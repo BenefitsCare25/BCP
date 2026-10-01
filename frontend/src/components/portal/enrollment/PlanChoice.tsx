@@ -26,6 +26,7 @@ import {
   directionLabel,
 } from "@/components/enrollment/electionCore";
 import { Field, leafControl } from "@/components/portal/leaf/Field";
+import type { TierPrice } from "@/components/portal/enrollment/form/formMath";
 import { Money, currencySymbol, moneyText } from "@/components/portal/leaf/Figure";
 import { MountRow } from "@/components/portal/leaf/Mount";
 import { choiceControl, choiceRowClass } from "./choiceRow";
@@ -178,6 +179,44 @@ function TierFigureRows({
   );
 }
 
+/** The e-form's premium figures for one option — the paper form's price
+ * beside every plan: the plan's annual premium for the family as ticked, what
+ * that changes against the held plan, and what the member would pay. Only
+ * where the broker set an employee share (premiums are otherwise not shown). */
+function PremiumRows({
+  price,
+  isCurrent,
+  row: Row,
+}: {
+  price: TierPrice;
+  isCurrent: boolean;
+  row: typeof ChoiceFigure;
+}) {
+  return (
+    <>
+      {price.premium !== null && (
+        <Row term="Annual premium">
+          <Money value={price.premium} />
+        </Row>
+      )}
+      {!isCurrent && price.change !== null && price.change !== 0 && (
+        <Row term={price.change > 0 ? "More than your current plan" : "Less than your current plan"}>
+          <Money value={Math.abs(price.change)} />
+        </Row>
+      )}
+      {price.share !== null && (
+        <Row term={isCurrent ? "You pay a year" : "You'd pay a year"}>
+          <Money value={price.share} emphasis="strong" />
+        </Row>
+      )}
+    </>
+  );
+}
+
+function hasPremiumRows(price: TierPrice | null | undefined): boolean {
+  return !!price && (price.premium !== null || price.share !== null);
+}
+
 /** True when a tier has any figure worth a `<dl>` at all. */
 function hasFigureRows(tier: CohortTier, flexOnChange: boolean): boolean {
   return (
@@ -190,16 +229,20 @@ function TierFigures({
   tier,
   flexOnChange,
   currency,
+  premium,
+  isCurrent = false,
 }: {
   tier: CohortTier;
   flexOnChange: boolean;
   currency: string | null;
+  premium?: TierPrice | null;
+  isCurrent?: boolean;
 }) {
   const price = priceTerm(tier, flexOnChange);
-  if (tier.financials?.sum_insured == null && !price) return null;
+  if (tier.financials?.sum_insured == null && !price && !hasPremiumRows(premium)) return null;
   return (
     <>
-      {hasFigureRows(tier, flexOnChange) && (
+      {(hasFigureRows(tier, flexOnChange) || hasPremiumRows(premium)) && (
         <dl>
           <TierFigureRows
             tier={tier}
@@ -208,6 +251,7 @@ function TierFigures({
             row={ChoiceFigure}
             siTerm="You'd be covered for"
           />
+          {premium && <PremiumRows price={premium} isCurrent={isCurrent} row={ChoiceFigure} />}
         </dl>
       )}
       {price && price.amount == null && (
@@ -231,6 +275,7 @@ function tierOptionLabel(
   isCurrent: boolean,
   flexOnChange: boolean,
   currency: string | null,
+  premium?: TierPrice | null,
 ): string {
   const parts = [t.label];
   if (isCurrent) parts.push("your current plan");
@@ -246,6 +291,11 @@ function tierOptionLabel(
         : `${price.term.toLowerCase()} ${currencySymbol(currency)}${moneyText(price.amount)}`,
     );
   }
+  if (premium?.share != null) {
+    parts.push(`you pay S$${moneyText(premium.share)} a year`);
+  } else if (!isCurrent && premium?.change) {
+    parts.push(`${premium.change > 0 ? "+" : "-"}S$${moneyText(Math.abs(premium.change))} premium`);
+  }
   return parts.join(" — ");
 }
 
@@ -255,6 +305,7 @@ export function PlanChoice({
   disabled,
   flexOnChange,
   currency,
+  premiumFor,
   onChange,
 }: {
   ts: ProductTierSet;
@@ -262,6 +313,8 @@ export function PlanChoice({
   disabled: boolean;
   flexOnChange: boolean;
   currency: string | null;
+  /** E-form only: each option's premium, change and member share. */
+  premiumFor?: (tierKey: string) => TierPrice | null;
   onChange: (next: ProductState) => void;
 }) {
   const groupName = useId();
@@ -327,6 +380,8 @@ export function PlanChoice({
                 tier={t}
                 flexOnChange={flexOnChange}
                 currency={currency}
+                premium={premiumFor?.(t.key)}
+                isCurrent={tierIsCurrent(t)}
               />
               {/* Only on the alternatives: the baseline IS the reference, so a
                   "what changes" block under it would compare it to itself. */}
@@ -375,7 +430,9 @@ export function PlanChoice({
             >
               {offered.map((t) => (
                 <option key={t.key} value={t.key}>
-                  {tierOptionLabel(t, tierIsCurrent(t), flexOnChange, currency)}
+                  {tierOptionLabel(
+                    t, tierIsCurrent(t), flexOnChange, currency, premiumFor?.(t.key),
+                  )}
                 </option>
               ))}
               {ts.can_decline && (
@@ -390,6 +447,8 @@ export function PlanChoice({
               tier={selectedTier}
               flexOnChange={flexOnChange}
               currency={currency}
+              premium={premiumFor?.(selectedTier.key)}
+              isCurrent={tierIsCurrent(selectedTier)}
             />
             <TierDifferences
               differences={selectedTier.differences ?? []}
@@ -433,6 +492,13 @@ export function PlanChoice({
               row={MountRow}
               siTerm="You're covered for"
             />
+            {premiumFor?.(selectedTier.key) && (
+              <PremiumRows
+                price={premiumFor(selectedTier.key) as TierPrice}
+                isCurrent={tierIsCurrent(selectedTier)}
+                row={MountRow}
+              />
+            )}
           </>
         ) : (
           <MountRow term="Your plan">Not set</MountRow>

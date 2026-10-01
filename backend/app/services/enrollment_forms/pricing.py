@@ -54,8 +54,31 @@ def _share(amount: float | None, pct: float | None) -> float | None:
     return round(amount * pct / 100.0, 2)
 
 
+def own_premium(fin: PlanFinancials | None) -> float | None:
+    """The member's own (employee-only) annual premium on one plan."""
+    if fin is None:
+        return None
+    eo = member_premium(fin)
+    if eo is not None:
+        return eo.amount
+    return float(fin.annual_premium) if isinstance(fin.annual_premium, (int, float)) else None
+
+
+def _own_share(own: float, share: FormContribution, base_own: float | None) -> float | None:
+    """The member's share of their own cover: a straight percentage, or — when
+    the company pays the default plan — the upgrade share of the extra over it."""
+    if share.employee_pct is not None:
+        return _share(own, share.employee_pct)
+    if share.upgrade_pct is not None and base_own is not None:
+        return _share(max(0.0, own - base_own), share.upgrade_pct)
+    return None
+
+
 def contribution_tier(
-    key: str, fin: PlanFinancials | None, share: FormContribution
+    key: str,
+    fin: PlanFinancials | None,
+    share: FormContribution,
+    base_own: float | None = None,
 ) -> ContributionTierOut | None:
     if fin is None:
         return None
@@ -74,7 +97,7 @@ def contribution_tier(
                     family[role] = amount
         return ContributionTierOut(
             tier_key=key, mode="tiered", premium=premium,
-            employee=_share(eo.amount, share.employee_pct), family=family,
+            employee=_own_share(eo.amount, share, base_own), family=family,
         )
     own = eo.amount if eo is not None else fin.annual_premium
     if own is None:
@@ -85,7 +108,7 @@ def contribution_tier(
         mode="flat",
         premium={"EO": round(float(own), 2)},
         premium_per_dependant=round(float(per_dep), 2) if per_dep is not None else None,
-        employee=_share(own, share.employee_pct),
+        employee=_own_share(float(own), share, base_own),
         per_dependant=_share(per_dep, share.dependant_pct),
     )
 
@@ -96,12 +119,18 @@ def product_contributions(
     out: list[ProductContributionOut] = []
     for ts in products:
         share = settings.contributions.get(ts.product_code)
-        if share is None or (share.employee_pct is None and share.dependant_pct is None):
+        if share is None or (
+            share.employee_pct is None
+            and share.dependant_pct is None
+            and share.upgrade_pct is None
+        ):
             continue
+        base = next((t for t in ts.tiers if t.is_baseline), None)
+        base_own = own_premium(base.financials) if base else None
         tiers = [
             tier
             for t in ts.tiers
-            if (tier := contribution_tier(t.key, t.financials, share)) is not None
+            if (tier := contribution_tier(t.key, t.financials, share, base_own)) is not None
         ]
         if not tiers:
             continue
@@ -110,6 +139,7 @@ def product_contributions(
                 product_code=ts.product_code,
                 employee_pct=share.employee_pct,
                 dependant_pct=share.dependant_pct,
+                upgrade_pct=share.upgrade_pct,
                 gst_included=any(t.financials and t.financials.gst_included for t in ts.tiers),
                 tiers=tiers,
             )

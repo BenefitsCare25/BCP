@@ -93,7 +93,7 @@ import {
   signPayload,
   useFormDraft,
 } from "@/components/portal/enrollment/form/formDeck";
-import { memberShare } from "@/components/portal/enrollment/form/formMath";
+import { tierPrice } from "@/components/portal/enrollment/form/formMath";
 import { PlanPricing } from "@/components/portal/enrollment/form/PlanPricing";
 import { productShortLabel } from "@/components/portal/leaf/glossary";
 import { isHiddenUnlessChosen } from "@/components/portal/memberVisibility";
@@ -527,6 +527,14 @@ export function MemberEnrollmentPanel({
           dependants={dependants}
           flexOnChange={!!flex?.onChange}
           currency={currency}
+          premiumFor={
+            form
+              ? (tierKey: string) =>
+                  tierPrice(
+                    contributionOf(ts.product_code), ts, ps, tierKey, form.context.dependants,
+                  )
+              : undefined
+          }
           pricing={
             form && !ps.declined ? (
               <PlanPricing
@@ -535,9 +543,6 @@ export function MemberEnrollmentPanel({
                 )}
                 contribution={contributionOf(ts.product_code)}
                 tierKey={ps.tierKey}
-                share={memberShare(
-                  contributionOf(ts.product_code), ts, ps, form.context.dependants,
-                )}
               />
             ) : undefined
           }

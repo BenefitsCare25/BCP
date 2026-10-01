@@ -226,6 +226,23 @@ def _price_tag(sel: Selection) -> float | None:
     return sel.tier.price_tag if sel.tier else None
 
 
+_COMPOSITION = {(0, 0): "EO", (1, 0): "ES", (0, 1): "EC", (1, 1): "EF"}
+
+
+def composition_premium(tier: Any, roles: list[str | None]) -> float | None:
+    """One plan's full annual premium for THIS family composition."""
+    if tier is None:
+        return None
+    spouses, children = roles.count("spouse"), roles.count("child")
+    if tier.mode == "flat":
+        own = tier.premium.get("EO")
+        per_dep = tier.premium_per_dependant or 0.0
+        return round(own + per_dep * (spouses + children), 2) if own is not None else None
+    key = _COMPOSITION[(min(spouses, 1), min(children, 1))]
+    value = tier.premium.get(key)
+    return round(value, 2) if value is not None else None
+
+
 def selection_rows(selections: list[Selection], ctx: MemberFormContextOut) -> list[dict[str, Any]]:
     deps = {d.id: d for d in ctx.dependants}
     contribs = {c.product_code: c for c in ctx.contributions}
@@ -241,6 +258,16 @@ def selection_rows(selections: list[Selection], ctx: MemberFormContextOut) -> li
         premium = (
             next((t for t in contrib.tiers if t.tier_key == key), None) if contrib and key else None
         )
+        held = next((t for t in sel.ts.tiers if t.is_current), None) or next(
+            (t for t in sel.ts.tiers if t.is_baseline), None
+        )
+        held_premium = (
+            next((t for t in contrib.tiers if t.tier_key == held.key), None)
+            if contrib and held else None
+        )
+        roles = [deps[i].role for i in sel.covered_ids if i in deps]
+        now = composition_premium(held_premium, roles)
+        after = composition_premium(premium, roles)
         rows.append({
             "product_code": sel.code,
             "product_name": sel.ts.product_name,
@@ -260,6 +287,12 @@ def selection_rows(selections: list[Selection], ctx: MemberFormContextOut) -> li
             "premium_per_dependant": premium.premium_per_dependant if premium else None,
             "employee_pct": contrib.employee_pct if contrib else None,
             "dependant_pct": contrib.dependant_pct if contrib else None,
+            "upgrade_pct": contrib.upgrade_pct if contrib else None,
+            "premium_now": now,
+            "premium_after": after,
+            "premium_change": (
+                round(after - now, 2) if after is not None and now is not None else None
+            ),
             "price_tag": _price_tag(sel),
             "you_pay": _you_pay(
                 contrib, key, [deps[i].role for i in sel.covered_ids if i in deps]

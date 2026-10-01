@@ -78,6 +78,66 @@ export function memberShare(
   return known.length ? Math.round(known.reduce((a, b) => a + b, 0) * 100) / 100 : null;
 }
 
+export interface TierPrice {
+  /** Full annual premium of this plan for the member's family as chosen. */
+  premium: number | null;
+  /** Against the plan the member holds today (null on that plan itself). */
+  change: number | null;
+  /** What the member pays a year on this plan. */
+  share: number | null;
+}
+
+function compositionPremium(
+  tier: ProductContribution["tiers"][number] | undefined,
+  roles: ("spouse" | "child")[],
+): number | null {
+  if (!tier) return null;
+  const spouses = roles.filter((r) => r === "spouse").length;
+  const children = roles.length - spouses;
+  if (tier.mode === "flat") {
+    const own = tier.premium.EO;
+    return own === undefined ? null : own + (tier.premium_per_dependant ?? 0) * roles.length;
+  }
+  const key = spouses && children ? "EF" : spouses ? "ES" : children ? "EC" : "EO";
+  return tier.premium[key] ?? null;
+}
+
+/** The figures beside ONE plan option, as the paper form printed beside each
+ * plan: its premium, what changes against the held plan, and the member's
+ * share — priced for the family members currently ticked. */
+export function tierPrice(
+  contribution: ProductContribution | undefined,
+  ts: ProductTierSet,
+  ps: ProductState,
+  tierKey: string,
+  dependants: FormDependant[],
+): TierPrice | null {
+  if (!contribution) return null;
+  const tier = contribution.tiers.find((t) => t.tier_key === tierKey);
+  if (!tier) return null;
+  const held = ts.tiers.find((t) => t.is_current) ?? ts.tiers.find((t) => t.is_baseline);
+  const asIf = { ...ps, tierKey, declined: false };
+  const roles = coveredOn(ts, asIf, dependants)
+    .map((d) => d.role)
+    .filter((r): r is "spouse" | "child" => r !== null);
+  const premium = compositionPremium(tier, roles);
+  const heldPremium =
+    held && held.key !== tierKey
+      ? compositionPremium(
+          contribution.tiers.find((t) => t.tier_key === held.key),
+          roles,
+        )
+      : null;
+  return {
+    premium,
+    change:
+      premium !== null && heldPremium !== null
+        ? Math.round((premium - heldPremium) * 100) / 100
+        : null,
+    share: memberShare(contribution, ts, asIf, dependants),
+  };
+}
+
 /** "EMM can only be taken with GHS" — one message per broken rule. */
 export function ruleProblems(
   rules: FormRuleView[],

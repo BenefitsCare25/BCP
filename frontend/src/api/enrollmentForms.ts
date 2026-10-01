@@ -30,6 +30,9 @@ export interface FormDocument {
 export interface FormContribution {
   employee_pct: number | null;
   dependant_pct: number | null;
+  /** Company pays the default plan; the member pays this % of the extra for a
+   *  higher plan. Ignored when `employee_pct` is set. */
+  upgrade_pct?: number | null;
 }
 
 export interface FormRule {
@@ -55,6 +58,7 @@ export interface FormProduct {
   participation: string | null;
   has_dependant_cover: boolean;
   dependant_participation: string | null;
+  has_upgrades: boolean;
 }
 
 export interface FormConfig {
@@ -114,6 +118,7 @@ export interface ProductContribution {
   product_code: string;
   employee_pct: number | null;
   dependant_pct: number | null;
+  upgrade_pct: number | null;
   gst_included: boolean;
   tiers: ContributionTier[];
 }

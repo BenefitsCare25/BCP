@@ -180,8 +180,11 @@ def _selection_table(s: dict[str, Any]) -> str:
 def _share_text(sel: dict[str, Any]) -> str:
     parts = []
     own, family = sel.get("employee_pct"), sel.get("dependant_pct")
-    if own == 0:
+    upgrade = sel.get("upgrade_pct")
+    if own == 0 or (own is None and upgrade is not None):
         parts.append("Own cover paid by the company")
+        if own is None and upgrade:
+            parts.append(f"you pay {upgrade:g}% of the extra for a higher plan")
     elif own is not None:
         parts.append(f"You pay {own:g}% of your own cover")
     if family == 0:
@@ -195,9 +198,12 @@ def _share_text(sel: dict[str, Any]) -> str:
 def _premium_table(s: dict[str, Any]) -> str:
     """The paper form's premium table, for the member's OWN plans only: the
     annual premium per family composition, and the share they bear."""
+    # Only plans with money in play for the member: something to pay, a plan
+    # change, or family on cover. A company-paid plan they kept is not listed.
     rows = [
         sel for sel in s.get("selections", [])
         if sel.get("premium") and not sel.get("declined")
+        and (sel.get("you_pay") or sel.get("premium_change") or sel.get("covered"))
     ]
     if not rows:
         return ""
@@ -205,7 +211,8 @@ def _premium_table(s: dict[str, Any]) -> str:
         "<p class='sub'>Annual premium for your plans</p>"
         "<table><tr><th>Benefit and plan</th><th class='right'>Employee only</th>"
         "<th class='right'>Employee and spouse</th><th class='right'>Employee and child(ren)</th>"
-        "<th class='right'>Family</th><th>Your share</th></tr>"
+        "<th class='right'>Family</th><th class='right'>Change vs current plan</th>"
+        "<th>Your share</th></tr>"
     ]
     for sel in rows:
         prem = sel["premium"]
@@ -216,9 +223,15 @@ def _premium_table(s: dict[str, Any]) -> str:
         else:
             cells = [_money(prem.get(k)) for k in ("EO", "ES", "EC", "EF")]
         name = f"{sel.get('product_name') or sel.get('product_code')} - {sel.get('elected_plan')}"
+        change = sel.get("premium_change")
+        change_cell = (
+            "No change" if not change
+            else ("+" if change > 0 else "") + _money(change)
+        )
         out.append(
             f"<tr><td>{_e(name)}</td>"
             + "".join(f"<td class='right'>{c}</td>" for c in cells)
+            + f"<td class='right'>{change_cell}</td>"
             + f"<td>{_e(_share_text(sel))}</td></tr>"
         )
     out.append("</table>")

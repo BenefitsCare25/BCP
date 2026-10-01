@@ -13,6 +13,7 @@ import type {
 import { dependantParticipationFor } from "@/components/enrollment/electionCore";
 import { Mount, MountRule } from "@/components/portal/leaf/Mount";
 import { glossBeside } from "@/components/portal/leaf/glossary";
+import type { TierPrice } from "./form/formMath";
 import { FamilyChoice } from "./FamilyChoice";
 import { PlanChoice } from "./PlanChoice";
 
@@ -26,6 +27,7 @@ export function ProductElectionMount({
   currency,
   rise = true,
   pricing,
+  premiumFor,
   onChange,
 }: {
   ts: ProductTierSet;
@@ -42,6 +44,8 @@ export function ProductElectionMount({
   /** The e-form's figures for the chosen plan — key benefit, sum insured,
    *  premium per family tier and the member's share (`PlanPricing`). */
   pricing?: ReactNode;
+  /** Each plan option's premium, change and member share (e-form). */
+  premiumFor?: (tierKey: string) => TierPrice | null;
   onChange: (next: ProductState) => void;
 }) {
   const headingId = useId();
@@ -77,6 +81,7 @@ export function ProductElectionMount({
         disabled={disabled}
         flexOnChange={flexOnChange}
         currency={currency}
+        premiumFor={premiumFor}
         onChange={onChange}
       />
 

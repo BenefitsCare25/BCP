@@ -56,6 +56,10 @@ class FormContribution(BaseModel):
 
     employee_pct: float | None = Field(default=None, ge=0, le=100)
     dependant_pct: float | None = Field(default=None, ge=0, le=100)
+    # When the company pays the member's own cover (employee_pct unset): the
+    # share of the EXTRA premium the member pays for choosing a plan above
+    # their default one. A downgrade costs the member nothing.
+    upgrade_pct: float | None = Field(default=None, ge=0, le=100)
 
 
 class FormRule(BaseModel):
@@ -111,6 +115,8 @@ class FormProductOut(BaseModel):
     has_dependant_cover: bool
     # How family cover is taken on this product: compulsory | voluntary | mixed.
     dependant_participation: str | None = None
+    # The product offers plans other than the member's default (upgrades).
+    has_upgrades: bool = False
 
 
 class FormConfigOut(BaseModel):
@@ -189,6 +195,7 @@ class ProductContributionOut(BaseModel):
     product_code: str
     employee_pct: float | None
     dependant_pct: float | None
+    upgrade_pct: float | None = None
     gst_included: bool
     tiers: list[ContributionTierOut]
 

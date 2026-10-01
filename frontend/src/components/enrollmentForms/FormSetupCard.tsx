@@ -178,26 +178,38 @@ function FormSetupEditor({ config, readOnly }: { config: FormConfig; readOnly: b
 
         <Section
           title="Employee's share of the premium"
-          hint="Members see only their own share, never the full premium. Leave blank to show nothing for that product (e.g. company-paid)."
+          hint="Members see each plan's premium and their share. Leave every box blank to show no premium for that product. Upgrade % applies when the company pays the member's own cover: the member pays that share of the extra for a higher plan."
         >
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[32rem] text-sm">
+            <table className="w-full min-w-[40rem] text-sm">
               <thead>
                 <tr className="text-left text-xs text-muted-foreground">
                   <th className="py-1.5 pr-3 font-medium">Product</th>
                   <th className="py-1.5 pr-3 font-medium">Participation</th>
                   <th className="py-1.5 pr-3 font-medium">Employee cover %</th>
-                  <th className="py-1.5 font-medium">Family cover %</th>
+                  <th className="py-1.5 pr-3 font-medium">Family cover %</th>
+                  <th className="py-1.5 font-medium">Upgrade %</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
                 {products.map((p) => {
-                  const share = s.contributions[p.product_code] ?? { employee_pct: null, dependant_pct: null };
+                  const share = s.contributions[p.product_code] ?? {
+                    employee_pct: null,
+                    dependant_pct: null,
+                    upgrade_pct: null,
+                  };
                   const setShare = (patch: Partial<typeof share>) => {
                     const next = { ...share, ...patch };
                     const rest = { ...s.contributions };
-                    if (next.employee_pct === null && next.dependant_pct === null) delete rest[p.product_code];
-                    else rest[p.product_code] = next;
+                    if (
+                      next.employee_pct === null &&
+                      next.dependant_pct === null &&
+                      (next.upgrade_pct ?? null) === null
+                    ) {
+                      delete rest[p.product_code];
+                    } else {
+                      rest[p.product_code] = next;
+                    }
                     update({ contributions: rest });
                   };
                   return (
@@ -212,13 +224,22 @@ function FormSetupEditor({ config, readOnly }: { config: FormConfig; readOnly: b
                           onChange={(e) => setShare({ employee_pct: pct(e.target.value) })}
                         />
                       </td>
-                      <td className="py-2">
+                      <td className="py-2 pr-3">
                         <Input
                           type="number" min={0} max={100} step="any" className="h-8 w-24"
                           aria-label={`${p.product_code} family share`}
                           disabled={!p.has_dependant_cover}
                           value={share.dependant_pct ?? ""}
                           onChange={(e) => setShare({ dependant_pct: pct(e.target.value) })}
+                        />
+                      </td>
+                      <td className="py-2">
+                        <Input
+                          type="number" min={0} max={100} step="any" className="h-8 w-24"
+                          aria-label={`${p.product_code} upgrade share`}
+                          disabled={!p.has_upgrades || share.employee_pct !== null}
+                          value={share.upgrade_pct ?? ""}
+                          onChange={(e) => setShare({ upgrade_pct: pct(e.target.value) })}
                         />
                       </td>
                     </tr>

@@ -24,6 +24,9 @@ function shareGloss(contribution: ProductContribution): string {
       ? "your own cover is paid by the company"
       : `you pay ${contribution.employee_pct}% of your own cover`,
   );
+  if (!contribution.employee_pct && contribution.upgrade_pct) {
+    parts.push(`you pay ${contribution.upgrade_pct}% of the extra for a higher plan`);
+  }
   if (contribution.dependant_pct !== null) {
     parts.push(
       contribution.dependant_pct === 0
@@ -65,12 +68,10 @@ export function PlanPricing({
   fact,
   contribution,
   tierKey,
-  share,
 }: {
   fact: PlanFact | undefined;
   contribution: ProductContribution | undefined;
   tierKey: string;
-  share: number | null;
 }) {
   const tier = contribution?.tiers.find((t) => t.tier_key === tierKey);
   const hasFacts = !!(fact?.highlight || fact?.sum_insured || fact?.insurer);
@@ -92,15 +93,11 @@ export function PlanPricing({
       {tier && contribution && (
         <div>
           <p className="text-row font-medium text-record">
-            Annual premium{contribution.gst_included ? " (incl. GST)" : ""}
+            Premium for this plan by family cover
+            {contribution.gst_included ? " (incl. GST)" : ""}
           </p>
           <dl>
             <PremiumRows tier={tier} />
-            {share !== null && (
-              <MountRow term="Your share a year">
-                <Money value={share} emphasis="strong" />
-              </MountRow>
-            )}
           </dl>
           <p className="text-row text-label">{shareGloss(contribution)}</p>
         </div>

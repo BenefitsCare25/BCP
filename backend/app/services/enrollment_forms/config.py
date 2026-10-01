@@ -141,6 +141,7 @@ def form_products(db: Session, window: EnrollmentWindow) -> list[FormProductOut]
                 dependant_participation=(
                     next(iter(dep)) if len(dep) == 1 else "mixed" if dep else None
                 ),
+                has_upgrades=len(ts.tiers) > 1,
             )
         )
     return out
@@ -148,14 +149,18 @@ def form_products(db: Session, window: EnrollmentWindow) -> list[FormProductOut]
 
 def default_contributions(products: list[FormProductOut]) -> dict[str, FormContribution]:
     """Voluntary cover is, by default, paid by the member — the paper forms'
-    usual "100% borne by employee". Compulsory cover stays company-paid (no
-    figure shown). The broker adjusts (e.g. GHS dependants 50%) in setup."""
+    usual "100% borne by employee". Compulsory cover stays company-paid, but a
+    member choosing a HIGHER plan pays the extra (upgrade share 100%). The
+    broker adjusts (e.g. GHS dependants 50%) in setup."""
     out: dict[str, FormContribution] = {}
     for p in products:
         employee = 100.0 if p.participation == "voluntary" else None
         dependant = 100.0 if p.dependant_participation == "voluntary" else None
-        if employee is not None or dependant is not None:
-            out[p.product_code] = FormContribution(employee_pct=employee, dependant_pct=dependant)
+        upgrade = 100.0 if employee is None and p.has_upgrades else None
+        if employee is not None or dependant is not None or upgrade is not None:
+            out[p.product_code] = FormContribution(
+                employee_pct=employee, dependant_pct=dependant, upgrade_pct=upgrade
+            )
     return out
 
 
