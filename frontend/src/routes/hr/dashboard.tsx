@@ -1,7 +1,15 @@
 /** HR admin home — identity and entry points to operational modules. Claims
- * are live; the remaining modules stay visibly unavailable until ready. */
+ * and enrolment forms are live; the remaining modules stay visibly unavailable
+ * until ready. */
 import { Link } from "@tanstack/react-router";
-import { ArrowRight, ClipboardList, FileText, ShieldAlert, Users } from "lucide-react";
+import {
+  ArrowRight,
+  ClipboardList,
+  FileSignature,
+  FileText,
+  ShieldAlert,
+  Users,
+} from "lucide-react";
 import { useHrMe } from "@/api/hr";
 import { useHrSession } from "@/stores/hrSession";
 import { Badge } from "@/components/ui/badge";
@@ -21,6 +29,13 @@ const MODULES = [
     description: "Track and manage employee claims for your organisation.",
     icon: ClipboardList,
     href: "/hr/claims" as const,
+  },
+  {
+    key: "enrollment-forms",
+    title: "Enrolment forms",
+    description: "Forms your employees signed, as PDF or an Excel summary.",
+    icon: FileSignature,
+    href: "/hr/enrollment-forms" as const,
   },
   {
     key: "policies",
@@ -63,7 +78,7 @@ export function HrDashboardPage() {
         </Card>
       )}
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         {MODULES.map((m) => {
           const Icon = m.icon;
           if ("href" in m) {
