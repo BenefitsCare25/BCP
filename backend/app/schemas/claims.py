@@ -1760,6 +1760,7 @@ class PortalDependantCreateIn(BaseModel):
     dob: date | None = None
     gender: str | None = Field(default=None, max_length=16)
     id_no: str | None = Field(default=None, max_length=64)
+    occupation: str | None = Field(default=None, max_length=120)
 
 
 class DependantApprovalIn(BaseModel):

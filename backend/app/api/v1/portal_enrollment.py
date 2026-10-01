@@ -20,26 +20,35 @@ Registered in ``main.py`` OUTSIDE the broker gate.
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.audit import write_member_audit
+from app.core.downloads import attachment_header
 from app.core.portal_auth import (
     CurrentMember,
     get_current_member,
     resolve_member_employee,
 )
 from app.core.rate_limit import limiter
+from app.core.request_context import client_ip, user_agent
+from app.core.storage import get_storage
 from app.db.session import get_db
-from app.models import Employee, Enrollment, EnrollmentWindow
+from app.models import Employee, Enrollment, EnrollmentWindow, StoredDocument
 from app.models.enrollment import EnrollmentStatus
+from app.models.stored_document import DOC_ENTITY_FORM_RESOURCE, STORAGE_AVAILABLE
 from app.schemas.enrollment import (
     ElectionsUpdate,
     EnrollmentOut,
     EnrollmentSubmitIn,
     LeaveElectionIn,
     PortalEnrollmentOut,
+)
+from app.schemas.enrollment_forms import (
+    FormSignIn,
+    FormSubmissionSummary,
+    MemberFormContextOut,
 )
 from app.services.enrollment_elections import (
     apply_elections,
@@ -49,8 +58,10 @@ from app.services.enrollment_elections import (
     find_enrollment,
     lock_enrollment,
     member_window_for,
-    perform_submit,
 )
+from app.services.enrollment_forms.config import resolve_settings
+from app.services.enrollment_forms.context import build_form_context, submission_summary
+from app.services.enrollment_forms.submission import SignatureMeta, sign_and_submit
 from app.services.enrollment_lifecycle import baseline_for
 from app.services.member_access import Capability
 
@@ -187,34 +198,108 @@ def submit_my_enrollment(
     member: CurrentMember = Depends(get_current_member),
     db: Session = Depends(get_db),
 ) -> EnrollmentOut:
-    """Member submits their elections for broker confirmation. Projection into
-    live coverage happens at broker confirm (or window-close deeming) — never
-    directly from the portal."""
-    employee, _window, enr = _require_open_enrollment(db, member)
+    """Retired for members: an enrolment is sent by SIGNING the e-form
+    (``POST /portal/enrollment/sign``), which records the declarations, the
+    signature and the PDF the broker and HR rely on. Left in place so an older
+    cached portal bundle gets a clear, coded refusal instead of a 404 — and so
+    nothing can reach "submitted" without a signed form on file."""
+    _require_open_enrollment(db, member)
+    raise HTTPException(
+        status.HTTP_409_CONFLICT,
+        detail={
+            "code": "signature_required",
+            "message": "Please refresh the page, then sign the enrolment form to send it.",
+        },
+    )
+
+
+# -- Online enrolment e-form --------------------------------------------------
+
+
+@router.get("/form", response_model=MemberFormContextOut)
+def my_enrollment_form(
+    member: CurrentMember = Depends(get_current_member),
+    db: Session = Depends(get_db),
+) -> MemberFormContextOut:
+    """The e-form around the election deck: particulars, family members with
+    eligibility, the member's premium share, documents and declarations."""
+    employee, window, enr = _require_open_enrollment(db, member)
+    context = build_form_context(db, employee, window, enr)
+    db.commit()
+    return context
+
+
+@router.post("/sign", response_model=FormSubmissionSummary)
+@limiter.limit("10/minute")
+def sign_my_enrollment_form(
+    request: Request,
+    body: FormSignIn,
+    member: CurrentMember = Depends(get_current_member),
+    db: Session = Depends(get_db),
+) -> FormSubmissionSummary:
+    """Sign and submit the enrolment form: applies the reviewed choices,
+    submits the enrolment for broker confirmation, and files a signed,
+    versioned record with its PDF."""
+    employee, window, enr = _require_open_enrollment(db, member)
     enr = lock_enrollment(db, enr)
-    if body and body.acknowledge_unpriced:
-        raise HTTPException(
-            status.HTTP_403_FORBIDDEN,
-            "Only an authorized administrator can accept unpriced elections.",
-        )
-    if body and body.elections is not None:
-        apply_elections(db, enr, body.elections)
-    if body and body.leave is not None:
-        apply_leave(db, enr, body.leave)
-    perform_submit(
-        db, enr,
-        acknowledge=False,
-        actor_id=member.member_account_id,
+    _assert_member_editable(enr)
+    submission = sign_and_submit(
+        db,
+        employee=employee,
+        window=window,
+        enrollment=enr,
+        body=body,
+        meta=SignatureMeta(
+            ip=client_ip(request),
+            user_agent=(user_agent(request) or "")[:512] or None,
+            member_account_id=member.member_account_id,
+        ),
     )
     write_member_audit(
-        db, member, action="submit_enrollment", entity_type="enrollment",
-        entity_id=enr.id,
-        after={
-            "elections_included": bool(body and body.elections is not None),
-            "leave_included": bool(body and body.leave is not None),
-        },
+        db, member, action="enrollment_form.signed", entity_type="enrollment_form",
+        entity_id=submission.id,
+        after={"reference_no": submission.reference_no, "version": submission.version},
         employee_id=employee.id,
+        request=request,
     )
     db.commit()
-    db.refresh(enr)
-    return enrollment_detail(db, enr)
+    return submission_summary(submission, enr.status)
+
+
+@router.get("/form/documents/{document_id}")
+def download_form_document(
+    document_id: str,
+    request: Request,
+    member: CurrentMember = Depends(get_current_member),
+    db: Session = Depends(get_db),
+) -> Response:
+    """A document the open period's form asks members to read (uploaded by the
+    broker). Only documents listed on THIS window's form are served."""
+    employee, window, _enr = _require_open_enrollment(db, member)
+    settings, _row = resolve_settings(db, window)
+    listed = {d.document_id for d in settings.documents if d.document_id}
+    doc = db.get(StoredDocument, document_id)
+    if (
+        document_id not in listed
+        or doc is None
+        or doc.client_id != employee.client_id
+        or doc.entity_type != DOC_ENTITY_FORM_RESOURCE
+        or doc.entity_id != window.id
+        or doc.storage_state != STORAGE_AVAILABLE
+    ):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Document not found")
+    try:
+        content = get_storage().read(doc.storage_path)
+    except FileNotFoundError:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Document not found") from None
+    write_member_audit(
+        db, member, action="enrollment_form.document_download",
+        entity_type="stored_document", entity_id=doc.id, employee_id=employee.id,
+        request=request,
+    )
+    db.commit()
+    return Response(
+        content=content,
+        media_type=doc.mime_type or "application/octet-stream",
+        headers={"Content-Disposition": attachment_header(doc.file_name)},
+    )

@@ -50,6 +50,8 @@ def add_my_dependant(
         attribute_values["gender"] = body.gender.strip()
     if body.id_no:
         attribute_values["id_no"] = body.id_no.strip()
+    if body.occupation and body.occupation.strip():
+        attribute_values["occupation"] = body.occupation.strip()
 
     dependant = Dependant(
         client_id=employee.client_id,

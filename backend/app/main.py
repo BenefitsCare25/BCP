@@ -44,6 +44,7 @@ from app.api.v1 import (
     eligibility_mappings,
     employees,
     enquiries,
+    enrollment_forms,
     enrollment_windows,
     enrollments,
     entity_aliases,
@@ -52,6 +53,7 @@ from app.api.v1 import (
     hr_admin,
     hr_auth,
     hr_claims,
+    hr_enrollment_forms,
     insurers,
     leave_policies,
     matches,
@@ -71,6 +73,7 @@ from app.api.v1 import (
     portal_dependants,
     portal_enquiries,
     portal_enrollment,
+    portal_enrollment_forms,
     portal_messages,
     portal_preview,
     product_setups,
@@ -214,6 +217,7 @@ def create_app() -> FastAPI:
         plans.router,
         plan_overrides.router,
         enrollment_windows.router,
+        enrollment_forms.router,
         enrollments.router,
         leave_policies.router,
         bulk_plan_updates.router,
@@ -284,11 +288,13 @@ def create_app() -> FastAPI:
     # (mirrors portal_auth: registered OUTSIDE the broker require_write_access gate).
     app.include_router(hr_auth.router, prefix=api_prefix)
     app.include_router(hr_claims.router, prefix=api_prefix)
+    app.include_router(hr_enrollment_forms.router, prefix=api_prefix)
     app.include_router(portal.router, prefix=api_prefix)
     app.include_router(portal_claims.router, prefix=api_prefix)
     app.include_router(portal_claims.options_router, prefix=api_prefix)
     app.include_router(portal_dependants.router, prefix=api_prefix)
     app.include_router(portal_enrollment.router, prefix=api_prefix)
+    app.include_router(portal_enrollment_forms.router, prefix=api_prefix)
     app.include_router(portal_messages.router, prefix=api_prefix)
     app.include_router(portal_enquiries.router, prefix=api_prefix)
 

@@ -4,6 +4,7 @@
  *   Members          everyone in the period and each one's selection
  *   Pricing & rules  what the benefit year prices (plan price tags, leave)
  *   Coverage changes rule-based bulk edits to live coverage
+ *   Enrolment forms  signed online forms + filed paper forms, and form setup
  *
  * The old page had five tabs mixing yearly setup, running a period and
  * per-member work, and led with a blank create form even mid-period. */
@@ -20,10 +21,12 @@ import { PeriodOverview } from "@/components/enrollment/period/PeriodOverview";
 import { EnrollmentElectionsPage } from "./elections";
 import { EnrollmentBulkPage } from "./bulk";
 import { EnrollmentRulesPage } from "./rules";
+import { EnrollmentFormsPage } from "./forms";
 
 const TABS = [
   { key: "overview", label: "Overview" },
   { key: "members", label: "Members" },
+  { key: "forms", label: "Enrolment forms" },
   { key: "rules", label: "Pricing & rules" },
   { key: "bulk", label: "Coverage changes" },
 ] as const;
@@ -81,6 +84,9 @@ export function EnrollmentPage() {
         </TabsContent>
         <TabsContent value="members">
           <EnrollmentElectionsPage readOnly={readOnly} />
+        </TabsContent>
+        <TabsContent value="forms">
+          <EnrollmentFormsPage readOnly={readOnly} />
         </TabsContent>
         <TabsContent value="rules">
           <EnrollmentRulesPage

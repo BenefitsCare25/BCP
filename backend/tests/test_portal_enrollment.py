@@ -272,11 +272,29 @@ def test_member_upgrade_submit_broker_confirm(broker: TestClient) -> None:
         json={"action": "buy", "days": 2}, headers=_member_auth(),
     )
     assert lv.status_code == 200 and lv.json()["leave"]["days"] == 2
-    sub = broker.post(
+    # Members send by SIGNING the e-form; the old unsigned submit is refused.
+    unsigned = broker.post(
         "/api/v1/portal/enrollment/submit", json={}, headers=_member_auth()
     )
-    assert sub.status_code == 200 and sub.json()["status"] == "submitted"
-    assert sub.json()["elections"][0]["previous_plan_code"] == "SILVER"
+    assert unsigned.status_code == 409
+    assert unsigned.json()["detail"]["code"] == "signature_required"
+    form = broker.get("/api/v1/portal/enrollment/form", headers=_member_auth())
+    assert form.status_code == 200, form.text
+    sub = broker.post(
+        "/api/v1/portal/enrollment/sign",
+        json={
+            "accepted_clause_ids": [c["id"] for c in form.json()["clauses"]],
+            "signature_name": "Portal Member",
+            "confirm": True,
+        },
+        headers=_member_auth(),
+    )
+    assert sub.status_code == 200, sub.text
+    assert sub.json()["enrollment_status"] == "submitted"
+    assert sub.json()["has_pdf"] is True
+    detail = broker.get("/api/v1/portal/enrollment", headers=_member_auth()).json()
+    assert detail["enrollment"]["status"] == "submitted"
+    assert detail["enrollment"]["elections"][0]["previous_plan_code"] == "SILVER"
 
     # The member-submitted enrollment lands in the broker roster as submitted.
     roster = broker.get(f"/api/v1/enrollment-windows/{wid}/enrollments").json()

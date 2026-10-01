@@ -1172,6 +1172,7 @@ export interface PortalDependantCreateInput {
   dob?: string | null;
   gender?: string | null;
   id_no?: string | null;
+  occupation?: string | null;
 }
 
 export function useAddDependant() {

@@ -118,6 +118,13 @@ def _remove_rolled_back_document_blobs(session: Session) -> None:
             )
 
 
+def track_pending_blob(db: Session, path: str) -> None:
+    """Register a freshly written blob so a rollback deletes it (see the
+    session listeners above). For callers that write storage directly rather
+    than through ``attach_document``."""
+    db.info.setdefault(_PENDING_BLOBS_KEY, set()).add(path)
+
+
 def lock_claim_for_mutation(db: Session, claim: Claim) -> Claim:
     """Reload and lock a claim before validating or changing its state.
 

@@ -2,7 +2,14 @@
  * routed content. A tenant is pinned by the subdomain, so there is no client
  * switcher. */
 import { Link, Outlet, useNavigate, useRouterState } from "@tanstack/react-router";
-import { Building2, ClipboardList, LayoutDashboard, LogOut, ShieldCheck } from "lucide-react";
+import {
+  Building2,
+  ClipboardList,
+  FileSignature,
+  LayoutDashboard,
+  LogOut,
+  ShieldCheck,
+} from "lucide-react";
 import { useHrMe } from "@/api/hr";
 import { hrApi } from "@/api/hrClient";
 import { useHrSession } from "@/stores/hrSession";
@@ -69,6 +76,21 @@ export function HrShell() {
               >
                 <ClipboardList className="size-4" aria-hidden />
                 <span className="hidden sm:inline">Claims</span>
+              </Link>
+              <Link
+                to="/hr/enrollment-forms"
+                aria-label="Enrolment forms"
+                aria-current={path.startsWith("/hr/enrollment-forms") ? "page" : undefined}
+                className={cn(
+                  "inline-flex min-h-11 items-center gap-1.5 rounded-md px-2 text-sm transition-colors sm:min-h-9",
+                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40",
+                  path.startsWith("/hr/enrollment-forms")
+                    ? "bg-accent font-medium text-accent-foreground"
+                    : "text-muted-foreground hover:bg-muted hover:text-foreground",
+                )}
+              >
+                <FileSignature className="size-4" aria-hidden />
+                <span className="hidden sm:inline">Enrolment forms</span>
               </Link>
             </nav>
           </div>

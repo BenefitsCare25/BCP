@@ -4,7 +4,7 @@
  * and `FamilyChoice` the three a dependant list can, because each of those is a
  * branch on its own conditions and holding both in one component put a
  * 380-line function behind a heading. */
-import { useId } from "react";
+import { type ReactNode, useId } from "react";
 import type { ProductTierSet } from "@/api/enrollment";
 import type {
   DependantRef,
@@ -25,6 +25,7 @@ export function ProductElectionMount({
   flexOnChange,
   currency,
   rise = true,
+  pricing,
   onChange,
 }: {
   ts: ProductTierSet;
@@ -38,6 +39,9 @@ export function ProductElectionMount({
   /** Off inside an enrollment-deck slide, whose own transition owns the
    *  arrival — see `Mount`'s `rise`. */
   rise?: boolean;
+  /** The e-form's figures for the chosen plan — key benefit, sum insured,
+   *  premium per family tier and the member's share (`PlanPricing`). */
+  pricing?: ReactNode;
   onChange: (next: ProductState) => void;
 }) {
   const headingId = useId();
@@ -89,6 +93,8 @@ export function ProductElectionMount({
           />
         </>
       )}
+
+      {pricing}
     </Mount>
   );
 }

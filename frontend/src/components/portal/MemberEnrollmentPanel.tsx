@@ -49,6 +49,8 @@ import type {
   ProductTierSet,
 } from "@/api/enrollment";
 import type { PortalEnrollmentData } from "@/api/portal";
+import type { MemberFormContext } from "@/api/enrollmentForms";
+import type { FormSignInput } from "@/api/portalEnrollmentForms";
 import {
   type DependantRef,
   type ProductState,
@@ -85,6 +87,14 @@ import {
   type StandardLine,
   StandardMount,
 } from "@/components/portal/enrollment/StandardMount";
+import {
+  SIGN_KEY,
+  buildFormSlides,
+  signPayload,
+  useFormDraft,
+} from "@/components/portal/enrollment/form/formDeck";
+import { memberShare } from "@/components/portal/enrollment/form/formMath";
+import { PlanPricing } from "@/components/portal/enrollment/form/PlanPricing";
 import { productShortLabel } from "@/components/portal/leaf/glossary";
 import { isHiddenUnlessChosen } from "@/components/portal/memberVisibility";
 import { ConflictDetailError, formatError } from "@/lib/errors";
@@ -181,6 +191,7 @@ export function MemberEnrollmentPanel({
   saving = false,
   savingLeave = false,
   submitting = false,
+  form,
 }: {
   data: PortalEnrollmentData;
   dependants: DependantRef[];
@@ -195,6 +206,14 @@ export function MemberEnrollmentPanel({
   saving?: boolean;
   savingLeave?: boolean;
   submitting?: boolean;
+  /** The online enrolment e-form. When present the deck gains the paper
+   *  form's steps (details, family, declarations) and ends in a signature
+   *  instead of a bare Send. Absent on the broker preview. */
+  form?: {
+    context: MemberFormContext;
+    onSign: (input: FormSignInput) => Promise<unknown>;
+    signing: boolean;
+  };
 }) {
   const { window: win, enrollment, options } = data;
   // Where the running balance goes. `lg` and up the shell offers the middle of
@@ -224,6 +243,7 @@ export function MemberEnrollmentPanel({
   const [state, setState] = useState<Record<string, ProductState>>({});
   const [leaveAction, setLeaveAction] = useState("none");
   const [leaveDays, setLeaveDays] = useState("0");
+  const draft = useFormDraft(form?.context ?? null);
 
   // The state the server would produce if the member touched nothing — both the
   // seed and, once saved, the thing local edits are compared against to know
@@ -369,32 +389,54 @@ export function MemberEnrollmentPanel({
       });
       toast.success("Sent — you'll be told once it's confirmed.");
     } catch (e) {
-      if (e instanceof ConflictDetailError) {
-        if (e.detail.code === "unpriced_elections") {
-          const products = Array.isArray(e.detail.products)
-            ? (e.detail.products as string[])
-            : [];
-          toast.error(
-            products.length
-              ? `Pricing is missing for ${products.join(", ")}. Contact your HR team before sending.`
-              : "Pricing is missing for one or more choices. Contact your HR team before sending.",
-          );
-          return;
-        }
-        if (e.detail.code === "flex_overdrawn") {
-          const balance = e.detail.balance;
-          toast.error(
-            `Your choices exceed your flex dollars${
-              typeof balance === "number"
-                ? ` by ${money}${fmtAmount(Math.abs(balance))}`
-                : ""
-            }. Reduce them before sending.`,
-          );
-          return;
-        }
-      }
-      toast.error(formatError(e));
+      reportSendError(e);
     }
+  }
+
+  async function doSign() {
+    if (!form) return;
+    try {
+      await form.onSign(
+        signPayload(draft, form.context, { tierSets, state: current, allowDeps }, {
+          elections: tierSets.length
+            ? buildElectionsPayload(current, tierSets, dependants, allowDeps)
+            : undefined,
+          leave: win?.allow_leave ? chosenLeave : undefined,
+        }),
+      );
+      draft.resetSignature();
+      toast.success("Signed and sent. Your copy is under Your signed forms.");
+    } catch (e) {
+      reportSendError(e);
+    }
+  }
+
+  function reportSendError(e: unknown) {
+    if (e instanceof ConflictDetailError) {
+      if (e.detail.code === "unpriced_elections") {
+        const products = Array.isArray(e.detail.products)
+          ? (e.detail.products as string[])
+          : [];
+        toast.error(
+          products.length
+            ? `Pricing is missing for ${products.join(", ")}. Contact your HR team before sending.`
+            : "Pricing is missing for one or more choices. Contact your HR team before sending.",
+        );
+        return;
+      }
+      if (e.detail.code === "flex_overdrawn") {
+        const balance = e.detail.balance;
+        toast.error(
+          `Your choices exceed your flex dollars${
+            typeof balance === "number"
+              ? ` by ${money}${fmtAmount(Math.abs(balance))}`
+              : ""
+          }. Reduce them before sending.`,
+        );
+        return;
+      }
+    }
+    toast.error(formatError(e));
   }
 
   // ── The slides ─────────────────────────────────────────────────────────
@@ -447,7 +489,24 @@ export function MemberEnrollmentPanel({
   const changes = buildChanges(reviewTierSets, current, held, dependants, allowDeps);
   const changedCodes = new Set(changes.map((c) => c.key));
 
+  const formSlides = form
+    ? buildFormSlides({
+        ctx: form.context,
+        draft,
+        tierSets,
+        state: current,
+        disabled,
+        blocked,
+        allowDeps,
+        signing: form.signing,
+        onSign: () => void doSign(),
+      })
+    : null;
+  const contributionOf = (code: string) =>
+    form?.context.contributions.find((c) => c.product_code === code);
+
   const slides: DeckSlide[] = [];
+  if (formSlides) slides.push(formSlides.details);
   for (const ts of decisions) {
     const ps = current[ts.product_code];
     if (!ps) continue;
@@ -468,6 +527,20 @@ export function MemberEnrollmentPanel({
           dependants={dependants}
           flexOnChange={!!flex?.onChange}
           currency={currency}
+          pricing={
+            form && !ps.declined ? (
+              <PlanPricing
+                fact={form.context.plans.find(
+                  (f) => f.product_code === ts.product_code && f.tier_key === ps.tierKey,
+                )}
+                contribution={contributionOf(ts.product_code)}
+                tierKey={ps.tierKey}
+                share={memberShare(
+                  contributionOf(ts.product_code), ts, ps, form.context.dependants,
+                )}
+              />
+            ) : undefined
+          }
           onChange={(next) =>
             setState((s) => ({ ...s, [ts.product_code]: next }))
           }
@@ -511,6 +584,8 @@ export function MemberEnrollmentPanel({
       ),
     });
   }
+  if (formSlides?.family) slides.push(formSlides.family);
+  if (formSlides?.agree) slides.push(formSlides.agree);
   const changeCount = changes.length + (leaveChange ? 1 : 0);
   slides.push({
     key: REVIEW_KEY,
@@ -533,10 +608,14 @@ export function MemberEnrollmentPanel({
         submitting={submitting}
         blocked={blocked}
         onSave={() => void saveOnly()}
-        onSubmit={() => void doSubmit()}
+        sendLabel={formSlides ? "Continue to sign" : undefined}
+        onSubmit={() =>
+          formSlides ? onSlideKeyChange?.(SIGN_KEY) : void doSubmit()
+        }
       />
     ),
   });
+  if (formSlides) slides.push(formSlides.sign);
 
   return (
     <div className="space-y-4">

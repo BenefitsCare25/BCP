@@ -18,6 +18,10 @@ DOC_ENTITY_DEPENDANT = "dependant"
 # Member-level referral letters (entity_id = the member's Employee row id) —
 # reusable across specialist claims via Claim.referral_document_id.
 DOC_ENTITY_REFERRAL = "referral"
+# Enrolment e-form PDFs (entity_id = EnrollmentFormSubmission.id) and the
+# documents a form asks members to read (entity_id = EnrollmentWindow.id).
+DOC_ENTITY_ENROL_FORM = "enrol_form"
+DOC_ENTITY_FORM_RESOURCE = "form_resource"
 STORAGE_AVAILABLE = "available"
 STORAGE_DELETE_PENDING = "delete_pending"
 

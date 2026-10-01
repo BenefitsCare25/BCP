@@ -159,6 +159,10 @@ const HrSecurityPage = lazyRouteComponent(
   () => import("@/routes/hr/security"),
   "HrSecurityPage",
 );
+const HrEnrollmentFormsPage = lazyRouteComponent(
+  () => import("@/routes/hr/enrollment-forms"),
+  "HrEnrollmentFormsPage",
+);
 const SignInPage = lazyRouteComponent(
   () => import("@/routes/auth/sign-in"),
   "SignInPage",
@@ -386,6 +390,12 @@ const hrSecurityRoute = createRoute({
   getParentRoute: () => hrLayoutRoute,
   path: "/hr/security",
   component: HrSecurityPage,
+});
+
+const hrEnrollmentFormsRoute = createRoute({
+  getParentRoute: () => hrLayoutRoute,
+  path: "/hr/enrollment-forms",
+  component: HrEnrollmentFormsPage,
 });
 
 const portalLayoutRoute = createRoute({
@@ -853,6 +863,7 @@ const routeTree = rootRoute.addChildren([
     hrNewClaimRoute,
     hrClaimDetailRoute,
     hrSecurityRoute,
+    hrEnrollmentFormsRoute,
   ]),
   portalSignInRoute,
   portalSetPasswordRoute,

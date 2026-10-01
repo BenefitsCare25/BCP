@@ -29,6 +29,7 @@ from app.models.eligibility_mapping_profile import EligibilityMappingProfile
 from app.models.employee import Employee
 from app.models.employee_plan_override import EmployeePlanOverride
 from app.models.enrollment import Enrollment, EnrollmentElection
+from app.models.enrollment_form import EnrollmentFormConfig, EnrollmentFormSubmission
 from app.models.enrollment_window import EnrollmentWindow
 from app.models.entity_alias import EntityAlias
 from app.models.flex_pricing import FlexPricing
@@ -92,6 +93,8 @@ __all__ = [
     "EmployeePlanOverride",
     "Enrollment",
     "EnrollmentElection",
+    "EnrollmentFormConfig",
+    "EnrollmentFormSubmission",
     "EnrollmentWindow",
     "EntityAlias",
     "FlexPricing",

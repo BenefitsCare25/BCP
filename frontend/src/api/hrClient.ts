@@ -142,6 +142,25 @@ export const hrApi = {
     request<T>(path, { method: "PUT", body: JSON.stringify(body) }),
   upload: <T>(path: string, body: FormData) =>
     request<T>(path, { method: "POST", body }),
+  /** A binary response (PDF, ZIP, XLSX) — returns the raw Response so the
+   * caller can honour the server's Content-Disposition filename. Shares the
+   * request path's refresh-once-on-401 behaviour. */
+  downloadResponse: async (path: string, retried = false): Promise<Response> => {
+    const res = await fetch(`${API_BASE}${path}`, {
+      credentials: "include",
+      headers: { ...tenantHeader(), ...authHeader() },
+    });
+    if (res.status === 401) {
+      if (!retried && (await refreshHrSession())) {
+        return hrApi.downloadResponse(path, true);
+      }
+      return handleUnauthorized();
+    }
+    if (!res.ok) {
+      throw errorFromText(res.status, await res.text(), res.statusText);
+    }
+    return res;
+  },
   /** Public auth call (login / mfa / set-password): a 401/4xx is surfaced to
    * the form inline — no refresh, no redirect. Cookie still included so the
    * server can set the rotating refresh token. */

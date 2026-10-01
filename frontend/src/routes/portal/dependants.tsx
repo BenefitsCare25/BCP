@@ -35,6 +35,9 @@ export function PortalDependantsPage() {
   const [name, setName] = useState("");
   const [relationship, setRelationship] = useState("");
   const [dob, setDob] = useState("");
+  const [gender, setGender] = useState("");
+  const [idNo, setIdNo] = useState("");
+  const [occupation, setOccupation] = useState("");
   const [proof, setProof] = useState<File | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<{
@@ -60,6 +63,9 @@ export function PortalDependantsPage() {
         name: name.trim(),
         relationship: relationship.trim(),
         dob: dob || null,
+        gender: gender || null,
+        id_no: idNo.trim() || null,
+        occupation: occupation.trim() || null,
       });
       if (proof) {
         await uploadProof.mutateAsync({ dependantId: created.id, file: proof });
@@ -69,6 +75,9 @@ export function PortalDependantsPage() {
       setName("");
       setRelationship("");
       setDob("");
+      setGender("");
+      setIdNo("");
+      setOccupation("");
       setProof(null);
     } catch (err) {
       setError(formatError(err));
@@ -179,6 +188,49 @@ export function PortalDependantsPage() {
                     className={leafControl}
                     value={dob}
                     onChange={(e) => setDob(e.target.value)}
+                  />
+                )}
+              </Field>
+
+              <Field label="Sex">
+                {(p) => (
+                  <select
+                    {...p}
+                    className={leafControl}
+                    value={gender}
+                    onChange={(e) => setGender(e.target.value)}
+                  >
+                    <option value="">Choose one…</option>
+                    <option value="Female">Female</option>
+                    <option value="Male">Male</option>
+                  </select>
+                )}
+              </Field>
+
+              <Field
+                label="NRIC, FIN or birth certificate no."
+                hint="As printed on the document."
+              >
+                {(p) => (
+                  <input
+                    {...p}
+                    className={leafControl}
+                    value={idNo}
+                    maxLength={64}
+                    autoCapitalize="characters"
+                    onChange={(e) => setIdNo(e.target.value)}
+                  />
+                )}
+              </Field>
+
+              <Field label="Occupation" hint="Leave blank for a child or student.">
+                {(p) => (
+                  <input
+                    {...p}
+                    className={leafControl}
+                    value={occupation}
+                    maxLength={120}
+                    onChange={(e) => setOccupation(e.target.value)}
                   />
                 )}
               </Field>

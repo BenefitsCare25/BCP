@@ -11,7 +11,12 @@ import {
   useSetMyLeave,
   useSubmitMyEnrollment,
 } from "@/api/portal";
+import {
+  usePortalEnrollmentForm,
+  useSignEnrollmentForm,
+} from "@/api/portalEnrollmentForms";
 import type { DependantRef } from "@/components/enrollment/electionCore";
+import { MyFormsMount } from "@/components/portal/enrollment/form/MyFormsMount";
 import {
   dependantName,
   dependantRelationship,
@@ -33,6 +38,9 @@ export function PortalEnrollmentPage() {
   const saveElections = useSaveMyElections();
   const setLeave = useSetMyLeave();
   const submit = useSubmitMyEnrollment();
+  // The e-form wraps the deck whenever a period is open for this member.
+  const formContext = usePortalEnrollmentForm(!!enrollment.data?.window);
+  const sign = useSignEnrollmentForm();
 
   // Only active (approved) dependants are electable for coverage — pending
   // self-added dependants join once the broker approves them.
@@ -56,7 +64,11 @@ export function PortalEnrollmentPage() {
   // products and project it into the member's cover at broker confirm. It is
   // reachable on first paint through a restored `?p=review` link, where the
   // deck opens on the step whose primary action is Send.
-  if (enrollment.isLoading || dependants.isPending) {
+  if (
+    enrollment.isLoading ||
+    dependants.isPending ||
+    (!!enrollment.data?.window && formContext.isPending)
+  ) {
     return (
       <div className="space-y-4">
         <Skeleton className="h-20 w-full" />
@@ -76,6 +88,12 @@ export function PortalEnrollmentPage() {
   // on the member's behalf.
   if (dependants.isError) {
     return <PortalErrorState onRetry={() => void dependants.refetch()} />;
+  }
+  // Signing is the only way to send while a period is open, so a form that
+  // failed to load is an error to retry, not a reason to fall back to an
+  // unsigned send.
+  if (enrollment.data?.window && formContext.isError) {
+    return <PortalErrorState onRetry={() => void formContext.refetch()} />;
   }
   if (enrollment.isError) {
     return (
@@ -121,7 +139,17 @@ export function PortalEnrollmentPage() {
         saving={saveElections.isPending}
         savingLeave={setLeave.isPending}
         submitting={submit.isPending}
+        form={
+          formContext.data
+            ? {
+                context: formContext.data,
+                onSign: (input) => sign.mutateAsync(input),
+                signing: sign.isPending,
+              }
+            : undefined
+        }
       />
+      <MyFormsMount />
     </div>
   );
 }

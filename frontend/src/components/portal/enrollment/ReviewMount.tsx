@@ -200,6 +200,7 @@ export function ReviewMount({
   submitting,
   blocked,
   rise = true,
+  sendLabel = "Send them in",
   onSave,
   onSubmit,
 }: {
@@ -231,6 +232,9 @@ export function ReviewMount({
   /** Off inside an enrollment-deck slide, whose own transition owns the
    *  arrival — see `Mount`'s `rise`. */
   rise?: boolean;
+  /** The primary action's wording. With the e-form the review hands over to
+   *  the signature step rather than sending. */
+  sendLabel?: string;
   onSave: () => void;
   onSubmit: () => void;
 }) {
@@ -379,7 +383,7 @@ export function ReviewMount({
               ) : (
                 <Send className="size-4" aria-hidden />
               )}
-              Send them in
+              {sendLabel}
             </Action>
           </div>
 
