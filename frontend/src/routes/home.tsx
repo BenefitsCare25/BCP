@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Building2, CalendarDays, Loader2, ReceiptText, RefreshCw, Users } from "lucide-react";
+import { Building2, CalendarDays, ReceiptText, Users } from "lucide-react";
 import { useDashboardSummary, type DashboardSummary } from "@/api/dashboard";
 import { Button } from "@/components/ui/button";
 import { CompanyDirectory } from "@/components/home/CompanyDirectory";
@@ -8,18 +8,18 @@ import { WorkPanel } from "@/components/home/WorkPanel";
 import { renewalCompanies, type QueueKey } from "@/lib/homeDashboard";
 
 export function HomePage() {
-  const { data, isLoading, isError, refetch, isFetching, dataUpdatedAt } = useDashboardSummary(undefined, { localErrorHandling: true });
+  const { data, isLoading, isError, refetch, isFetching } = useDashboardSummary(undefined, { localErrorHandling: true });
   if (isLoading) return <HomeSkeleton />;
   if (!data) return <div className="flex min-h-52 flex-col items-center justify-center gap-3 rounded-xl border border-border bg-card p-6 text-center" role="alert">
     <p className="text-sm text-error">Couldn't load Home. Please retry.</p>
     <Button variant="outline" size="sm" disabled={isFetching} onClick={() => void refetch()}>Retry</Button>
   </div>;
   return <HomeContent data={data} stale={isError} refreshing={isFetching}
-    updatedAt={dataUpdatedAt} refresh={() => void refetch()} />;
+    refresh={() => void refetch()} />;
 }
 
-function HomeContent({ data, stale, refreshing, updatedAt, refresh }: {
-  data: DashboardSummary; stale: boolean; refreshing: boolean; updatedAt: number; refresh: () => void;
+function HomeContent({ data, stale, refreshing, refresh }: {
+  data: DashboardSummary; stale: boolean; refreshing: boolean; refresh: () => void;
 }) {
   const [queue, setQueue] = useState<QueueKey>("claims_review");
   const [companyQuery, setCompanyQuery] = useState("");
@@ -28,18 +28,7 @@ function HomeContent({ data, stale, refreshing, updatedAt, refresh }: {
   const renewals = renewalCompanies(data.companies, 30, data.business_date);
   const work = data.work_by_year ?? data.companies;
   return <div className="space-y-5 pb-4">
-    <div className="flex flex-wrap items-start justify-between gap-3">
-      <div>
-        <h1 className="text-xl font-semibold tracking-tight text-foreground">Home</h1>
-        <p className="mt-1 text-xs text-muted-foreground">Employees in periods covering today. Outstanding work across all benefit years.</p>
-      </div>
-      <div className="flex flex-wrap items-center gap-3">
-        <p className="text-xs text-muted-foreground">Updated <time dateTime={new Date(updatedAt).toISOString()}>{new Intl.DateTimeFormat("en-SG", { hour: "2-digit", minute: "2-digit", second: "2-digit", timeZone: "Asia/Singapore" }).format(updatedAt)}</time> SGT</p>
-        <Button variant="outline" size="sm" disabled={refreshing} onClick={refresh} aria-label="Refresh Home">
-          {refreshing ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />} Refresh
-        </Button>
-      </div>
-    </div>
+    <h1 className="sr-only">Home</h1>
     {stale && <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-warn-soft p-3 text-sm text-warn" role="alert">
       <p>Couldn't refresh Home. Showing the last successful update.</p>
       <Button variant="outline" size="sm" disabled={refreshing} onClick={refresh}>Retry</Button>
@@ -64,7 +53,6 @@ function HomeContent({ data, stale, refreshing, updatedAt, refresh }: {
 function HomeSkeleton() {
   return <div className="space-y-5" aria-label="Loading Home" role="status">
     <span className="sr-only">Loading Home</span>
-    <div className="h-12 animate-pulse rounded-lg bg-muted/45" />
     <div className="grid grid-cols-2 overflow-hidden rounded-xl border border-border bg-card sm:grid-cols-4">
       {Array.from({ length: 4 }).map((_, index) => <div key={index} className="h-28 animate-pulse bg-muted/45" />)}
     </div>

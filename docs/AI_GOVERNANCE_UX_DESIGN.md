@@ -56,7 +56,7 @@ Describe claim review, member claim autofill, and document extraction/setup assi
 | `/platform/ai-oversight/releases/claim-review-v3` | `/settings/ai?tab=provider` |
 | `/claims/review?preview=ai-governance` | Existing production Claims Review; no sample decision screen |
 
-The top-bar oversight entry, sample stores, mock member journey, gallery images/PDF and gallery build/QA tools are retired. The old review folder retains a notice pointing to current documentation. Review the actual frontend.
+The top-bar oversight entry, sample stores, mock member journey, gallery images/PDF and gallery build/QA tools are retired. The obsolete review folder has been removed. Review the actual frontend.
 
 ## Verification
 

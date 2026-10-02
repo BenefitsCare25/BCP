@@ -57,6 +57,6 @@ CI additionally runs the full suites, including disposable PostgreSQL migration 
 1. **System administrator:** collect and approve actual usage policies, data-handling rules and procedures; upload/publish PDFs and choose review dates.
 2. **Broker administrators:** check company provider/usage settings and read shared policies. Operational settings and human decisions stay in Claims Review.
 3. **Organization:** retain supplier agreements, scope decisions, risk assessments, training and audit evidence through the relevant business processes. Application roles do not replace organizational responsibilities.
-4. **Future engineering work, if prioritized:** reassess remaining model-validation, review-provenance and member-explanation gaps against the [dated baseline](AI_COMPLIANCE_READINESS_2026-09-28.md). These are not delivered capabilities or approved commitments in this release.
+4. **Future engineering work, if prioritized:** reassess remaining model-validation, review-provenance and member-explanation gaps against the [dated baseline](archive/AI_COMPLIANCE_READINESS_2026-09-28.md). These are not delivered capabilities or approved commitments in this release.
 
 The owner-assignment model, separate oversight workspaces, synthetic release controls and member-journey preview are retired. Removed source and designs remain recoverable in Git history; they are not the plan for further implementation.

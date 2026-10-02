@@ -1,10 +1,12 @@
 # AI Claim Review Production Status
 
+> Historical reference, archived 2 October 2026. Dates, verification results and open items below describe the original review, not the current deployment. See the current [AI Settings guide](../AI_SETTINGS.md).
+
 Status: deployed and production verified
 
 Last updated: 2026-08-18 10:41 SGT (Asia/Singapore)
 
-Navigation update, 28 September 2026: provider controls are now under **AI Settings → Provider & usage**. Platform-wide documents are in its **Policies** tab; see the [AI Settings guide](AI_SETTINGS.md). The claims baseline below remains its original verification record.
+Navigation update, 28 September 2026: provider controls are now under **AI Settings → Provider & usage**. Platform-wide documents are in its **Policies** tab; see the [AI Settings guide](../AI_SETTINGS.md). The claims baseline below remains its original verification record.
 
 Deployed baseline:
 
