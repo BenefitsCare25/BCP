@@ -314,8 +314,11 @@ test("benefit-year selection defaults to today and follows every module", async 
   const invalidEndDate = page.getByTestId(
     `benefit-year-${years.past.id}-end_date`,
   );
+  // Move focus as a user would: native date fields can keep focus after blur()
+  // or a single Tab while moving between their month, day and year segments.
+  await invalidEndDate.focus();
   await invalidEndDate.fill(years.current.start_date);
-  await invalidEndDate.blur();
+  await page.getByTestId(`benefit-year-${years.past.id}-start_date`).click();
   await expect(
     page.getByText(new RegExp(`Overlaps .*${years.current.start_date}`)),
   ).toBeVisible();

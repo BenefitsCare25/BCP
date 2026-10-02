@@ -124,7 +124,7 @@ export function HrSignInPage() {
               />
             </div>
           </div>
-          {error && <p className="text-sm text-error">{error}</p>}
+          {error && <p className="text-sm text-error" role="alert">{error}</p>}
           <Button
             type="submit"
             className="h-12 w-full text-md transition-transform duration-150 active:scale-[0.99]"
@@ -160,7 +160,7 @@ export function HrSignInPage() {
               className="h-12 text-center text-lg font-semibold tracking-[0.5em]"
             />
           </div>
-          {error && <p className="text-sm text-error">{error}</p>}
+          {error && <p className="text-sm text-error" role="alert">{error}</p>}
           <Button
             type="submit"
             className="h-12 w-full text-md transition-transform duration-150 active:scale-[0.99]"
