@@ -18,7 +18,6 @@ import {
 import { Mount } from "./Mount";
 import { buildCareRoutes } from "./careRoutes";
 import { careTone } from "./careTone";
-import { isEmployeeLine } from "../memberVisibility";
 import { Strike } from "./Strike";
 import { formatDay } from "./date";
 
@@ -65,26 +64,17 @@ function CareTags({ lines }: { lines: CoverageLine[] }) {
 export function DependantsLeaf({
   rows,
   statement,
-  selfName,
 }: {
   rows: Dependant[];
   /** The member's statement, to name what each person is covered for. Omit
    *  while it is unresolvable — an absent list is not "covered for nothing". */
   statement?: BenefitStatement;
-  /** The member's own name: the family starts with them. */
-  selfName?: string;
 }) {
-  const selfLines = statement ? statement.coverage.filter(isEmployeeLine) : null;
   const linesFor = (id: string) =>
     statement ? statement.coverage.filter((line) => line.covered_dependants.some((person) => person.id === id)) : null;
 
   return (
     <ul className="portal-family-records space-y-3">
-      {selfName && selfLines && (
-        <Mount as="li" label={selfName} gloss="You" aside={<Strike tone="approved">Covered</Strike>}>
-          <CareTags lines={selfLines} />
-        </Mount>
-      )}
       {rows.length === 0 && (
         <Mount as="li" label="No one added yet">
           <p className="text-row text-label">

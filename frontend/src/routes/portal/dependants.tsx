@@ -17,7 +17,6 @@ import { LeafSkeleton } from "@/components/portal/leaf/LeafSkeleton";
 import { Mount } from "@/components/portal/leaf/Mount";
 import { Action } from "@/components/portal/leaf/Action";
 import { PortalErrorState } from "@/components/portal/PortalErrorState";
-import { usePortalSession } from "@/stores/portalSession";
 
 export function PortalDependantsPage() {
   const dependants = usePortalDependants();
@@ -27,7 +26,6 @@ export function PortalDependantsPage() {
   // status, which stopped being the same fact once cover could be set per
   // person.
   const statement = usePortalStatement();
-  const member = usePortalSession((state) => state.member);
   const addDependant = useAddDependant();
   const uploadProof = useUploadDependantProof();
 
@@ -283,7 +281,7 @@ export function PortalDependantsPage() {
         </Mount>
       )}
 
-      <DependantsLeaf rows={rows} statement={statement.data} selfName={member?.display_name ?? undefined} />
+      <DependantsLeaf rows={rows} statement={statement.data} />
     </div>
   );
 }

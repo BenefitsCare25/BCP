@@ -219,7 +219,13 @@ export function PortalClaimDetailPage() {
   return (
     <ClaimDetailLeaf
       claim={data}
-      messages={messages.data}
+      messages={messages.data?.map((message) =>
+        // A routine acknowledgement needs only its event and timestamp here.
+        // Preserve the stored message and all human replies/decision notes.
+        message.author_type === "system" && message.event === "submitted"
+          ? { ...message, subject: "", body: "Claim submitted." }
+          : message,
+      )}
       messagesLoading={messages.isLoading}
       messagesError={messages.isError}
       back={

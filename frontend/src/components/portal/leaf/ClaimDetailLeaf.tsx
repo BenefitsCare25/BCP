@@ -353,22 +353,6 @@ export function ClaimDetailLeaf({
     <div className="portal-claim-detail mx-auto max-w-3xl space-y-3">
       {back}
 
-      {/* The receipt. A notice, never a second brand fill — it carries a strike
-          in the pending ink and states what was sent and what happens next.
-          It deliberately promises no turnaround: the AI check runs immediately
-          but the decision is a person's, and prod cannot email a member yet. */}
-      {receipt && (
-        <Mount>
-          <Strike tone="pending">Sent</Strike>
-          <p className="text-md font-semibold text-record">We have your claim</p>
-          <p className="text-row text-label">
-            Everything you sent is listed below, and this page is where its
-            status appears. You don&rsquo;t need to send it again — if we need
-            anything else, this claim will say so and you can add it here.
-          </p>
-        </Mount>
-      )}
-
       <Mount
         label={claimTitle(claim)}
         className="portal-claim-summary"
@@ -386,6 +370,12 @@ export function ClaimDetailLeaf({
         {editing ?? (
         <>
         <ClaimTimeline claim={claim} />
+        {receipt && claim.submitted_at && claim.status !== "draft" && (
+          <p role="status" className="flex items-center gap-2 text-row text-action-ink">
+            <Check className="size-4 shrink-0" aria-hidden />
+            Claim submitted
+          </p>
+        )}
         {/* One column on a phone. The old two-up grid never collapsed, so a
             long diagnosis and a currency figure shared ~147px each. */}
         <dl className="portal-claim-facts divide-y divide-hairline/75">
