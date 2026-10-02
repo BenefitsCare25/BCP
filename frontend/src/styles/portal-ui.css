@@ -191,7 +191,19 @@
   .enrolment-comparison dd > div { padding: 0; }
 }
 .portal-coverage .clay-sheet > .clay-tag { display: none; }
-.portal-coverage .clay-sheet { display: flex; flex-direction: column; grid-row: auto; padding: 20px; border-radius: 24px; }
+.portal-coverage .clay-sheet { padding: 20px; border-radius: 24px; }
+/* Share content tracks across each row, including cards with wrapped copy.
+   Explicit positions keep empty facts from moving the description or action. */
+.portal-coverage .clay-sheets:not(.clay-sheets-other) > .clay-sheet { grid-row: span 6; }
+.portal-coverage .clay-sheets:not(.clay-sheets-other) .clay-sheet-title { grid-row: 1; min-height: 56px; }
+.portal-coverage .clay-sheets:not(.clay-sheets-other) .clay-sheet-label { grid-row: 2; }
+.portal-coverage .clay-sheets:not(.clay-sheets-other) .clay-sheet-value { grid-row: 3; }
+.portal-coverage .clay-sheets:not(.clay-sheets-other) .clay-sheet-detail { grid-row: 4; }
+.portal-coverage .clay-sheets:not(.clay-sheets-other) .clay-meter { grid-row: 5; }
+.portal-coverage .clay-sheets:not(.clay-sheets-other) .clay-sheet-go { grid-row: 6; }
+.portal-coverage .clay-sheet-detail:empty,
+.portal-coverage .clay-sheet > span[aria-hidden] { display: none; }
+.portal-coverage .clay-sheet-label:empty { min-height: 0; }
 .portal-coverage .clay-sheet-title { margin: 0; max-width: calc(100% - 80px); }
 .portal-coverage .clay-sheet-art { width: 86px; height: 86px; top: 8px; right: 6px; }
 .portal-coverage .clay-sheet-label { margin-top: 18px; }
@@ -215,7 +227,7 @@
   .portal-ui .clay-navlink:hover { color: var(--color-action-ink); }
   .portal-ui .leaf-mount:not(.enrolment-product):hover { background-color: var(--color-glass); }
   .portal-ui label:has(input[type="file"]:not(:disabled)):hover { background: var(--color-portal-hover); }
-  .portal-ui .leaf-focus:not(.bg-action):not(:disabled):not([aria-disabled="true"]):hover { background-color: var(--color-portal-hover); }
+  .portal-ui .leaf-focus:not(.bg-action):not(.clay-sheet):not(:disabled):not([aria-disabled="true"]):hover { background-color: var(--color-portal-hover); }
   .portal-ui .clinic-grid > li:hover { background: var(--color-shade); border-color: var(--color-leaf-input); box-shadow: none; translate: 0 -2px; }
 }
 @media (min-width: 768px) {
@@ -237,6 +249,12 @@
   .portal-ui .portal-clinic-finder { padding: 16px; }
   .portal-ui .portal-clinic-finder > div:first-of-type { padding-right: 0; }
   .portal-coverage .clay-sheets { grid-template-columns: minmax(0, 1fr); }
+  /* Stacked phone cards need no shared tracks or empty-row clearance. */
+  .portal-coverage .clay-sheets:not(.clay-sheets-other) > .clay-sheet { grid-row: auto; grid-template-rows: repeat(6, auto); padding: 16px; }
+  .portal-coverage .clay-sheets:not(.clay-sheets-other) .clay-sheet-title { min-height: 24px; max-width: calc(100% - 48px); }
+  .portal-coverage .clay-sheet-art { width: 40px; height: 40px; top: 12px; right: 12px; }
+  .portal-coverage .clay-sheet-label { margin-top: 12px; }
+  .portal-coverage .clay-sheet-detail { margin-top: 4px; }
   .portal-coverage .clay-sheet-go { display: flex; }
 }
 @media (prefers-reduced-motion: reduce) {

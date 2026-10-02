@@ -57,14 +57,9 @@ function MakeClaimAction() {
   );
 }
 
-/** The same measure the claim's own page uses.
- *
- * A ledger row is a term on the left and a figure on the right, and at the
- * shell's full 1024px that put ~500px of nothing between them — the eye has to
- * traverse it to pair a claim with its amount. Sharing the detail page's
- * `max-w-3xl` also means opening a claim expands the row in place instead of
- * reflowing the column it came from. */
-const MEASURE = "max-w-4xl";
+/** Keep the ledger readable and centred within the shared page container,
+ * including loading, empty and retry states. */
+const MEASURE = "mx-auto w-full max-w-4xl";
 
 export function PortalClaimsPage() {
   const company = useCompany();
@@ -78,12 +73,12 @@ export function PortalClaimsPage() {
   const canClaim = holds(usePortalMe().data?.access.capabilities, "claim");
   useDocumentTitle("My claims");
 
-  if (claims.isLoading) return <LeafSkeleton label="Loading your claims" />;
+  if (claims.isLoading) return <div className={MEASURE}><LeafSkeleton label="Loading your claims" /></div>;
 
   // A 404 keeps the confident empty state below; anything else is a fetch
   // failure and must not read as "no claims yet".
   if (claims.isError && !isNotFoundError(claims.error)) {
-    return <><ClaimPeriodPicker /><PortalErrorState onRetry={() => void claims.refetch()} /></>;
+    return <div className={MEASURE}><ClaimPeriodPicker /><PortalErrorState onRetry={() => void claims.refetch()} /></div>;
   }
 
   const rows = claims.data?.pages.flatMap((page) => page.items) ?? [];
@@ -95,7 +90,7 @@ export function PortalClaimsPage() {
   // one-handed.
   if (rows.length === 0) {
     return (
-      <div>
+      <div className={MEASURE}>
         <ClaimPeriodPicker />
         <ClayEmpty
           tone="peach"

@@ -35,7 +35,7 @@ function line(code: string, name: string, items: ReturnType<typeof item>[], fami
   };
 }
 
-async function mockMember(page: Page) {
+async function mockMember(page: Page, descriptionsOnly = false) {
   await page.addInitScript((member) => {
     localStorage.setItem("inspro-portal-session", JSON.stringify({
       state: { token: "e2e-member-token", expiresAt: "2100-01-01T00:00:00Z", member },
@@ -57,7 +57,12 @@ async function mockMember(page: Page) {
   await page.route(/\/api\/v1\/portal\/benefit-statement$/, (route) => route.fulfill({ json: {
     employee: { id: "employee-1", staff_id: "EMP-001", employee_name: "Alex Tan" },
     policy_year_id: "year-1", is_matched: true, attributes: [], dependants: [], flex: null,
-    coverage: [
+    coverage: descriptionsOnly ? [
+      { ...line("GCGP", "Group GP", []), care_route: "gp" },
+      { ...line("GCSP", "Group Specialist", []), care_route: "specialist" },
+      { ...line("GHS", "Group Hospital & Surgical", []), care_route: "hospital" },
+      { ...line("GDT", "Group Dental", []), care_route: "dental" },
+    ] : [
       line("GCGP", "Group GP", [
         item("Panel consultation", "As charged"),
         item("Non-panel visit", "80", "per visit", { maximum_visits: "6" }),
@@ -120,4 +125,42 @@ test("care routes show the right facts and hide GTL", async ({ page }, testInfo)
   expect(errors).toEqual([]);
   const overflowing = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
   expect(overflowing).toBe(false);
+});
+
+test("coverage card rows align when titles and descriptions wrap", async ({ page }, testInfo) => {
+  await mockMember(page, true);
+  await page.goto("/portal/demo/coverage?tab=benefits");
+  const cards = page.locator(".portal-coverage .clay-sheets:not(.clay-sheets-other) > .clay-sheet");
+  await expect(cards).toHaveCount(4);
+  await page.evaluate(() => document.fonts.ready);
+
+  const widths = testInfo.project.name === "desktop-chromium" ? [1440, 940, 768] : [393, 320];
+  for (const width of widths) {
+    await page.setViewportSize({ width, height: 960 });
+    const rows = await cards.evaluateAll((elements) => elements.map((card) => {
+      const box = card.getBoundingClientRect();
+      const positions = [".clay-sheet-title", ".clay-sheet-value", ".clay-sheet-go"].map((selector) => {
+        const element = card.querySelector(selector)!;
+        const rect = element.getBoundingClientRect();
+        return { top: rect.top, right: rect.right, bottom: rect.bottom };
+      });
+      const art = card.querySelector("img")!.getBoundingClientRect();
+      return { top: box.top, bottom: box.bottom, right: box.right, positions, artBottom: art.bottom };
+    }));
+    for (const card of rows) {
+      // Body copy starts below the illustration, including single-line phone titles.
+      expect(card.positions[1].top).toBeGreaterThanOrEqual(card.artBottom);
+      for (const position of card.positions) {
+        expect(position.right).toBeLessThanOrEqual(card.right);
+        expect(position.bottom).toBeLessThanOrEqual(card.bottom);
+      }
+      for (const peer of rows.filter((row) => Math.abs(row.top - card.top) < 1)) {
+        for (let index = 0; index < card.positions.length; index++) {
+          expect(Math.abs(card.positions[index].top - peer.positions[index].top)).toBeLessThan(1);
+        }
+      }
+    }
+    expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
+    await page.screenshot({ path: testInfo.outputPath(`coverage-aligned-${width}.png`), fullPage: true });
+  }
 });
