@@ -200,8 +200,8 @@ test("HR submits and tracks one employee claim with evidence", async ({ page }, 
   await page.getByRole("button", { name: "Save and add evidence" }).click();
 
   await expect(page.getByRole("heading", { name: "Draft claim" })).toBeVisible();
-  await expect(page.getByText("Filed for Avery Tan")).toBeVisible();
-  await expect(page.getByText(/By Demo HR Admin/)).toBeVisible();
+  await expect(page.getByText(/^Avery Tan ·/)).toBeVisible();
+  await expect(page.getByText("Filed by Demo HR Admin", { exact: true })).toBeVisible();
   await page.getByLabel("Upload Receipt or invoice").setInputFiles({
     name: "wellness-receipt.pdf",
     mimeType: "application/pdf",

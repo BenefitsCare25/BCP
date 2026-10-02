@@ -13,7 +13,7 @@ dependencies = [
     "xlrd==2.0.1",
     # Flex-document intake — normalize PDF/PNG/JPG/MSG into text + images for
     # vision extraction. PyMuPDF is a self-contained wheel (no Poppler binary).
-    "pypdf>=6.15.0",
+    "pypdf>=6.19.0",
     "pymupdf>=1.24.0",
     "pillow>=12.3.0",
     "extract-msg>=0.52.0",
