@@ -192,13 +192,15 @@
 }
 .portal-coverage .clay-sheet > .clay-tag { display: none; }
 .portal-coverage .clay-sheet { display: flex; flex-direction: column; grid-row: auto; padding: 20px; border-radius: 24px; }
-.portal-coverage .clay-sheet-title { margin: 0; max-width: calc(100% - 80px); font-size: 20px; }
+.portal-coverage .clay-sheet-title { margin: 0; max-width: calc(100% - 80px); }
 .portal-coverage .clay-sheet-art { width: 86px; height: 86px; top: 8px; right: 6px; }
 .portal-coverage .clay-sheet-label { margin-top: 18px; }
-.portal-coverage .clay-sheet-value { font-size: 24px; }
+/* Only numeric amounts use this compact scale. Descriptions and long-word
+   values inherit Home's shared typography instead of becoming 24px headlines. */
+.portal-coverage .clay-sheet-value:not(.is-quiet):not(.is-words) { font-size: 24px; }
 .portal-coverage .clay-sheet-detail { white-space: normal; overflow: visible; }
 .portal-coverage .clay-sheet-go { margin-top: 12px; }
-.portal-coverage .clay-sheets-other .clay-sheet-title { max-width: none; font-size: 16px; }
+.portal-coverage .clay-sheets-other .clay-sheet-title { max-width: none; }
 .portal-coverage > div.tone-lime,
 .portal-coverage > div.tone-blue,
 .portal-coverage > div.tone-peach,
@@ -235,7 +237,6 @@
   .portal-ui .portal-clinic-finder { padding: 16px; }
   .portal-ui .portal-clinic-finder > div:first-of-type { padding-right: 0; }
   .portal-coverage .clay-sheets { grid-template-columns: minmax(0, 1fr); }
-  .portal-coverage .clay-sheet-title { font-size: 20px; }
   .portal-coverage .clay-sheet-go { display: flex; }
 }
 @media (prefers-reduced-motion: reduce) {
