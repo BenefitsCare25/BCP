@@ -69,6 +69,8 @@ class ExtractedCategory:
     # Full text of an annotated premium cell whose amount was parsed out, e.g.
     # GBT's "$3,169.80 (Subject to Minimum Policy Premium of S$500)".
     premium_note: str | None = None
+    source_insured: str | None = None
+    source_sheet: str | None = None
 
 
 @dataclass(frozen=True)
@@ -228,6 +230,8 @@ class ProductSlip:
     # surfaced downstream as needs_classification.
     layout_family: str | None = None
     registry_known: bool = True
+    rate_schedules: tuple[dict[str, Any], ...] = ()
+    extraction_issues: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

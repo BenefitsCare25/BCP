@@ -34,6 +34,7 @@ import {
   type CatalogScope,
 } from "@/api/hooks";
 import { ScopeToggle } from "@/components/schema/ScopeToggle";
+import { ValueMappingEditor } from "@/components/schema/ValueMappingEditor";
 import { formatError } from "@/lib/errors";
 import type { AttributeSchema } from "@/types";
 
@@ -49,6 +50,7 @@ interface Draft {
   allow_matching: boolean;
   allow_ai_values: boolean;
   description: string;
+  derivation_rule: Record<string, unknown> | null;
 }
 
 const EMPTY_DRAFT: Draft = {
@@ -61,6 +63,7 @@ const EMPTY_DRAFT: Draft = {
   allow_matching: true,
   allow_ai_values: false,
   description: "",
+  derivation_rule: null,
 };
 
 function toDraft(attr: AttributeSchema): Draft {
@@ -74,6 +77,7 @@ function toDraft(attr: AttributeSchema): Draft {
     allow_matching: attr.allow_matching,
     allow_ai_values: attr.allow_ai_values,
     description: attr.description ?? "",
+    derivation_rule: attr.derivation_rule,
   };
 }
 
@@ -98,7 +102,9 @@ export function SchemaAttributesPage({
   // "Firm library" shows only the shared (client_id NULL) rows; "This company"
   // shows the effective set (its own rows + inherited firm-library defaults).
   const visible =
-    scope === "firm" ? attrs.filter((a) => a.client_id === null) : attrs;
+    scope === "firm" ? attrs.filter((a) => a.client_id === null) :
+      [...new Map([...attrs.filter(a => a.client_id === null), ...attrs.filter(a => a.client_id !== null)]
+        .map(a => [a.attribute_id, a])).values()];
   const firmWriteBlocked = scope === "firm" && !isAdmin;
 
   const onSheetOpenChange = (next: boolean) => {
@@ -110,7 +116,8 @@ export function SchemaAttributesPage({
   };
 
   const beginEdit = (attr: AttributeSchema) => {
-    setEditing(attr);
+    // Editing an inherited default in company scope creates a company override.
+    setEditing(scope === "company" && attr.client_id === null ? null : attr);
     setDraft(toDraft(attr));
     onOpenChange(true);
   };
@@ -136,6 +143,8 @@ export function SchemaAttributesPage({
             allow_matching: draft.allow_matching,
             allow_ai_values: draft.is_pii ? false : draft.allow_ai_values,
             description: draft.description || null,
+            derivation_rule: draft.derivation_rule,
+            derived_from: typeof draft.derivation_rule?.source === "string" ? draft.derivation_rule.source : null,
           },
         });
         toast.success(`Updated ${draft.display_name}`);
@@ -151,6 +160,8 @@ export function SchemaAttributesPage({
             allow_matching: draft.allow_matching,
             allow_ai_values: draft.is_pii ? false : draft.allow_ai_values,
             description: draft.description || null,
+            derivation_rule: draft.derivation_rule,
+            derived_from: typeof draft.derivation_rule?.source === "string" ? draft.derivation_rule.source : null,
           },
           scope,
         });
@@ -323,6 +334,8 @@ export function SchemaAttributesPage({
                   }
                 />
               </div>
+              {scope === "company" && <ValueMappingEditor rule={draft.derivation_rule} attributes={visible}
+                onChange={rule => setDraft({ ...draft, derivation_rule: rule })} />}
             </SheetBody>
             <SheetFooter>
               <SheetClose asChild>
@@ -366,7 +379,7 @@ export function SchemaAttributesPage({
               onEdit={beginEdit}
               onDelete={setDeleting}
               // Firm-library defaults are shared across companies — admin-only.
-              lockRow={(a) => a.client_id === null && !isAdmin}
+              lockRow={(a) => scope === "firm" && a.client_id === null && !isAdmin}
             />
           )}
         </CardContent>

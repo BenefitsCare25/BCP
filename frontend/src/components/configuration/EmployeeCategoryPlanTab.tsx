@@ -207,9 +207,8 @@ function useEmployeeCategoryData(props: Props) {
       groups.map((group) => ({
         key: group.key,
         description: group.representative.raw_description || group.name,
-        insured: productEntities.length
-          ? productEntities
-          : insuredNames(
+        location_scope: String(group.representative.plan_assignments?.location_scope ?? "") || null,
+        insured: insuredNames(
               (group.representative.plan_assignments as PlanAssignment | null)
                 ?.insured,
             ),

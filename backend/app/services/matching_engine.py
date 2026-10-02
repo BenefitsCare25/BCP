@@ -34,7 +34,7 @@ from app.models.category import CategoryStatus
 from app.models.employee import EMPLOYEE_STATUS_ACTIVE
 from app.models.product import Product
 from app.services.derivation_engine import derive
-from app.services.eligibility_scope import unscoped_catch_alls
+from app.services.eligibility_scope import location_allows, relative_remainder, unscoped_catch_alls
 from app.services.explicit_grade_clauses import has_explicit_grade_clause
 from app.services.rule_evaluator import evaluate
 
@@ -77,9 +77,8 @@ MatchMethod = Literal["exact_name", "fuzzy_name", "rule"]
 # Multi-subsidiary slips (WICA-style per-entity blocks) repeat category names
 # per legal entity; the roster's "Entity" column says which company employs
 # each member. A category whose plan_assignments.insured names specific
-# entities only matches employees of those entities. Blank on EITHER side is a
-# wildcard, so single-entity clients and rosters without an Entity column are
-# untouched.
+# entities only matches employees with a known, matching entity. Only an
+# unscoped category is a wildcard.
 
 # Corporate-suffix canonicalization so punctuation/abbreviation variance can't
 # split an entity ("CityNexus Pte. Ltd." == "CityNexus Pte Ltd";
@@ -188,6 +187,19 @@ def product_entities(
     return insured_entities(meta.get("entities"), aliases)
 
 
+def category_entity_gate(
+    category: Category,
+    product_gate: frozenset[str],
+    aliases: EntityAliases | None = None,
+) -> frozenset[str]:
+    """Intersect explicit restrictions; disjoint scopes must not become a wildcard."""
+    category_gate = category_insured_entities(category, aliases)
+    if product_gate and category_gate:
+        # No real entity normalizes to an empty name.
+        return product_gate & category_gate or frozenset({""})
+    return product_gate or category_gate
+
+
 def employee_entity(
     attribute_values: dict[str, Any] | None, aliases: EntityAliases | None = None
 ) -> frozenset[str]:
@@ -228,10 +240,10 @@ def entity_alias_map(db: Session, client_id: str | None) -> EntityAliases:
 
 
 def _entity_allows(cat_entities: frozenset[str], emp_entities: frozenset[str]) -> bool:
-    """A blank on EITHER side is a wildcard; otherwise the two sets must
+    """An unscoped category is a wildcard; otherwise the two sets must
     overlap. Both sides are alias-expanded, so a roster spelling covering
     several entities matches a category insured on any one of them."""
-    return not cat_entities or not emp_entities or not cat_entities.isdisjoint(emp_entities)
+    return not cat_entities or bool(emp_entities and not cat_entities.isdisjoint(emp_entities))
 
 
 @dataclass(frozen=True)
@@ -316,7 +328,13 @@ def rule_specificity(rule: object) -> int:
 
 def rule_has_validation_errors(category: Category) -> bool:
     validation = category.rule_validation
-    return isinstance(validation, dict) and bool(validation.get("errors"))
+    return isinstance(validation, dict) and bool(
+        validation.get("errors") or validation.get("unresolved_clauses")
+    )
+
+
+def category_specificity(category: Category) -> int:
+    return -1 if relative_remainder(category) else rule_specificity(category.matching_rule)
 
 
 def match_one(
@@ -362,6 +380,8 @@ def match_one(
 
     def _allowed(cat: Category) -> bool:
         if cat.id in blocked_category_ids:
+            return False
+        if not location_allows(cat, view):
             return False
         if not _entity_allows(insured_by_category.get(cat.id, frozenset()), emp_entities):
             return False
@@ -437,7 +457,7 @@ def match_one(
             matches,
             key=lambda c: (
                 _status_rank(c.status),
-                -rule_specificity(c.matching_rule),
+                -category_specificity(c),
                 c.priority,
             ),
         )
@@ -547,21 +567,21 @@ def _build_product_indices(
         # slip-parsed `insured` still gate — that keeps multi-entity slips and
         # every pre-existing configuration matching exactly as before.
         prod_entities = product_entities(product, aliases)
-        indices.append(_ProductIndex(
-            product_id=pid,
-            product_code=product.code if product else "?",
-            categories_by_priority=sorted_cats,
-            exact_lookup=_build_exact_lookup(sorted_cats),
-            category_tokens={
-                c.id: tokenize(canonicalize_category_name(c.display_name))
-                for c in sorted_cats
-            },
-            insured_by_category={
-                c.id: prod_entities or category_insured_entities(c, aliases)
-                for c in sorted_cats
-            },
-            blocked_category_ids=frozenset(unscoped_catch_alls(sorted_cats)),
-        ))
+        indices.append(
+            _ProductIndex(
+                product_id=pid,
+                product_code=product.code if product else "?",
+                categories_by_priority=sorted_cats,
+                exact_lookup=_build_exact_lookup(sorted_cats),
+                category_tokens={
+                    c.id: tokenize(canonicalize_category_name(c.display_name)) for c in sorted_cats
+                },
+                insured_by_category={
+                    c.id: category_entity_gate(c, prod_entities, aliases) for c in sorted_cats
+                },
+                blocked_category_ids=frozenset(unscoped_catch_alls(sorted_cats)),
+            )
+        )
     return indices
 
 

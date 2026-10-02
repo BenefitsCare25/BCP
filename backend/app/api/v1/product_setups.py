@@ -157,6 +157,7 @@ class MemberCountCategoryIn(BaseModel):
     description: str = ""
     # Token list from the picker; a legacy comma-joined string still parses.
     insured: str | list[str] | None = None
+    location_scope: str | None = None
 
 
 class MemberCountsIn(BaseModel):
@@ -540,7 +541,12 @@ def preview_member_counts(
         client_id,
         has_dependants,
         [
-            DraftCategory(key=c.key, description=c.description, insured=c.insured)
+            DraftCategory(
+                key=c.key,
+                description=c.description,
+                insured=c.insured,
+                location_scope=c.location_scope,
+            )
             for c in payload.categories
         ],
         product_id=product_id,
@@ -893,6 +899,11 @@ def confirm_setup(
     setup = _upsert_draft(db, policy_year_id, tpl.code, body, lock=True)
 
     selected = _selected_plans(setup.answers)
+    if setup.answers.get("source_issues") and setup.answers.get("source_reviewed") is not True:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "Review the source rate and mapping issues before confirming this setup.",
+        )
     if not selected:
         # Nothing was committed yet — the merged draft is rolled back on session
         # close, so a failed confirm never persists a half-built setup.
@@ -1228,7 +1239,12 @@ def _upsert_draft(
         # only carries `plans`) can't silently wipe a previously-saved section
         # like `categories` or `rate_table`. A section is only replaced when the
         # caller explicitly sends that key.
-        setup.answers = {**(setup.answers or {}), **body.answers}
+        source = {
+            key: value
+            for key, value in (setup.answers or {}).items()
+            if key in {"source_issues", "source_rate_schedules"}
+        }
+        setup.answers = {**(setup.answers or {}), **body.answers, **source}
         setup.template_version = body.template_version
     return setup
 
@@ -1844,6 +1860,9 @@ def _category_plan_assignments(
     }
     # Sum-assured products carry SI + basis regardless of whether a rate was
     # entered, so the financials view and re-synthesis see the cover amount.
+    for field in ("location_scope", "source_insured"):
+        if row.get(field):
+            pa[field] = str(row[field]).strip()
     sum_insured = _coerce_money(row.get("sum_insured"))
     basis = str(row.get("basis") or "").strip()
     if basis_model == "sum_assured":

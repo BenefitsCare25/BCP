@@ -21,9 +21,14 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.deps import tenant_or_global
-from app.models import Dependant, Employee, EmployeeAttributeSchema, Product
+from app.models import Dependant, Employee, EmployeeAttributeSchema, PolicyYear, Product
 from app.models.category import Category, CategoryStatus
 from app.services.derivation_engine import derive
+from app.services.eligibility_mapping import (
+    AttributeValueCatalog,
+    build_attribute_catalog,
+    propose_category_rule,
+)
 from app.services.eligibility_scope import unscoped_catch_alls
 from app.services.matching_engine import (
     _build_exact_lookup,
@@ -31,7 +36,7 @@ from app.services.matching_engine import (
     _normalize,
     _status_rank,
     canonicalize_category_name,
-    category_insured_entities,
+    category_entity_gate,
     employee_entity,
     entity_alias_map,
     insured_names,
@@ -39,7 +44,6 @@ from app.services.matching_engine import (
     product_entities,
     tokenize,
 )
-from app.services.rule_generator import description_to_rule
 
 
 @dataclass(frozen=True)
@@ -54,6 +58,7 @@ class DraftCategory:
     description: str
     # List of entity tokens; a legacy comma-joined string is still accepted.
     insured: str | list[str] | None = None
+    location_scope: str | None = None
 
 
 @dataclass(frozen=True)
@@ -91,11 +96,11 @@ class _EmpView:
     derived_attribute_values: dict[str, Any]
 
 
-def _draft_identity(draft: DraftCategory) -> tuple[str, tuple[str, ...]]:
+def _draft_identity(draft: DraftCategory) -> tuple[str, tuple[str, ...], str]:
     """Identify one employee category independently of its plan assignment."""
     description = _normalize((draft.description or "").strip())
     entities = tuple(sorted({_normalize(name) for name in insured_names(draft.insured)}))
-    return description, entities
+    return description, entities, _normalize(draft.location_scope or "")
 
 
 def _collapse_drafts(
@@ -104,7 +109,7 @@ def _collapse_drafts(
     """Collapse repeated plan rows onto one employee-category representative."""
     representatives: list[DraftCategory] = []
     representative_by_key: dict[str, str] = {}
-    representative_by_identity: dict[tuple[str, tuple[str, ...]], str] = {}
+    representative_by_identity: dict[tuple[str, tuple[str, ...], str], str] = {}
     for draft in drafts:
         identity = _draft_identity(draft)
         representative = representative_by_identity.get(identity)
@@ -118,31 +123,39 @@ def _collapse_drafts(
 
 def _transient_categories(
     drafts: list[DraftCategory],
-    persisted: dict[str, Category],
+    persisted: dict[tuple[str, tuple[str, ...], str], Category],
+    catalog: AttributeValueCatalog,
 ) -> list[Category]:
     """Build unpersisted ``Category`` objects from draft descriptions.
 
     ``id`` is set to the client-side row key so a match outcome maps straight
     back to the originating row. They're never added to the session.
 
-    When a persisted category with the same (normalised) display name already
+    When a persisted category with the same description, entities and location
     exists for this product, its **stored** ``matching_rule``/status/confidence
     are reused — so the preview mirrors what real matching will do. Re-deriving
     from the text alone can't reproduce rules an edit or AI reconcile produced
     (e.g. a category titled "All job Grades…" whose rule was set to the
-    catch-all "all employees"). Only genuinely new rows fall back to
-    ``description_to_rule``.
+    catch-all "all employees"). New rows use the company-aware rule compiler.
     """
     cats: list[Category] = []
     for index, draft in enumerate(drafts):
         desc = (draft.description or "").strip()
-        match = persisted.get(_normalize(desc)) if desc else None
+        match = persisted.get(_draft_identity(draft)) if desc else None
+        if match is None and desc:
+            candidates = [
+                category
+                for identity, category in persisted.items()
+                if identity[0] == _normalize(desc)
+                and (not draft.location_scope or identity[2] == _normalize(draft.location_scope))
+            ]
+            match = candidates[0] if len(candidates) == 1 else None
         if match is not None:
             rule = match.matching_rule
             confidence = match.confidence
             status = match.status
         else:
-            envelope = description_to_rule(draft.description or "")
+            envelope = propose_category_rule(draft.description or "", catalog)
             rule = envelope.rule
             confidence = envelope.confidence
             status = CategoryStatus.confirmed.value
@@ -163,7 +176,22 @@ def _transient_categories(
                 priority=index,
                 status=status,
                 confidence=confidence,
-                plan_assignments={"insured": insured} if insured else None,
+                rule_status=match.rule_status if match is not None else envelope.validation_state,
+                rule_validation=match.rule_validation
+                if match is not None
+                else {
+                    "unresolved_clauses": envelope.unresolved_clauses,
+                    "errors": [] if envelope.rule is not None else ["Matching rule is required"],
+                },
+                plan_assignments={
+                    "insured": insured,
+                    "location_scope": draft.location_scope
+                    or (
+                        (match.plan_assignments or {}).get("location_scope")
+                        if match is not None
+                        else None
+                    ),
+                },
             )
         )
     return cats
@@ -171,15 +199,15 @@ def _transient_categories(
 
 def _persisted_by_name(
     db: Session, policy_year_id: str, product_id: str | None
-) -> dict[str, Category]:
-    """Map normalised display name → the persisted Category for this product.
+) -> dict[tuple[str, tuple[str, ...], str], Category]:
+    """Map description, entities and location to the persisted category.
 
     On a name collision, prefer the better (lower) status rank, then lower
     priority — matching ``_build_exact_lookup``'s tie-break.
     """
     if not product_id:
         return {}
-    out: dict[str, Category] = {}
+    out: dict[tuple[str, tuple[str, ...], str], Category] = {}
     for c in db.execute(
         select(Category).where(
             Category.policy_year_id == policy_year_id,
@@ -188,7 +216,15 @@ def _persisted_by_name(
     ).scalars():
         if not c.display_name:
             continue
-        key = _normalize(c.display_name)
+        assignments = c.plan_assignments or {}
+        key = _draft_identity(
+            DraftCategory(
+                c.id,
+                c.raw_description or c.display_name,
+                assignments.get("insured"),
+                assignments.get("location_scope"),
+            )
+        )
         existing = out.get(key)
         if existing is None or (_status_rank(c.status), c.priority) < (
             _status_rank(existing.status),
@@ -270,7 +306,12 @@ def compute_member_counts(
     # assignment so later plan rows do not incorrectly show zero employees.
     representatives, representative_by_key = _collapse_drafts(valid)
     persisted = _persisted_by_name(db, policy_year_id, product_id)
-    cats = _transient_categories(representatives, persisted)
+    year = db.get(PolicyYear, policy_year_id)
+    catalog_client = client_id or (year.client_id if year is not None else "")
+    catalog, _, _ = build_attribute_catalog(
+        db, client_id=catalog_client, policy_year_id=policy_year_id
+    )
+    cats = _transient_categories(representatives, persisted, catalog)
     cats_by_priority = sorted(cats, key=lambda c: (_status_rank(c.status), c.priority))
     exact_lookup = _build_exact_lookup(cats_by_priority)
     category_tokens = {
@@ -288,8 +329,7 @@ def compute_member_counts(
         db.get(Product, product_id) if product_id else None, aliases
     )
     insured_by_category = {
-        c.id: prod_entities or category_insured_entities(c, aliases)
-        for c in cats_by_priority
+        c.id: category_entity_gate(c, prod_entities, aliases) for c in cats_by_priority
     }
 
     blocked = frozenset(unscoped_catch_alls(cats_by_priority))

@@ -429,6 +429,8 @@ export interface RateTier {
 // Editable shape of Category.plan_assignments. plan_code is the linkage to a
 // Plan record and must be preserved on edit — never surfaced as an input.
 export interface PlanAssignment {
+  location_scope?: string | null;
+  source_insured?: string | null;
   plan_code?: string | number | null;
   num_employees?: number | null;
   basis?: string | null;
@@ -1257,6 +1259,8 @@ export interface BasisOfCoverRow {
   // (flat / "12x monthly salary" / "% of GTL"). Null/absent for other models.
   sum_insured?: number | null;
   basis?: string | null;
+  location_scope?: string | null;
+  source_insured?: string | null;
 }
 
 export interface EndorsementAnswer {
@@ -1308,6 +1312,9 @@ export interface SetupAnswers {
   // migrated on load. New/confirmed drafts always populate this.
   sob?: SobSchedule;
   rate_table: Record<string, Record<string, RateCell>>;
+  source_rate_schedules?: { label: string; sheet?: string; start_date: string | null; end_date: string | null; selected: boolean }[];
+  source_issues?: string[];
+  source_reviewed?: boolean;
   categories: BasisOfCoverRow[];
   endorsements: EndorsementAnswer[];
   arrangements: Record<string, boolean>;

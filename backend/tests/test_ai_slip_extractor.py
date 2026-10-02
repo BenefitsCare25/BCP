@@ -115,6 +115,33 @@ def test_build_product_slip_rejects_rate_basis_foreign_to_product() -> None:
     assert ps2.categories[0].rate_basis == "earnings_based"
 
 
+def test_ai_does_not_fill_known_source_ambiguity(monkeypatch) -> None:
+    from contextlib import nullcontext
+    from types import SimpleNamespace
+
+    from app.services.placement_slip_parser import PlacementSlip
+
+    product = ProductSlip(
+        sheet="GHS",
+        product_code="GHS",
+        policy_header=PolicyHeader(),
+        categories=(),
+        extraction_issues=("Rate entities disagree",),
+    )
+    rec = reconcile_slip(PlacementSlip(client="test", products=(product,)))
+    monkeypatch.setattr("app.services.ai_slip_extractor.load_ai_config", lambda *args: object())
+    monkeypatch.setattr(
+        "app.services.ai_slip_extractor.open_workbook",
+        lambda *args: nullcontext(SimpleNamespace(sheet_names=["GHS"])),
+    )
+
+    def unexpected(*args, **kwargs):
+        pytest.fail("A known source discrepancy must not be delegated to AI")
+
+    monkeypatch.setattr("app.services.ai_slip_extractor._ai_extract_product", unexpected)
+    assert maybe_ai_augment(None, "client", "year", "unused.xlsx", rec) is rec
+
+
 def test_augment_is_noop_without_provider(monkeypatch) -> None:
     monkeypatch.setattr(
         "app.services.ai_slip_extractor.load_ai_config", lambda db, client_id: None
@@ -134,7 +161,8 @@ def test_augment_is_noop_without_provider(monkeypatch) -> None:
 def test_augment_makes_flagged_product_sound(monkeypatch) -> None:
     raw = parse_placement_slip(str(STM), client_label="t")
     rec = reconcile_slip(raw)
-    flagged = [d for d in rec.diagnostics if d.needs_attention]
+    source_issues = {p.sheet for p in rec.slip.products if p.extraction_issues}
+    flagged = [d for d in rec.diagnostics if d.needs_attention and d.sheet not in source_issues]
     assert flagged, "expected at least one flagged product in STM (e.g. GBT)"
     target = flagged[0]
 

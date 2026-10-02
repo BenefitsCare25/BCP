@@ -1,4 +1,5 @@
 import { Badge } from "@/components/ui/badge";
+import { SourceMappingNotes } from "./SourceMappingNotes";
 import { useCategoryOverlaps, useMemberCounts } from "@/api/hooks";
 import { UnmatchedEmployeeNotice } from "./UnmatchedEmployeeNotice";
 import { fmtDay, fmtMoney } from "@/lib/format";
@@ -366,6 +367,7 @@ export function ProductSetupSummary({ policyYearId, template, draft, group, term
       key: categoryGroup.key,
       description: categoryGroup.representative.raw_description || categoryGroup.name,
       insured: insuredNames(categoryGroup.representative.plan_assignments?.insured),
+      location_scope: String(categoryGroup.representative.plan_assignments?.location_scope ?? "") || null,
     })),
   );
   const overlapsByCategory = new Map(
@@ -385,6 +387,7 @@ export function ProductSetupSummary({ policyYearId, template, draft, group, term
 
   return (
     <div className="space-y-5">
+      <SourceMappingNotes answers={answers} />
       {!draft && (
         <div className="rounded-lg border border-dashed border-border bg-muted/20 p-4 text-sm text-muted-foreground">
           This product has not been configured yet. Open edit mode to enter the

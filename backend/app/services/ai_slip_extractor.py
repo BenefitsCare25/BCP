@@ -230,6 +230,10 @@ def maybe_ai_augment(
             before_diag = diagnostics[i]
             if product.sheet not in flagged or product.sheet not in sheet_names:
                 continue
+            if product.extraction_issues:
+                # Known source ambiguity (entity, period, blank rates) requires
+                # source review, not a model inventing the missing relationship.
+                continue
             ai_product = _ai_extract_product(
                 db, client_id, policy_year_id, wb.sheet(product.sheet).rows, product
             )

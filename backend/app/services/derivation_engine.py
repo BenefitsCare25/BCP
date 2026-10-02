@@ -5,12 +5,14 @@ to raw `employee.attribute_values`, producing the structured
 `derived_attribute_values` that the matching engine evaluates JSONLogic rules
 against (see brief §8.4).
 
-Three ops are supported:
+The supported operations are:
 
 - `regex_extract`: extract a capture group from a source field, optionally cast.
 - `regex_case`: first-match-wins lookup, each case maps a pattern to a literal value.
 - `passthrough`: copy a raw attribute through (used to surface enum fields like
   `pass` into the derived view without re-keying).
+- `value_map`: translate exact, case-insensitive source values into company
+  eligibility labels; unlisted values can be omitted or preserved.
 
 A bad regex or missing source produces `None` for that attribute — never raises.
 The rest of the schemas continue to derive.
@@ -103,6 +105,15 @@ def _apply(rule: dict[str, Any], raw: dict[str, Any]) -> Any:
         return _regex_case(rule, raw)
     if op == "passthrough":
         return _passthrough(rule, raw)
+    if op == "value_map":
+        source = _read_source(rule, raw)
+        if source is None:
+            return None
+        key = source.strip().casefold()
+        for entry in rule.get("mappings", []):
+            if str(entry["from"]).strip().casefold() == key:
+                return entry["to"]
+        return source if rule.get("unmapped") == "keep" else None
     logger.warning("unknown derivation op: %s", op)
     return None
 

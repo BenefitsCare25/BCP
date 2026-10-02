@@ -51,7 +51,7 @@ from app.models import (
 )
 from app.models.category import CategoryStatus, SourceKind
 from app.models.placement_slip import ParseStatus
-from app.models.product_setup import ProductSetupStatus
+from app.models.product_setup import ProductSetupOrigin, ProductSetupStatus
 from app.schemas.api import (
     ParseResult,
     ProductDiagnostic,
@@ -77,7 +77,7 @@ from app.services.product_variants import variant_traits
 from app.services.rule_generator import description_to_rule
 from app.services.slip_reconcile import reconcile_slip
 from app.services.slip_template_memory import make_resolver, save_profile
-from app.services.slip_to_setup import build_setup_answers
+from app.services.slip_to_setup import build_setup_answers, merge_product_sheets
 from app.services.slip_variants import assign_variants
 
 logger = logging.getLogger(__name__)
@@ -207,6 +207,7 @@ def _category_reconcile_key(
     plan_code: object,
     description: str,
     insured: object,
+    location_scope: object = None,
 ) -> tuple[str | None, str, str, tuple[str, ...]]:
     entities = tuple(
         sorted(name for raw in insured_names(insured) if (name := normalize_entity(raw)))
@@ -214,7 +215,8 @@ def _category_reconcile_key(
     return (
         product_id,
         str(plan_code or "").strip().casefold(),
-        category_signature(description),
+        category_signature(description)
+        + (f"::location={str(location_scope).strip().casefold()}" if location_scope else ""),
         entities,
     )
 
@@ -391,7 +393,10 @@ def _prefill_setup_drafts(
         tpl = merge_file_overlay(synth, file_tpl) if synth is not None else file_tpl
         if tpl is None:
             continue
-        answers = build_setup_answers(product_slip, tpl)
+        siblings = [
+            sheet for sheet in slip.products if sheet.product_code == product_slip.product_code
+        ]
+        answers = build_setup_answers(merge_product_sheets(siblings), tpl)
         if seed_draft_from_slip(
             db, policy_year_id, slip_id, tpl.code, answers, tpl.version
         ):
@@ -484,6 +489,7 @@ async def parse_upload(
                 client_label=client_id,
                 profile_resolver=make_resolver(db, client_id),
                 classification_resolver=_classification,
+                rate_date=policy_year.start_date,
             )
         except Exception as exc:
             slip_row.parse_status = ParseStatus.error
@@ -614,6 +620,7 @@ async def parse_upload(
             assignments.get("plan_code"),
             existing_category.raw_description,
             assignments.get("insured"),
+            assignments.get("location_scope"),
         )
         preserved_by_key.setdefault(key, existing_category)
     clear_stmt = delete(Category).where(
@@ -648,6 +655,47 @@ async def parse_upload(
             Plan.product_id.notin_(confirmed_product_ids)
         )
     replaced_plans = _affected_rows(db.execute(plan_clear))
+
+    # A revised parse may split an old base product into policy variants.
+    # Remove only superseded provisional drafts whose originating workbook is
+    # being replaced and which no preserved category/plan still uses.
+    parsed_codes = {p.product_code.upper() for p in parsed.products}
+    parsed_bases = {product_registry.base_code(code) for code in parsed_codes}
+    obsolete = list(
+        db.execute(
+            select(ProductSetup).where(
+                ProductSetup.policy_year_id == policy_year_id,
+                ProductSetup.origin == ProductSetupOrigin.placement_slip,
+                ProductSetup.status == ProductSetupStatus.draft,
+                ProductSetup.materialized_product_id.is_(None),
+            )
+        ).scalars()
+    )
+    for draft in obsolete:
+        code = draft.product_code.upper()
+        source = db.get(PlacementSlipRow, draft.origin_ref) if draft.origin_ref else None
+        if (
+            code in parsed_codes
+            or product_registry.base_code(code) not in parsed_bases
+            or source is None
+            or source.filename != slip_row.filename
+        ):
+            continue
+        product = products_cache.get(code)
+        if product and (
+            db.scalar(
+                select(Category.id)
+                .where(Category.policy_year_id == policy_year_id, Category.product_id == product.id)
+                .limit(1)
+            )
+            or db.scalar(
+                select(Plan.id)
+                .where(Plan.policy_year_id == policy_year_id, Plan.product_id == product.id)
+                .limit(1)
+            )
+        ):
+            continue
+        db.delete(draft)
 
     high_conf = 0
     total = 0
@@ -689,6 +737,7 @@ async def parse_upload(
                 cat.plan_code,
                 cat.category,
                 cat.insured,
+                cat.location_scope,
             )
             if preserved := preserved_by_key.pop(reconcile_key, None):
                 if not preserved.human_modified:

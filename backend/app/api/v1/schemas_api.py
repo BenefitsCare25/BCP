@@ -13,6 +13,7 @@ from app.core.deps import (
     can_write_global,
     load_editable_global,
     require_client_id,
+    require_system_admin,
     tenant_or_global,
 )
 from app.db.session import get_db
@@ -97,6 +98,58 @@ def _load_editable_product(product_id: str, user: CurrentUser, db: Session) -> P
     return load_editable_global(Product, product_id, user, db, "Product")
 
 
+def _validate_value_mapping(row: EmployeeAttributeSchema, db: Session) -> None:
+    rule = row.derivation_rule
+    if not isinstance(rule, dict) or rule.get("op") != "value_map":
+        return
+    source = rule.get("source")
+    mappings = rule.get("mappings")
+    if (
+        not isinstance(source, str)
+        or not source.strip()
+        or not isinstance(mappings, list)
+        or not 1 <= len(mappings) <= 500
+    ):
+        raise HTTPException(
+            422, "Choose a source field and supply between 1 and 500 value mappings."
+        )
+    if rule.get("unmapped", "omit") not in {"omit", "keep"}:
+        raise HTTPException(422, "Unmapped values must be kept or left unmapped.")
+    sources = list(
+        db.execute(
+            select(EmployeeAttributeSchema).where(
+                tenant_or_global(EmployeeAttributeSchema.client_id, row.client_id),
+                EmployeeAttributeSchema.attribute_id == source,
+            )
+        ).scalars()
+    )
+    source_schema = next(
+        (s for s in sources if s.client_id == row.client_id), sources[0] if sources else None
+    )
+    if source_schema is None:
+        raise HTTPException(422, "The source field is not available to this company.")
+    if source_schema.is_pii and not row.is_pii:
+        raise HTTPException(422, "Mappings from a personal-data field must also be marked PII.")
+    seen = set()
+    for entry in mappings:
+        if not isinstance(entry, dict) or any(
+            not isinstance(entry.get(k), str) or not entry[k].strip() or len(entry[k]) > 250
+            for k in ("from", "to")
+        ):
+            raise HTTPException(
+                422, "Each mapping needs a source and target value of 1 to 250 characters."
+            )
+        key = entry["from"].strip().casefold()
+        if key in seen:
+            raise HTTPException(422, "Each source value may appear only once in a mapping.")
+        seen.add(key)
+        if row.data_type == "enum" and entry["to"] not in (row.enum_values or []):
+            raise HTTPException(
+                422, "Mapped values must be included in the attribute's allowed values."
+            )
+    row.derived_from = source
+
+
 @router.get("/schemas/employee-attributes", response_model=list[AttributeSchemaOut])
 def list_employee_attributes(
     user: CurrentUser = Depends(get_current_user),
@@ -144,6 +197,7 @@ def create_employee_attribute(
             f"Attribute {payload.attribute_id!r} already exists in {where}",
         )
     row = EmployeeAttributeSchema(client_id=client_id, **payload.model_dump())
+    _validate_value_mapping(row, db)
     if row.is_pii:
         # Sensitive values are never opted into an external model as a side
         # effect of creation. Internal matching is controlled separately.
@@ -183,8 +237,26 @@ def update_employee_attribute(
         "allow_matching": row.allow_matching,
         "allow_ai_values": row.allow_ai_values,
         "description": row.description,
+        "derived_from": row.derived_from,
+        "derivation_rule": row.derivation_rule,
     }
     patch = payload.model_dump(exclude_unset=True)
+    previous_rule = row.derivation_rule
+    if (
+        "derivation_rule" in patch
+        and isinstance(previous_rule, dict)
+        and previous_rule.get("op") == "value_map"
+    ):
+        next_rule = patch["derivation_rule"]
+        if (
+            not isinstance(next_rule, dict)
+            or next_rule.get("op") != "value_map"
+            or (
+                isinstance(next_rule.get("mappings"), list)
+                and len(next_rule["mappings"]) < len(previous_rule.get("mappings") or [])
+            )
+        ):
+            require_system_admin(user)
     if patch.get("is_pii") is True:
         patch["allow_ai_values"] = False
     effective_pii = bool(patch.get("is_pii", row.is_pii))
@@ -195,6 +267,7 @@ def update_employee_attribute(
         )
     for key, value in patch.items():
         setattr(row, key, value)
+    _validate_value_mapping(row, db)
     db.flush()
     write_audit(
         db,

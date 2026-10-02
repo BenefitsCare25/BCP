@@ -22,11 +22,13 @@ from __future__ import annotations
 
 import re
 from collections import Counter
+from dataclasses import replace
 from typing import Any
 
 from app.services.claim_limits import visit_count_value
 from app.services.placement_slip_parser import (
     ExtractedCategory,
+    ExtractedPlan,
     ProductSlip,
     normalize_participation,
     split_plan_codes,
@@ -557,7 +559,7 @@ def _rate_table(slip: ProductSlip) -> dict[str, Any]:
 
 
 def _category_id(slip: ProductSlip, cat: ExtractedCategory) -> str:
-    return f"{slip.sheet}_row_{cat.source_row}"
+    return f"{cat.source_sheet or slip.sheet}_row_{cat.source_row}"
 
 
 def _category_rows(slip: ProductSlip, tpl: ProductTemplate) -> list[dict[str, Any]]:
@@ -579,6 +581,8 @@ def _category_rows(slip: ProductSlip, tpl: ProductTemplate) -> list[dict[str, An
             {
                 "id": _category_id(slip, cat),
                 "insured": _s(cat.insured),
+                "source_insured": cat.source_insured,
+                "location_scope": cat.location_scope,
                 "category": _s(cat.category),
                 "participation": _s(cat.participation),
                 "plan_code": _s(cat.plan_code),
@@ -630,6 +634,39 @@ def _sections(slip: ProductSlip) -> list[dict[str, Any]]:
     ]
 
 
+def merge_product_sheets(sheets: list[ProductSlip]) -> ProductSlip:
+    """Union sheets of one policy without losing categories or source identity."""
+    first = sheets[0]
+    plans: dict[str, ExtractedPlan] = {}
+    issues = [issue for sheet in sheets for issue in sheet.extraction_issues]
+    for sheet in sheets:
+        for plan in sheet.plans:
+            existing = plans.get(plan.code)
+            if existing and existing.items and plan.items and existing.items != plan.items:
+                issues.append(
+                    f"Plan {plan.code} has differing schedules across source sheets; "
+                    "review each source before confirming."
+                )
+            if existing is None or not existing.items:
+                plans[plan.code] = plan
+    return replace(
+        first,
+        categories=tuple(
+            replace(cat, source_sheet=sheet.sheet) for sheet in sheets for cat in sheet.categories
+        ),
+        plans=tuple(plans.values()),
+        endorsements=tuple(item for sheet in sheets for item in sheet.endorsements),
+        terms=tuple(item for sheet in sheets for item in sheet.terms),
+        sections=tuple(item for sheet in sheets for item in sheet.sections),
+        rate_schedules=tuple(
+            {**schedule, "sheet": sheet.sheet}
+            for sheet in sheets
+            for schedule in sheet.rate_schedules
+        ),
+        extraction_issues=tuple(dict.fromkeys(issues)),
+    )
+
+
 def build_setup_answers(slip: ProductSlip, tpl: ProductTemplate) -> dict[str, Any]:
     """Project a parsed ``ProductSlip`` onto the ``SetupAnswers`` form shape."""
     plans = _plan_answers(slip, tpl)
@@ -662,6 +699,8 @@ def build_setup_answers(slip: ProductSlip, tpl: ProductTemplate) -> dict[str, An
         "plans": plan_stubs,
         "sob": sob,
         "rate_table": _rate_table(slip),
+        "source_rate_schedules": list(slip.rate_schedules),
+        "source_issues": list(slip.extraction_issues),
         "categories": _category_rows(slip, tpl),
         "endorsements": _endorsements(slip),
         "terms": _terms(slip),

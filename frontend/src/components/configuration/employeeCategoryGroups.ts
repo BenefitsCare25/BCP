@@ -20,7 +20,8 @@ function identity(category: Category): string {
     .map(normalize)
     .sort()
     .join("|");
-  return `${wording}::${entities}`;
+  const location = String(category.plan_assignments?.location_scope ?? "");
+  return `${wording}::${entities}::${normalize(location)}`;
 }
 
 const STATUS_PRIORITY: Record<EligibilityRuleStatus, number> = {
@@ -48,7 +49,8 @@ export function groupEmployeeCategories(
   return [...groups.entries()]
     .map(([key, members]) => ({
       key,
-      name: members[0].raw_description || members[0].display_name,
+      name: [members[0].raw_description || members[0].display_name,
+        members[0].plan_assignments?.location_scope].filter(Boolean).join(" · "),
       categories: [...members].sort((a, b) => a.priority - b.priority),
       representative: [...members].sort((a, b) => {
         const status =

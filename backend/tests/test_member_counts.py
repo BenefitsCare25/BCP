@@ -20,6 +20,75 @@ def test_repeated_plan_rows_share_one_employee_category() -> None:
     assert representative_by_key == {"plan-1": "plan-1", "plan-2": "plan-1"}
 
 
+def test_preview_keeps_depots_entities_and_unresolved_rules_separate() -> None:
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine) as db:
+        db.add(BrokerFirm(id="firm", name="Firm"))
+        db.flush()
+        db.add(Client(id="client", name="Client", broker_firm_id="firm"))
+        db.add(
+            PolicyYear(
+                id="year",
+                client_id="client",
+                year=2026,
+                start_date=date(2026, 1, 1),
+                end_date=date(2026, 12, 31),
+            )
+        )
+        db.add(
+            Product(
+                id="product",
+                client_id="client",
+                code="WICA",
+                display_name="WICA",
+                product_metadata={"entities": ["Entity A", "Entity B"]},
+            )
+        )
+        db.flush()
+        for depot in ("North", "South"):
+            db.add(
+                Category(
+                    id=depot,
+                    policy_year_id="year",
+                    product_id="product",
+                    display_name="Drivers",
+                    raw_description="Drivers",
+                    matching_rule={"=": ["depot", depot]},
+                    plan_assignments={"insured": ["Entity A"], "location_scope": f"{depot} Depot"},
+                )
+            )
+        for i, (entity, depot) in enumerate(
+            [
+                ("Entity A", "North"),
+                ("Entity A", "North"),
+                ("Entity A", "South"),
+                ("Entity A", ""),
+                ("Entity B", "North"),
+            ]
+        ):
+            db.add(
+                Employee(
+                    client_id="client",
+                    policy_year_id="year",
+                    staff_id=str(i),
+                    status="active",
+                    attribute_values={"entity": entity, "depot": depot},
+                )
+            )
+        db.commit()
+        drafts = [
+            DraftCategory(depot, "Drivers", ["Entity A"], f"{depot} Depot")
+            for depot in ("North", "South")
+        ]
+        result = compute_member_counts(db, "year", "client", False, drafts, "product")
+        assert {r.key: r.employees for r in result.counts} == {"North": 2, "South": 1}
+        db.get(Category, "North").rule_validation = {"unresolved_clauses": ["Unknown job titles"]}
+        db.flush()
+        result = compute_member_counts(db, "year", "client", False, drafts, "product")
+        assert {r.key: r.employees for r in result.counts} == {"North": 0, "South": 1}
+
+
 def test_same_wording_with_different_entities_stays_separate() -> None:
     drafts = [
         DraftCategory("entity-a", "All employees", ["Entity A"]),

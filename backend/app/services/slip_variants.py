@@ -25,6 +25,7 @@ import re
 from dataclasses import dataclass, field, replace
 
 from app.services import product_registry
+from app.services.period_parser import parse_period_of_insurance
 from app.services.slip_parsing.models import PlacementSlip, ProductSlip
 
 # Header fields that identify a policy, in the order used to label variants
@@ -34,7 +35,7 @@ _IDENTITY_FIELDS = ("insured", "insurer", "policyholder")
 # Separators inside an "Insured :" line that lists several legal entities:
 # "1. A Pte Ltd 2. B Pte Ltd", "A Pte Ltd and/or B Pte Ltd", "A; B". Commas and
 # "&" stay inside one name ("A Pte. Ltd., Singapore Branch", "Tan & Sons"); a
-# list joined by them still overlaps each member by core-word containment.
+# list must use an explicit separator to establish its individual members.
 _ENTITY_SPLIT = re.compile(r"(?:^|\s)\d+[.)]\s+|;|\n|\s+and/or\s+", re.IGNORECASE)
 
 # Words that restate a company's legal form or domicile rather than name it:
@@ -72,7 +73,7 @@ def _entities_overlap(
 ) -> bool:
     if not a or not b:
         return True
-    return any(x <= y or y <= x for x in a for y in b)
+    return bool(a & b)
 
 
 @dataclass
@@ -96,9 +97,25 @@ class _Policy:
         entity).
         """
         header = product.policy_header
+        period = parse_period_of_insurance(header.period)
+        for sibling in self.sheets:
+            other = sibling.policy_header
+            other_period = parse_period_of_insurance(other.period)
+            if period and other_period and period != other_period:
+                return False
+            if (
+                header.policy_no
+                and other.policy_no
+                and _norm(header.policy_no) != _norm(other.policy_no)
+            ):
+                return False
         return (
             _same_party(self.insurer, _core(header.insurer))
-            and _same_party(self.policyholder, _core(header.policyholder))
+            and (
+                not self.policyholder
+                or not _core(header.policyholder)
+                or self.policyholder == _core(header.policyholder)
+            )
             and _entities_overlap(self.entities, _entities(header.insured))
         )
 

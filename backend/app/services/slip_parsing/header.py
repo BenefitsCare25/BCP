@@ -83,7 +83,7 @@ def _nel_amount(text: str | None) -> float | None:
         return None
 
 
-def _header_value(row: list[Cell], exclude: str) -> str | None:
+def _header_value(row: list[Cell], exclude: str, *, numeric_code: bool = False) -> str | None:
     """First non-empty cell on a label row that isn't the label itself.
 
     Labels sit in col 0 (e.g. "Insured :") and the value in a later cell; the
@@ -91,6 +91,8 @@ def _header_value(row: list[Cell], exclude: str) -> str | None:
     """
     for v in row:
         if _non_empty(v) and not re.search(exclude, str(v), re.IGNORECASE):
+            if numeric_code and isinstance(v, float) and v.is_integer():
+                return str(int(v))
             return _norm(v)
     return None
 
@@ -124,7 +126,7 @@ def _scan_policy_header(rows: list[list[Cell]]) -> _HeaderScan:
         head = text[:60]
         for key, label, exclude, limit in _HEADER_LABELS:
             if vals[key] is None and re.search(label, head, re.IGNORECASE):
-                value = _header_value(row, exclude)
+                value = _header_value(row, exclude, numeric_code=key == "policy_no")
                 vals[key] = value[:limit] if (value and limit) else value
         if re.search(r"basis\s+of\s+cover", text, re.IGNORECASE):
             basis_row = i

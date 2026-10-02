@@ -49,6 +49,8 @@ class AttributeSchemaCreate(BaseModel):
     allow_matching: bool = True
     allow_ai_values: bool = False
     description: str | None = None
+    derived_from: str | None = None
+    derivation_rule: dict[str, Any] | None = None
 
 
 class AttributeSchemaPatch(BaseModel):

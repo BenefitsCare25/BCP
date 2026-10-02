@@ -181,7 +181,7 @@ def _reconcile_product(product: ProductSlip) -> tuple[ProductSlip, ProductDiagno
         cats = tuple(replace(c, plan_code=plans[0].code) for c in cats)
         assigned_default = True
 
-    issues: list[str] = []
+    issues: list[str] = list(product.extraction_issues)
     if not plans:
         reconciliation = "no_plans"
         layout = "none"
@@ -225,6 +225,8 @@ def _reconcile_product(product: ProductSlip) -> tuple[ProductSlip, ProductDiagno
         )
 
     confidence = _confidence(recognized, reconciliation)
+    if product.extraction_issues:
+        confidence = min(confidence, 0.5)
     if empty_sob:
         confidence = max(0.0, round(confidence - 0.3, 2))
     low_conf = confidence < LOW_CONFIDENCE

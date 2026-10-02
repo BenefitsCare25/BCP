@@ -9,12 +9,19 @@ and must never be folded onto ES/EC/EF.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
+from datetime import date, timedelta
 from typing import Any
 
 from app.services import product_registry
 from app.services.excel_reader import Cell
+from app.services.period_parser import parse_period_of_insurance
 from app.services.slip_parsing.models import ExtractedCategory
+from app.services.slip_parsing.table_sections import (
+    is_rate_heading,
+    is_rate_table_header,
+    leading_text,
+)
 from app.services.slip_parsing.text import (
     _PLAN_INLINE,
     _currency_amount,
@@ -125,11 +132,13 @@ def _rate_section_ended(row: list[Cell]) -> bool:
     stop condition on the *first cell* avoids halting at that repeated header
     and dropping the second entity's rates.
     """
-    col0 = _norm(row[0]).lower() if row and _non_empty(row[0]) else ""
+    col0 = leading_text(row).lower()
     if not col0:
         return False
     return (
         col0.startswith("annual premium")
+        or col0.startswith("total annual premium")
+        or col0.startswith("total premium")
         or col0.startswith("experience refund")
         or col0.startswith("maximum limit")
         or col0.startswith("cover")
@@ -141,24 +150,105 @@ def _is_rate_header_row(row: list[Cell]) -> bool:
     """True for a repeated Insured/Category column-header row inside a Rate
     section (skipped, not treated as data)."""
     cells = [_norm(c).lower() for c in row if _non_empty(c)]
-    return "category" in cells and ("insured" in cells or "plan" in cells)
+    return is_rate_table_header(row) or (
+        "category" in cells and ("insured" in cells or "plan" in cells)
+    )
 
 
 def _read_insured(row: list[Cell], insured_col: int) -> str | None:
     """Read the insured-entity cell, ignoring the literal header 'Insured'."""
     if 0 <= insured_col < len(row) and _non_empty(row[insured_col]):
         val = _norm(row[insured_col])
-        if val.lower() != "insured":
+        if val.lower().strip("() ") not in {"insured", "as above", "same as above", "ditto"}:
             return val
     return None
 
 
 def _find_rate_section_start(rows: list[list[Cell]]) -> int:
     for i, row in enumerate(rows):
-        text = _row_text(row or []).strip()
-        if re.match(r"rate\s*:", text, re.IGNORECASE):
+        if leading_text(row).lower().startswith("schedule of benefits"):
+            break
+        if is_rate_heading(row) or is_rate_table_header(row):
             return i
     return -1
+
+
+def extract_rate_schedules(
+    rows: list[list[Cell]],
+    *,
+    effective_date: date | None = None,
+    policy_period: str | None = None,
+) -> tuple[list[_RateRow], dict[str, str] | None, tuple[dict[str, Any], ...], tuple[str, ...]]:
+    """Retain every dated table and select rates for the requested benefit year.
+
+    A company name, sheet width or fixed row number never selects a template.
+    Repeated entity headers stay inside one table; dated headings start a new
+    schedule. Ambiguous periods return no prices rather than first-row wins.
+    """
+    starts: list[int] = []
+    stop = len(rows)
+    for i, row in enumerate(rows):
+        if leading_text(row).lower().startswith("schedule of benefits"):
+            stop = i
+            break
+        if is_rate_heading(row) or (not starts and is_rate_table_header(row)):
+            starts.append(i)
+    if not starts:
+        return [], None, (), ()
+    policy_range = parse_period_of_insurance(policy_period)
+    tables: list[tuple[list[_RateRow], dict[str, str] | None]] = []
+    schedules: list[dict[str, Any]] = []
+    for index, start in enumerate(starts):
+        end = starts[index + 1] if index + 1 < len(starts) else stop
+        chunk = rows[start:end]
+        rates, labels = extract_rate_section(chunk)
+        label = leading_text(rows[start])
+        period = parse_period_of_insurance(label)
+        if period is None and (years := re.search(r"\b(20\d{2})\s*[/\-]\s*(20\d{2})\b", label)):
+            first, last = map(int, years.groups())
+            if last == first + 1:
+                month, day = (
+                    (policy_range[0].month, policy_range[0].day) if policy_range else (1, 1)
+                )
+                try:
+                    period = (date(first, month, day), date(last, month, day) - timedelta(days=1))
+                except ValueError:
+                    period = None
+        schedules.append(
+            {
+                "label": label,
+                "source_row": start + 1,
+                "start_date": period[0].isoformat() if period else None,
+                "end_date": period[1].isoformat() if period else None,
+                "rates": [asdict(rate) for rate in rates],
+                "source_rows": [list(row) for row in chunk],
+                "selected": False,
+            }
+        )
+        tables.append((rates, labels))
+    dated = [i for i, schedule in enumerate(schedules) if schedule["start_date"]]
+    if dated:
+        candidates = [
+            i
+            for i in dated
+            if effective_date is not None
+            and schedules[i]["start_date"] <= effective_date.isoformat() <= schedules[i]["end_date"]
+        ]
+    else:
+        candidates = list(range(len(tables)))
+    if (dated and len(candidates) != 1) or (len(tables) > 1 and not dated):
+        return (
+            [],
+            None,
+            tuple(schedules),
+            (
+                "Multiple or unmatched rate schedules: select a benefit year within exactly one "
+                "dated schedule and re-upload, or review the source rates manually.",
+            ),
+        )
+    selected = candidates[0]
+    schedules[selected]["selected"] = True
+    return *tables[selected], tuple(schedules), ()
 
 
 def _parse_age_band(text: str) -> tuple[int | None, int | None] | None:
@@ -349,7 +439,7 @@ def _parse_tiered_rates(rows: list[list[Cell]], tier_row: int) -> list[_RateRow]
     # Walk data rows starting after the sub-header.
     out: list[_RateRow] = []
     current_insured = ""
-    for i in range(sub_header_idx + 1, min(len(rows), tier_row + 30)):
+    for i in range(sub_header_idx + 1, len(rows)):
         row = rows[i] or []
         text = _row_text(row)
         if not text.strip():
@@ -426,6 +516,8 @@ def _parse_flat_rates(
     def _scan_header(scan_row: list[Cell]) -> None:
         nonlocal cat_col, si_col, rate_col, prem_col, insured_col, earnings_col
         nonlocal plan_col
+        if is_rate_heading(scan_row) and sum(_non_empty(v) for v in scan_row) == 1:
+            return
         for c, val in enumerate(scan_row):
             if val is None:
                 continue
@@ -457,7 +549,7 @@ def _parse_flat_rates(
                 rate_col = c
             elif earnings_col < 0 and "earning" in h:
                 earnings_col = c
-            elif prem_col < 0 and "premium" in h and "premium rate" not in h:
+            elif "premium" in h and "premium rate" not in h:
                 prem_col = c
 
     _scan_header(header)
@@ -500,9 +592,13 @@ def _parse_flat_rates(
     # key column holds at most one value across the data rows but a nearby
     # unclaimed column holds several, the header was printed over the insured
     # column and the real keys live to its right (VDL WICA).
-    if key_col >= 0:
+    if cat_col >= 0:
         claimed = {si_col, rate_col, prem_col, earnings_col, insured_col, plan_col}
-        window = rows[data_start : data_start + 10]
+        window = []
+        for candidate in rows[data_start : data_start + 10]:
+            if _rate_section_ended(candidate):
+                break
+            window.append(candidate)
 
         def _count(col: int) -> int:
             return sum(
@@ -531,7 +627,7 @@ def _parse_flat_rates(
 
     out: list[_RateRow] = []
     current_insured = ""
-    for i in range(data_start, min(len(rows), rate_start + 30)):
+    for i in range(data_start, len(rows)):
         row = rows[i] or []
         text = _row_text(row)
         if not text.strip():
@@ -663,6 +759,9 @@ def _enrich_with_rates(
     # category's, so it must not be mistaken for a single line's premium.
     blended = _blended_product_rate(categories, rate_data)
     if blended is not None:
+        from app.services.matching_engine import normalize_entity
+
+        insured = normalize_entity(rate_data[0].insured)
         return tuple(
             replace(
                 cat,
@@ -670,11 +769,13 @@ def _enrich_with_rates(
                 rate_basis="per_1000_si",
                 annual_premium=None,
             )
+            if not insured or normalize_entity(cat.insured) == insured
+            else cat
             for cat in categories
         )
 
     def _norm_ins(value: str) -> str:
-        return re.sub(r"\s+", " ", value or "").strip().lower()
+        return " ".join(re.findall(r"[a-z0-9]+", (value or "").lower()))
 
     def _plan_tokens(key: str) -> set[str]:
         """Lower-cased candidate plan codes for matching a rate key to a category.
@@ -724,7 +825,12 @@ def _enrich_with_rates(
             for rd in candidates:
                 if _norm_ins(rd.insured) == target:
                     return rd
-        return candidates[0]
+        unscoped = [rd for rd in candidates if not _norm_ins(rd.insured)]
+        if unscoped:
+            return unscoped[0]
+        # A missing or different entity is not permission to take the first
+        # subsidiary's price. Ambiguous tables must remain visibly unpriced.
+        return None
 
     enriched: list[ExtractedCategory] = []
     for cat in categories:

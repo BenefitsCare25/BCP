@@ -422,10 +422,10 @@ def test_entity_gate_routes_same_named_categories_per_subsidiary() -> None:
     assert out.category_id == "cdl"
 
 
-def test_entity_gate_blank_sides_are_wildcards() -> None:
-    # Employee without an Entity column still matches a restricted category.
+def test_entity_gate_requires_identity_for_restricted_category() -> None:
+    # Missing identity must not admit staff to an explicitly insured entity.
     cats = [_cat("c1", "Managers", insured="City Developments Limited")]
-    assert _match(_emp("Managers"), cats).category_id == "c1"
+    assert _match(_emp("Managers"), cats).category_id is None
     # Category without insured matches any entity.
     cats = [_cat("c1", "Managers")]
     out = _match(_emp("Managers", entity="Le Grove Management Pte Ltd"), cats)

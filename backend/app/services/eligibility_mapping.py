@@ -36,6 +36,7 @@ from app.schemas.api import AttributeSchemaOut
 from app.services.derivation_engine import derive, resolve_attribute_schemas
 from app.services.eligibility_scope import (
     is_catch_all,
+    location_allows,
     location_cohort_value,
     location_scope,
     multi_location_scoped,
@@ -51,12 +52,12 @@ from app.services.explicit_grade_clauses import (
 from app.services.flex_membership import nationality_country_exact
 from app.services.matching_engine import (
     _entity_allows,
-    category_insured_entities,
+    category_entity_gate,
+    category_specificity,
     employee_entity,
     entity_alias_map,
     product_entities,
     rule_has_validation_errors,
-    rule_specificity,
 )
 from app.services.rule_evaluator import evaluate
 
@@ -69,14 +70,16 @@ _DEPENDANT_TAIL_RE = re.compile(
     re.IGNORECASE,
 )
 _OPTION_TAIL_RE = re.compile(r"\s*\(option\s+\d+\)\s*$", re.IGNORECASE)
-_EXCLUSION_RE = re.compile(r"\b(?:excluding|except(?:\s+for)?)\s+([^)]*)(?:\)|$)", re.IGNORECASE)
+_EXCLUSION_RE = re.compile(
+    r"\b(?:excluding|excl\.?|except(?:\s+for)?)\s+([^)]*)(?:\)|$)", re.IGNORECASE
+)
 _BASED_IN_RE = re.compile(
     r"\bbased\s+in\s+([^()]+?)(?=\s*(?:\(\s*)?(?:excluding|except)\b|\s*\(|$)",
     re.IGNORECASE,
 )
 _LOCATION_ALIAS_SEPARATOR_RE = re.compile(r"\s*(?:,|/|;|&|\band\b)\s*", re.IGNORECASE)
 _ALL_EMPLOYEES_RE = re.compile(r"^all\s+(?:employees?|staff|members?)$", re.IGNORECASE)
-_ALL_OTHER_RE = re.compile(r"^all\s+other\s+(?:employees?|staff|members?)\b", re.IGNORECASE)
+_ALL_OTHER_RE = re.compile(r"^all\s+others?\s+(?:employees?|staff|members?)\b", re.IGNORECASE)
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
 _TOKEN_ALIASES = {
     "asst": "assistant",
@@ -769,10 +772,14 @@ def _unresolved_list_clauses(text: str, included: list[Any]) -> list[str]:
     list grammar used by placement slips such as MCIL's plan bands.
     """
 
-    if "/" not in text and ";" not in text:
+    if not any(separator in text for separator in ("/", ";", ",")):
         return []
     unresolved: list[str] = []
-    for raw_clause in re.split(r"\s*[/;]\s*", text):
+    # Strip an explicit occupational classification prefix before checking the
+    # named jobs. A comma-separated list must not validate only its first hit.
+    text = re.sub(r"^(?:semi[- ]manual|non[- ]manual|manual\s*\d*)\s*-\s*", "", text, flags=re.I)
+    separator = r"\s*[/;,]\s*|\s+and\s+" if "," in text else r"\s*[/;]\s*"
+    for raw_clause in re.split(separator, text):
         clause = raw_clause.strip(" (),")
         clause_tokens = _tokens(clause)
         if not clause_tokens:
@@ -791,6 +798,8 @@ def _rule_for_values(attribute_id: str, values: list[Any], *, negate: bool = Fal
 
 def _pass_codes(text: str) -> list[str]:
     codes: list[str] = []
+    # "SP Grade" is a job band, not an S Pass restriction.
+    text = re.sub(r"\b(?:SP|WP|EP)\s+grade\b", "", text, flags=re.I)
     normalized = " ".join(_tokens(text))
     if re.search(r"\bs\s*pass\b|\bspass\b|\bsp\b", normalized):
         codes.append("SP")
@@ -905,6 +914,46 @@ def propose_category_rule(description: str, catalog: AttributeValueCatalog) -> R
     """
 
     text = _intent_text(description)
+    # Inclusion notes widen an already universal cohort; they do not restrict
+    # it to the examples in parentheses ("All Employees incl. WP/SP").
+    universal = re.sub(r"\s*\(\s*(?:incl\.?|including)\s+[^)]*\)\s*$", "", text, flags=re.I)
+    if _ALL_EMPLOYEES_RE.fullmatch(universal):
+        return RuleProposal(
+            rule={"and": []},
+            human_readable="All employees",
+            confidence=0.95,
+            source="deterministic",
+            validation_state="proposed",
+        )
+    if _ALL_OTHER_RE.match(text):
+        text = universal
+    # Company roster labels often prefix the actual insurer cohort with local
+    # grade codes ("A and B - MSO Grade"). Match the complete labelled suffix;
+    # never infer a hierarchy from a substring such as the letters "SP".
+    qualifier = _ALL_OTHER_RE.sub("", text).strip(" ().") if _ALL_OTHER_RE.match(text) else text
+
+    def cohort_words(value: str) -> list[str]:
+        value = re.sub(r"\bs[ -]?pass\b", "SP", value, flags=re.I)
+        value = re.sub(r"\bwork\s+permit\b", "WP", value, flags=re.I)
+        return [token for token in _tokens(value) if token not in {"all", "and", "only"}]
+
+    for attribute in ("employee_category", "category"):
+        matches = [
+            value
+            for value in catalog.values.get(attribute, [])
+            if len(label_parts := re.split(r"\s+-\s+|\s*:\s*", str(value))) > 1
+            and cohort_words(label_parts[-1]) == cohort_words(qualifier)
+            and cohort_words(qualifier)
+        ]
+        if matches:
+            return RuleProposal(
+                rule=_rule_for_values(attribute, matches),
+                human_readable=f"{attribute} is one of {', '.join(map(str, matches))}",
+                confidence=0.95,
+                source="roster_values",
+                validation_state="proposed",
+                referenced_attributes=[attribute],
+            )
     oversized_clauses = _oversized_explicit_grade_clauses(text)
     if oversized_clauses:
         return RuleProposal(
@@ -972,7 +1021,8 @@ def propose_category_rule(description: str, catalog: AttributeValueCatalog) -> R
     # Relative cohorts are compiled after their specific siblings. The matching
     # engine's specificity ordering makes an empty-AND the safe remainder; a
     # stated exclusion is retained when the company vocabulary can express it.
-    if relative_remainder and not explicit_codes:
+    remainder_qualifier = _ALL_OTHER_RE.sub("", without_exclusion).strip(" ().")
+    if relative_remainder and not explicit_codes and not remainder_qualifier:
         if not exclusion_text:
             return RuleProposal(
                 rule={"and": []},
@@ -994,7 +1044,7 @@ def propose_category_rule(description: str, catalog: AttributeValueCatalog) -> R
                 relative_remainder=True,
             )
         return RuleProposal(
-            rule={"and": []},
+            rule=None,
             human_readable="All remaining employees; exclusion needs mapping",
             confidence=0.5,
             source="product_context",
@@ -1106,6 +1156,30 @@ def propose_category_rule(description: str, catalog: AttributeValueCatalog) -> R
             if location_match
             else "employee work-location exception"
         )
+
+    if relative_remainder and remainder_qualifier and not parts:
+        # A qualified remainder is not an unrestricted fallback. Resolve its
+        # grade against this company's vocabulary or retain it for review.
+        qualifier = re.sub(r"\bgrade\b", "", remainder_qualifier, flags=re.I).strip()
+        grade_attr, grade_values = _best_value_mapping(
+            qualifier,
+            catalog,
+            allowed=("job_grade", "grade", "job_category", "employee_category", "class"),
+        )
+        if grade_attr and grade_values:
+            parts.append(_rule_for_values(grade_attr, grade_values))
+            readings.append(f"{grade_attr} is one of {', '.join(map(str, grade_values))}")
+            referenced.append(grade_attr)
+        else:
+            return RuleProposal(
+                rule=None,
+                human_readable="Qualified employee cohort needs mapping",
+                confidence=0.0,
+                source="unmapped",
+                validation_state="needs_review",
+                unresolved_clauses=[remainder_qualifier],
+                relative_remainder=True,
+            )
 
     if parts:
         rule = parts[0] if len(parts) == 1 else {"and": parts}
@@ -1504,7 +1578,10 @@ def validate_ai_matching_rule(
         errors.append(
             f"Explicit employee range exceeds {_MAX_SET_VALUES} values: {clause}"
         )
-    if rule == {"and": []} and not (_ALL_EMPLOYEES_RE.match(text) or _ALL_OTHER_RE.match(text)):
+    universal = re.sub(r"\s*\(\s*(?:incl\.?|including)\s+[^)]*\)\s*$", "", text, flags=re.I)
+    if rule == {"and": []} and not (
+        _ALL_EMPLOYEES_RE.fullmatch(universal) or _ALL_OTHER_RE.fullmatch(universal)
+    ):
         errors.append("AI may use an all-employees rule only when the eligibility wording says so")
     if has_explicit_grade_clause(text) and not source_values:
         errors.append("Could not map explicit employee codes to a company employee field")
@@ -2167,18 +2244,23 @@ def _scope_catch_all(
     proposal: RuleProposal, category: Category, catalog: AttributeValueCatalog
 ) -> RuleProposal:
     """Narrow "All Employees — Thai Office" to the staff at that office."""
-    if not is_catch_all(proposal.rule):
-        return proposal
     scope = location_scope(category) or ""
     attr, value = location_cohort_value(scope, catalog.values)
     if attr and value is not None:
         return RuleProposal(
-            rule={"=": [attr, value]},
-            human_readable=f"{attr} is {value}",
-            confidence=0.9,
-            source="roster_values",
-            validation_state="proposed",
-            referenced_attributes=[attr],
+            rule=(
+                {"=": [attr, value]}
+                if is_catch_all(proposal.rule)
+                else {"and": [proposal.rule, {"=": [attr, value]}]}
+                if proposal.rule
+                else None
+            ),
+            human_readable=f"{proposal.human_readable}; {attr} is {value}",
+            confidence=proposal.confidence,
+            source=proposal.source,
+            validation_state=proposal.validation_state,
+            unresolved_clauses=proposal.unresolved_clauses,
+            referenced_attributes=list(dict.fromkeys([*proposal.referenced_attributes, attr])),
         )
     return RuleProposal(
         rule=None,
@@ -2204,8 +2286,8 @@ def _separate_location_cohorts(
         if target_category is not None:
             if category.product_id != target_category.product_id:
                 continue
-            target_gate = product_gate or category_insured_entities(target_category, aliases)
-            location_gate = product_gate or category_insured_entities(category, aliases)
+            target_gate = category_entity_gate(target_category, product_gate, aliases)
+            location_gate = category_entity_gate(category, product_gate, aliases)
             if target_gate and location_gate and not target_gate & location_gate:
                 continue
         text = _intent_text(category.raw_description)
@@ -2288,6 +2370,12 @@ def _rule_without_product_location_context(
     rule: Rule | None, validation: dict[str, Any]
 ) -> Rule | None:
     """Store a reusable cohort rule without exclusions required by one product."""
+    scope_guard = validation.get("location_scope_rule")
+    if isinstance(scope_guard, dict) and isinstance(rule, dict):
+        if rule == scope_guard:
+            rule = {"and": []}
+        elif isinstance(parts := rule.get("and"), list) and parts and parts[-1] == scope_guard:
+            rule = parts[0] if len(parts) == 2 else {"and": parts[:-1]}
     exclusions = validation.get("product_location_exclusions")
     if not isinstance(exclusions, dict) or not isinstance(rule, dict):
         return rule
@@ -2357,7 +2445,7 @@ def _assignment_counts(
             if category.status == CategoryStatus.needs_review.value
             else 2
         )
-        return status_rank, -rule_specificity(category.matching_rule)
+        return status_rank, -category_specificity(category)
 
     def cohort_identity(category: Category) -> tuple[str, frozenset[str]]:
         return category_signature(category.raw_description), gates[category.id]
@@ -2366,7 +2454,7 @@ def _assignment_counts(
         product = products.get(product_id) if product_id else None
         product_gate = product_entities(product, aliases)
         gates = {
-            category.id: product_gate or category_insured_entities(category, aliases)
+            category.id: category_entity_gate(category, product_gate, aliases)
             for category in product_categories
         }
         for employee, view in zip(employees, views, strict=True):
@@ -2376,10 +2464,9 @@ def _assignment_counts(
                 for category in product_categories
                 if category.matching_rule
                 and category.id not in excluded
-                and (
-                    category.id in validated or not rule_has_validation_errors(category)
-                )
+                and (category.id in validated or not rule_has_validation_errors(category))
                 and _entity_allows(gates[category.id], employee_gate)
+                and location_allows(category, view)
                 and evaluate(category.matching_rule, view)
             ]
             if not matches:
@@ -2513,11 +2600,13 @@ class CategoryConfirmationBatch:
             for employee in self._employees
         ]
         self._gates = {
-            category.id: product_entities(
-                products.get(category.product_id) if category.product_id else None,
+            category.id: category_entity_gate(
+                category,
+                product_entities(
+                    products.get(category.product_id) if category.product_id else None, aliases
+                ),
                 aliases,
             )
-            or category_insured_entities(category, aliases)
             for category in categories.values()
         }
         self._matches: dict[str, list[int]] = {}
@@ -2539,13 +2628,14 @@ class CategoryConfirmationBatch:
                 )
                 if category.matching_rule
                 and _entity_allows(gate, employee_gate)
+                and location_allows(category, view)
                 and evaluate(category.matching_rule, view)
             ]
             self._cohorts[category.id] = (
                 category_signature(category.raw_description),
                 gate,
             )
-            self._specificities[category.id] = rule_specificity(category.matching_rule)
+            self._specificities[category.id] = category_specificity(category)
         return self._matches[category.id]
 
     def assessment(self, category: Category) -> tuple[int, int]:
@@ -2884,6 +2974,10 @@ def auto_map_policy_year(
             "relative_remainder": proposal.relative_remainder,
             "reused": reused,
         }
+        if scope := location_scope(category):
+            scope_attr, scope_value = location_cohort_value(scope, catalog.values)
+            if scope_attr and scope_value is not None:
+                payload["location_scope_rule"] = {"=": [scope_attr, scope_value]}
         if (
             category.id in profile_proposals
             and proposal.rule != profile_proposals[category.id].rule

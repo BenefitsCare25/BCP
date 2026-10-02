@@ -764,6 +764,8 @@ export interface AttributePayload {
   allow_matching?: boolean;
   allow_ai_values?: boolean;
   description?: string | null;
+  derived_from?: string | null;
+  derivation_rule?: Record<string, unknown> | null;
 }
 
 // Where a catalog create lands. "company" (default) = the active client;
@@ -789,6 +791,7 @@ export function useCreateAttribute() {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["schemas", "employee-attributes"] });
+      qc.invalidateQueries({ queryKey: ["member-counts"] });
       qc.invalidateQueries({ queryKey: ["audit-log"] });
     },
   });
@@ -807,6 +810,7 @@ export function useUpdateAttribute() {
       api.patch<AttributeSchema>(`/schemas/employee-attributes/${id}`, patch),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["schemas", "employee-attributes"] });
+      qc.invalidateQueries({ queryKey: ["member-counts"] });
       qc.invalidateQueries({ queryKey: ["audit-log"] });
     },
   });
@@ -918,6 +922,7 @@ export function useUpdateProduct() {
     }) => api.patch<Product>(`/schemas/products/${id}`, patch),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["schemas", "products"] });
+      qc.invalidateQueries({ queryKey: ["member-counts"] });
       // Classification (form_profile / line / layout_family) reshapes the
       // setup templates and tab routing.
       qc.invalidateQueries({ queryKey: ["setup-products"] });
@@ -1558,6 +1563,7 @@ export function useMemberCounts(
     key: string;
     description: string;
     insured?: string[] | string | null;
+    location_scope?: string | null;
   }[],
 ) {
   const cid = useActiveClientId();

@@ -200,18 +200,12 @@ def _find_sob_section(rows: list[list[Cell]]) -> int:
             # The header row is usually the one with plan column labels.
             # Sometimes the "Cover:" description precedes the actual SOB header.
             # Look for the row that actually has plan labels in cols > 4.
-            if any(
-                _non_empty(c) and _PLAN_LABEL.search(str(c))
-                for c in (row[5:] if len(row) > 5 else [])
-            ):
+            if any(_non_empty(c) and _PLAN_LABEL.search(str(c)) for c in row[1:]):
                 return i
             # Check next row for plan labels
             if i + 1 < len(rows):
                 next_row = rows[i + 1] or []
-                if any(
-                    _non_empty(c) and _PLAN_LABEL.search(str(c))
-                    for c in (next_row[5:] if len(next_row) > 5 else [])
-                ):
+                if any(_non_empty(c) and _PLAN_LABEL.search(str(c)) for c in next_row[1:]):
                     return i + 1
             # The header row itself has "SCHEDULE OF BENEFITS" + plan labels
             return i
@@ -228,7 +222,7 @@ def _detect_plan_columns(
     header_row = rows[sob_idx] if sob_idx < len(rows) else []
     results: list[tuple[str, str, int]] = []
 
-    for col_idx in range(5, len(header_row)):
+    for col_idx in range(1, len(header_row)):
         cell = header_row[col_idx]
         if not _non_empty(cell):
             continue

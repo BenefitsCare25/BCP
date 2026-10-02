@@ -73,6 +73,35 @@ def _user() -> CurrentUser:
     )
 
 
+def test_source_issues_cannot_be_erased_to_bypass_confirmation(db: Session, monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    from app.api.v1 import product_setups
+    from app.models import ProductSetup
+
+    setup = ProductSetup(
+        policy_year_id="year",
+        product_code="GHS",
+        origin="placement_slip",
+        answers={"source_issues": ["Missing source rates"], "plans": []},
+    )
+    db.add(setup)
+    db.commit()
+    body = product_setups.SetupSaveIn(
+        answers={"source_issues": [], "source_rate_schedules": []},
+        expected_updated_at=setup.updated_at,
+    )
+    monkeypatch.setattr(
+        product_setups, "_resolve_template", lambda *a, **kw: SimpleNamespace(code="GHS")
+    )
+    with pytest.raises(HTTPException) as error:
+        product_setups.confirm_setup("year", "GHS", body, db.get(PolicyYear, "year"), _user(), db)
+    assert error.value.status_code == 422
+    assert "Review the source" in str(error.value.detail)
+    assert setup.answers["source_issues"] == ["Missing source rates"]
+    db.rollback()
+
+
 def test_adopts_slip_categories_terms_pricing_and_removes_generated_plans(
     db: Session,
 ) -> None:

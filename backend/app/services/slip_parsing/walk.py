@@ -8,6 +8,7 @@ from app.services import product_registry
 from app.services.excel_reader import Cell
 from app.services.slip_parsing.models import ExtractedCategory
 from app.services.slip_parsing.participation import parse_participation
+from app.services.slip_parsing.table_sections import ends_basis_table
 from app.services.slip_parsing.text import (
     _FOOTNOTE_SPLIT,
     _PLAN_INLINE,
@@ -397,6 +398,8 @@ def _walk_data_rows(
         row = rows[i] or []
         text = _row_text(row)
         upper = text.upper()
+        if out and ends_basis_table(row):
+            break
         if "FIGURES ABOVE ARE FOR" in upper or "ACTUAL FIGURES" in upper:
             break
         if out and prev_empty and _is_section_heading(rows, i, cols):

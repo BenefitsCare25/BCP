@@ -56,48 +56,98 @@ def _sheet(code, family, **kw) -> SheetExpect:
 
 WORKBOOKS: dict[str, dict[str, SheetExpect]] = {
     "Placement Slips 2026.xls": {  # CDL
-        "GTL": _sheet("GTL", "si_based", min_categories=25, min_rated=20,
-                      bases=frozenset({"per_1000_si"}),
-                      expects_voluntary_bands=True, min_dependant_scope=6),
-        "GCI - Additional": _sheet("GCI", "si_based", min_categories=25,
-                                   min_rated=20, bases=frozenset({"per_1000_si"}),
-                                   expects_voluntary_bands=True),
+        "GTL": _sheet(
+            "GTL",
+            "si_based",
+            min_categories=25,
+            min_rated=20,
+            bases=frozenset({"per_1000_si"}),
+            expects_voluntary_bands=True,
+            min_dependant_scope=6,
+        ),
+        "GCI - Additional": _sheet(
+            "GCI",
+            "si_based",
+            min_categories=25,
+            min_rated=20,
+            bases=frozenset({"per_1000_si"}),
+            expects_voluntary_bands=True,
+        ),
         # 16 = 4 compulsory + 12 voluntary upgrade/downgrade pairs, including
         # the plan-code-only continuation rows (SM → D01/D02/D03, Clerical →
         # U01/U02/U03, …) that a regression would silently drop again.
-        "GHS": _sheet("GHS", "plan_tier", min_categories=16, min_rated=16,
-                      bases=frozenset({"tiered"}), min_plans=4),
-        "GMM": _sheet("GMM", "plan_tier", min_categories=16, min_rated=16,
-                      bases=frozenset({"tiered"}), min_plans=4),
-        "GCGP": _sheet("GCGP", "plan_tier", min_categories=6, min_rated=6,
-                       bases=frozenset({"flat", "per_member"})),
-        "GCSP": _sheet("GCSP", "plan_tier", min_categories=6, min_rated=6,
-                       bases=frozenset({"flat", "per_member"})),
+        "GHS": _sheet(
+            "GHS",
+            "plan_tier",
+            min_categories=16,
+            min_rated=16,
+            bases=frozenset({"tiered"}),
+            min_plans=4,
+        ),
+        "GMM": _sheet(
+            "GMM",
+            "plan_tier",
+            min_categories=16,
+            min_rated=16,
+            bases=frozenset({"tiered"}),
+            min_plans=4,
+        ),
+        "GCGP": _sheet(
+            "GCGP",
+            "plan_tier",
+            min_categories=6,
+            min_rated=6,
+            bases=frozenset({"flat", "per_member"}),
+        ),
+        "GCSP": _sheet(
+            "GCSP",
+            "plan_tier",
+            min_categories=6,
+            min_rated=6,
+            bases=frozenset({"flat", "per_member"}),
+        ),
         "GD": _sheet("GD", "plan_tier", min_categories=2, min_rated=2),
-        "GPA": _sheet("GPA", "si_based", min_categories=25, min_rated=25,
-                      bases=frozenset({"per_1000_si"}), min_dependant_scope=6,
-                      expects_location_scope=True),
-        "GBT": _sheet("GBT", "travel", min_categories=1, min_rated=1,
-                      bases=frozenset({"annual_flat"})),
-        "OSI": _sheet("OSI", "named_person", min_categories=1, min_rated=1,
-                      bases=frozenset({"tiered"})),
-        "WICI": _sheet("WICI", "earnings", min_categories=4, min_rated=4,
-                       bases=frozenset({"earnings_based"})),
+        "GPA": _sheet(
+            "GPA",
+            "si_based",
+            min_categories=25,
+            min_rated=25,
+            bases=frozenset({"per_1000_si"}),
+            min_dependant_scope=6,
+            expects_location_scope=True,
+        ),
+        "GBT": _sheet(
+            "GBT", "travel", min_categories=1, min_rated=1, bases=frozenset({"annual_flat"})
+        ),
+        "OSI": _sheet(
+            "OSI", "named_person", min_categories=1, min_rated=1, bases=frozenset({"tiered"})
+        ),
+        "WICI": _sheet(
+            "WICI", "earnings", min_categories=4, min_rated=4, bases=frozenset({"earnings_based"})
+        ),
     },
     "Placement Slips - CBRE Group (2025-2026).xls": {
-        "GTL": _sheet("GTL", "si_based", min_categories=3, min_rated=3,
-                      bases=frozenset({"per_1000_si"})),
-        "GDD ": _sheet("GDD", "si_based", min_rated=1,
-                       bases=frozenset({"per_1000_si"})),
-        "GHS": _sheet("GHS", "plan_tier", min_categories=5, min_rated=5,
-                      bases=frozenset({"tiered"}), min_plans=3),
-        "GMM": _sheet("GMM", "plan_tier", min_categories=10, min_rated=10,
-                      bases=frozenset({"tiered"})),
+        "GTL": _sheet(
+            "GTL", "si_based", min_categories=3, min_rated=3, bases=frozenset({"per_1000_si"})
+        ),
+        "GDD ": _sheet("GDD", "si_based", min_rated=1, bases=frozenset({"per_1000_si"})),
+        "GHS": _sheet(
+            "GHS",
+            "plan_tier",
+            min_categories=5,
+            min_rated=5,
+            bases=frozenset({"tiered"}),
+            min_plans=3,
+        ),
+        "GMM": _sheet(
+            "GMM", "plan_tier", min_categories=10, min_rated=10, bases=frozenset({"tiered"})
+        ),
         "GP": _sheet("GP", "plan_tier", min_categories=5, min_rated=5),
         "SP": _sheet("SP", "plan_tier", min_categories=5, min_rated=5),
         "Dental": _sheet("DENTAL", "plan_tier", min_rated=1),
-        "GPA": _sheet("GPA", "si_based", min_categories=3, min_rated=2,
-                      bases=frozenset({"per_1000_si"})),
+        "GPA": _sheet(
+            "GPA", "si_based", min_categories=3, min_rated=2, bases=frozenset({"per_1000_si"})
+        ),
     },
     "Placement Slips - CBRE MCST  (2025-2026).xlsx": {
         "GTL": _sheet("GTL", "si_based", bases=frozenset({"per_1000_si"})),
@@ -107,50 +157,75 @@ WORKBOOKS: dict[str, dict[str, SheetExpect]] = {
         "GPA": _sheet("GPA", "si_based", bases=frozenset({"per_1000_si"})),
     },
     "STMicroelectronics - Placement Slips 2026_workingfile (1).xls": {
-        "GEL-GTL": _sheet("GTL", "si_based", min_categories=4, min_rated=4,
-                          bases=frozenset({"per_1000_si"})),
-        "GEL-GHS": _sheet("GHS", "plan_tier", min_categories=6, min_rated=6,
-                          bases=frozenset({"tiered"}), min_plans=6),
-        "GEL-GMM": _sheet("GMM", "plan_tier", min_categories=3, min_rated=3,
-                          bases=frozenset({"tiered"})),
+        "GEL-GTL": _sheet(
+            "GTL", "si_based", min_categories=4, min_rated=4, bases=frozenset({"per_1000_si"})
+        ),
+        "GEL-GHS": _sheet(
+            "GHS",
+            "plan_tier",
+            min_categories=6,
+            min_rated=6,
+            bases=frozenset({"tiered"}),
+            min_plans=6,
+        ),
+        "GEL-GMM": _sheet(
+            "GMM", "plan_tier", min_categories=3, min_rated=3, bases=frozenset({"tiered"})
+        ),
         # SP is bundled into GHS ("Part of GHS", $0) — no numeric rates exist.
         "GEL-SP": _sheet("SP", "plan_tier", min_categories=3, min_rated=0),
-        "Zurich-GPA": _sheet("GPA", "si_based", min_categories=4, min_rated=4,
-                             bases=frozenset({"per_1000_si"})),
+        "Zurich-GPA": _sheet(
+            "GPA", "si_based", min_categories=4, min_rated=4, bases=frozenset({"per_1000_si"})
+        ),
         " Chubb -GBT": _sheet("GBT", "travel", min_rated=1),
-        "Allianz-WICI": _sheet("WICI", "earnings", min_categories=7,
-                               min_rated=7, bases=frozenset({"earnings_based"})),
+        "Allianz-WICI": _sheet(
+            "WICI", "earnings", min_categories=7, min_rated=7, bases=frozenset({"earnings_based"})
+        ),
     },
     "VDL - Placement Slips 2026 (as at 13 Apr 2026).xls": {
-        "GTL ": _sheet("GTL", "si_based", min_categories=2, min_rated=2,
-                       bases=frozenset({"per_1000_si"})),
-        "GHS - Locals": _sheet("GHS-LOCALS", "plan_tier", min_categories=6,
-                               min_rated=6, bases=frozenset({"tiered"}),
-                               min_plans=5),
+        "GTL ": _sheet(
+            "GTL", "si_based", min_categories=2, min_rated=2, bases=frozenset({"per_1000_si"})
+        ),
+        "GHS - Locals": _sheet(
+            "GHS-LOCALS",
+            "plan_tier",
+            min_categories=6,
+            min_rated=6,
+            bases=frozenset({"tiered"}),
+            min_plans=5,
+        ),
         # Secondees premium is included in the Locals figures — no rate table.
-        "GHS - Secondees": _sheet("GHS-SECONDEES", "plan_tier",
-                                  min_categories=2, min_rated=0),
-        "GHS - Dependants": _sheet("GHS-DEPENDANTS", "plan_tier",
-                                   min_categories=6, min_rated=6,
-                                   bases=frozenset({"tiered"}),
-                                   min_dependant_scope=6),
-        "GMM": _sheet("GMM", "plan_tier", min_categories=4, min_rated=4,
-                      bases=frozenset({"tiered"})),
+        "GHS - Secondees": _sheet("GHS-SECONDEES", "plan_tier", min_categories=2, min_rated=0),
+        "GHS - Dependants": _sheet(
+            "GHS-DEPENDANTS",
+            "plan_tier",
+            min_categories=6,
+            min_rated=6,
+            bases=frozenset({"tiered"}),
+            min_dependant_scope=6,
+        ),
+        "GMM": _sheet(
+            "GMM", "plan_tier", min_categories=4, min_rated=4, bases=frozenset({"tiered"})
+        ),
         "GCGP": _sheet("GCGP", "plan_tier", min_categories=6, min_rated=6),
         "GCSP": _sheet("GCSP", "plan_tier", min_categories=6, min_rated=6),
-        "GPA": _sheet("GPA", "si_based", min_categories=2, min_rated=2,
-                      bases=frozenset({"per_1000_si"})),
+        "GPA": _sheet(
+            "GPA", "si_based", min_categories=2, min_rated=2, bases=frozenset({"per_1000_si"})
+        ),
         "GBT": _sheet("GBT", "travel", min_rated=1),
-        "WICA": _sheet("WICA", "earnings", min_categories=10, min_rated=10,
-                       bases=frozenset({"earnings_based"})),
+        "WICA": _sheet(
+            "WICA", "earnings", min_categories=10, min_rated=10, bases=frozenset({"earnings_based"})
+        ),
     },
     "Hartree Partners & CHC Energy - Placement slips 2026 - 2027 (1).xlsx": {
         "GTL": _sheet("GTL", "si_based", bases=frozenset({"per_1000_si"})),
         "GCI": _sheet("GCI", "si_based", bases=frozenset({"per_1000_si"})),
-        "GHS": _sheet("GHS", "plan_tier", min_categories=2, min_rated=2,
-                      bases=frozenset({"tiered"})),
+        "GHS": _sheet(
+            "GHS", "plan_tier", min_categories=2, min_rated=2, bases=frozenset({"tiered"})
+        ),
         "GP": _sheet("GP", "plan_tier", min_categories=2, min_rated=2),
-        "SP": _sheet("SP", "plan_tier", min_categories=2, min_rated=2),
+        # SP's category entity is CHC but its rate entity is Hartree. Rates
+        # must remain unassigned until this source discrepancy is reviewed.
+        "SP": _sheet("SP", "plan_tier", min_categories=2, min_rated=0),
         "Dental": _sheet("DENTAL", "plan_tier", min_categories=2, min_rated=1),
         "GBT": _sheet("GBT", "travel", min_rated=1),
         # Rates read "Pending" / #VALUE! at source — nothing numeric to extract.
@@ -163,9 +238,9 @@ WORKBOOKS: dict[str, dict[str, SheetExpect]] = {
         "GCSP": _sheet("GCSP", "plan_tier"),
         "GD": _sheet("GD", "plan_tier"),
         "GPA": _sheet("GPA", "si_based", bases=frozenset({"per_1000_si"})),
-        "WICI": _sheet("WICI", "earnings",
-                       min_categories=2, min_rated=2,
-                       bases=frozenset({"earnings_based"})),
+        "WICI": _sheet(
+            "WICI", "earnings", min_categories=2, min_rated=2, bases=frozenset({"earnings_based"})
+        ),
     },
 }
 
@@ -176,8 +251,8 @@ def _parse(filename: str):
     path = REFERENCE_DIR / filename
     if not path.exists():
         # CDL's root workbook also exists as a copy under CDL/.
-        alt = REFERENCE_DIR / "CDL" / filename
-        path = alt if alt.exists() else path
+        matches = list(REFERENCE_DIR.rglob(filename))
+        path = matches[0] if len(matches) == 1 else path
     if not path.exists():
         pytest.skip(f"reference workbook absent: {filename}")
     if filename not in _PARSED:

@@ -12,14 +12,24 @@ Two slip shapes the generic mapper got wrong on CDL's GPA sheet:
 from __future__ import annotations
 
 import re
-from collections import defaultdict
 from collections.abc import Iterable, Mapping
 from typing import Any
 
 CATCH_ALL: dict[str, list[Any]] = {"and": []}
 
 _WORD_RE = re.compile(r"[a-z0-9]+")
-_SCOPE_NOISE = {"office", "offices", "branch", "staff", "employee", "employees", "based", "in"}
+_SCOPE_NOISE = {
+    "office",
+    "offices",
+    "branch",
+    "depot",
+    "site",
+    "staff",
+    "employee",
+    "employees",
+    "based",
+    "in",
+}
 _BASED_IN_RE = re.compile(r"\bbased\s+in\s+([a-z ]+?)(?=\s*(?:\(|except|excluding|$))", re.I)
 _LOCATION_ATTRS = (
     "country_of_work",
@@ -28,6 +38,8 @@ _LOCATION_ATTRS = (
     "location",
     "office_location",
     "country",
+    "depot",
+    "site",
 )
 _COHORT_ATTRS = ("category", "employee_category")
 
@@ -54,23 +66,25 @@ def is_catch_all(rule: Any) -> bool:
     return bool(rule == CATCH_ALL)
 
 
-def multi_location_scoped(categories: Iterable[Any]) -> set[str]:
-    """Categories limited to ONE of several separately priced locations.
+def relative_remainder(category: Any) -> bool:
+    text = str(getattr(category, "raw_description", "") or "")
+    text = re.sub(
+        r"\s*\(\s*(?:excl\.?|excluding|except|incl\.?|including)\b[^)]*\)", "", text, flags=re.I
+    )
+    return bool(re.fullmatch(r"all\s+others?\s+(?:employees?|staff|members?)", text.strip(), re.I))
 
-    Only a product that prices two or more locations separately counts: a
-    single-location slip states its office for information, and its catch-all
-    genuinely is everyone.
-    """
-    scopes: dict[Any, set[str]] = defaultdict(set)
-    rows = list(categories)
-    for category in rows:
-        if scope := location_scope(category):
-            scopes[category.product_id].add(scope.casefold())
-    return {
-        category.id
-        for category in rows
-        if location_scope(category) and len(scopes[category.product_id]) >= 2
-    }
+
+def location_allows(category: Any, view: Mapping[str, Any]) -> bool:
+    scope = location_scope(category)
+    return (
+        not scope
+        or location_cohort_value(scope, {k: [v] for k, v in view.items() if v})[0] is not None
+    )
+
+
+def multi_location_scoped(categories: Iterable[Any]) -> set[str]:
+    """Explicit location restrictions apply even to a single-location policy."""
+    return {category.id for category in categories if location_scope(category)}
 
 
 def unscoped_catch_alls(categories: Iterable[Any]) -> set[str]:
@@ -113,6 +127,16 @@ def location_cohort_value(
     roster does it ("All Employees based in Thailand (except for Director)").
     """
     country = scope_country(scope)
+    scope_words = [w for w in _words(scope) if w not in _SCOPE_NOISE]
+    for attr in _LOCATION_ATTRS:
+        matches = [
+            (attr, v)
+            for v in values.get(attr, [])
+            if [w for w in _words(v) if w not in _SCOPE_NOISE] == scope_words
+        ]
+        hit = _unique(matches)
+        if hit[0] and scope_words:
+            return hit
     if country is None:
         return None, None
     for attr in _LOCATION_ATTRS:

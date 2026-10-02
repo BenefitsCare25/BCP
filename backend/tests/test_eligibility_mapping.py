@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from datetime import date
 from unittest.mock import patch
 
@@ -141,6 +142,79 @@ def test_category_signature_strips_plan_and_dependant_noise() -> None:
     )
     right = category_signature("Senior Vice President / General Manager")
     assert left == right
+
+
+def test_company_value_map_api_validation(client: TestClient) -> None:
+    payload = {
+        "attribute_id": "mapped_occupation",
+        "display_name": "Mapped occupation",
+        "data_type": "string",
+        "derivation_rule": {
+            "op": "value_map",
+            "source": "employment_type",
+            "unmapped": "omit",
+            "mappings": [{"from": "DRIVER", "to": "Bus Drivers"}],
+        },
+    }
+    created = client.post("/api/v1/schemas/employee-attributes", json=payload)
+    assert created.status_code == 201
+    assert created.json()["client_id"] == CLIENT_ID
+    assert created.json()["derived_from"] == "employment_type"
+    rule = {**payload["derivation_rule"], "source": "another_company_private_field"}
+    endpoint = f"/api/v1/schemas/employee-attributes/{created.json()['id']}"
+    assert client.patch(endpoint, json={"derivation_rule": rule}).status_code == 422
+    rule = {
+        **payload["derivation_rule"],
+        "mappings": [
+            {"from": "DRIVER", "to": "Bus Drivers"},
+            {"from": " driver ", "to": "Other staff"},
+        ],
+    }
+    assert client.patch(endpoint, json={"derivation_rule": rule}).status_code == 422
+    stored = next(
+        a
+        for a in client.get("/api/v1/schemas/employee-attributes").json()
+        if a["id"] == created.json()["id"]
+    )
+    assert stored["derivation_rule"] == payload["derivation_rule"]
+
+
+def test_only_system_admin_can_remove_saved_value_mappings(client: TestClient) -> None:
+    rule = {
+        "op": "value_map",
+        "source": "employment_type",
+        "mappings": [
+            {"from": "DRIVER", "to": "Bus Drivers"},
+            {"from": "TECH", "to": "Technicians"},
+        ],
+    }
+    created = client.post(
+        "/api/v1/schemas/employee-attributes",
+        json={
+            "attribute_id": "protected_mappings",
+            "display_name": "Protected mappings",
+            "data_type": "string",
+            "derivation_rule": rule,
+        },
+    )
+    assert created.status_code == 201, created.text
+    endpoint = f"/api/v1/schemas/employee-attributes/{created.json()['id']}"
+    reduced = {**rule, "mappings": rule["mappings"][:1]}
+    for replacement in (None, reduced, {"op": "passthrough", "source": "employment_type"}):
+        assert client.patch(endpoint, json={"derivation_rule": replacement}).status_code == 403
+    assert client.patch(endpoint, json={"derivation_rule": rule}).status_code == 200
+    assert (
+        client.patch(endpoint, json={"derivation_rule": {**rule, "mappings": 123}}).status_code
+        == 422
+    )
+    admin = replace(_user(), role="system_admin")
+    app.dependency_overrides[get_current_user] = lambda: admin
+    try:
+        removed = client.patch(endpoint, json={"derivation_rule": reduced})
+        assert removed.status_code == 200, removed.text
+        assert removed.json()["derivation_rule"] == reduced
+    finally:
+        app.dependency_overrides[get_current_user] = _user
 
 
 def test_mcil_executive_band_uses_company_designation_values() -> None:
@@ -482,7 +556,8 @@ def test_location_exclusion_respects_category_insured_entities() -> None:
         target_category=grade,
         product_gate=frozenset({"entity b"}),
     )
-    assert product_scoped[grade.product_id] == {"category": [location]}
+    # Product B cannot widen a category explicitly insured on A.
+    assert product_scoped.get(grade.product_id, {}) == {}
 
 
 def test_upload_proposal_does_not_replace_unmapped_codes_with_text_cohort() -> None:

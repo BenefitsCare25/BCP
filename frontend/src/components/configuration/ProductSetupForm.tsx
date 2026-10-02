@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { CircleCheck } from "lucide-react";
 import { toast } from "sonner";
+import { SourceMappingNotes } from "./SourceMappingNotes";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { AlertDialog } from "@/components/ui/alert-dialog";
@@ -758,6 +759,7 @@ export function ProductSetupForm({
 
   return (
     <div className="flex flex-col gap-4">
+      <SourceMappingNotes answers={answers} onReview={source_reviewed => setAnswers(a => ({ ...a, source_reviewed }))} />
       {conflictMessage && (
         <SetupConflictAlert
           message={conflictMessage}
@@ -823,6 +825,7 @@ export function ProductSetupForm({
               confirm.isPending ||
               termStatus.busy ||
               !termStatus.valid
+              || (Boolean(answers.source_issues?.length) && !answers.source_reviewed)
             }
           >
             {confirmLabel}

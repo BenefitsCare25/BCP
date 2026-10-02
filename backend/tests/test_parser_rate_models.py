@@ -68,7 +68,7 @@ def test_per_member_rate_with_member_type_suffix() -> None:
     rows = [
         ["Rate :"],
         ["", "Insured", "", "Plan", "Rate", "Premium"],
-        ["", "CDL", "", "1 - Employees", 378, 186732],
+        ["", "ACME", "", "1 - Employees", 378, 186732],
         ["", "", "", "1 - Dependents", 396.9, None],
         ["", "", "", "2 - Employees / Dependents", 454, None],
         ["Annual Premium (sbj to GST) :", "", 186732],

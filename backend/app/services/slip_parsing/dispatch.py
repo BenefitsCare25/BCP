@@ -10,8 +10,10 @@ flagged ``registry_known=False`` so the API layer can surface
 """
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -33,7 +35,7 @@ from app.services.slip_parsing.rates import (
     _enrich_with_rates,
     _extract_voluntary_rates,
     _find_rate_section_start,
-    extract_rate_section,
+    extract_rate_schedules,
 )
 from app.services.slip_parsing.sections import extract_sections, extract_terms
 from app.services.slip_parsing.walk import (
@@ -80,6 +82,8 @@ class _SheetResult:
     terms: tuple[SlipTerm, ...] = ()
     sections: tuple[SlipSection, ...] = ()
     merges_resolved: bool = False
+    rate_schedules: tuple[dict[str, Any], ...] = ()
+    extraction_issues: tuple[str, ...] = ()
 
 
 def _free_text(
@@ -167,6 +171,7 @@ def _extract_categories_from_sheet(
     sheet: Sheet,
     product_code: str = "",
     profile_resolver: ProfileResolver | None = None,
+    rate_date: date | None = None,
 ) -> _SheetResult:
     # Imported here (not module top) to avoid a cycle: the SOB module shares
     # this package's models/text helpers.
@@ -220,8 +225,43 @@ def _extract_categories_from_sheet(
     )
 
     # Enrich categories with premium rate data from the Rate section.
-    rate_data, tier_labels = extract_rate_section(rows)
+    rate_data, tier_labels, rate_schedules, rate_issues = extract_rate_schedules(
+        rows, effective_date=rate_date, policy_period=header_fields.header.period
+    )
     categories = _enrich_with_rates(categories, rate_data)
+    # Explicit depot/site qualifiers describe location, not another legal
+    # entity. Split only when the remaining name equals the policy's insured.
+    from app.services.matching_engine import normalize_entity
+
+    scoped_categories = []
+    for category in categories:
+        qualified = re.match(
+            r"^(.+?)(?:\s*\(\s*|\s+-\s+)([^()]+\b(?:depot|site|office))\s*\)?$",
+            category.insured,
+            re.I,
+        )
+        if qualified and normalize_entity(qualified[1]) == normalize_entity(
+            header_fields.header.insured
+        ):
+            category = replace(
+                category,
+                insured=header_fields.header.insured or qualified[1],
+                location_scope=qualified[2].strip(),
+                source_insured=category.insured,
+            )
+        scoped_categories.append(category)
+    categories = tuple(scoped_categories)
+    if rate_schedules:
+        missing = [
+            c
+            for c in categories
+            if c.premium_rate is None and not c.rate_tiers and not c.annual_premium
+        ]
+        if missing:
+            rate_issues += (
+                f"{len(missing)} category row(s) have no usable rate. "
+                "Check blank source rates and insured-entity names before pricing.",
+            )
 
     # Age-banded voluntary rate table — drives voluntary employee and dependant
     # pricing off the member's age band, not the flat compulsory rate.
@@ -242,6 +282,8 @@ def _extract_categories_from_sheet(
             endorsements=extract_endorsements(sheet),
             terms=terms,
             sections=sections,
+            rate_schedules=rate_schedules,
+            extraction_issues=rate_issues,
         )
 
     plan_cols = _detect_plan_columns(rows, sob_idx)
@@ -286,6 +328,8 @@ def _extract_categories_from_sheet(
         terms=terms,
         sections=sections,
         merges_resolved=merges_resolved,
+        rate_schedules=rate_schedules,
+        extraction_issues=rate_issues,
     )
 
 
@@ -294,6 +338,7 @@ def parse_placement_slip(
     client_label: str,
     profile_resolver: ProfileResolver | None = None,
     classification_resolver: ClassificationResolver | None = None,
+    rate_date: date | None = None,
 ) -> PlacementSlip:
     """Parse a placement-slip workbook end-to-end.
 
@@ -323,7 +368,7 @@ def parse_placement_slip(
             )
             entry = product_registry.resolve_entry(product_code, metadata)
             result = _extract_categories_from_sheet(
-                sheet, product_code, profile_resolver
+                sheet, product_code, profile_resolver, rate_date
             )
             if not result.categories:
                 skipped.append({"sheet": sheet_name, "reason": "no_categories_found"})
@@ -346,6 +391,8 @@ def parse_placement_slip(
                     layout_family=entry.layout_family,
                     # A broker classification (stored metadata) counts as known.
                     registry_known=known or bool(metadata),
+                    rate_schedules=result.rate_schedules,
+                    extraction_issues=result.extraction_issues,
                 )
             )
     return PlacementSlip(
