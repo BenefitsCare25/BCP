@@ -115,7 +115,7 @@ export function PortalDependantsPage() {
       {showForm && (
         <Mount
           label="Add a family member"
-          gloss="Your HR team checks every addition before their cover starts. Attaching a birth or marriage certificate usually speeds that up."
+          gloss="HR approval is required. You can attach a birth or marriage certificate."
           aside={
             <button
               type="button"

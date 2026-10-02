@@ -448,6 +448,162 @@ a.clay-sheet:hover .clay-sheet-go svg, button.clay-sheet:hover .clay-sheet-go sv
 }
 .clay-panel-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
 .clay-panel-head h2 { margin: 0; font-size: 20px; font-weight: 700; }
+
+/* Enrolment inherits Home's type scale, rounded sheets and benefit colours.
+   Scoped to the member route so the shared broker preview keeps its layout. */
+.portal-clay.is-enrolment {
+  --color-shade: #eef5ff;
+  --color-action-wash: #eef5ff;
+  --color-label: color-mix(in srgb, var(--color-record) 65%, var(--color-action) 35%);
+  --color-hairline: color-mix(in srgb, var(--color-action) 15%, var(--color-glass));
+  --color-glass-edge: var(--color-hairline);
+  --color-track: var(--color-shade);
+  --color-leaf-input: color-mix(in srgb, var(--color-action) 65%, var(--color-glass));
+  --color-muted: var(--color-shade);
+  --color-accent: var(--color-shade);
+  --color-secondary: var(--color-shade);
+  --color-enrolment-hover: color-mix(in srgb, var(--color-action) 12%, var(--color-glass));
+  --text-row: 0.875rem;
+  --text-row--line-height: 1.375rem;
+  --radius-enrolment-sheet: 1.5rem;
+  --text-enrolment-title: 1.25rem;
+}
+.is-enrolment main > div { padding-top: 14px; }
+.is-enrolment .enrolment-context { margin-bottom: 14px; }
+.is-enrolment .enrolment-context h1 { font-size: 18px; }
+.is-enrolment .enrolment-context p { font-size: var(--text-row); }
+.is-enrolment .leaf-mount {
+  padding: 20px;
+  gap: 12px;
+  border-radius: var(--radius-enrolment-sheet);
+  box-shadow: none;
+  backdrop-filter: none;
+}
+.is-enrolment .leaf-mount > div:first-child h2 {
+  font-size: var(--text-enrolment-title);
+  font-weight: 700;
+  line-height: 1.2;
+}
+.is-enrolment .enrolment-product {
+  background: var(--tone-wash);
+  border-color: transparent;
+}
+.is-enrolment .enrolment-product:hover { background: var(--tone-wash); }
+.is-enrolment .leaf-deck-rail {
+  top: 80px;
+  max-height: calc(100dvh - 156px);
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-track) transparent;
+  padding: 8px;
+  border-radius: var(--radius-enrolment-sheet);
+  box-shadow: none;
+  backdrop-filter: none;
+}
+.is-enrolment .leaf-deck-rail > div:first-child:not(.leaf-deck-scroll) {
+  position: sticky;
+  top: -8px;
+  z-index: 2;
+  background: var(--color-glass);
+  padding: 4px 8px 10px;
+}
+.is-enrolment .leaf-deck-rail [role="tab"] {
+  min-height: 36px;
+  padding-inline: 12px;
+  transition: background-color 180ms ease, color 180ms ease;
+}
+.is-enrolment .leaf-deck-pill {
+  background: var(--color-action-wash);
+}
+.is-enrolment .leaf-deck-rail [aria-selected="true"] {
+  color: var(--color-action-ink);
+  font-weight: 700;
+}
+.is-enrolment .leaf-deck-stage { scroll-margin-top: 160px; }
+.is-enrolment .leaf-deck-step {
+  min-height: 48px;
+  padding-inline: 18px;
+  border-radius: var(--radius-control);
+  background: var(--color-shade);
+  color: var(--color-action-ink);
+  border-color: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+}
+.is-enrolment .leaf-deck-step:focus-visible { background: var(--color-enrolment-hover); }
+.is-enrolment .enrolment-plan-option { padding-block: 10px; }
+.is-enrolment .enrolment-plan-option:has(input:checked) {
+  background: var(--color-glass);
+}
+.is-enrolment .enrolment-choice:not(:has(input:disabled)):focus-within { background: var(--color-enrolment-hover); }
+.is-enrolment .enrolment-plan-figures {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 28px;
+  margin-top: 6px;
+}
+.is-enrolment .enrolment-plan-figures > div {
+  flex-direction: column;
+  align-items: start;
+  gap: 0;
+  padding: 0;
+}
+.is-enrolment .enrolment-plan-figures dd { font-weight: 600; }
+.is-enrolment .enrolment-records {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 28px;
+}
+.is-enrolment .enrolment-records > div { padding-block: 5px; }
+.is-enrolment .enrolment-cost-details summary {
+  width: fit-content;
+  cursor: pointer;
+  padding: 4px 8px;
+  margin-inline: -8px;
+  border-radius: var(--radius-control);
+  transition: background-color 180ms ease, color 180ms ease;
+}
+.is-enrolment .enrolment-cost-details summary:focus-visible { background: var(--color-enrolment-hover); }
+.is-enrolment .enrolment-cost-details[open] > div { padding-top: 10px; }
+/* Match Home's quiet hover response without moving the form while it is used.
+   Pointer-only lift is reserved for navigation; touch and keyboard keep the
+   same stable geometry, with focus feedback supplied above. */
+@media (hover: hover) and (pointer: fine) {
+  .is-enrolment .leaf-deck-rail [role="tab"]:hover,
+  .is-enrolment .enrolment-choice:not(:has(input:disabled)):hover,
+  .is-enrolment .enrolment-cost-details summary:hover {
+    background: var(--color-enrolment-hover);
+  }
+  .is-enrolment .leaf-deck-rail [role="tab"]:hover,
+  .is-enrolment .enrolment-cost-details summary:hover {
+    color: var(--color-action-ink);
+  }
+  .is-enrolment .leaf-deck-step:not(:disabled):hover {
+    background: var(--color-enrolment-hover);
+    translate: 0 -2px;
+  }
+  .is-enrolment .leaf-deck-step:not(:disabled):active { translate: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .is-enrolment .leaf-deck-step,
+  .is-enrolment .leaf-deck-rail [role="tab"],
+  .is-enrolment .enrolment-choice,
+  .is-enrolment .enrolment-cost-details summary,
+  .is-enrolment .enrolment-product { transition: none; }
+  .is-enrolment .leaf-deck-step:not(:disabled):hover { translate: none; }
+}
+@media (max-width: 1023px) {
+  .is-enrolment .leaf-deck-rail [role="tab"] { min-height: 44px; }
+}
+@media (max-width: 639px) {
+  .is-enrolment .leaf-mount { padding: 16px; gap: 12px; }
+  .is-enrolment .leaf-deck-rail { top: 64px; padding: 6px; max-height: none; overflow-y: hidden; }
+  .is-enrolment .leaf-deck-rail > div:first-child:not(.leaf-deck-scroll) {
+    padding: 4px 6px 10px;
+  }
+  .is-enrolment .leaf-deck-stage { scroll-margin-top: 190px; }
+  .is-enrolment .enrolment-records { grid-template-columns: minmax(0, 1fr); }
+}
 .clay-quick { display: grid; gap: 10px; }
 .clay-quick a {
   display: flex;

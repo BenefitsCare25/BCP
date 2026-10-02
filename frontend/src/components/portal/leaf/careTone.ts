@@ -58,7 +58,11 @@ const PRODUCT_ROUTE: Record<string, string> = {
   GHS: "hospital", GHS2: "hospital", GMM: "hospital", GMM2: "hospital",
   GCGP: "gp", GP: "gp", GOGP: "gp",
   GCSP: "specialist", SP: "specialist", GOSP: "specialist",
-  GD: "dental", GDI: "dental",
+  GD: "dental", DENTAL: "dental",
+  GTL: "protection", GCI: "protection", GDI: "protection",
+  GPA: "protection", GTPD: "protection",
+  IMP: "international", MATERNITY: "maternity", VISION: "vision",
+  WELLNESS: "wellness", OSI: "posting", GBT: "travel", WICA: "work-injury",
 };
 
 export function productRouteKey(code: string | null | undefined): string {

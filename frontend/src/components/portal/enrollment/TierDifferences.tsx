@@ -93,6 +93,7 @@ export function TierDifferences({
   currentLabel,
   electedLabel,
   settled = false,
+  compact = false,
 }: {
   differences: BenefitDifference[];
   /** Count before truncation — equal to `differences.length` in every real
@@ -108,18 +109,24 @@ export function TierDifferences({
    * simply untrue there — the elected plan IS the member's plan now, and the
    * baseline is what they held before. */
   settled?: boolean;
+  compact?: boolean;
 }) {
   if (!differences.length) return null;
   const hidden = Math.max(0, total - differences.length);
 
   return (
-    <div className="mt-2.5 border-t border-hairline/75 pt-2.5">
+    <div className={cn("mt-2.5 border-t border-hairline/75 pt-2.5", compact && "enrolment-comparison")}>
       <h4 className="leaf-label">What changes</h4>
-      <p className="text-row text-label">
+      {!compact && <p className="text-row text-label">
         {currentLabel
           ? `compared with ${currentLabel}, your current plan`
           : "compared with your current plan"}
-      </p>
+      </p>}
+      {compact && <div className="enrolment-comparison-head text-row text-label" aria-hidden="true">
+        <span>Benefit</span>
+        <span>{currentLabel ?? "Your plan"} · {settled ? "Before" : "Current"}</span>
+        <span>{electedLabel ?? "New plan"} · {settled ? "Current" : "If you switch"}</span>
+      </div>}
 
       {/* The rule between items is the thing that makes this a list rather
           than a paragraph — see the note above. */}

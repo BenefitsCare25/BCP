@@ -289,6 +289,7 @@ function FilterRow({
 }
 
 export function ClinicFinder({
+  compact = false,
   facets,
   typeKey,
   onTypeKey,
@@ -303,6 +304,7 @@ export function ClinicFinder({
   onLocate,
   onClearOrigin,
 }: {
+  compact?: boolean;
   facets: ClinicTypeFacet[];
   typeKey: string;
   onTypeKey: (key: string) => void;
@@ -320,15 +322,15 @@ export function ClinicFinder({
   onClearOrigin: () => void;
 }) {
   return (
-    <section className="tone-mint relative overflow-hidden rounded-[28px] bg-[var(--tone-wash)] p-5 text-[var(--tone-ink)] sm:p-7">
+    <section className="portal-clinic-finder tone-mint relative overflow-hidden rounded-[28px] bg-[var(--tone-wash)] p-5 text-[var(--tone-ink)] sm:p-7">
       <img
         src="/portal/clay/clinic.webp"
         alt=""
         className="pointer-events-none absolute -right-2 -top-1 hidden size-36 object-contain sm:block lg:size-44"
       />
       <div className="sm:pr-44">
-        <h2 className="text-2xl font-bold tracking-title text-record sm:text-3xl">Find a panel clinic</h2>
-        <div className="mt-4">
+        <h2 className={compact ? "sr-only" : "text-2xl font-bold tracking-title text-record sm:text-3xl"}>Find a panel clinic</h2>
+        <div className={compact ? "mt-0" : "mt-4"}>
           <OriginRow
             origin={origin}
             busy={status.kind === "busy"}

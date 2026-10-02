@@ -150,6 +150,7 @@ export function PortalSignInPage() {
 
   return (
     <AuthScene
+      portalTheme="employee"
       eyebrow="Employee benefits portal"
       title={step === "credentials" ? "Sign in" : "Two-factor authentication"}
       subtitle={

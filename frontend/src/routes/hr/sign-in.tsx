@@ -91,11 +91,12 @@ export function HrSignInPage() {
 
   return (
     <AuthScene
+      portalTheme="hr"
       eyebrow="HR administration"
       title={step === "credentials" ? "Sign in" : "Two-factor authentication"}
       subtitle={
         step === "credentials"
-          ? "Manage your company's employees, policies and claims."
+          ? "Manage employee claims and enrolment forms."
           : "Enter the 6-digit code from your authenticator app, or one of your recovery codes."
       }
     >

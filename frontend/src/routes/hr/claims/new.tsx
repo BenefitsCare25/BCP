@@ -19,6 +19,7 @@ import {
 } from "@/api/hrClaims";
 import type { CoverageOptions } from "@/api/portal";
 import { ConversionNotice } from "@/components/portal/claims/ConversionNotice";
+import { formatClaimDate } from "@/components/hr/claimPresentation";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -257,8 +258,8 @@ export function HrNewClaimPage() {
   };
 
   return (
-    <div className="mx-auto max-w-3xl space-y-5">
-      <div>
+    <div className="hr-new-claim grid items-start gap-3 lg:grid-cols-[18rem_minmax(0,1fr)]">
+      <div className="lg:col-span-2">
         <Button asChild variant="ghost" className="-ml-3 h-11 sm:h-9">
           <Link to="/hr/claims">
             <ArrowLeft className="size-4" aria-hidden />
@@ -268,23 +269,23 @@ export function HrNewClaimPage() {
         <h1 className="mt-2 text-2xl font-semibold tracking-tight">New employee claim</h1>
       </div>
 
-      <Card className="p-5 sm:p-6">
-        <h2 className="text-base font-semibold">1. Choose the employee</h2>
+      <Card className={cn("p-5", !employee && "lg:col-span-2")}>
+        <h2 className="text-xl font-bold">{employee ? "Employee" : "Choose the employee"}</h2>
         {employee ? (
-          <div className="mt-4 flex items-center gap-3 rounded-lg bg-muted p-4">
+          <div className="mt-3 grid grid-cols-[2.5rem_minmax(0,1fr)] items-start gap-3 rounded-xl bg-muted p-3">
             <div className="flex size-10 shrink-0 items-center justify-center rounded-full bg-card">
               <UserRound className="size-5 text-muted-foreground" aria-hidden />
             </div>
             <div className="min-w-0 flex-1">
-              <p className="truncate font-medium">{employee.name ?? "Employee"}</p>
-              <p className="truncate text-sm text-muted-foreground">
-                {employee.staff_id} · {employee.period}
+              <p className="break-words font-medium">{employee.name ?? "Employee"}</p>
+              <p className="text-sm text-muted-foreground">
+                {employee.staff_id} · {employee.period.split(" - ").map(formatClaimDate).join(" – ")}
               </p>
             </div>
             <Button
               type="button"
               variant="outline"
-              className="h-11 sm:h-9"
+              className="col-span-2 h-11 justify-self-end sm:h-9"
               onClick={() => setEmployee(null)}
             >
               Change
@@ -345,8 +346,8 @@ export function HrNewClaimPage() {
       </Card>
 
       {employee && (
-        <Card className="p-5 sm:p-6">
-          <h2 className="text-base font-semibold">2. Enter the claim</h2>
+        <Card className="p-5">
+          <h2 className="text-xl font-bold">Claim details</h2>
           {options.isLoading ? (
             <div className="mt-4 space-y-3" aria-label="Loading claim options">
               <Skeleton className="h-11" />
@@ -368,7 +369,7 @@ export function HrNewClaimPage() {
               This employee has no claimable cover in the selected benefit period.
             </p>
           ) : (
-            <form className="mt-5 space-y-5" onSubmit={(event) => void submit(event)}>
+            <form className="mt-3 space-y-3" onSubmit={(event) => void submit(event)}>
               <Field label="Claim type" required>
                 <NativeSelect
                   className="h-11 w-full px-3"
@@ -390,7 +391,7 @@ export function HrNewClaimPage() {
 
               {choice && (
                 <>
-                  <div className="grid gap-4 sm:grid-cols-3">
+                  <div className="hr-claim-money grid grid-cols-2 gap-3 sm:grid-cols-3">
                     <Field label="Date incurred" required>
                       <Input
                         type="date"

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { cn } from "@/lib/cn";
 
 export type SkyPeriod = "day" | "dusk";
 
@@ -19,11 +20,15 @@ export function SkyStage({
   period,
   noteLeft,
   noteRight,
+  className,
+  label = "Welcome",
   children,
 }: {
   period: SkyPeriod;
   noteLeft?: string | null;
   noteRight?: string | null;
+  className?: string;
+  label?: string;
   children: ReactNode;
 }) {
   const stage = useRef<HTMLElement | null>(null);
@@ -57,7 +62,7 @@ export function SkyStage({
   }, []);
 
   return (
-    <section ref={stage} className="sky-stage" data-period={period} aria-label="Welcome">
+    <section ref={stage} className={cn("sky-stage", className)} data-period={period} aria-label={label}>
       <div className="sky-plate" aria-hidden>
         {/* The river flows in a cinemagraph made from this same painting —
             only the water moves. Day only (the dusk plate has no loop yet);

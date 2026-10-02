@@ -32,14 +32,9 @@ export function HrClaimsPage() {
   const pages = Math.max(1, Math.ceil((claims.data?.total ?? 0) / PAGE_SIZE));
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Employee claims</h1>
-          <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-            Submit a claim for one employee and follow its progress.
-          </p>
-        </div>
+    <div className="space-y-3">
+      <div className="flex justify-end">
+        <h1 className="sr-only">Employee claims</h1>
         <Button asChild className="h-11 shrink-0 sm:h-9">
           <Link to="/hr/claims/new">
             <FilePlus2 className="size-4" aria-hidden />
@@ -135,6 +130,9 @@ export function HrClaimsPage() {
                     </p>
                     <p className="mt-1 text-xs text-muted-foreground">
                       {claim.claim_ref ?? "Draft"} · Incurred {formatClaimDate(claim.incurred_date)}
+                    </p>
+                    <p className="mt-1 text-sm font-medium tabular-nums sm:hidden">
+                      {formatClaimMoney(claim.amount_claimed, claim.currency)}
                     </p>
                   </div>
                   <div className="hidden shrink-0 text-right sm:block">

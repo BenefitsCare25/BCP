@@ -51,6 +51,7 @@ export function NotificationBell({ largeTarget = false }: { largeTarget?: boolea
   const [open, setOpen] = useState(false);
   const [pulse, setPulse] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
   const unread = items.filter((n) => !n.read).length;
 
   // Draw the eye once per NEW message (repeats don't re-fire) — the bell is
@@ -70,7 +71,10 @@ export function NotificationBell({ largeTarget = false }: { largeTarget?: boolea
       }
     };
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
+      if (e.key === "Escape") {
+        setOpen(false);
+        triggerRef.current?.focus();
+      }
     };
     document.addEventListener("mousedown", onPointer);
     document.addEventListener("keydown", onKey);
@@ -89,6 +93,7 @@ export function NotificationBell({ largeTarget = false }: { largeTarget?: boolea
   return (
     <div ref={panelRef} className="relative">
       <button
+        ref={triggerRef}
         type="button"
         onClick={toggle}
         aria-label={
@@ -100,7 +105,7 @@ export function NotificationBell({ largeTarget = false }: { largeTarget?: boolea
           "relative flex items-center justify-center rounded-md transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
           // 44×44 on the member surface (The Reach Rule); the broker app is a
           // desktop tool whose top bar is built on a 32px rhythm.
-          inLeaf || largeTarget ? "size-11 rounded-pill" : "size-8",
+          inLeaf || largeTarget ? "portal-nav-action size-11 rounded-pill" : "size-8",
           open
             ? "bg-accent text-primary"
             : "text-muted-foreground hover:bg-muted hover:text-foreground",
@@ -124,7 +129,7 @@ export function NotificationBell({ largeTarget = false }: { largeTarget?: boolea
         <div
           role="dialog"
           aria-label="Notifications"
-          className="absolute right-0 top-10 z-50 w-[22rem] max-w-[calc(100vw-2rem)] overflow-hidden rounded-md border border-border bg-card shadow-md"
+          className="notification-panel absolute right-0 top-10 z-50 w-[22rem] max-w-[calc(100vw-2rem)] overflow-hidden rounded-md border border-border bg-card shadow-md"
         >
           <div className="flex items-center justify-between border-b border-border px-3 py-2">
             <span className="text-sm font-medium text-foreground">

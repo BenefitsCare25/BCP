@@ -179,7 +179,7 @@ export function Mount({
         // `leaf-rise` on every mount, staggered by sibling position in CSS so
         // no component has to thread an index. It runs once, for half a second.
         rise && "leaf-rise",
-        "flex flex-col gap-3 rounded-tile p-4 sm:p-5",
+        "leaf-mount flex flex-col gap-3 rounded-tile p-4 sm:p-5",
         className,
       )}
     >

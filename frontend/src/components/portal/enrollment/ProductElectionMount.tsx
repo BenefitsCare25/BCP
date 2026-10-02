@@ -13,6 +13,7 @@ import type {
 import { dependantParticipationFor } from "@/components/enrollment/electionCore";
 import { Mount, MountRule } from "@/components/portal/leaf/Mount";
 import { glossBeside } from "@/components/portal/leaf/glossary";
+import { careTone, productRouteKey } from "@/components/portal/leaf/careTone";
 import type { TierPrice } from "./form/formMath";
 import { FamilyChoice } from "./FamilyChoice";
 import { PlanChoice } from "./PlanChoice";
@@ -26,6 +27,7 @@ export function ProductElectionMount({
   flexOnChange,
   currency,
   rise = true,
+  compact = false,
   pricing,
   premiumFor,
   onChange,
@@ -41,6 +43,7 @@ export function ProductElectionMount({
   /** Off inside an enrollment-deck slide, whose own transition owns the
    *  arrival — see `Mount`'s `rise`. */
   rise?: boolean;
+  compact?: boolean;
   /** The e-form's figures for the chosen plan — key benefit, sum insured,
    *  premium per family tier and the member's share (`PlanPricing`). */
   pricing?: ReactNode;
@@ -63,10 +66,11 @@ export function ProductElectionMount({
     <Mount
       as="article"
       rise={rise}
-      label={label}
+      label={compact ? undefined : label}
       labelId={headingId}
-      gloss={gloss}
-      aside={
+      gloss={compact ? undefined : gloss}
+      className={`enrolment-product tone-${careTone(productRouteKey(ts.product_code))}`}
+      aside={compact ? undefined :
         // Printed, never a pill: "Included for everyone" is a fact about the
         // plan, not a status to be badged, and this world's only pill is a
         // button.
@@ -81,6 +85,7 @@ export function ProductElectionMount({
         disabled={disabled}
         flexOnChange={flexOnChange}
         currency={currency}
+        compact={compact}
         premiumFor={premiumFor}
         onChange={onChange}
       />

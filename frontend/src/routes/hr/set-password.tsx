@@ -89,6 +89,7 @@ export function HrSetPasswordPage() {
   if (step === "mfa") {
     return (
       <AuthScene
+        portalTheme="hr"
         eyebrow="HR administration"
         title="Two-factor authentication"
         subtitle="Enter the 6-digit code from your authenticator app, or one of your recovery codes."
@@ -128,11 +129,13 @@ export function HrSetPasswordPage() {
 
   return (
     <AuthScene
+      portalTheme="hr"
       eyebrow="HR administration"
       title="Set your password"
       subtitle="Choose a strong password to finish setting up your HR account."
     >
       <form onSubmit={submit} className="space-y-4">
+        {!token && <p role="alert" className="text-sm text-error">This link is missing its token. Ask your administrator to resend it.</p>}
         <div className="space-y-1.5">
           <Label
             htmlFor="hr-new-password"

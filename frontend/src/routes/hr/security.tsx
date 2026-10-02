@@ -18,10 +18,10 @@ import {
   CardContent,
   CardDescription,
   CardHeader,
-  CardTitle,
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Skeleton } from "@/components/ui/skeleton";
 
 function RecoveryCodes({ codes, onDone }: { codes: string[]; onDone: () => void }) {
   const copy = async () => {
@@ -47,9 +47,9 @@ function RecoveryCodes({ codes, onDone }: { codes: string[]; onDone: () => void 
           Each code works once if you lose your authenticator. Store them somewhere
           safe — they won't be shown again.
         </p>
-        <div className="grid grid-cols-2 gap-2 rounded-md border border-border bg-muted p-3 font-mono text-sm">
+        <div className="grid grid-cols-1 gap-2 rounded-md border border-border bg-muted p-3 font-mono text-sm sm:grid-cols-2">
           {codes.map((c) => (
-            <span key={c}>{c}</span>
+            <span className="break-all" key={c}>{c}</span>
           ))}
         </div>
         <div className="mt-2 flex gap-2">
@@ -205,7 +205,7 @@ function DisablePanel() {
 }
 
 export function HrSecurityPage() {
-  const { data: me, refetch } = useHrMe();
+  const { data: me, refetch, isLoading, isError, error } = useHrMe();
   const enrolled = me?.mfa_status === "confirmed";
   const available = me?.mfa_available ?? false;
   // Held HERE, not inside EnrollFlow. Recovery codes are shown exactly once
@@ -216,22 +216,23 @@ export function HrSecurityPage() {
   const [recovery, setRecovery] = useState<string[] | null>(null);
 
   return (
-    <div className="mx-auto max-w-2xl">
+    <div className="max-w-3xl">
+      <h1 className="sr-only">Account security</h1>
       <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-base">
+        <CardHeader className="p-5 pb-3">
+          <h2 className="flex items-center gap-2 text-xl font-bold">
             {enrolled ? (
               <ShieldCheck className="size-5 text-good" />
             ) : (
               <ShieldCheck className="size-5 text-muted-foreground" />
             )}
             Two-factor authentication
-          </CardTitle>
+          </h2>
           <CardDescription>
-            A one-time code from your phone, required at each sign-in.
+            Use an authenticator app to add a code at sign-in.
           </CardDescription>
         </CardHeader>
-        <CardContent>
+        <CardContent className="px-5 pb-5">
           {recovery ? (
             <RecoveryCodes
               codes={recovery}
@@ -240,6 +241,13 @@ export function HrSecurityPage() {
                 void refetch();
               }}
             />
+          ) : isLoading ? (
+            <div aria-label="Loading account security" role="status"><Skeleton className="h-16" /></div>
+          ) : isError ? (
+            <div role="alert" className="space-y-3">
+              <p className="text-sm text-error">{formatError(error)}</p>
+              <Button variant="outline" onClick={() => void refetch()}>Try again</Button>
+            </div>
           ) : enrolled ? (
             <DisablePanel />
           ) : available ? (

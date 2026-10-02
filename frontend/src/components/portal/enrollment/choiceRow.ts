@@ -19,7 +19,7 @@ import { cn } from "@/lib/cn";
 
 export function choiceRowClass(selected: boolean, extra?: string): string {
   return cn(
-    "-mx-2 flex min-h-11 cursor-pointer gap-3 rounded-control px-2 py-2.5",
+    "enrolment-choice -mx-2 flex min-h-11 cursor-pointer gap-3 rounded-control px-2 py-2.5",
     "transition-colors duration-200 ease-leaf",
     selected ? "bg-shade/70" : "hover:bg-shade/40",
     extra,

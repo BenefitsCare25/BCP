@@ -434,13 +434,14 @@ export function Deck({
   return (
     <div
       ref={measureDeck}
-      className={cn("grid items-start gap-3.5", wide && "grid-cols-[236px_minmax(0,1fr)] gap-5")}
+      data-layout={wide ? "vertical" : "horizontal"}
+      className={cn("leaf-deck grid items-start gap-3.5", wide && "grid-cols-[236px_minmax(0,1fr)] gap-5")}
     >
       {/* ── The index ──────────────────────────────────────────────────── */}
       <div
         className={cn(
           glassSurface,
-          "sticky top-2 z-10 overflow-hidden",
+          "leaf-deck-rail sticky top-2 z-10 overflow-hidden",
           // The pill shape belongs to a bare row of chips. Once a header sits
           // above them the container is a card, and a pill's radius would cut
           // the corners off its own first line.
@@ -546,7 +547,7 @@ export function Deck({
       </div>
 
       {/* ── The stage ──────────────────────────────────────────────────── */}
-      <div>
+      <div className="leaf-deck-content min-w-0">
         <div
           ref={stageRef}
           onPointerDown={onPointerDown}
@@ -558,7 +559,7 @@ export function Deck({
           // a header the phone rail is ~108px tall against ~72px without one,
           // and at `scroll-mt-20` the incoming slide's own title landed under it.
           className={cn(
-            "relative overflow-x-clip",
+            "leaf-deck-stage relative overflow-x-clip",
             railHeader ? "scroll-mt-32" : "scroll-mt-20",
           )}
         >
@@ -618,7 +619,7 @@ export function Deck({
             and teaches the shape of the set. Neutral, never terracotta — these
             PICK a view rather than doing something to the member's record (the
             Do-vs-Pick Rule). */}
-        <div className="mt-3.5 flex items-center gap-2.5">
+        <div className="leaf-deck-pagination mt-3.5 flex items-center gap-2.5">
           <DeckStep
             direction="prev"
             slide={prev}
@@ -673,7 +674,7 @@ function DeckStep({
         // card's, because a pill this size reads better with a small scale than
         // with a fill change alone.
         glassHover,
-        "leaf-focus flex min-h-11 min-w-0 flex-1 items-center gap-1.5 rounded-pill px-3.5",
+        "leaf-deck-step leaf-focus flex min-h-11 min-w-0 flex-1 items-center gap-1.5 rounded-pill px-3.5",
         "text-row font-semibold text-record active:scale-[0.99]",
         // Invisible rather than greyed at the ends: a permanently dead control
         // is furniture, and the counter beside it already says where you are.

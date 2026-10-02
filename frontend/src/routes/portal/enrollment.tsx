@@ -111,10 +111,6 @@ export function PortalEnrollmentPage() {
   }
 
   return (
-    // No page heading and no lede. The shell already carries the h1 and the
-    // nav already says which section this is, so both only repeated what the
-    // member could see; the deadline is the one fact worth the space, and the
-    // panel states it.
     <div className="space-y-4">
       <MemberEnrollmentPanel
         data={enrollment.data ?? { window: null, enrollment: null, options: null }}

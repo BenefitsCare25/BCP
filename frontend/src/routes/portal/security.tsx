@@ -352,7 +352,7 @@ export function PortalSecurityPage() {
   const [recovery, setRecovery] = useState<string[] | null>(null);
 
   return (
-    <div className="max-w-3xl space-y-4">
+    <div className="portal-security grid items-start gap-3 md:grid-cols-2">
     <ChangePasswordPanel />
     {isLoading ? (
       <LeafSkeleton label="Loading your sign-in settings" mounts={1} />

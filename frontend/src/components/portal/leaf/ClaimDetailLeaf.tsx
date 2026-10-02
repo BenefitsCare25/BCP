@@ -350,7 +350,7 @@ export function ClaimDetailLeaf({
     // term and its value, the message bodies ran to ~150 characters a line
     // (double a comfortable measure), and a full-width primary pill read as a
     // banner. Widening a page is not the same as using the width.
-    <div className="mx-auto max-w-3xl space-y-3">
+    <div className="portal-claim-detail mx-auto max-w-3xl space-y-3">
       {back}
 
       {/* The receipt. A notice, never a second brand fill — it carries a strike
@@ -371,6 +371,7 @@ export function ClaimDetailLeaf({
 
       <Mount
         label={claimTitle(claim)}
+        className="portal-claim-summary"
         gloss={gloss}
         aside={
           <Strike tone={state.tone} animate>
@@ -387,7 +388,7 @@ export function ClaimDetailLeaf({
         <ClaimTimeline claim={claim} />
         {/* One column on a phone. The old two-up grid never collapsed, so a
             long diagnosis and a currency figure shared ~147px each. */}
-        <dl className="divide-y divide-hairline/75">
+        <dl className="portal-claim-facts divide-y divide-hairline/75">
           {claim.reference_no && (
             <MountRow term="Reference">
               <span className="font-semibold tracking-wide">{claim.reference_no}</span>
@@ -611,7 +612,7 @@ export function ClaimDetailLeaf({
             {extraDocs.map((doc) => (
               <li
                 key={doc.id}
-                className="flex items-center gap-2 py-2.5 first:pt-0"
+                className="portal-extra-document flex items-center gap-2 py-2.5 first:pt-0"
               >
                 <FileText className="size-4 shrink-0 text-label" aria-hidden />
                 <span className="min-w-0 break-all text-row text-record">

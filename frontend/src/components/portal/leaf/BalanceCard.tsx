@@ -58,7 +58,7 @@ export function BalanceCard({
   const name = productCode ? productShortLabel(productCode, productName) : productName ?? "Benefit";
   const usedPct = limit ? Math.round((bucket.approved / limit) * 100) : 0;
   return (
-    <section className={cn(`tone-${careTone(route)}`, "relative overflow-hidden rounded-[28px] bg-[var(--tone-wash)] text-[var(--tone-ink)]")}>
+    <section className={cn(`tone-${careTone(route)}`, "portal-balance relative overflow-hidden rounded-[28px] bg-[var(--tone-wash)] text-[var(--tone-ink)]")}>
       <div className="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-4 p-4 sm:grid-cols-[auto_minmax(0,1fr)_auto] sm:gap-7 sm:p-6">
         <div className="relative">
           <Ring used={limit ? bucket.approved / limit : 0} pending={limit ? bucket.pending / limit : 0} />

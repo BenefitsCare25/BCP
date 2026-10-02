@@ -64,7 +64,7 @@ function MakeClaimAction() {
  * traverse it to pair a claim with its amount. Sharing the detail page's
  * `max-w-3xl` also means opening a claim expands the row in place instead of
  * reflowing the column it came from. */
-const MEASURE = "max-w-3xl";
+const MEASURE = "max-w-4xl";
 
 export function PortalClaimsPage() {
   const company = useCompany();

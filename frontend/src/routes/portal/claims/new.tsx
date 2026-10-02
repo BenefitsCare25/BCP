@@ -57,7 +57,11 @@ export function PortalNewClaimPage() {
   const form = useNewClaimForm();
   const { options } = form;
 
-  if (options.isLoading) return <LeafSkeleton label="Loading the claim form" />;
+  if (options.isLoading) return (
+    <div className="portal-new-claim mx-auto w-full max-w-4xl">
+      <LeafSkeleton label="Loading the claim form" />
+    </div>
+  );
   if (
     options.isError ||
     !options.data ||
@@ -80,7 +84,7 @@ export function PortalNewClaimPage() {
       /* The heading has to move with the sentence. "No benefits to claim
          against" is the right noun only for the generic case — a leaver HAS
          benefits, and the thing that ended is the window. */
-      <Mount label={blocked ? "This window has closed" : "No benefits to claim against"}>
+      <Mount className="mx-auto w-full max-w-4xl" label={blocked ? "This window has closed" : "No benefits to claim against"}>
         <p className="text-row text-label">
           {blocked ??
             "We don't have any cover recorded against your name for this " +
@@ -94,7 +98,7 @@ export function PortalNewClaimPage() {
   const queued = form.pendingClaims.length;
 
   return (
-    <div className="max-w-2xl">
+    <div className="portal-new-claim mx-auto w-full max-w-4xl">
       {/* No heading and no preamble. The nav and the document title already say
           what this page is; "your broker reviews every claim" describes our
           process, not the member's task; and the eligible-date window is
@@ -110,7 +114,7 @@ export function PortalNewClaimPage() {
       <Mount>
         <ClaimSubmissionHeader form={form} />
         <form
-          className="mt-6 space-y-4"
+          className="mt-3 space-y-4"
           onSubmit={async (e) => {
             e.preventDefault();
             const formElement = e.currentTarget;
@@ -154,6 +158,8 @@ export function PortalNewClaimPage() {
             }
           />
           <PendingClaimsNotice form={form} />
+          <div className="portal-claim-entry">
+          <div className="space-y-4">
           <ClaimTypeFields form={form} />
           <ClaimLimitNotice form={form} />
           {/* Before the visit details, because it changes what they are
@@ -161,6 +167,8 @@ export function PortalNewClaimPage() {
           <AnchorField form={form} />
           <VisitFields form={form} />
           <ReferralField form={form} />
+          </div>
+          <div className="space-y-4">
           <DocumentFields form={form} />
 
           <Field label="Remarks">
@@ -181,6 +189,8 @@ export function PortalNewClaimPage() {
               </>
             )}
           </Field>
+          </div>
+          </div>
 
           {form.error && <FormAlert>{form.error}</FormAlert>}
 

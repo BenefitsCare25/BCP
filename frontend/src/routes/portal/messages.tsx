@@ -231,14 +231,14 @@ export function PortalMessagesPage() {
   );
 
   return (
-    <div ref={measureFrame}>
+    <div ref={measureFrame} className="portal-messages">
       {head}
       {wide ? (
         // `items-start` so the index does not stretch to a long thread's
         // height, and the index scrolls WITHIN the viewport rather than with
         // the page — a list you have to scroll back up to is not an index.
         <div className="grid grid-cols-[22rem_minmax(0,1fr)] items-start gap-3">
-          <div className="sticky top-4 max-h-[calc(100vh-8rem)] overflow-y-auto">
+          <div className="portal-message-index sticky top-4 max-h-[calc(100vh-8rem)] overflow-y-auto">
             {index}
           </div>
           {selected ? (

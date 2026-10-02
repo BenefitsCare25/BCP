@@ -239,7 +239,9 @@ function useOrigin(onChange: () => void) {
 
 export function ClinicLocator({
   useClinicsQuery,
+  compact = false,
 }: {
+  compact?: boolean;
   /** Injected data source — portal or broker-preview hook. */
   useClinicsQuery: (
     params: ClinicSearchParams,
@@ -333,6 +335,7 @@ export function ClinicLocator({
   return (
     <div className="space-y-3">
       <ClinicFinder
+        compact={compact}
         facets={facets}
         typeKey={typeKey}
         onTypeKey={(key) => {

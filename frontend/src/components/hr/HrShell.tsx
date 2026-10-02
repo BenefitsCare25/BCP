@@ -3,8 +3,7 @@
  * switcher. */
 import { Link, Outlet, useNavigate, useRouterState } from "@tanstack/react-router";
 import {
-  Building2,
-  ClipboardList,
+  FileText,
   FileSignature,
   LayoutDashboard,
   LogOut,
@@ -13,9 +12,15 @@ import {
 import { useHrMe } from "@/api/hr";
 import { hrApi } from "@/api/hrClient";
 import { useHrSession } from "@/stores/hrSession";
-import { Button } from "@/components/ui/button";
 import { NotificationBell } from "@/components/shell/NotificationBell";
+import { LeafScopeContext } from "@/lib/leaf-scope";
 import { cn } from "@/lib/cn";
+
+const HR_NAV = [
+  { to: "/hr/dashboard", label: "Overview", icon: LayoutDashboard },
+  { to: "/hr/claims", label: "Claims", icon: FileText },
+  { to: "/hr/enrollment-forms", label: "Enrolment forms", icon: FileSignature },
+] as const;
 
 export function HrShell() {
   const navigate = useNavigate();
@@ -24,6 +29,7 @@ export function HrShell() {
   const clearSession = useHrSession((s) => s.clearSession);
   const { data } = useHrMe();
   const company = data?.company_name ?? me?.company_name;
+  const isOverview = path === "/hr/dashboard";
 
   const signOut = async () => {
     await hrApi.logout();
@@ -32,104 +38,65 @@ export function HrShell() {
   };
 
   return (
-    <div className="min-h-screen bg-background">
-      <header className="border-b border-border bg-card">
-        <div className="mx-auto flex h-14 max-w-5xl items-center justify-between gap-2 px-4">
-          <div className="flex min-w-0 items-center gap-1 sm:gap-3">
+    <LeafScopeContext.Provider value>
+    <div className={cn("leaf portal-clay portal-ui hr-portal min-h-screen bg-background", isOverview && "hr-is-overview")}>
+      <header className="clay-topbar">
+        <div className="clay-topbar-inner mx-auto max-w-[1440px]">
+          <div className="portal-nav-row flex items-center gap-0 py-2 pl-3 pr-2 lg:py-2.5 lg:pl-5 lg:pr-3">
             <Link
               to="/hr/dashboard"
+              activeOptions={{ exact: true }}
               aria-label="HR dashboard"
-              className="flex min-w-0 items-center gap-2 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+              className="portal-nav-brand leaf-focus hidden min-h-11 shrink-0 items-center rounded-pill lg:flex"
             >
-              <Building2 className="size-5 shrink-0 text-primary" />
-              <span className="hidden max-w-44 truncate text-sm font-semibold text-foreground md:inline">
-                {company ?? "HR Administration"}
-              </span>
+              <img src="/inspro-logo-header.png" alt="Inspro Insurance Brokers" width={125} height={40} className="portal-nav-logo hidden h-10 w-auto lg:block" />
             </Link>
-            <nav aria-label="HR navigation" className="flex items-center gap-1">
-              <Link
-                to="/hr/dashboard"
-                aria-label="Overview"
-                aria-current={path === "/hr/dashboard" ? "page" : undefined}
-                className={cn(
-                  "inline-flex min-h-11 items-center gap-1.5 rounded-md px-2 text-sm transition-colors sm:min-h-9",
-                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40",
-                  path === "/hr/dashboard"
-                    ? "bg-accent font-medium text-accent-foreground"
-                    : "text-muted-foreground hover:bg-muted hover:text-foreground",
-                )}
-              >
-                <LayoutDashboard className="size-4" aria-hidden />
-                <span className="hidden sm:inline">Overview</span>
-              </Link>
-              <Link
-                to="/hr/claims"
-                aria-label="Claims"
-                aria-current={path.startsWith("/hr/claims") ? "page" : undefined}
-                className={cn(
-                  "inline-flex min-h-11 items-center gap-1.5 rounded-md px-2 text-sm transition-colors sm:min-h-9",
-                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40",
-                  path.startsWith("/hr/claims")
-                    ? "bg-accent font-medium text-accent-foreground"
-                    : "text-muted-foreground hover:bg-muted hover:text-foreground",
-                )}
-              >
-                <ClipboardList className="size-4" aria-hidden />
-                <span className="hidden sm:inline">Claims</span>
-              </Link>
-              <Link
-                to="/hr/enrollment-forms"
-                aria-label="Enrolment forms"
-                aria-current={path.startsWith("/hr/enrollment-forms") ? "page" : undefined}
-                className={cn(
-                  "inline-flex min-h-11 items-center gap-1.5 rounded-md px-2 text-sm transition-colors sm:min-h-9",
-                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40",
-                  path.startsWith("/hr/enrollment-forms")
-                    ? "bg-accent font-medium text-accent-foreground"
-                    : "text-muted-foreground hover:bg-muted hover:text-foreground",
-                )}
-              >
-                <FileSignature className="size-4" aria-hidden />
-                <span className="hidden sm:inline">Enrolment forms</span>
-              </Link>
+            <span aria-hidden className="portal-nav-divider mx-5 hidden h-8 w-px shrink-0 bg-hairline lg:block" />
+            <nav aria-label="HR navigation" className="hr-navigation flex items-center gap-0.5">
+              {HR_NAV.map(({ to, label, icon: Icon }) => (
+                <Link
+                  key={to}
+                  to={to}
+                  aria-label={label}
+                  activeOptions={{ exact: to === "/hr/dashboard" }}
+                  aria-current={(to === "/hr/dashboard" ? path === to : path.startsWith(to)) ? "page" : undefined}
+                  className="portal-nav-link leaf-focus"
+                >
+                  <Icon aria-hidden strokeWidth={1.75} />
+                  <span className="hidden sm:inline">{label}</span>
+                </Link>
+              ))}
             </nav>
-          </div>
-          <div className="flex items-center gap-1 sm:gap-3">
+          <div className="portal-nav-actions ml-auto flex shrink-0 items-center gap-1 pl-2 lg:pl-6">
+            <NotificationBell largeTarget />
             <Link
               to="/hr/security"
               aria-label="Security"
               aria-current={path === "/hr/security" ? "page" : undefined}
-              className={cn(
-                "inline-flex min-h-11 items-center gap-1.5 rounded-md px-2 text-sm transition-colors sm:min-h-9",
-                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40",
-                path === "/hr/security"
-                  ? "bg-accent font-medium text-accent-foreground"
-                  : "text-muted-foreground hover:bg-muted hover:text-foreground",
-              )}
+              className="portal-nav-action leaf-focus inline-flex items-center justify-center transition-colors"
             >
-              <ShieldCheck className="size-4" />
-              <span className="hidden sm:inline">Security</span>
+              <ShieldCheck className="size-5" aria-hidden />
             </Link>
-            <span className="hidden text-xs text-muted-foreground sm:inline">
-              {me?.display_name || me?.email}
-            </span>
-            <NotificationBell largeTarget />
-            <Button
-              variant="ghost"
-              size="sm"
+            <button
+              type="button"
               aria-label="Sign out"
-              className="h-11 px-2 sm:h-9"
+              className="portal-nav-action leaf-focus inline-flex items-center justify-center transition-colors"
               onClick={() => void signOut()}
             >
-              <LogOut className="size-4" />
-              <span className="ml-1 hidden sm:inline">Sign out</span>
-            </Button>
+              <LogOut className="size-5" aria-hidden />
+            </button>
           </div>
         </div>
+        </div>
       </header>
-      <main className="mx-auto w-full max-w-5xl px-4 py-6 sm:py-8">
+      <main className={cn("mx-auto w-full", !isOverview && "max-w-6xl px-4 py-4")}>
+        {!isOverview && <div className="hr-context mb-4 flex flex-wrap items-baseline justify-between gap-2">
+          <p className="text-lg font-bold">{company ?? "HR Administration"}</p>
+          <p className="text-sm text-label">{me?.display_name || me?.email}</p>
+        </div>}
         <Outlet />
       </main>
     </div>
+    </LeafScopeContext.Provider>
   );
 }

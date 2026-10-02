@@ -30,10 +30,12 @@ function coveredPeople(lines: CoverageLine[]): DependantSummary[] {
   return [...people.values()];
 }
 
-function PlanDetail({ line, routeKey, person }: {
+function PlanDetail({ line, routeKey, person, compact = false, showLabel = true }: {
   line: CoverageLine;
   routeKey: string;
   person: DependantSummary | null;
+  compact?: boolean;
+  showLabel?: boolean;
 }) {
   const code = line.product_code.trim().toUpperCase();
   const additionalMedical = code === "GMM" || code === "GMM2";
@@ -46,7 +48,7 @@ function PlanDetail({ line, routeKey, person }: {
   // rather than shown nothing.
   if (line.published === false) {
     return (
-      <Mount as="article" label={label} gloss={line.plan_code ? `Plan ${line.plan_code}` : undefined}>
+      <Mount as="article" label={showLabel ? label : undefined} gloss={line.plan_code ? `Plan ${line.plan_code}` : undefined}>
         <p className="text-row text-label">
           Your plan details are being checked and will appear here once they're confirmed.
           Your HR team can help in the meantime.
@@ -59,7 +61,7 @@ function PlanDetail({ line, routeKey, person }: {
   // rather than presenting it as cover the member can claim against.
   if (line.enrolment === "eligible") {
     return (
-      <Mount as="article" label={label} gloss={line.plan_code ? `Plan ${line.plan_code}` : undefined}>
+      <Mount as="article" label={showLabel ? label : undefined} gloss={line.plan_code ? `Plan ${line.plan_code}` : undefined}>
         <p className="text-row text-label">
           You're eligible for this voluntary cover but not enrolled, so it can't be claimed yet.
           Your HR team can tell you how to join.
@@ -70,8 +72,9 @@ function PlanDetail({ line, routeKey, person }: {
 
   const facts = careFacts(line, routeKey);
   return (
-    <Mount as="article" label={label} gloss={line.plan_code ? `Plan ${line.plan_code}` : undefined}>
+    <Mount as="article" label={showLabel ? label : undefined} gloss={line.plan_code ? `Plan ${line.plan_code}` : undefined}>
       <p className="text-row text-label">
+        {compact && !showLabel && line.plan_code && <span className="mr-4 font-semibold text-record">Plan {line.plan_code}</span>}
         Covered person: <span className="font-medium text-record">{person ? dependantName(person) : "You"}</span>
       </p>
       {additionalMedical && (
@@ -152,7 +155,7 @@ export function CoverageLeaf({ data, selection, onSelectionChange, company }: {
   }
 
   return (
-    <div className="space-y-4">
+    <div className={`${company ? "portal-coverage " : ""}space-y-4`}>
       {people.length > 0 && (
         <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Choose covered person">
           <span className="mr-1 text-row text-label">Cover for</span>
@@ -178,9 +181,9 @@ export function CoverageLeaf({ data, selection, onSelectionChange, company }: {
           </button>
           <div className={`tone-${careTone(selected.key)} relative flex min-h-36 items-end overflow-hidden rounded-[28px] bg-[var(--tone-wash)] p-6 pr-40 sm:min-h-44 sm:p-8 sm:pr-56`}>
             <div>
-              <span className="clay-tag">{productShortLabel(selected.lines[0].product_code, selected.lines[0].product_name)}</span>
+              {!company && <span className="clay-tag">{productShortLabel(selected.lines[0].product_code, selected.lines[0].product_name)}</span>}
               <h2 className="mt-4 text-3xl font-bold tracking-title text-record sm:text-4xl">{selected.title}</h2>
-              <p className="mt-1 text-row text-[var(--tone-ink)]">{selected.description}</p>
+              {!company && <p className="mt-1 text-row text-[var(--tone-ink)]">{selected.description}</p>}
             </div>
             {careArt(selected.key) && (
               <img src={careArt(selected.key)!} alt="" className="pointer-events-none absolute -bottom-2 right-2 size-36 object-contain sm:right-6 sm:size-48" />
@@ -188,7 +191,7 @@ export function CoverageLeaf({ data, selection, onSelectionChange, company }: {
           </div>
           <div className="grid gap-4">
             {selected.lines.map((line, index) => (
-              <PlanDetail key={`${line.product_code}-${line.plan_code ?? ""}-${index}`} line={line} routeKey={selected.key} person={person} />
+              <PlanDetail key={`${line.product_code}-${line.plan_code ?? ""}-${index}`} line={line} routeKey={selected.key} person={person} compact={!!company} showLabel={!company || selected.lines.length > 1} />
             ))}
           </div>
           {company && ["gp", "specialist", "dental"].includes(selected.key) && (

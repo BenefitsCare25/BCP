@@ -25,12 +25,11 @@ export function HrEnrollmentFormsPage() {
   const windows = useHrFormWindows();
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-3">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight text-foreground">Enrolment forms</h1>
-        <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-          Forms your employees signed in the employee portal, and paper forms your broker
-          filed for them. Your broker reviews each one before cover changes.
+        <h1 className="sr-only">Enrolment forms</h1>
+        <p className="text-sm text-muted-foreground">
+          Your broker reviews each form before cover changes.
         </p>
       </div>
       <FormRegisterView
@@ -44,7 +43,9 @@ export function HrEnrollmentFormsPage() {
         showSource={false}
         onDownload={downloadHrFormPdf}
         onExport={(kind) => exportHrForms(effective, kind)}
-        emptyHint="No enrolment forms yet. They appear here as employees sign them in the portal."
+        emptyHint={filters.query || filters.status || filters.windowId
+          ? "No forms match these filters. Change the filters or clear your search."
+          : "No enrolment forms yet. Signed online forms and filed paper forms appear here."}
       />
     </div>
   );

@@ -79,7 +79,7 @@ export function DependantsLeaf({
     statement ? statement.coverage.filter((line) => line.covered_dependants.some((person) => person.id === id)) : null;
 
   return (
-    <ul className="space-y-3">
+    <ul className="portal-family-records space-y-3">
       {selfName && selfLines && (
         <Mount as="li" label={selfName} gloss="You" aside={<Strike tone="approved">Covered</Strike>}>
           <CareTags lines={selfLines} />

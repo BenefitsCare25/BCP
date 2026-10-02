@@ -70,20 +70,20 @@ function NoIssuedCard() {
   const memberId = firstMemberId(options.data);
   const companyLabel = me.data?.company?.legal_name || me.data?.company?.name || "";
   return (
-    <div className="mx-auto grid max-w-4xl items-center gap-8 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+    <div className="portal-card-page mx-auto grid max-w-4xl items-center gap-5 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
       <div className="clay-card-tilt mx-auto w-full max-w-[400px]">
         <TemporaryCard memberName={member?.display_name ?? ""} companyName={companyLabel} memberId={memberId} />
       </div>
       <div>
-        <h2 className="text-3xl font-bold tracking-title text-record">
+        <h2 className="text-xl font-bold tracking-title text-record">
           {memberId ? "Show your member ID at the clinic" : "Your card is on its way"}
         </h2>
-        <p className="mt-3 text-md text-label">
+        <p className="mt-2 text-row text-label">
           {memberId
-            ? `Your insurer hasn't sent the card design yet. Quote your ${memberId.insurer ?? "insurer"} member ID ${memberId.id} at any panel clinic — it's what the card would show.`
+            ? "Your insurer hasn't supplied the card design yet. Quote the member ID shown in this preview at a panel clinic."
             : "Your insurer hasn't issued your card yet. It will appear here as soon as it does."}
         </p>
-        <Link to="/portal/$company/clinics" params={{ company }} className={actionClass("primary", { className: "mt-6" })}>
+        <Link to="/portal/$company/clinics" params={{ company }} className={actionClass("primary", { className: "mt-4" })}>
           <MapPin className="size-4" aria-hidden /> Find a panel clinic
         </Link>
       </div>

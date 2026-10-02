@@ -113,7 +113,7 @@ def _company_name(db: Session, client_id: str) -> str | None:
     from app.models import Client
 
     c = db.get(Client, client_id)
-    return c.name if c else None
+    return (c.legal_name or c.name) if c else None
 
 
 def _me(db: Session, user: User, client_id: str) -> HrMeOut:

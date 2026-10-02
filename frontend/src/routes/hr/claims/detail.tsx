@@ -25,12 +25,13 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { CLAIM_DOCUMENT_MAX_BYTES } from "@/lib/claim-files";
 import { formatError } from "@/lib/errors";
 import { useDocumentTitle } from "@/lib/useDocumentTitle";
+import { documentsForSlot } from "@/components/hr/claimEvidence";
 
 function Fact({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div>
+    <div className="min-w-0">
       <dt className="text-xs font-medium text-muted-foreground">{label}</dt>
-      <dd className="mt-1 text-sm text-foreground">{children}</dd>
+      <dd className="mt-1 break-words text-sm text-foreground">{children}</dd>
     </div>
   );
 }
@@ -70,8 +71,10 @@ export function HrClaimDetailPage() {
 
   const data = claim.data;
   const missing = data.doc_slots.filter(
-    (slot) => !data.documents.some((document) => document.doc_type === slot.key),
+    (slot) => documentsForSlot(data.documents, slot.key).length === 0,
   );
+  const matchedIds = new Set(data.doc_slots.flatMap((slot) => documentsForSlot(data.documents, slot.key).map((document) => document.id)));
+  const additionalDocuments = data.documents.filter((document) => !matchedIds.has(document.id));
   const submitReady = data.can_submit && missing.length === 0;
 
   const uploadFile = async (slot: string, file: File | null) => {
@@ -101,8 +104,8 @@ export function HrClaimDetailPage() {
   };
 
   return (
-    <div className="mx-auto max-w-3xl space-y-5">
-      <div>
+    <div className="hr-claim-detail grid items-start gap-3 md:grid-cols-2">
+      <div className="md:col-span-2">
         <Button asChild variant="ghost" className="-ml-3 h-11 sm:h-9">
           <Link to="/hr/claims">
             <ArrowLeft className="size-4" aria-hidden />
@@ -124,9 +127,8 @@ export function HrClaimDetailPage() {
         </div>
       </div>
 
-      <Card className="p-5 sm:p-6">
-        <dl className="grid gap-x-6 gap-y-5 sm:grid-cols-2">
-          <Fact label="Employee">{data.employee_name ?? "Employee"}</Fact>
+      <Card className="p-5">
+        <dl className="grid grid-cols-2 gap-x-4 gap-y-3">
           <Fact label="Claim amount">
             <span className="tabular-nums">{formatClaimMoney(data.amount_claimed, data.currency)}</span>
           </Fact>
@@ -137,21 +139,18 @@ export function HrClaimDetailPage() {
             {data.submitted_at ? formatClaimDate(data.submitted_at) : "Not submitted"}
           </Fact>
         </dl>
-        <div className="mt-5 flex items-start gap-3 border-t border-border pt-5">
+        <div className="mt-3 flex items-start gap-3 border-t border-border pt-3">
           <UserRound className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden />
           <div className="text-sm">
-            <p className="font-medium">Filed for {data.employee_name ?? "the employee"}</p>
-            <p className="text-muted-foreground">
-              By {data.submitted_by_name || data.submitted_by_email || "company HR"}
-              {data.submitted_by_name && data.submitted_by_email
-                ? ` · ${data.submitted_by_email}`
-                : ""}
-            </p>
+            <p className="font-medium">Filed by {data.submitted_by_name || data.submitted_by_email || "company HR"}</p>
+            {data.submitted_by_name && data.submitted_by_email && (
+              <p className="break-all text-muted-foreground">{data.submitted_by_email}</p>
+            )}
           </div>
         </div>
       </Card>
 
-      <Card className="p-5 sm:p-6">
+      <Card className="p-5">
         <div className="flex items-start justify-between gap-4">
           <div>
             <h2 className="text-base font-semibold">Evidence</h2>
@@ -173,14 +172,14 @@ export function HrClaimDetailPage() {
             No evidence is required for this claim type.
           </p>
         ) : (
-          <div className="mt-5 divide-y divide-border rounded-lg border border-border">
+          <div className="mt-3 divide-y divide-border rounded-xl border border-border">
             {data.doc_slots.map((slot) => {
-              const documents = data.documents.filter((item) => item.doc_type === slot.key);
+              const documents = documentsForSlot(data.documents, slot.key);
               const satisfied = documents.length > 0;
               const uploading = uploadingSlot === slot.key;
               return (
                 <div key={slot.key} className="p-4">
-                  <div className="flex items-start gap-3">
+                  <div className="flex flex-wrap items-start gap-3">
                     {satisfied ? (
                       <CheckCircle2 className="mt-0.5 size-5 shrink-0 text-good" aria-hidden />
                     ) : (
@@ -188,14 +187,9 @@ export function HrClaimDetailPage() {
                     )}
                     <div className="min-w-0 flex-1">
                       <p className="text-sm font-medium">{slot.label}</p>
-                      {slot.instructions && (
+                      {slot.instructions && slot.instructions.trim().toLowerCase() !== `attach the ${slot.label.toLowerCase()}.` && (
                         <p className="mt-0.5 text-xs text-muted-foreground">{slot.instructions}</p>
                       )}
-                      {documents.map((document) => (
-                        <p key={document.id} className="mt-2 truncate text-sm text-muted-foreground">
-                          {document.file_name}
-                        </p>
-                      ))}
                     </div>
                     {data.can_add_evidence && (
                       <label className="relative inline-flex min-h-11 shrink-0 cursor-pointer items-center gap-2 rounded-md border border-input bg-card px-3 text-sm font-medium hover:bg-muted focus-within:ring-2 focus-within:ring-ring/40 sm:min-h-9">
@@ -220,9 +214,22 @@ export function HrClaimDetailPage() {
                       </label>
                     )}
                   </div>
+                  {documents.map((document) => (
+                    <p key={document.id} className="mt-2 break-all text-sm text-muted-foreground">
+                      {document.file_name}
+                    </p>
+                  ))}
                 </div>
               );
             })}
+          </div>
+        )}
+        {additionalDocuments.length > 0 && (
+          <div className="mt-3 space-y-2 border-t border-border pt-3">
+            <h3 className="text-sm font-semibold">Additional evidence</h3>
+            {additionalDocuments.map((document) => (
+              <p key={document.id} className="break-all text-sm text-label">{document.file_name}</p>
+            ))}
           </div>
         )}
 

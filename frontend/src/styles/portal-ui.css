@@ -1,0 +1,245 @@
+/* User-approved employee/HR theme. Broker components retain their defaults. */
+/* Chromium supports translucent gradient thumbs; keep the track clear so the
+   page colour shows through. Cover both document and nested scrolling areas. */
+:is(html:has(.portal-clay), body:has(.portal-clay), .portal-clay, .portal-clay *)::-webkit-scrollbar { width: 10px; height: 10px; }
+:is(html:has(.portal-clay), body:has(.portal-clay), .portal-clay, .portal-clay *)::-webkit-scrollbar-track { background: transparent; }
+:is(html:has(.portal-clay), body:has(.portal-clay), .portal-clay, .portal-clay *)::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: linear-gradient(180deg, rgb(93 152 232 / .42), rgb(146 119 220 / .32));
+  background-clip: padding-box;
+}
+:is(html:has(.portal-clay), body:has(.portal-clay), .portal-clay, .portal-clay *)::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, rgb(65 126 216 / .65), rgb(126 98 205 / .55));
+  background-clip: padding-box;
+}
+:is(html:has(.portal-clay), body:has(.portal-clay), .portal-clay, .portal-clay *)::-webkit-scrollbar-corner { background: transparent; }
+:is(html:has(.portal-clay), body:has(.portal-clay), .portal-clay, .portal-clay *)::-webkit-scrollbar-button { display: none; }
+@supports not selector(::-webkit-scrollbar) {
+  :is(html:has(.portal-clay), body:has(.portal-clay), .portal-clay, .portal-clay *) { scrollbar-width: thin; scrollbar-color: #99b9eb transparent; }
+}
+@media (forced-colors: active) {
+  :is(html:has(.portal-clay), body:has(.portal-clay), .portal-clay, .portal-clay *) { scrollbar-color: auto; }
+  :is(html:has(.portal-clay), body:has(.portal-clay), .portal-clay, .portal-clay *)::-webkit-scrollbar-thumb,
+  :is(html:has(.portal-clay), body:has(.portal-clay), .portal-clay, .portal-clay *)::-webkit-scrollbar-thumb:hover { background: CanvasText; }
+}
+.portal-clay.portal-ui {
+  --color-shade: #eef5ff;
+  --color-action-wash: #eef5ff;
+  --color-label: color-mix(in srgb, var(--color-record) 65%, var(--color-action) 35%);
+  --color-hairline: color-mix(in srgb, var(--color-action) 15%, white);
+  --color-glass-edge: var(--color-hairline);
+  --color-track: var(--color-shade);
+  --color-unread-wash: #f4f8ff;
+  --color-leaf-input: color-mix(in srgb, var(--color-action) 65%, white);
+  --color-border-strong: var(--color-leaf-input);
+  --color-strike-review: #253d70;
+  --color-muted: var(--color-shade);
+  --color-accent: var(--color-shade);
+  --color-secondary: var(--color-shade);
+  --color-portal-hover: #e0eeff;
+  --color-enrolment-hover: var(--color-portal-hover);
+  --text-row: .875rem;
+  --text-row--line-height: 1.375rem;
+  font-family: var(--font-leaf);
+}
+.portal-ui main > div { padding-top: 14px; }
+.portal-ui .portal-context { margin-bottom: 14px; }
+.portal-ui .portal-context h1 { font-size: 18px; }
+.portal-ui .portal-context p { font-size: var(--text-row); }
+.portal-clay .notification-panel { --color-label: #253d70; --color-subtle: #253d70; top: calc(100% + 8px); border-color: #dae5ff; border-radius: 24px; background: white; box-shadow: none; }
+.portal-clay .notification-panel button { min-height: 44px; min-width: 44px; border-radius: 12px; }
+.portal-clay .notification-panel button:hover { background: #e0eeff; }
+.portal-clay .notification-panel button:focus-visible { outline: 2px solid var(--color-action); outline-offset: -2px; }
+.portal-ui .portal-message-index { top: 6rem; }
+.portal-ui .portal-security form { max-width: none; gap: 12px; }
+.portal-auth .signin-in { animation: none; opacity: 1; transform: none; }
+.portal-auth h1 { font-size: 28px; margin-top: 8px; }
+.portal-auth label { text-transform: none; letter-spacing: 0; font-size: 14px; }
+.portal-auth :is(input, button) { border-radius: 12px; }
+.portal-auth section:first-child > div > div { padding-block: 24px; }
+.portal-auth section:first-child > div > div > div { margin-top: 24px; }
+.hr-portal main > div { padding-top: 0; }
+/* HR Overview follows Home: welcome in the scene, modules on the ground below. */
+.hr-is-overview .clay-topbar { position: fixed; inset-inline: 0; }
+.hr-portal .hr-overview-sky { width: 100%; margin-left: 0; height: auto; min-height: clamp(440px, 36vw, 560px); overflow: clip; }
+.hr-overview-sky .sky-content { max-width: 900px; padding: 104px 24px 96px; text-align: center; }
+.hr-overview-sky h1 { overflow-wrap: anywhere; }
+.hr-overview-sky h1 .name { display: inline-block; max-width: 100%; }
+@media (max-width: 1023px) {
+  .hr-overview-sky .sky-content { padding-top: 84px; }
+}
+@media (max-width: 640px) {
+  .hr-overview-sky .sky-content { padding: 88px 22px 64px; }
+  .hr-portal .hr-overview-sky { min-height: 470px; }
+}
+.hr-portal :is(div, section, article).bg-card { border-radius: 24px; box-shadow: none; }
+.hr-portal :is(button, input, select, textarea) { border-radius: 12px; }
+.hr-portal [aria-current="page"] { color: var(--color-action-ink); background: var(--color-shade); }
+.hr-portal :is(input, select, textarea) { border-color: var(--color-leaf-input); }
+.hr-portal button { min-height: 44px; }
+/* One header system for employee Home, other employee pages and HR. */
+.portal-clay :is(.clay-topbar, .portal-nav-dock) {
+  --color-shade: #eef5ff; --color-label: #253d70;
+  --color-hairline: #dae5ff; --color-portal-hover: #e0eeff;
+}
+.portal-clay .clay-topbar-inner { border-color: #dae5ff; }
+.portal-clay .portal-nav-brand { background: transparent; }
+.portal-clay .portal-nav-dock a[aria-current="page"] { color: #1d3bc4; background: #eef5ff; }
+.portal-clay .portal-nav-link {
+  display: inline-flex; flex: none; align-items: center; justify-content: center;
+  min-width: 44px; height: 44px; gap: 8px; padding-inline: 14px;
+  border-radius: 999px; color: #253d70; font-size: 15px; line-height: 1.25;
+  white-space: nowrap; transition: background-color 180ms ease, color 180ms ease;
+}
+.portal-clay .portal-nav-link svg { width: 18px; height: 18px; flex: none; }
+.portal-clay .portal-nav-action { width: 44px; height: 44px; flex: none; border-radius: 999px; color: #253d70; }
+.portal-clay :is(.portal-nav-link, .portal-nav-action)[aria-current="page"],
+.portal-clay .portal-nav-action[aria-expanded="true"] { background: #eef5ff; color: #1d3bc4; font-weight: 600; }
+.portal-clay :is(.portal-nav-link, .portal-nav-action):focus-visible { outline: 2px solid var(--color-action); outline-offset: 2px; }
+.portal-clay .clay-nav-pill { height: 44px; margin-top: -22px; border-radius: 999px; background: #e0eeff; }
+@media (hover: hover) and (pointer: fine) {
+  .portal-clay :is(.portal-nav-link, .portal-nav-action):hover { background: #e0eeff; color: #1d3bc4; }
+  .portal-clay .portal-nav-dock a:hover { background: #e0eeff; color: #1d3bc4; }
+}
+@media (min-width: 1024px) and (max-width: 1199px) {
+  .portal-clay .portal-nav-link { padding-inline: 8px; gap: 6px; font-size: 14px; }
+  .portal-clay .portal-nav-link svg { width: 16px; height: 16px; }
+  .portal-clay .portal-nav-divider { margin-inline: 12px; }
+  .portal-clay .portal-nav-actions { padding-left: 12px; }
+}
+@media (max-width: 639px) {
+  .portal-clay .hr-navigation .portal-nav-link { padding-inline: 0; }
+  .hr-portal .portal-nav-row { padding-inline: 8px; }
+  .hr-portal .portal-nav-actions { padding-left: 0; gap: 0; }
+}
+.portal-ui .portal-messages [aria-current="true"] { background: #e7efff; }
+.portal-ui .leaf-mount { padding: 20px; gap: 12px; border-radius: 24px; box-shadow: none; backdrop-filter: none; }
+.portal-ui .leaf-mount > div:first-child h2 { font-size: 20px; line-height: 1.2; font-weight: 700; }
+.portal-ui .leaf-rise { animation: none; }
+.portal-ui .clay-tag { box-shadow: none; letter-spacing: 0; text-transform: none; font-size: 14px; }
+.portal-ui .portal-balance { border-radius: 24px; }
+.portal-ui .portal-balance > div:first-child { padding: 20px; gap: 20px; }
+.portal-ui .portal-family-records { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.portal-ui .portal-family-records > li { margin-block: 0; }
+.portal-ui .portal-family-records > li:has(.clay-tag) { grid-column: 1 / -1; }
+.portal-ui .portal-claim-detail { max-width: none; display: grid; gap: 12px; align-items: start; }
+.portal-ui .portal-claim-detail > * { margin-block: 0; }
+.portal-ui .portal-claim-facts { display: grid; gap: 0 28px; }
+.portal-ui .portal-claim-facts > div { padding-block: 8px; grid-template-columns: minmax(100px, .8fr) minmax(0, 1.3fr); gap: 12px; }
+.portal-ui .portal-claim-facts dd { overflow-wrap: anywhere; }
+.portal-ui .portal-extra-document { flex-wrap: wrap; }
+.portal-ui .portal-extra-document > span:last-child { flex: 1 1 100%; min-width: 0; overflow-wrap: anywhere; }
+.portal-ui .portal-claim-entry { display: grid; gap: 20px; }
+.portal-ui .portal-claim-entry > div { min-width: 0; }
+.portal-ui .clay-card-tilt { rotate: none; filter: none; }
+.portal-ui .portal-temporary-card { background: var(--color-shade); color: #14224a; border: 1px solid var(--color-hairline); box-shadow: none; }
+.portal-ui .portal-temporary-card-top img { filter: none; }
+.portal-ui .portal-temporary-card-top svg { color: var(--color-action-ink); }
+.portal-ui .portal-temporary-card-bottom span,
+.portal-ui .portal-temporary-card-id { color: #253d70; }
+.portal-ui .portal-temporary-card-mark { color: var(--color-action-ink); border-color: var(--color-leaf-input); }
+.portal-ui .clinic-grid > li { border-color: var(--color-hairline); border-radius: 24px; box-shadow: none; }
+.portal-ui .portal-clinic-finder { padding: 20px; border-radius: 24px; }
+.portal-ui .portal-clinic-finder > img { width: 112px; height: 112px; }
+.portal-ui .portal-clinic-finder > div:first-of-type { padding-right: 112px; }
+.portal-ui .clinic-grid .leaf-clinic-row { padding: 16px; }
+.portal-ui .clinic-grid .leaf-clinic-row > :is(a[data-cell="call"], [data-cell="dirs"]) { min-height: 44px; background: var(--color-shade); color: var(--color-action-ink); }
+.portal-ui .clinic-grid > li:focus-within { border-color: var(--color-leaf-input); background: var(--color-shade); }
+.portal-ui :is(button, a, summary, input, select, textarea) { -webkit-tap-highlight-color: transparent; }
+.portal-ui :is(input, select, textarea) { caret-color: var(--color-action); }
+.portal-ui ::selection { background: #c3dfff; color: #14224a; }
+.portal-ui :is(button, a, summary):focus-visible { outline: 2px solid var(--color-action); outline-offset: 3px; }
+.portal-ui :is([role="tab"], summary):focus-visible { background: var(--color-portal-hover); }
+.portal-ui [role="tab"][data-state="active"] { color: var(--color-action-ink); }
+.portal-ui [aria-pressed="true"] { color: var(--color-action-ink); }
+.portal-ui summary { border-radius: 12px; padding-inline: 8px; margin-inline: -8px; transition: background-color 180ms ease, color 180ms ease; }
+/* Scroll within the index, never through the rounded frame or its deadline. */
+.is-enrolment .leaf-deck-rail { display: flex; flex-direction: column; overflow: hidden; }
+.is-enrolment .leaf-deck-rail > div:first-child:not(.leaf-deck-scroll) { position: static; flex: none; }
+.is-enrolment .leaf-deck-scroll { min-height: 0; scrollbar-width: auto; scrollbar-color: auto; }
+.is-enrolment .leaf-deck-scroll::-webkit-scrollbar { display: block; }
+@supports not selector(::-webkit-scrollbar) {
+  .is-enrolment .leaf-deck-scroll { scrollbar-width: thin; scrollbar-color: #99b9eb transparent; }
+}
+@media (forced-colors: active) {
+  .is-enrolment .leaf-deck-scroll { scrollbar-color: auto; }
+}
+.is-enrolment [data-layout="vertical"] .leaf-deck-scroll { overflow-y: auto; overflow-x: hidden; }
+.is-enrolment [data-layout="vertical"] [role="tab"] { border-radius: 12px; }
+.is-enrolment .leaf-deck-rail [role="tab"]:focus-visible { outline-offset: -2px; }
+.is-enrolment .leaf-deck-stage [role="tabpanel"] { border-radius: 24px; outline-offset: -2px; }
+/* Benefit controls take their feedback from Home's benefit palette. The
+   enclosing sheet stays the same colour; blue is reserved for navigation. */
+.portal-ui .enrolment-product {
+  --color-portal-hover: color-mix(in srgb, var(--tone-pill) 28%, var(--tone-wash));
+  --color-enrolment-hover: var(--color-portal-hover);
+}
+.portal-ui .enrolment-product:hover { background: var(--tone-wash); }
+.is-enrolment .enrolment-choice:has(input:checked):is(:hover, :focus-within) { background: white; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tone-ink, var(--color-action)) 35%, white); }
+.is-enrolment .leaf-deck-pagination { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; }
+.enrolment-comparison { container-type: inline-size; }
+.enrolment-comparison-head { display: none; }
+@container (min-width: 560px) {
+  .enrolment-comparison-head,
+  .enrolment-comparison dl > div { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
+  .enrolment-comparison-head { margin-top: 8px; }
+  .enrolment-comparison dl > div { align-items: start; padding-block: 8px; }
+  .enrolment-comparison-head > span:not(:first-child) { text-align: right; }
+  .enrolment-comparison dd { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-column: 2 / -1; gap: 16px; margin-top: 0; }
+  .enrolment-comparison dd > div > span:first-child { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  .enrolment-comparison dd > div { padding: 0; }
+}
+.portal-coverage .clay-sheet > .clay-tag { display: none; }
+.portal-coverage .clay-sheet { display: flex; flex-direction: column; grid-row: auto; padding: 20px; border-radius: 24px; }
+.portal-coverage .clay-sheet-title { margin: 0; max-width: calc(100% - 80px); font-size: 20px; }
+.portal-coverage .clay-sheet-art { width: 86px; height: 86px; top: 8px; right: 6px; }
+.portal-coverage .clay-sheet-label { margin-top: 18px; }
+.portal-coverage .clay-sheet-value { font-size: 24px; }
+.portal-coverage .clay-sheet-detail { white-space: normal; overflow: visible; }
+.portal-coverage .clay-sheet-go { margin-top: 12px; }
+.portal-coverage .clay-sheets-other .clay-sheet-title { max-width: none; font-size: 16px; }
+.portal-coverage > div.tone-lime,
+.portal-coverage > div.tone-blue,
+.portal-coverage > div.tone-peach,
+.portal-coverage > div.tone-pink,
+.portal-coverage > div.tone-lilac,
+.portal-coverage > div.tone-mint { min-height: 84px; align-items: center; padding: 20px 112px 20px 20px; border-radius: 24px; }
+.portal-coverage > div h2 { margin: 0; font-size: 24px; }
+.portal-coverage > div > img { width: 100px; height: 100px; right: 12px; }
+@media (hover: hover) and (pointer: fine) {
+  .hr-portal .hr-module:hover > div { background: #e0eeff; border-color: var(--color-leaf-input); }
+  .portal-ui :is([role="tab"], summary):not(:disabled):not([aria-disabled="true"]):hover { background: var(--color-portal-hover); color: var(--color-action-ink); }
+  .portal-ui .clay-navlink:hover { color: var(--color-action-ink); }
+  .portal-ui .leaf-mount:not(.enrolment-product):hover { background-color: var(--color-glass); }
+  .portal-ui label:has(input[type="file"]:not(:disabled)):hover { background: var(--color-portal-hover); }
+  .portal-ui .leaf-focus:not(.bg-action):not(:disabled):not([aria-disabled="true"]):hover { background-color: var(--color-portal-hover); }
+  .portal-ui .clinic-grid > li:hover { background: var(--color-shade); border-color: var(--color-leaf-input); box-shadow: none; translate: 0 -2px; }
+}
+@media (min-width: 768px) {
+  .portal-ui .portal-claim-entry { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 28px; }
+  .portal-ui .portal-claim-detail { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .portal-ui .portal-claim-detail > :not(.leaf-mount),
+  .portal-ui .portal-claim-summary { grid-column: 1 / -1; }
+  .portal-ui .portal-claim-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 639px) {
+  .portal-clay .notification-panel { position: fixed; inset-inline: 16px; top: 72px; width: auto; max-width: none; }
+  .is-enrolment .enrolment-plan-figures { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 16px; }
+  .hr-new-claim .hr-claim-money > label:first-child { grid-column: 1 / -1; }
+  .portal-auth section:first-child > div > div { flex: none; padding-top: 32px; }
+  .portal-auth footer { margin-top: auto; padding-top: 24px; }
+  .portal-ui .leaf-mount { padding: 16px; }
+  .portal-ui .portal-balance > div:first-child { padding: 16px; gap: 12px; }
+  .portal-ui .portal-family-records { grid-template-columns: minmax(0, 1fr); }
+  .portal-ui .portal-clinic-finder { padding: 16px; }
+  .portal-ui .portal-clinic-finder > div:first-of-type { padding-right: 0; }
+  .portal-coverage .clay-sheets { grid-template-columns: minmax(0, 1fr); }
+  .portal-coverage .clay-sheet-title { font-size: 20px; }
+  .portal-coverage .clay-sheet-go { display: flex; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .portal-ui :is(button, a, summary) { transition: none; }
+  .portal-ui .clinic-grid > li { transition: none; }
+  .portal-ui .clinic-grid > li:hover { translate: none; }
+}

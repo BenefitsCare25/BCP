@@ -96,6 +96,7 @@ export function PortalSetPasswordPage() {
   if (step === "mfa") {
     return (
       <AuthScene
+        portalTheme="employee"
         eyebrow="Employee benefits portal"
         title="Two-factor authentication"
         subtitle="Enter the 6-digit code from your authenticator app, or one of your recovery codes."
@@ -135,11 +136,13 @@ export function PortalSetPasswordPage() {
 
   return (
     <AuthScene
+      portalTheme="employee"
       eyebrow="Employee benefits portal"
       title="Set your password"
       subtitle="Choose a strong password to finish setting up your account."
     >
       <form onSubmit={submit} className="space-y-4">
+        {!token && <p role="alert" className="text-sm text-error">This link is missing its token. Ask your HR team to resend it.</p>}
         <div className="space-y-1.5">
           <Label
             htmlFor="portal-new-password"

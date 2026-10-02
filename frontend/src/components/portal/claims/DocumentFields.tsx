@@ -56,7 +56,7 @@ export function DocumentFields({ form }: { form: NewClaimForm }) {
             aria-live="polite"
           >
             <span className="font-medium text-record">
-              {attachedCount === docSlots.length ? "All documents attached" : "Required uploads"}
+              {attachedCount === docSlots.length ? "All documents attached" : ""}
             </span>
             <span className="tabular-nums text-label">
               {attachedCount} of {docSlots.length} attached
@@ -80,7 +80,7 @@ export function DocumentFields({ form }: { form: NewClaimForm }) {
                   )}
                   <div className="min-w-0 flex-1">
                     <p className="text-row font-semibold text-record">{slot.label}</p>
-                    {slot.instructions && (
+                    {slot.instructions && slot.instructions.toLowerCase().trim() !== `attach the ${slot.label.toLowerCase()}.` && (
                       <p className="mt-0.5 text-row text-label">{slot.instructions}</p>
                     )}
                   </div>

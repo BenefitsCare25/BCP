@@ -1,7 +1,7 @@
 /** Portal navigation and account controls. Home supplies its own greeting and
  * benefit-year context; other routes use the shell heading. The broker preview
  * keeps its own data path and layout in `components/operations/PortalFrame`. */
-import { useEffect, useMemo, useState, type ComponentType } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Link,
   Outlet,
@@ -19,6 +19,7 @@ import {
   MessageSquare,
   ShieldAlert,
   ShieldCheck,
+  type LucideIcon,
 } from "lucide-react";
 import { usePortalMe, useMemberSecurityStatus } from "@/api/portal";
 import { usePortalConversations } from "@/api/portalMessages";
@@ -51,7 +52,7 @@ const NAV: {
    *  link resolved to a path no route matches, and `isActive` compared it
    *  against a real pathname that can never contain it, so no tab ever lit. */
   sub: string;
-  icon: ComponentType<{ className?: string }>;
+  icon: LucideIcon;
   /** In the phone dock. Coverage is not — it is one tap from the home tiles. */
   dock: boolean;
   /** The SERVED capability this destination needs, when it needs one — see
@@ -105,7 +106,7 @@ const NAV: {
 
 // `relative` so an unread badge can hang off the icon it belongs to.
 const ICON_BUTTON =
-  "leaf-focus relative inline-flex size-11 shrink-0 items-center justify-center rounded-pill " +
+  "portal-nav-action leaf-focus relative inline-flex size-11 shrink-0 items-center justify-center rounded-pill " +
   "text-label transition-colors duration-200 ease-leaf hover:bg-shade hover:text-record";
 
 export function PortalShell() {
@@ -192,6 +193,7 @@ export function PortalShell() {
   const year = me?.policy_year;
   const companyLabel = me?.company?.legal_name || me?.company?.name || "";
   const isHome = isActive("");
+  const isEnrollment = isActive("/enrollment");
   const [hover, setHover] = useState<{ left: number; width: number } | null>(null);
   const [scrolled, setScrolled] = useState(false);
   useEffect(() => {
@@ -248,7 +250,7 @@ export function PortalShell() {
     <LeafScopeContext.Provider value>
       {/* min-h-dvh, not min-h-screen: on mobile Safari `100vh` is the browser's
           *largest* viewport, so the last row of any page sat under the URL bar. */}
-      <div className={cn("leaf portal-clay flex min-h-dvh flex-col", isHome && "is-home", scrolled && "is-scrolled")}>
+      <div className={cn("leaf portal-clay flex min-h-dvh flex-col", isHome ? "is-home" : "portal-ui", isEnrollment && "is-enrolment", scrolled && "is-scrolled")}>
         <header className="clay-topbar">
           <div className="clay-topbar-inner mx-auto max-w-[1440px]">
           {/* ── Phone: name, scope, account. No mark, by request. ────────── */}
@@ -269,7 +271,7 @@ export function PortalShell() {
           </div>
 
           {/* ── Desktop: one row. ────────────────────────────────────────── */}
-          <div className="hidden items-center gap-0 py-2.5 pl-5 pr-3 lg:flex">
+          <div className="portal-nav-row hidden items-center gap-0 py-2.5 pl-5 pr-3 lg:flex">
             {/* Used whole and uncropped. Served from a 50 KB derivative — the
                 source asset is 792 KB and has no business in a header. */}
             <img
@@ -277,14 +279,15 @@ export function PortalShell() {
               alt="Inspro Insurance Brokers"
               width={125}
               height={40}
-              className="h-10 w-auto shrink-0"
+              className="portal-nav-logo h-10 w-auto shrink-0"
             />
-            <span aria-hidden className="mx-5 h-8 w-px shrink-0 bg-hairline" />
+            <span aria-hidden className="portal-nav-divider mx-5 h-8 w-px shrink-0 bg-hairline" />
 
             <nav aria-label="Portal sections" className="clay-nav relative flex items-center gap-0.5" onMouseLeave={() => setHover(null)}>
               <span aria-hidden className="clay-nav-pill" style={hover ? { opacity: 1, translate: `${hover.left}px 0`, width: hover.width } : undefined} />
               {nav.map((item) => {
                 const active = isActive(item.sub);
+                const Icon = item.icon;
                 return (
                   <Link
                     key={item.sub}
@@ -295,14 +298,15 @@ export function PortalShell() {
                     aria-current={active ? "page" : undefined}
                     onMouseEnter={(event) => setHover({ left: event.currentTarget.offsetLeft, width: event.currentTarget.offsetWidth })}
                     className={cn(
-                      "clay-navlink leaf-focus inline-flex h-10 items-center gap-2 rounded-xl px-3.5 text-[15px]",
+                      "portal-nav-link clay-navlink leaf-focus",
                       "transition-colors duration-200 ease-leaf",
                       active
                         ? "bg-shade font-semibold text-record"
                         : "text-record/75 hover:text-record",
                     )}
                   >
-                    {item.label}
+                    <Icon aria-hidden strokeWidth={1.75} />
+                    <span>{item.label}</span>
                   </Link>
                 );
               })}
@@ -314,7 +318,7 @@ export function PortalShell() {
                 past the edge on a laptop. The enrolment deadline is likewise
                 announced in the page (the home tile) rather than as a chip in
                 the nav — time-sensitive signals live in the page. */}
-            <div className="ml-auto flex shrink-0 items-center gap-1 pl-6">
+            <div className="portal-nav-actions ml-auto flex shrink-0 items-center gap-1 pl-6">
               {accountControls}
             </div>
           </div>
@@ -325,14 +329,14 @@ export function PortalShell() {
             that makes the glass read as glass rather than as paler paint — see
             leaf.css. Without this class the whole material fails. */}
         <main className="leaf-ground flex-1">
-          <div className={cn("mx-auto w-full px-4 py-5 pb-28 sm:px-6 lg:pb-10", isHome ? "max-w-7xl" : "max-w-5xl")}>
+          <div className={cn("mx-auto w-full px-4 py-5 pb-28 sm:px-6 lg:pb-10", isHome ? "max-w-7xl" : "max-w-6xl")}>
             {/* The page heading on desktop only; on a phone the bar above is
                 already carrying it. `hidden` is display:none, so exactly one h1
                 is ever in the accessibility tree.
                 The year selector shares this row rather than stacking under the
                 name — it scopes the content below it, and a period set beneath a
                 name reads as a subtitle explaining the person. */}
-            <div className={cn("mb-5 items-center gap-4", isHome ? "hidden" : "hidden lg:flex")}>
+            <div className={cn("portal-context mb-5 items-center gap-4", isEnrollment && "enrolment-context", isHome ? "hidden" : "hidden lg:flex")}>
               {/* Both flanks are `flex-1 basis-0`, so they resolve to equal
                   widths and whatever a route hangs in the rail is centred in
                   the row exactly — not merely balanced by eye. The name
@@ -418,7 +422,7 @@ export function PortalShell() {
           aria-label="Portal sections"
           className={cn(
             glassSurface,
-            "fixed inset-x-3 bottom-3 z-20 flex rounded-[22px] p-1.5 shadow-float lg:hidden",
+            "portal-nav-dock fixed inset-x-3 bottom-3 z-20 flex rounded-[22px] p-1.5 shadow-float lg:hidden",
             "mb-[env(safe-area-inset-bottom)]",
           )}
         >

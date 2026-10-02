@@ -1,5 +1,7 @@
 import type { ReactNode } from "react";
 import { AuthPanel } from "./AuthPanel";
+import { LeafScopeContext } from "@/lib/leaf-scope";
+import { cn } from "@/lib/cn";
 
 /**
  * Shared sign-in shell for both surfaces (broker Entra + member OTP): a clean
@@ -14,15 +16,18 @@ export function AuthScene({
   subtitle,
   children,
   secondary,
+  portalTheme,
 }: {
   eyebrow: string;
   title: ReactNode;
   subtitle: string;
   children: ReactNode;
   secondary?: ReactNode;
+  portalTheme?: "employee" | "hr";
 }) {
   return (
-    <div className="flex min-h-screen w-full flex-col bg-background lg:h-screen lg:flex-row">
+    <LeafScopeContext.Provider value={!!portalTheme}>
+    <div className={cn("flex min-h-screen w-full flex-col bg-background lg:h-screen lg:flex-row", portalTheme && "leaf portal-clay portal-ui portal-auth")}>
       {/* ── Form column ─────────────────────────────────────────────── */}
       <section className="relative flex flex-1 flex-col bg-background px-6 py-8 sm:px-10 lg:h-screen lg:w-[45%] lg:overflow-y-auto lg:px-12 lg:py-10">
         <div className="mx-auto flex w-full max-w-sm flex-1 flex-col">
@@ -79,9 +84,22 @@ export function AuthScene({
       </section>
 
       {/* ── Brand panel ─────────────────────────────────────────────── */}
-      <section className="min-h-[42vh] p-4 sm:p-5 lg:h-screen lg:min-h-0 lg:w-[55%] lg:py-5 lg:pl-0 lg:pr-5">
-        <AuthPanel />
+      <section className={cn("min-h-[42vh] p-4 sm:p-5 lg:h-screen lg:min-h-0 lg:w-[55%] lg:py-5 lg:pl-0 lg:pr-5", portalTheme && "hidden lg:block")}>
+        {portalTheme ? (
+          <div className="portal-auth-panel flex h-full flex-col justify-center rounded-[32px] bg-[#ebf8f0] p-10">
+            <img src="/portal/clay/enrol.webp" alt="" className="size-44 self-start" />
+            <h2 className="mt-5 max-w-sm text-3xl font-bold text-record">
+              {portalTheme === "hr" ? "Employee benefits administration" : "Your benefits, in one place"}
+            </h2>
+            <div className="mt-6 flex flex-wrap gap-2 text-sm font-medium text-[#0e6340]">
+              {(portalTheme === "hr" ? ["Claims", "Enrolment forms"] : ["Coverage", "Claims", "Clinics", "Enrolment"]).map((label) => (
+                <span key={label} className="rounded-xl bg-white px-4 py-3">{label}</span>
+              ))}
+            </div>
+          </div>
+        ) : <AuthPanel />}
       </section>
     </div>
+    </LeafScopeContext.Provider>
   );
 }

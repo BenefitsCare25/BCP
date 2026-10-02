@@ -519,6 +519,7 @@ export function MemberEnrollmentPanel({
       mark: !changed ? undefined : ps.declined ? "Declined" : "Changed",
       render: () => (
         <ProductElectionMount
+          compact={!readOnly}
           ts={ts}
           ps={ps}
           rise={false}
@@ -538,6 +539,7 @@ export function MemberEnrollmentPanel({
           pricing={
             form && !ps.declined ? (
               <PlanPricing
+                compact={!readOnly}
                 fact={form.context.plans.find(
                   (f) => f.product_code === ts.product_code && f.tier_key === ps.tierKey,
                 )}

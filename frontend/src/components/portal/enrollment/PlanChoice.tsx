@@ -80,7 +80,7 @@ function ChoiceRow({
   children?: React.ReactNode;
 }) {
   return (
-    <label className={choiceRowClass(checked)}>
+    <label className={choiceRowClass(checked, "enrolment-plan-option")}>
       <input
         type="radio"
         name={name}
@@ -243,7 +243,7 @@ function TierFigures({
   return (
     <>
       {(hasFigureRows(tier, flexOnChange) || hasPremiumRows(premium)) && (
-        <dl>
+        <dl className="enrolment-plan-figures">
           <TierFigureRows
             tier={tier}
             flexOnChange={flexOnChange}
@@ -306,6 +306,7 @@ export function PlanChoice({
   flexOnChange,
   currency,
   premiumFor,
+  compact = false,
   onChange,
 }: {
   ts: ProductTierSet;
@@ -315,6 +316,7 @@ export function PlanChoice({
   currency: string | null;
   /** E-form only: each option's premium, change and member share. */
   premiumFor?: (tierKey: string) => TierPrice | null;
+  compact?: boolean;
   onChange: (next: ProductState) => void;
 }) {
   const groupName = useId();
@@ -354,7 +356,7 @@ export function PlanChoice({
   if (asRows) {
     return (
       <div className="flex flex-col gap-1.5">
-        <h3 className="leaf-label" id={`${groupName}-label`}>
+        <h3 className={compact ? "sr-only" : "leaf-label"} id={`${groupName}-label`}>
           Your plan
         </h3>
         <div
@@ -369,7 +371,7 @@ export function PlanChoice({
               value={t.key}
               checked={!ps.declined && ps.tierKey === t.key}
               onSelect={() => selectTier(t.key)}
-              title={`${t.label}${tierIsCurrent(t) ? " — your current plan" : ""}`}
+              title={`${t.label}${tierIsCurrent(t) ? compact ? " · Current" : " — your current plan" : ""}`}
               // Neutral ink, deliberately. The strike ramp belongs to claim
               // verdicts (The Status-Is-Not-Brand Rule), and a green "upgrade"
               // beside an approved claim's green would ask the member to decide
@@ -386,6 +388,7 @@ export function PlanChoice({
               {/* Only on the alternatives: the baseline IS the reference, so a
                   "what changes" block under it would compare it to itself. */}
               <TierDifferences
+                compact={compact}
                 differences={t.differences ?? []}
                 total={t.differences_total ?? 0}
                 currentLabel={currentLabel}
@@ -451,6 +454,7 @@ export function PlanChoice({
               isCurrent={tierIsCurrent(selectedTier)}
             />
             <TierDifferences
+              compact={compact}
               differences={selectedTier.differences ?? []}
               total={selectedTier.differences_total ?? 0}
               currentLabel={currentLabel}
@@ -512,6 +516,7 @@ export function PlanChoice({
           clearest statement of what was elected. Empty on the baseline. */}
       {!ps.declined && selectedTier && (
         <TierDifferences
+          compact={compact}
           differences={selectedTier.differences ?? []}
           total={selectedTier.differences_total ?? 0}
           currentLabel={currentLabel}

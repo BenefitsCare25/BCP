@@ -16,6 +16,7 @@ os.environ["INSPRO_DATABASE_URL"] = f"sqlite:///{TEST_DB}"
 
 from fastapi.testclient import TestClient  # noqa: E402
 
+from app.api.v1.hr_auth import _company_name  # noqa: E402
 from app.core import totp as T  # noqa: E402
 from app.core.auth import DEMO_CLIENT_ID  # noqa: E402
 from app.db.base import Base  # noqa: E402
@@ -71,6 +72,15 @@ def _tenant(slug: str = DEMO_SLUG) -> dict[str, str]:
 
 def _bearer(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
+
+
+@pytest.mark.parametrize("legal_name", ["City Developments Limited", None, ""])
+def test_company_name_prefers_registered_name(legal_name: str | None):
+    with SessionLocal() as s:
+        client = s.get(Client, CLIENT_B)
+        client.legal_name = legal_name
+        assert _company_name(s, CLIENT_B) == (legal_name or "Client B")
+        assert _company_name(s, "missing-client") is None
 
 
 def _provision_hr(api: TestClient, email: str, role: str = "client_hr") -> dict:

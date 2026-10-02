@@ -11,5 +11,5 @@ import { useDocumentTitle } from "@/lib/useDocumentTitle";
 
 export function PortalClinicsPage() {
   useDocumentTitle("Find a clinic");
-  return <ClinicLocator useClinicsQuery={usePortalClinics} />;
+  return <ClinicLocator useClinicsQuery={usePortalClinics} compact />;
 }

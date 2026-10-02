@@ -42,10 +42,10 @@ export function ParticularsMount({
     <Mount
       as="article"
       rise={false}
+      className="enrolment-particulars"
       label="Your details"
-      gloss="From your company's records. Tell your HR team if any of this is wrong."
     >
-      <dl>
+      <dl className="enrolment-records">
         <MountRow term="Name">{particulars.name ?? "—"}</MountRow>
         <MountRow term="NRIC / FIN">{particulars.id_masked || "—"}</MountRow>
         <MountRow term="Staff ID">{particulars.staff_id}</MountRow>
@@ -60,6 +60,7 @@ export function ParticularsMount({
           <MountRow term="Date joined">{formatDay(particulars.date_of_hire)}</MountRow>
         )}
       </dl>
+      <p className="text-row text-label">Contact HR to correct these details.</p>
       <MountRule />
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <Field label="Contact number" error={errors.contactNo}>

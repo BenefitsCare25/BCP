@@ -68,14 +68,26 @@ export function PlanPricing({
   fact,
   contribution,
   tierKey,
+  compact = false,
 }: {
   fact: PlanFact | undefined;
   contribution: ProductContribution | undefined;
   tierKey: string;
+  compact?: boolean;
 }) {
   const tier = contribution?.tiers.find((t) => t.tier_key === tierKey);
   const hasFacts = !!(fact?.highlight || fact?.sum_insured || fact?.insurer);
   if (!hasFacts && !tier) return null;
+  const breakdown = tier && contribution ? (
+    <div>
+      <p className="text-row font-medium text-record">
+        Premium by family cover
+        {contribution.gst_included ? " (incl. GST)" : " (before GST)"}
+      </p>
+      <dl><PremiumRows tier={tier} /></dl>
+      <p className="text-row text-label">{shareGloss(contribution)}</p>
+    </div>
+  ) : null;
   return (
     <>
       <MountRule />
@@ -90,18 +102,12 @@ export function PlanPricing({
           ) : null}
         </dl>
       )}
-      {tier && contribution && (
-        <div>
-          <p className="text-row font-medium text-record">
-            Premium for this plan by family cover
-            {contribution.gst_included ? " (incl. GST)" : " (before GST)"}
-          </p>
-          <dl>
-            <PremiumRows tier={tier} />
-          </dl>
-          <p className="text-row text-label">{shareGloss(contribution)}</p>
-        </div>
-      )}
+      {breakdown && (compact ? (
+        <details className="enrolment-cost-details">
+          <summary className="leaf-focus text-row font-semibold text-record">Premium &amp; contribution details</summary>
+          {breakdown}
+        </details>
+      ) : breakdown)}
     </>
   );
 }
