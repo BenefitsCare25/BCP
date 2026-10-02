@@ -1,3 +1,4 @@
+import { SystemAdminOnly } from "@/components/auth/SystemAdminOnly";
 import { Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -70,7 +71,7 @@ export function EndorsementsSection({ endorsements, onChange }: Props) {
                     {endorsement.author ? <span>{endorsement.author}</span> : null}
                   </div>
                 </div>
-                <Button
+                <SystemAdminOnly><Button
                   type="button"
                   variant="ghost"
                   size="icon-sm"
@@ -79,7 +80,7 @@ export function EndorsementsSection({ endorsements, onChange }: Props) {
                   title="Remove endorsement"
                 >
                   <Trash2 className="size-4 text-error" />
-                </Button>
+                </Button></SystemAdminOnly>
               </div>
 
               <div className="grid grid-cols-1 gap-3 md:grid-cols-[8rem_1fr]">

@@ -706,7 +706,9 @@ def test_member_document_removal_refuses_a_stale_claim_revision(anon: TestClient
 
 
 def test_broker_replacement_removal_retains_audit_after_blob_purge(
-    anon: TestClient, broker: TestClient
+    anon: TestClient,
+    broker: TestClient,
+    system_admin_request,
 ):
     from app.services.claims import retry_pending_document_deletes
 
@@ -726,7 +728,9 @@ def test_broker_replacement_removal_retains_audit_after_blob_purge(
     old = next(item for item in current["documents"] if item["id"] == old["id"])
     assert old["removal_allowed"] is True
 
-    removed = broker.delete(
+    removed = system_admin_request(
+        broker,
+        "DELETE",
         f"/api/v1/claims/{claim['id']}/documents/{old['id']}",
         params={"expected_revision": current["revision"]},
     )
@@ -754,7 +758,9 @@ def test_broker_replacement_removal_retains_audit_after_blob_purge(
 
 
 def test_post_decision_evidence_is_retained(
-    anon: TestClient, broker: TestClient
+    anon: TestClient,
+    broker: TestClient,
+    system_admin_request,
 ):
     claim = _submitted(anon, b" broker-retained")
     assert broker.post(
@@ -766,8 +772,8 @@ def test_post_decision_evidence_is_retained(
     assert "retained after a decision" in document["removal_reason"]
 
     path = f"/api/v1/claims/{claim['id']}/documents/{document['id']}"
-    blocked = broker.delete(
-        path, params={"expected_revision": current["revision"]}
+    blocked = system_admin_request(
+        broker, "DELETE", path, params={"expected_revision": current["revision"]}
     )
     assert blocked.status_code == 409
     assert _code(blocked) == "document_retained"

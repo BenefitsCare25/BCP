@@ -1,3 +1,4 @@
+import { SystemAdminOnly } from "@/components/auth/SystemAdminOnly";
 import { memo } from "react";
 import {
   AlertTriangle,
@@ -316,7 +317,7 @@ export const SobRow = memo(function SobRow({
             </button>
           </div>
           )}
-          <Button
+          <SystemAdminOnly><Button
             size="icon-sm"
             variant="ghost"
             onClick={() => setSob((s) => removeItem(s, idx))}
@@ -324,7 +325,7 @@ export const SobRow = memo(function SobRow({
             className={cn("text-error hover:text-error")}
           >
             <X className="size-3.5" />
-          </Button>
+          </Button></SystemAdminOnly>
         </div>
       </td>
     </tr>

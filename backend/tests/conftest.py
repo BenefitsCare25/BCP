@@ -97,3 +97,27 @@ def pytest_sessionstart(session):
         except OSError:
             # Locked by another process — the per-module unlink will report it.
             pass
+
+
+@pytest.fixture
+def system_admin_request():
+    """Run an explicitly privileged request without elevating the rest of a test."""
+    from dataclasses import replace
+
+    from app.core.auth import _mock_user, get_current_user
+    from app.main import app
+
+    def request(client, method, *args, **kwargs):
+        previous = app.dependency_overrides.get(get_current_user)
+        actor_factory = getattr(client, "_user_factory", None) or previous or _mock_user
+        actor = actor_factory()
+        app.dependency_overrides[get_current_user] = lambda: replace(actor, role="system_admin")
+        try:
+            return getattr(client, "_tc", client).request(method, *args, **kwargs)
+        finally:
+            if previous:
+                app.dependency_overrides[get_current_user] = previous
+            else:
+                app.dependency_overrides.pop(get_current_user, None)
+
+    return request

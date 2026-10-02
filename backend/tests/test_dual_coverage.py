@@ -276,6 +276,7 @@ def _decide(client: TestClient, key: str, **kw) -> dict:
 
 def test_recording_a_decision_clears_the_case_from_the_count(
     client: TestClient,
+    system_admin_request,
 ) -> None:
     before = _get(client)
     case = _case_named(before, "Tan Wei Ming")
@@ -292,8 +293,10 @@ def test_recording_a_decision_clears_the_case_from_the_count(
     assert decided["decision"]["carried_by_staff_id"] == "D-200"
     assert decided["decision"]["stale"] is False
     # Reopening puts it back.
-    res = client.delete(
-        f"/api/v1/policy-years/{PY_ID}/dual-coverage/decisions/{case['subject_key']}"
+    res = system_admin_request(
+        client,
+        "DELETE",
+        f"/api/v1/policy-years/{PY_ID}/dual-coverage/decisions/{case['subject_key']}",
     )
     assert res.status_code == 204
     assert _get(client)["unresolved_cases"] == before["unresolved_cases"]
@@ -323,7 +326,9 @@ def test_carried_by_without_an_employee_is_rejected(client: TestClient) -> None:
     assert res.status_code == 422
 
 
-def test_a_changed_family_marks_the_decision_stale(client: TestClient) -> None:
+def test_a_changed_family_marks_the_decision_stale(
+    client: TestClient, system_admin_request
+) -> None:
     """The failure mode has to be "ask again", never "silently resolved"."""
     case = _case_named(_get(client), "Tan Wei Ming")
     _decide(client, case["subject_key"], decision="intentional_both")
@@ -345,19 +350,23 @@ def test_a_changed_family_marks_the_decision_stale(client: TestClient) -> None:
         with SessionLocal() as s:
             s.delete(s.get(Dependant, "dc-kid-x"))
             s.commit()
-        client.delete(
-            f"/api/v1/policy-years/{PY_ID}/dual-coverage/decisions/{case['subject_key']}"
+        system_admin_request(
+            client,
+            "DELETE",
+            f"/api/v1/policy-years/{PY_ID}/dual-coverage/decisions/{case['subject_key']}",
         )
 
 
-def test_not_a_match_dismisses_a_false_positive(client: TestClient) -> None:
+def test_not_a_match_dismisses_a_false_positive(client: TestClient, system_admin_request) -> None:
     """Name+DOB matching will occasionally be wrong, so the broker must be able
     to say "two different people" and have it stay said."""
     case = _case_named(_get(client), "Tan Wei Ming")
     _decide(client, case["subject_key"], decision="not_a_match")
     assert _case_named(_get(client), "Tan Wei Ming")["decision"]["decision"] == "not_a_match"
-    client.delete(
-        f"/api/v1/policy-years/{PY_ID}/dual-coverage/decisions/{case['subject_key']}"
+    system_admin_request(
+        client,
+        "DELETE",
+        f"/api/v1/policy-years/{PY_ID}/dual-coverage/decisions/{case['subject_key']}",
     )
 
 
@@ -474,7 +483,9 @@ def test_the_bulk_warning_fires_only_when_the_life_is_elected(
     assert DUAL_COVERAGE not in none_at_all
 
 
-def test_a_decision_survives_the_key_change_it_prompted(client: TestClient) -> None:
+def test_a_decision_survives_the_key_change_it_prompted(
+    client: TestClient, system_admin_request
+) -> None:
     """The workflow's own success used to break it.
 
     A name+DOB case is decided; the broker then does what the case asked and
@@ -511,8 +522,10 @@ def test_a_decision_survives_the_key_change_it_prompted(client: TestClient) -> N
         # Still attached, and still counted as resolved.
         assert moved["decision"]["decision"] == "intentional_both"
         # And reopenable under the NEW key.
-        res = client.delete(
-            f"/api/v1/policy-years/{PY_ID}/dual-coverage/decisions/{moved['subject_key']}"
+        res = system_admin_request(
+            client,
+            "DELETE",
+            f"/api/v1/policy-years/{PY_ID}/dual-coverage/decisions/{moved['subject_key']}",
         )
         assert res.status_code == 204
         assert _case_named(_get(client), "Key Change Kid")["decision"] is None
@@ -525,7 +538,9 @@ def test_a_decision_survives_the_key_change_it_prompted(client: TestClient) -> N
             s.commit()
 
 
-def test_re_deciding_updates_one_row_and_stamps_the_time(client: TestClient) -> None:
+def test_re_deciding_updates_one_row_and_stamps_the_time(
+    client: TestClient, system_admin_request
+) -> None:
     """An exact-key upsert after a key change would write a SECOND row for one
     life, and `decided_at` never moved off the original insert."""
     from app.models.dual_coverage_decision import DualCoverageDecision
@@ -545,8 +560,10 @@ def test_re_deciding_updates_one_row_and_stamps_the_time(client: TestClient) -> 
         assert len(rows) == 1
     assert after["decision"] == "carried_by"
     assert after["decided_at"] >= first
-    client.delete(
-        f"/api/v1/policy-years/{PY_ID}/dual-coverage/decisions/{case['subject_key']}"
+    system_admin_request(
+        client,
+        "DELETE",
+        f"/api/v1/policy-years/{PY_ID}/dual-coverage/decisions/{case['subject_key']}",
     )
 
 
@@ -588,7 +605,9 @@ def test_lives_is_not_capped_like_the_case_list(client: TestClient) -> None:
     assert sum(1 for life in body["lives"] if life["subject_key"] in keys) == expected
 
 
-def test_a_decided_life_is_marked_resolved_for_the_table(client: TestClient) -> None:
+def test_a_decided_life_is_marked_resolved_for_the_table(
+    client: TestClient, system_admin_request
+) -> None:
     body = _get(client)
     case = _case_named(body, "Tan Wei Ming")
     assert case is not None
@@ -610,8 +629,10 @@ def test_a_decided_life_is_marked_resolved_for_the_table(client: TestClient) -> 
         ]
         assert marked and all(life["resolved"] for life in marked)
     finally:
-        client.delete(
-            f"/api/v1/policy-years/{PY_ID}/dual-coverage/decisions/{case['subject_key']}"
+        system_admin_request(
+            client,
+            "DELETE",
+            f"/api/v1/policy-years/{PY_ID}/dual-coverage/decisions/{case['subject_key']}",
         )
 
 

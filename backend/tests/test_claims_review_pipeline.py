@@ -1223,7 +1223,7 @@ def _reset_doc_types(broker: TestClient) -> list[dict]:
     return response.json()
 
 
-def test_doc_type_config_lazy_seed_and_crud(broker: TestClient):
+def test_doc_type_config_lazy_seed_and_crud(broker: TestClient, system_admin_request):
     # First read lazily seeds the in-code defaults for the client.
     rows = broker.get("/api/v1/claim-doc-types").json()
     assert {r["key"] for r in rows} == {
@@ -1294,10 +1294,15 @@ def test_doc_type_config_lazy_seed_and_crud(broker: TestClient):
     assert stale.json()["detail"]["code"] == "stale_configuration"
 
     # Delete the custom row; reset restores exactly the defaults.
-    assert broker.delete(
-        f"/api/v1/claim-doc-types/{created['id']}",
-        params={"expected_updated_at": created["updated_at"]},
-    ).status_code == 204
+    assert (
+        system_admin_request(
+            broker,
+            "DELETE",
+            f"/api/v1/claim-doc-types/{created['id']}",
+            params={"expected_updated_at": created["updated_at"]},
+        ).status_code
+        == 204
+    )
     rows = _reset_doc_types(broker)
     assert {r["key"] for r in rows} == {
         "discharge_summary", "final_tax_invoice", "finalised_tax_invoice"
@@ -2059,7 +2064,7 @@ def test_vision_gating_follows_config():
         _drop_review_configs()
 
 
-def test_review_config_crud_over_http(broker: TestClient):
+def test_review_config_crud_over_http(broker: TestClient, system_admin_request):
     """CRUD + options + duplicate guard + preview, as the settings UI uses it."""
     try:
         assert broker.get("/api/v1/claim-review-configs").json() == []
@@ -2146,20 +2151,32 @@ def test_review_config_crud_over_http(broker: TestClient):
         assert self_import.status_code == 422
 
         assert (
-            broker.delete(
+            system_admin_request(
+                broker,
+                "DELETE",
                 f"/api/v1/claim-review-configs/{config_id}",
                 params={"expected_updated_at": updated.json()["updated_at"]},
             ).status_code
             == 204
         )
-        assert broker.delete(
-            f"/api/v1/claim-review-configs/{exact.json()['id']}",
-            params={"expected_updated_at": exact.json()["updated_at"]},
-        ).status_code == 204
-        assert broker.delete(
-            f"/api/v1/claim-review-configs/{govt.json()['id']}",
-            params={"expected_updated_at": govt.json()["updated_at"]},
-        ).status_code == 204
+        assert (
+            system_admin_request(
+                broker,
+                "DELETE",
+                f"/api/v1/claim-review-configs/{exact.json()['id']}",
+                params={"expected_updated_at": exact.json()["updated_at"]},
+            ).status_code
+            == 204
+        )
+        assert (
+            system_admin_request(
+                broker,
+                "DELETE",
+                f"/api/v1/claim-review-configs/{govt.json()['id']}",
+                params={"expected_updated_at": govt.json()["updated_at"]},
+            ).status_code
+            == 204
+        )
         assert broker.get("/api/v1/claim-review-configs").json() == []
     finally:
         _drop_review_configs()
@@ -2194,7 +2211,7 @@ def test_blank_label_is_rejected_not_committed(broker: TestClient):
         _drop_review_configs()
 
 
-def test_corrupt_row_stays_listable_and_deletable(broker: TestClient):
+def test_corrupt_row_stays_listable_and_deletable(broker: TestClient, system_admin_request):
     """Reading must never fail: a hand-edited row that violates the write-side
     schema (over-long rule, too many required docs) still lists — otherwise the
     broker could neither see nor delete it."""
@@ -2211,7 +2228,9 @@ def test_corrupt_row_stays_listable_and_deletable(broker: TestClient):
         assert row["ai_rules"][0]["severity"] == "critical"  # fail-safe
         assert len(row["required_documents"]) == 15          # clamped
         assert (
-            broker.delete(
+            system_admin_request(
+                broker,
+                "DELETE",
                 f"/api/v1/claim-review-configs/{config_id}",
                 params={"expected_updated_at": row["updated_at"]},
             ).status_code

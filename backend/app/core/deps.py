@@ -91,7 +91,12 @@ def require_write_access(
     request: Request,
     user: CurrentUser = Depends(get_current_user),
 ) -> CurrentUser:
-    """Keep broker viewers read-only across the entire API surface."""
+    """Keep viewers read-only and reserve record deletion for system admins."""
+    if request.method.upper() == "DELETE" and user.role != ROLE_SYSTEM_ADMIN:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Removing or clearing saved data requires system_admin role.",
+        )
     if user.role == "broker_viewer" and request.method.upper() not in _READ_ONLY_METHODS:
         raise HTTPException(
             status.HTTP_403_FORBIDDEN,
@@ -166,10 +171,11 @@ def require_system_admin(
 def require_firm_admin(
     user: CurrentUser = Depends(get_current_user),
 ) -> CurrentUser:
-    """Gate for firm-level admin surfaces (managing clients, users, invites).
+    """Gate for company administration within a broker firm.
 
     `broker_admin` manages their own firm; `system_admin` may manage any firm
     but must name the target firm explicitly in the request.
+    Users and invitations use the stricter `require_system_admin` dependency.
     """
     if user.role not in ("broker_admin", ROLE_SYSTEM_ADMIN):
         raise HTTPException(

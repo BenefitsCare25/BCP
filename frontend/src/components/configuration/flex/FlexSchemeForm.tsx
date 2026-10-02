@@ -1,3 +1,4 @@
+import { SystemAdminOnly } from "@/components/auth/SystemAdminOnly";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Plus,
@@ -632,7 +633,7 @@ export function FlexSchemeForm({ policyYearId, scheme }: Props) {
         >
           <CheckCircle2 className="size-4" /> Confirm
         </Button>
-        <Button
+        <SystemAdminOnly><Button
           variant="ghost"
           size="icon"
           onClick={() => setConfirmDiscard(true)}
@@ -640,10 +641,10 @@ export function FlexSchemeForm({ policyYearId, scheme }: Props) {
           aria-label="Discard scheme"
         >
           <Trash2 className="size-4 text-error" />
-        </Button>
+        </Button></SystemAdminOnly>
       </div>
 
-      <AlertDialog
+      <SystemAdminOnly><AlertDialog
         open={confirmDiscard}
         onOpenChange={setConfirmDiscard}
         title="Discard flex scheme?"
@@ -652,7 +653,7 @@ export function FlexSchemeForm({ policyYearId, scheme }: Props) {
         confirmVariant="destructive"
         onConfirm={onDiscard}
         loading={discard.isPending}
-      />
+      /></SystemAdminOnly>
 
       <AlertDialog
         open={unmatchedWarn !== null}

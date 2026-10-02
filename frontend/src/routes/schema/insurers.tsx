@@ -1,3 +1,4 @@
+import { SystemAdminOnly } from "@/components/auth/SystemAdminOnly";
 import { useState } from "react";
 import { Globe, Pencil, Trash2 } from "lucide-react";
 import { toast } from "sonner";
@@ -232,7 +233,7 @@ export function SchemaInsurersPage({
                         >
                           <Pencil className="size-3.5" />
                         </Button>
-                        <Button
+                        <SystemAdminOnly><Button
                           variant="ghost"
                           size="icon-sm"
                           onClick={() => setDeleting(i)}
@@ -240,7 +241,7 @@ export function SchemaInsurersPage({
                           className="text-error hover:text-error"
                         >
                           <Trash2 className="size-3.5" />
-                        </Button>
+                        </Button></SystemAdminOnly>
                       </div>
                     </TableCell>
                   </TableRow>
@@ -251,7 +252,7 @@ export function SchemaInsurersPage({
         </CardContent>
       </Card>
 
-      <AlertDialog
+      <SystemAdminOnly><AlertDialog
         open={Boolean(deleting)}
         onOpenChange={(o) => !o && setDeleting(null)}
         title={`Remove ${deleting?.name ?? ""} from the list?`}
@@ -282,7 +283,7 @@ export function SchemaInsurersPage({
             toast.error(formatError(err));
           }
         }}
-      />
+      /></SystemAdminOnly>
     </div>
   );
 }

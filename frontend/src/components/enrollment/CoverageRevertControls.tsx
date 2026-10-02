@@ -1,3 +1,4 @@
+import { SystemAdminOnly } from "@/components/auth/SystemAdminOnly";
 import { useState, type ReactNode } from "react";
 import { RotateCcw, Undo2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -148,7 +149,7 @@ export function CoverageRevertControls({
         <div className="flex flex-wrap gap-2">
           {offerBaseline && (
           <Explain text="Back to the coverage they held when the enrolment period opened — undoing their elections, but keeping any manual change made before the period.">
-            <Button
+            <SystemAdminOnly><Button
               variant="outline"
               size="sm"
               disabled={revert.isPending}
@@ -156,11 +157,11 @@ export function CoverageRevertControls({
             >
               <Undo2 className="size-3.5" />
               Revert to baseline
-            </Button>
+            </Button></SystemAdminOnly>
           </Explain>
           )}
           <Explain text="Back to their matched category's plan — wiping every manual change, including ones made before the enrolment period. Goes back further than the baseline.">
-            <Button
+            <SystemAdminOnly><Button
               variant="outline"
               size="sm"
               disabled={revert.isPending}
@@ -168,7 +169,7 @@ export function CoverageRevertControls({
             >
               <RotateCcw className="size-3.5" />
               Reset to default
-            </Button>
+            </Button></SystemAdminOnly>
           </Explain>
         </div>
       </TooltipProvider>
@@ -222,7 +223,7 @@ export function CoverageRevertControls({
         </div>
       )}
 
-      <AlertDialog
+      <SystemAdminOnly><AlertDialog
         open={target != null}
         onOpenChange={(o) => !o && setTarget(null)}
         title={
@@ -239,7 +240,7 @@ export function CoverageRevertControls({
         confirmVariant="default"
         loading={revert.isPending}
         onConfirm={run}
-      />
+      /></SystemAdminOnly>
     </div>
   );
 }

@@ -292,6 +292,10 @@ test("price book unifies employee and dependant setup per plan", async ({
   page,
   request,
 }, testInfo) => {
+  await page.route("**/api/v1/me", async (route) => {
+    const response = await route.fetch();
+    await route.fulfill({ json: { ...await response.json(), role: "system_admin" } });
+  });
   const policyYearId = await installCurrentSession(page, request);
   let savedPricing: Record<string, unknown> | null = null;
 

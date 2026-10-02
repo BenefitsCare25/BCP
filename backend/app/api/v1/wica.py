@@ -33,7 +33,12 @@ from starlette.concurrency import run_in_threadpool
 from app.core.audit import write_audit
 from app.core.auth import CurrentUser
 from app.core.clock import today
-from app.core.deps import require_claim_access, require_claim_configuration, require_client_id
+from app.core.deps import (
+    require_claim_access,
+    require_claim_configuration,
+    require_client_id,
+    require_system_admin,
+)
 from app.core.downloads import attachment_header
 from app.core.rate_limit import limiter
 from app.core.storage import DOCUMENT_SUFFIXES, MAX_DOCUMENT_BYTES, document_path, get_storage
@@ -459,7 +464,10 @@ def download_document(
     )
 
 
-@router.post("/incidents/{incident_id}/documents/{document_id}/remove")
+@router.post(
+    "/incidents/{incident_id}/documents/{document_id}/remove",
+    dependencies=[Depends(require_system_admin)],
+)
 def remove_untagged(
     incident_id: str,
     document_id: str,

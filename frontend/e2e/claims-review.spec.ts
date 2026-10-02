@@ -535,6 +535,10 @@ test("Claims Review stays within the viewport", async ({ page }, testInfo) => {
 test("claim workspace keeps form details readable and documents in context", async ({
   page,
 }, testInfo) => {
+  await page.route("**/api/v1/me", async (route) => {
+    const response = await route.fetch();
+    await route.fulfill({ json: { ...await response.json(), role: "system_admin" } });
+  });
   if (testInfo.project.name === "desktop-chromium") {
     await page.setViewportSize({ width: 1920, height: 1080 });
   }

@@ -1,3 +1,4 @@
+import { SystemAdminOnly } from "@/components/auth/SystemAdminOnly";
 import { useState } from "react";
 import { ArrowRight, Pencil, Plus, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
@@ -262,7 +263,7 @@ export function SchemaEntityAliasesPage({
                         >
                           <Pencil className="size-3.5" />
                         </Button>
-                        <Button
+                        <SystemAdminOnly><Button
                           variant="ghost"
                           size="icon-sm"
                           onClick={() => setDeleting(a)}
@@ -270,7 +271,7 @@ export function SchemaEntityAliasesPage({
                           className="text-error hover:text-error"
                         >
                           <Trash2 className="size-3.5" />
-                        </Button>
+                        </Button></SystemAdminOnly>
                       </div>
                     </TableCell>
                   </TableRow>
@@ -281,7 +282,7 @@ export function SchemaEntityAliasesPage({
         </CardContent>
       </Card>
 
-      <AlertDialog
+      <SystemAdminOnly><AlertDialog
         open={Boolean(deleting)}
         onOpenChange={(o) => !o && setDeleting(null)}
         title={`Remove the ${deleting?.alias ?? ""} alias?`}
@@ -305,7 +306,7 @@ export function SchemaEntityAliasesPage({
             toast.error(formatError(err));
           }
         }}
-      />
+      /></SystemAdminOnly>
     </div>
   );
 }

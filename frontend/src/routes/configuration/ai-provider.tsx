@@ -1,3 +1,4 @@
+import { SystemAdminOnly } from "@/components/auth/SystemAdminOnly";
 import { useState } from "react";
 import {
   AlertTriangle,
@@ -284,7 +285,7 @@ export function AIProviderPage() {
                   )}
                   Test stored key
                 </Button>
-                <Button
+                <SystemAdminOnly><Button
                   variant="outline"
                   size="sm"
                   className="text-error hover:text-error"
@@ -292,7 +293,7 @@ export function AIProviderPage() {
                   disabled={remove.isPending}
                 >
                   <Trash2 className="size-3.5" /> Clear key
-                </Button>
+                </Button></SystemAdminOnly>
               </>
             )}
             <Button onClick={() => setOpen(true)}>
@@ -310,7 +311,7 @@ export function AIProviderPage() {
         </CardContent>
       </Card>
 
-      <AlertDialog
+      <SystemAdminOnly><AlertDialog
         open={confirmClear}
         onOpenChange={setConfirmClear}
         title="Clear this company's AI key?"
@@ -332,7 +333,7 @@ export function AIProviderPage() {
             toast.error(formatError(err));
           }
         }}
-      />
+      /></SystemAdminOnly>
     </div>
   );
 }

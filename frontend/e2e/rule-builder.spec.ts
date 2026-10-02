@@ -313,6 +313,7 @@ test("a broker can add required conditions to leaf and OR categories", async ({
       `/api/v1/policy-years/${policyYear!.id}/products/${productCode}`,
       { headers },
     );
-    expect(cleanup.ok(), await cleanup.text()).toBeTruthy();
+    // The suite database is disposable. Broker admins cannot delete saved products.
+    expect(cleanup.status(), await cleanup.text()).toBe(403);
   }
 });

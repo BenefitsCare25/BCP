@@ -180,12 +180,14 @@ def test_added_product_gets_default_coverage_row_and_can_override(
     assert body["gst_included"] is None
 
 
-def test_gst_partial_update_keeps_the_other_dimension(client: TestClient) -> None:
+def test_gst_partial_update_keeps_the_other_dimension(
+    client: TestClient, system_admin_request
+) -> None:
     terms = client.get(f"/api/v1/policy-years/{PY_D}/product-terms").json()
     gpa = next(t for t in terms if t["code"] == "GPA")
     pid = gpa["product_id"]
     # Clean slate — an earlier test may have left an override on GPA.
-    client.delete(f"/api/v1/policy-years/{PY_D}/product-terms/{pid}")
+    system_admin_request(client, "DELETE", f"/api/v1/policy-years/{PY_D}/product-terms/{pid}")
 
     # GST without dates: the row exists for GST alone; dates keep inheriting.
     res = client.put(
@@ -229,25 +231,32 @@ def test_gst_partial_update_keeps_the_other_dimension(client: TestClient) -> Non
     ).status_code == 422
 
     # Reset removes the row entirely.
-    assert client.delete(
-        f"/api/v1/policy-years/{PY_D}/product-terms/{pid}"
-    ).status_code == 204
+    assert (
+        system_admin_request(
+            client, "DELETE", f"/api/v1/policy-years/{PY_D}/product-terms/{pid}"
+        ).status_code
+        == 204
+    )
 
 
-def test_remove_product_drops_client_row_and_coverage(client: TestClient) -> None:
+def test_remove_product_drops_client_row_and_coverage(
+    client: TestClient, system_admin_request
+) -> None:
     # FLEXWALLET was added (client row) but never configured. Removing it deletes
     # the client catalog row and its coverage override, so it leaves the tab.
     before = client.get("/api/v1/schemas/products").json()
     assert any(p["code"] == "FLEXWALLET" for p in before)
 
-    res = client.delete(f"/api/v1/policy-years/{PY_D}/products/FLEXWALLET")
+    res = system_admin_request(client, "DELETE", f"/api/v1/policy-years/{PY_D}/products/FLEXWALLET")
     assert res.status_code == 204, res.text
 
     after = {p["code"] for p in client.get("/api/v1/schemas/products").json()}
     assert "FLEXWALLET" not in after
     # Removal is idempotent — a second delete is still a clean 204.
     assert (
-        client.delete(f"/api/v1/policy-years/{PY_D}/products/FLEXWALLET").status_code
+        system_admin_request(
+            client, "DELETE", f"/api/v1/policy-years/{PY_D}/products/FLEXWALLET"
+        ).status_code
         == 204
     )
 
@@ -288,7 +297,9 @@ def test_create_product_firm_scope_requires_admin() -> None:
         app.dependency_overrides[get_current_user] = _user_d
 
 
-def test_envelope_paths_agree_on_a_half_written_term(client: TestClient) -> None:
+def test_envelope_paths_agree_on_a_half_written_term(
+    client: TestClient, system_admin_request
+) -> None:
     """`envelopes_for` (policy-year list) and `envelope_for` (single year) must
     resolve a ProductTerm's dates identically.
 
@@ -304,7 +315,9 @@ def test_envelope_paths_agree_on_a_half_written_term(client: TestClient) -> None
 
     terms = client.get(f"/api/v1/policy-years/{PY_D}/product-terms").json()
     gpa = next(t for t in terms if t["code"] == "GPA")
-    client.delete(f"/api/v1/policy-years/{PY_D}/product-terms/{gpa['product_id']}")
+    system_admin_request(
+        client, "DELETE", f"/api/v1/policy-years/{PY_D}/product-terms/{gpa['product_id']}"
+    )
 
     with SessionLocal() as s:
         # Bind the product INTO the year, so it actually shapes the envelope.

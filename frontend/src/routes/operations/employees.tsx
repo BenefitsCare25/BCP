@@ -1,3 +1,4 @@
+import { SystemAdminOnly } from "@/components/auth/SystemAdminOnly";
 /** The Employees TAB of the roster page — NOT a route of its own.
  *
  * This file is imported by `roster.tsx:8` and rendered as that tab, so
@@ -294,7 +295,7 @@ export function EmployeesPage() {
           <p className="text-xs tabular-nums text-muted-foreground">
             {onFile.toLocaleString()} employee{onFile === 1 ? "" : "s"} on file
           </p>
-          <Button
+          <SystemAdminOnly><Button
             variant="outline"
             size="sm"
             disabled={!total}
@@ -302,7 +303,7 @@ export function EmployeesPage() {
             className="shrink-0 text-error hover:text-error"
           >
             <Trash2 className="size-4" /> Clear all
-          </Button>
+          </Button></SystemAdminOnly>
         </CardHeader>
         <CardContent className="space-y-4">
           <RosterFilterBar
@@ -410,7 +411,7 @@ export function EmployeesPage() {
         </CardContent>
       </Card>
 
-      <AlertDialog
+      <SystemAdminOnly><AlertDialog
         open={showDeleteAll}
         onOpenChange={setShowDeleteAll}
         title="Clear all employees?"
@@ -453,9 +454,9 @@ export function EmployeesPage() {
             toast.error(formatError(e));
           }
         }}
-      />
+      /></SystemAdminOnly>
 
-      <AlertDialog
+      <SystemAdminOnly><AlertDialog
         open={!!deleteRisk}
         onOpenChange={(o) => !o && setDeleteRisk(null)}
         title="Enrollment & claims data will be lost"
@@ -504,7 +505,7 @@ export function EmployeesPage() {
             toast.error(formatError(e));
           }
         }}
-      />
+      /></SystemAdminOnly>
 
       <AlertDialog
         open={showRunConfirm}

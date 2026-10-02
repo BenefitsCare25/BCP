@@ -25,7 +25,7 @@ from sqlalchemy.orm import Session
 
 from app.core.audit import write_audit
 from app.core.auth import CurrentUser, get_current_user
-from app.core.deps import load_enrollment, load_enrollment_window
+from app.core.deps import load_enrollment, load_enrollment_window, require_system_admin
 from app.core.pagination import DEFAULT_LIMIT, MAX_LIMIT
 from app.db.session import get_db
 from app.models import (
@@ -295,7 +295,11 @@ def reopen_enrollment(
     return enrollment_detail(db, enr)
 
 
-@router.post("/enrollments/{enrollment_id}/reset", response_model=EnrollmentOut)
+@router.post(
+    "/enrollments/{enrollment_id}/reset",
+    response_model=EnrollmentOut,
+    dependencies=[Depends(require_system_admin)],
+)
 def reset_enrollment(
     enrollment_id: str,
     enr: Enrollment = Depends(load_enrollment),

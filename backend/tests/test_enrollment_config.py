@@ -224,11 +224,11 @@ def test_patch_window(client: TestClient) -> None:
     assert res.json()["name"] == "Renamed" and res.json()["allow_leave"] is False
 
 
-def test_delete_draft_window(client: TestClient) -> None:
+def test_delete_draft_window(client: TestClient, system_admin_request) -> None:
     wid = client.post(
         f"/api/v1/policy-years/{PY_ID}/enrollment-windows", json=_window_body(name="Doomed")
     ).json()["id"]
-    res = client.delete(f"/api/v1/enrollment-windows/{wid}")
+    res = system_admin_request(client, "DELETE", f"/api/v1/enrollment-windows/{wid}")
     assert res.status_code == 204
     assert client.get(f"/api/v1/enrollment-windows/{wid}").status_code == 404
 

@@ -240,12 +240,14 @@ def test_invalid_dependant_rejected(client: TestClient) -> None:
     assert res.status_code == 422
 
 
-def test_delete_reverts_to_default(client: TestClient) -> None:
+def test_delete_reverts_to_default(client: TestClient, system_admin_request) -> None:
     client.put(
         f"/api/v1/employees/{EMP_ID}/plan-overrides/ENRTST",
         json={"plan_code": "GOLD"},
     )
-    res = client.delete(f"/api/v1/employees/{EMP_ID}/plan-overrides/ENRTST")
+    res = system_admin_request(
+        client, "DELETE", f"/api/v1/employees/{EMP_ID}/plan-overrides/ENRTST"
+    )
     assert res.status_code == 204
     with SessionLocal() as s:
         plans = hydrate_plans([_emp(s)], s, PY_ID)[EMP_ID]

@@ -1,3 +1,4 @@
+import { SystemAdminOnly } from "@/components/auth/SystemAdminOnly";
 /** One primary action for where the member stands, with the reason when an
  * action is unavailable — instead of four equal buttons (Save · Submit ·
  * Confirm · Discard) that each worked in some states only. */
@@ -58,9 +59,9 @@ export function ElectionActionBar({
         </Button>
       )}
       {editable && status !== "not_started" && (
-        <Button variant="ghost" onClick={() => setConfirmReset(true)} disabled={a.pending.reset}>
+        <SystemAdminOnly><Button variant="ghost" onClick={() => setConfirmReset(true)} disabled={a.pending.reset}>
           <RotateCcw className="size-4" aria-hidden /> Discard changes
-        </Button>
+        </Button></SystemAdminOnly>
       )}
       {status === "confirmed" && phase === "open" && (
         <Button variant="outline" disabled={a.pending.reopen} onClick={a.reopen}>
@@ -73,7 +74,7 @@ export function ElectionActionBar({
         </Button>
       )}
       <StateNote status={status} phase={phase} opensAt={opensAt} editable={editable} />
-      <AlertDialog
+      <SystemAdminOnly><AlertDialog
         open={confirmReset}
         onOpenChange={setConfirmReset}
         title="Discard this member's changes?"
@@ -82,7 +83,7 @@ export function ElectionActionBar({
         confirmVariant="default"
         loading={a.pending.reset}
         onConfirm={() => a.discard(() => setConfirmReset(false))}
-      />
+      /></SystemAdminOnly>
     </div>
   );
 }

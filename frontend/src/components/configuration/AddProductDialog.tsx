@@ -1,3 +1,4 @@
+import { SystemAdminOnly } from "@/components/auth/SystemAdminOnly";
 import { useMemo, useState } from "react";
 import { Plus, ChevronDown, CheckCircle2, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -289,7 +290,7 @@ export function AddProductDialog({ policyYearId, line, onCreated }: Props) {
                       <span className="text-sm text-foreground flex-1">
                         {p.display_name}
                       </span>
-                      <Button
+                      <SystemAdminOnly><Button
                         variant="outline"
                         size="sm"
                         disabled={remove.isPending}
@@ -297,7 +298,7 @@ export function AddProductDialog({ policyYearId, line, onCreated }: Props) {
                         className="text-error hover:text-error"
                       >
                         <Trash2 className="size-3.5" /> Remove
-                      </Button>
+                      </Button></SystemAdminOnly>
                     </div>
                   ) : (
                     <label

@@ -321,12 +321,12 @@ def test_tenant_isolation(
     assert fp_a != fp_b
 
 
-def test_delete_clears_row(client_as_admin_a: AsUser) -> None:
+def test_delete_clears_row(client_as_admin_a: AsUser, system_admin_request) -> None:
     client_as_admin_a.put(
         "/api/v1/ai-config",
         json={"provider": "vertex", "api_key": REAL_KEY},
     )
-    res = client_as_admin_a.delete("/api/v1/ai-config")
+    res = system_admin_request(client_as_admin_a, "DELETE", "/api/v1/ai-config")
     assert res.status_code == 204
     assert client_as_admin_a.get("/api/v1/ai-config").status_code == 204
 

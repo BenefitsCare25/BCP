@@ -886,7 +886,7 @@ def test_review_follows_a_corrected_insurer(client: TestClient) -> None:
         client.post(f"/api/v1/policy-years/{PY_ID}/underwriting/refresh")
 
 
-def test_reset_product_term_clears_underwriting(client: TestClient) -> None:
+def test_reset_product_term_clears_underwriting(client: TestClient, system_admin_request) -> None:
     """DELETE drops the row's NEL values, so the cases are moot. Undecided
     lines hold a guaranteed-SI snapshot, so without a re-sync the listing keeps
     reporting a pending excess for a product with no limit."""
@@ -895,9 +895,12 @@ def test_reset_product_term_clears_underwriting(client: TestClient) -> None:
         f"/api/v1/policy-years/{PY_ID}/underwriting/cases"
     ).json()["total"] >= 1
     try:
-        assert client.delete(
-            f"/api/v1/policy-years/{PY_ID}/product-terms/{LIF_PROD}"
-        ).status_code == 204
+        assert (
+            system_admin_request(
+                client, "DELETE", f"/api/v1/policy-years/{PY_ID}/product-terms/{LIF_PROD}"
+            ).status_code
+            == 204
+        )
         assert client.get(
             f"/api/v1/policy-years/{PY_ID}/underwriting/cases"
         ).json()["total"] == 0

@@ -604,7 +604,9 @@ function ItReports({ year }: { year: PolicyYear | null }) {
       icon: UserCog,
       title: "Access & Companies",
       description:
-        "Users, roles and company access across the firm — invite, disable and manage grants.",
+        me?.role === "system_admin"
+          ? "Manage companies, users, roles and access across the firm."
+          : "Manage companies across your firm. User administration requires a system administrator.",
       format: "Interactive",
       action: <OpenLink to="/firm/access" label="Open access admin" />,
     });

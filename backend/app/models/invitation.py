@@ -1,6 +1,6 @@
 """Pending user invitations.
 
-A broker_admin (or system_admin) invites an email into a firm with a role.
+A system_admin invites an email into a firm with a role.
 The invite carries a single-use token; on accept (first Entra sign-in matching
 the email, or explicit token redemption) a `User` row is provisioned and the
 Entra `oid` is linked. `client_ids` scopes client-role invites to specific

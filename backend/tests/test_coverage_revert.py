@@ -160,9 +160,11 @@ def _add_enrollment(baseline: dict) -> None:
 # ── Revert to default ───────────────────────────────────────────────────────
 
 
-def test_revert_to_default_drops_override(client: TestClient) -> None:
+def test_revert_to_default_drops_override(client: TestClient, system_admin_request) -> None:
     _add_override(plan_code="GOLD")
-    res = client.post(f"/api/v1/employees/{EMP1}/coverage/revert", json={"target": "default"})
+    res = system_admin_request(
+        client, "POST", f"/api/v1/employees/{EMP1}/coverage/revert", json={"target": "default"}
+    )
     assert res.status_code == 200, res.text
     body = res.json()
     assert body["target"] == "default"
@@ -172,10 +174,12 @@ def test_revert_to_default_drops_override(client: TestClient) -> None:
         assert load_overrides(s, PY_ID, [EMP1]) == {}
 
 
-def test_revert_to_default_scoped_by_product(client: TestClient) -> None:
+def test_revert_to_default_scoped_by_product(client: TestClient, system_admin_request) -> None:
     _add_override(plan_code="GOLD")
     # Reverting an unrelated product leaves MED untouched.
-    res = client.post(
+    res = system_admin_request(
+        client,
+        "POST",
         f"/api/v1/employees/{EMP1}/coverage/revert",
         json={"target": "default", "product_codes": ["DENTAL"]},
     )
@@ -188,28 +192,36 @@ def test_revert_to_default_scoped_by_product(client: TestClient) -> None:
 # ── Revert to baseline ──────────────────────────────────────────────────────
 
 
-def test_revert_to_baseline_default_state_removes_override(client: TestClient) -> None:
+def test_revert_to_baseline_default_state_removes_override(
+    client: TestClient, system_admin_request
+) -> None:
     # Baseline == cohort default (SILVER) → reverting drops the GOLD override.
     _add_enrollment({"products": {"MED": {
         "plan_code": "SILVER", "tier_category_id": CAT_ID, "declined": False,
         "covered_dependant_ids": None, "compulsory": False,
     }}})
     _add_override(plan_code="GOLD")
-    res = client.post(f"/api/v1/employees/{EMP1}/coverage/revert", json={"target": "baseline"})
+    res = system_admin_request(
+        client, "POST", f"/api/v1/employees/{EMP1}/coverage/revert", json={"target": "baseline"}
+    )
     assert res.status_code == 200, res.text
     assert res.json()["changes"][0]["outcome"] == "reverted"
     with SessionLocal() as s:
         assert load_overrides(s, PY_ID, [EMP1]) == {}
 
 
-def test_revert_to_baseline_nondefault_writes_override(client: TestClient) -> None:
+def test_revert_to_baseline_nondefault_writes_override(
+    client: TestClient, system_admin_request
+) -> None:
     # Baseline = GOLD (richer than the SILVER default); the member currently sits
     # at default (no override). Reverting writes a GOLD override.
     _add_enrollment({"products": {"MED": {
         "plan_code": "GOLD", "tier_category_id": CAT_ID, "declined": False,
         "covered_dependant_ids": None, "compulsory": False,
     }}})
-    res = client.post(f"/api/v1/employees/{EMP1}/coverage/revert", json={"target": "baseline"})
+    res = system_admin_request(
+        client, "POST", f"/api/v1/employees/{EMP1}/coverage/revert", json={"target": "baseline"}
+    )
     assert res.status_code == 200, res.text
     assert res.json()["changes"][0]["to_plan"] == "GOLD"
     with SessionLocal() as s:
@@ -220,6 +232,7 @@ def test_revert_to_baseline_nondefault_writes_override(client: TestClient) -> No
 
 def test_revert_to_no_cover_baseline_clears_snapshot_dependants(
     client: TestClient,
+    system_admin_request,
 ) -> None:
     from app.models import FlexPricing
     from app.services.cohort_tiers import tier_key
@@ -239,7 +252,9 @@ def test_revert_to_no_cover_baseline_clears_snapshot_dependants(
         "dependant_option_ids": {"spouse": "stale-level"},
     }}})
     try:
-        res = client.post(
+        res = system_admin_request(
+            client,
+            "POST",
             f"/api/v1/employees/{EMP1}/coverage/revert",
             json={"target": "baseline"},
         )
@@ -254,19 +269,25 @@ def test_revert_to_no_cover_baseline_clears_snapshot_dependants(
             s.commit()
 
 
-def test_revert_to_baseline_without_enrollment_409(client: TestClient) -> None:
+def test_revert_to_baseline_without_enrollment_409(
+    client: TestClient, system_admin_request
+) -> None:
     _add_override(plan_code="GOLD")
-    res = client.post(f"/api/v1/employees/{EMP1}/coverage/revert", json={"target": "baseline"})
+    res = system_admin_request(
+        client, "POST", f"/api/v1/employees/{EMP1}/coverage/revert", json={"target": "baseline"}
+    )
     assert res.status_code == 409
 
 
 # ── Coverage history (track) ────────────────────────────────────────────────
 
 
-def test_coverage_history_records_changes(client: TestClient) -> None:
+def test_coverage_history_records_changes(client: TestClient, system_admin_request) -> None:
     # A manual override then a revert → two newest-first timeline entries.
     client.put(f"/api/v1/employees/{EMP1}/plan-overrides/MED", json={"plan_code": "GOLD"})
-    client.post(f"/api/v1/employees/{EMP1}/coverage/revert", json={"target": "default"})
+    system_admin_request(
+        client, "POST", f"/api/v1/employees/{EMP1}/coverage/revert", json={"target": "default"}
+    )
 
     res = client.get(f"/api/v1/employees/{EMP1}/coverage-history")
     assert res.status_code == 200, res.text
@@ -286,7 +307,7 @@ def test_coverage_history_records_changes(client: TestClient) -> None:
 # ── Enrollment reset (discard in-progress elections) ────────────────────────
 
 
-def test_reset_enrollment_clears_elections(client: TestClient) -> None:
+def test_reset_enrollment_clears_elections(client: TestClient, system_admin_request) -> None:
     _add_enrollment({"products": {}})
     with SessionLocal() as s:
         s.add(EnrollmentElection(
@@ -295,19 +316,19 @@ def test_reset_enrollment_clears_elections(client: TestClient) -> None:
             action="upgrade",
         ))
         s.commit()
-    res = client.post(f"/api/v1/enrollments/{ENROLL_ID}/reset")
+    res = system_admin_request(client, "POST", f"/api/v1/enrollments/{ENROLL_ID}/reset")
     assert res.status_code == 200, res.text
     assert res.json()["status"] == EnrollmentStatus.not_started
     with SessionLocal() as s:
         assert s.query(EnrollmentElection).filter_by(enrollment_id=ENROLL_ID).count() == 0
 
 
-def test_reset_finalized_enrollment_409(client: TestClient) -> None:
+def test_reset_finalized_enrollment_409(client: TestClient, system_admin_request) -> None:
     _add_enrollment({"products": {}})
     with SessionLocal() as s:
         s.get(Enrollment, ENROLL_ID).status = EnrollmentStatus.confirmed
         s.commit()
-    res = client.post(f"/api/v1/enrollments/{ENROLL_ID}/reset")
+    res = system_admin_request(client, "POST", f"/api/v1/enrollments/{ENROLL_ID}/reset")
     assert res.status_code == 409
 
 
@@ -325,9 +346,13 @@ def test_has_baseline_flag(client: TestClient) -> None:
     assert res.json()["has_baseline"] is True
 
 
-def test_revert_to_default_records_destination_plan(client: TestClient) -> None:
+def test_revert_to_default_records_destination_plan(
+    client: TestClient, system_admin_request
+) -> None:
     _add_override(plan_code="GOLD")
-    client.post(f"/api/v1/employees/{EMP1}/coverage/revert", json={"target": "default"})
+    system_admin_request(
+        client, "POST", f"/api/v1/employees/{EMP1}/coverage/revert", json={"target": "default"}
+    )
     res = client.get(f"/api/v1/employees/{EMP1}/coverage-history")
     entry = next(
         e for e in res.json()["entries"] if e["action"] == "revert_coverage_to_default"
@@ -336,13 +361,17 @@ def test_revert_to_default_records_destination_plan(client: TestClient) -> None:
     assert entry["to_plan"] == "SILVER"
 
 
-def test_revert_baseline_skips_out_of_baseline_override(client: TestClient) -> None:
+def test_revert_baseline_skips_out_of_baseline_override(
+    client: TestClient, system_admin_request
+) -> None:
     # Baseline snapshot has no products, but the member carries a MED override
     # (e.g. it entered the cohort after window-open). Revert must surface it as
     # 'skipped' and leave it in place rather than silently ignore it.
     _add_enrollment({"products": {}})
     _add_override(plan_code="GOLD")
-    res = client.post(f"/api/v1/employees/{EMP1}/coverage/revert", json={"target": "baseline"})
+    res = system_admin_request(
+        client, "POST", f"/api/v1/employees/{EMP1}/coverage/revert", json={"target": "baseline"}
+    )
     assert res.status_code == 200, res.text
     changes = res.json()["changes"]
     skipped = [c for c in changes if c["outcome"] == "skipped"]
@@ -388,22 +417,31 @@ def _spy_on_resync(monkeypatch) -> dict:
     return seen
 
 
-def test_resync_does_not_see_a_deleted_override(client: TestClient, monkeypatch) -> None:
+def test_resync_does_not_see_a_deleted_override(
+    client: TestClient, monkeypatch, system_admin_request
+) -> None:
     _add_override(plan_code="GOLD")
     seen = _spy_on_resync(monkeypatch)
-    assert client.delete(f"/api/v1/employees/{EMP1}/plan-overrides/MED").status_code == 204
+    assert (
+        system_admin_request(
+            client, "DELETE", f"/api/v1/employees/{EMP1}/plan-overrides/MED"
+        ).status_code
+        == 204
+    )
     assert (EMP1, PROD_ID) not in seen["overrides"]
 
 
 def test_resync_does_not_see_an_override_dropped_by_revert(
-    client: TestClient, monkeypatch
+    client: TestClient,
+    monkeypatch,
+    system_admin_request,
 ) -> None:
     """`revert_to_default` only deletes — it never flushes — so this path relied
     entirely on the helper's own flush."""
     _add_override(plan_code="GOLD")
     seen = _spy_on_resync(monkeypatch)
-    res = client.post(
-        f"/api/v1/employees/{EMP1}/coverage/revert", json={"target": "default"}
+    res = system_admin_request(
+        client, "POST", f"/api/v1/employees/{EMP1}/coverage/revert", json={"target": "default"}
     )
     assert res.status_code == 200, res.text
     assert (EMP1, PROD_ID) not in seen["overrides"]
@@ -417,10 +455,10 @@ def test_resync_does_not_see_an_override_dropped_by_revert(
 # underwriting in the first place.
 
 
-def test_revert_to_default_is_undoable(client: TestClient) -> None:
+def test_revert_to_default_is_undoable(client: TestClient, system_admin_request) -> None:
     _add_override(plan_code="GOLD")
-    res = client.post(
-        f"/api/v1/employees/{EMP1}/coverage/revert", json={"target": "default"}
+    res = system_admin_request(
+        client, "POST", f"/api/v1/employees/{EMP1}/coverage/revert", json={"target": "default"}
     )
     assert res.status_code == 200, res.text
     batch_id = res.json()["batch_id"]
@@ -435,13 +473,13 @@ def test_revert_to_default_is_undoable(client: TestClient) -> None:
         assert ov is not None and ov.plan_code == "GOLD"
 
 
-def test_revert_to_baseline_is_undoable(client: TestClient) -> None:
+def test_revert_to_baseline_is_undoable(client: TestClient, system_admin_request) -> None:
     _add_enrollment({"products": {"MED": {
         "plan_code": "GOLD", "tier_category_id": CAT_ID, "declined": False,
     }}})
     _add_override(plan_code="SILVER")
-    res = client.post(
-        f"/api/v1/employees/{EMP1}/coverage/revert", json={"target": "baseline"}
+    res = system_admin_request(
+        client, "POST", f"/api/v1/employees/{EMP1}/coverage/revert", json={"target": "baseline"}
     )
     assert res.status_code == 200, res.text
     batch_id = res.json()["batch_id"]
@@ -456,22 +494,22 @@ def test_revert_to_baseline_is_undoable(client: TestClient) -> None:
         assert load_overrides(s, PY_ID, [EMP1])[(EMP1, PROD_ID)].plan_code == "SILVER"
 
 
-def test_a_no_op_revert_records_no_batch(client: TestClient) -> None:
+def test_a_no_op_revert_records_no_batch(client: TestClient, system_admin_request) -> None:
     """Nothing changed → nothing to undo. A record here would offer an Undo
     button that does nothing."""
-    res = client.post(
-        f"/api/v1/employees/{EMP1}/coverage/revert", json={"target": "default"}
+    res = system_admin_request(
+        client, "POST", f"/api/v1/employees/{EMP1}/coverage/revert", json={"target": "default"}
     )
     assert res.status_code == 200
     assert res.json()["batch_id"] is None
 
 
-def test_undo_refuses_to_clobber_a_later_change(client: TestClient) -> None:
+def test_undo_refuses_to_clobber_a_later_change(client: TestClient, system_admin_request) -> None:
     """`undo_batch`'s superseded detection has to apply here too — the whole
     reason for reusing it rather than writing a second restore path."""
     _add_override(plan_code="GOLD")
-    batch_id = client.post(
-        f"/api/v1/employees/{EMP1}/coverage/revert", json={"target": "default"}
+    batch_id = system_admin_request(
+        client, "POST", f"/api/v1/employees/{EMP1}/coverage/revert", json={"target": "default"}
     ).json()["batch_id"]
     _add_override(plan_code="SILVER")  # somebody moves them again afterwards
 
@@ -482,13 +520,15 @@ def test_undo_refuses_to_clobber_a_later_change(client: TestClient) -> None:
         assert load_overrides(s, PY_ID, [EMP1])[(EMP1, PROD_ID)].plan_code == "SILVER"
 
 
-def test_revert_batch_is_listed_but_not_re_runnable(client: TestClient) -> None:
+def test_revert_batch_is_listed_but_not_re_runnable(
+    client: TestClient, system_admin_request
+) -> None:
     """A revert IS a coverage change and belongs in the year's history — but it
     names no product, so replaying it as a selection would 404. The flag is what
     lets the history offer Undo without offering Re-run."""
     _add_override(plan_code="GOLD")
-    batch_id = client.post(
-        f"/api/v1/employees/{EMP1}/coverage/revert", json={"target": "default"}
+    batch_id = system_admin_request(
+        client, "POST", f"/api/v1/employees/{EMP1}/coverage/revert", json={"target": "default"}
     ).json()["batch_id"]
 
     rows = client.get(f"/api/v1/policy-years/{PY_ID}/bulk-plan-updates").json()
@@ -499,15 +539,15 @@ def test_revert_batch_is_listed_but_not_re_runnable(client: TestClient) -> None:
     assert all(not r["is_revert"] for r in rows if r["id"] != batch_id)
 
 
-def test_the_batch_records_which_revert_it_was(client: TestClient) -> None:
+def test_the_batch_records_which_revert_it_was(client: TestClient, system_admin_request) -> None:
     """It used to hardcode `revert_to_default`, so a baseline revert was stored
     as the wrong action."""
     _add_enrollment({"products": {"MED": {
         "plan_code": "GOLD", "tier_category_id": CAT_ID, "declined": False,
     }}})
     _add_override(plan_code="SILVER")
-    batch_id = client.post(
-        f"/api/v1/employees/{EMP1}/coverage/revert", json={"target": "baseline"}
+    batch_id = system_admin_request(
+        client, "POST", f"/api/v1/employees/{EMP1}/coverage/revert", json={"target": "baseline"}
     ).json()["batch_id"]
     with SessionLocal() as s:
         from app.models.bulk_plan_update import BulkPlanUpdate
@@ -515,12 +555,14 @@ def test_the_batch_records_which_revert_it_was(client: TestClient) -> None:
         assert s.get(BulkPlanUpdate, batch_id).action == "revert_to_baseline"
 
 
-def test_undoing_a_revert_shows_in_the_coverage_timeline(client: TestClient) -> None:
+def test_undoing_a_revert_shows_in_the_coverage_timeline(
+    client: TestClient, system_admin_request
+) -> None:
     """The Undo button lives inside the card that renders this timeline, so an
     undo missing from it left the history contradicting the coverage above it."""
     _add_override(plan_code="GOLD")
-    batch_id = client.post(
-        f"/api/v1/employees/{EMP1}/coverage/revert", json={"target": "default"}
+    batch_id = system_admin_request(
+        client, "POST", f"/api/v1/employees/{EMP1}/coverage/revert", json={"target": "default"}
     ).json()["batch_id"]
     assert client.post(
         f"/api/v1/bulk-plan-updates/{batch_id}/undo", json={}
@@ -533,7 +575,9 @@ def test_undoing_a_revert_shows_in_the_coverage_timeline(client: TestClient) -> 
     assert "bulk_plan_override_undone" in actions
 
 
-def test_revert_to_baseline_drops_a_dangling_tier_id(client: TestClient) -> None:
+def test_revert_to_baseline_drops_a_dangling_tier_id(
+    client: TestClient, system_admin_request
+) -> None:
     """A slip re-upload REPLACES categories, so a baseline's `tier_category_id`
     usually points at a row that is gone (87% of them on CDL). Writing that dead
     id back would pin the member to a category that no longer exists — precisely
@@ -543,8 +587,8 @@ def test_revert_to_baseline_drops_a_dangling_tier_id(client: TestClient) -> None
         "plan_code": "GOLD", "tier_category_id": "deleted-by-a-re-upload",
         "declined": False, "covered_dependant_ids": None,
     }}})
-    res = client.post(
-        f"/api/v1/employees/{EMP1}/coverage/revert", json={"target": "baseline"}
+    res = system_admin_request(
+        client, "POST", f"/api/v1/employees/{EMP1}/coverage/revert", json={"target": "baseline"}
     )
     assert res.status_code == 200, res.text
     with SessionLocal() as s:

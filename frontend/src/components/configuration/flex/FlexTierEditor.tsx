@@ -1,3 +1,4 @@
+import { SystemAdminOnly } from "@/components/auth/SystemAdminOnly";
 import { AlertTriangle, Trash2, Plus, X, Save } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -218,14 +219,14 @@ export function FlexTierEditor({
             >
               <Save className="size-4" /> Save draft
             </Button>
-            <Button
+            <SystemAdminOnly><Button
               variant="ghost"
               size="icon"
               onClick={onRemove}
               aria-label="Remove tier"
             >
               <Trash2 className="size-4 text-error" />
-            </Button>
+            </Button></SystemAdminOnly>
           </div>
         </div>
 
@@ -369,14 +370,14 @@ export function FlexTierEditor({
                   className="w-36"
                   placeholder="amount"
                 />
-                <Button
+                <SystemAdminOnly><Button
                   variant="ghost"
                   size="icon"
                   onClick={() => removeLimit(i)}
                   aria-label="Remove limit"
                 >
                   <Trash2 className="size-4 text-muted-foreground" />
-                </Button>
+                </Button></SystemAdminOnly>
               </div>
             ))}
           </div>
@@ -425,14 +426,14 @@ export function FlexTierEditor({
                   onChange={(e) => setCat(i, { note: e.target.value })}
                   placeholder="Note (e.g. 100% up to USD 175 / procedure)"
                 />
-                <Button
+                <SystemAdminOnly><Button
                   variant="ghost"
                   size="icon"
                   onClick={() => removeCat(i)}
                   aria-label="Remove category"
                 >
                   <Trash2 className="size-4 text-muted-foreground" />
-                </Button>
+                </Button></SystemAdminOnly>
               </div>
             ))}
           </div>

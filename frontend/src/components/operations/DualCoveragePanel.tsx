@@ -1,3 +1,4 @@
+import { SystemAdminOnly } from "@/components/auth/SystemAdminOnly";
 /**
  * The dual-coverage alert on the Dependants tab, and the review sheet behind it.
  *
@@ -319,7 +320,7 @@ function SideBlock({
               {p.covered_products.length > 0 ? p.covered_products.join(", ") : "—"}
             </p>
             {canUnlink && (
-              <button
+              <SystemAdminOnly><button
                 type="button"
                 className="text-2xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
                 disabled={update.isPending}
@@ -339,7 +340,7 @@ function SideBlock({
                 }}
               >
                 Remove link
-              </button>
+              </button></SystemAdminOnly>
             )}
           </>
         )

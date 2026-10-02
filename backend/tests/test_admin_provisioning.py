@@ -4,9 +4,11 @@ Mock auth gives a demo broker_admin (firm = DEMO_BROKER_FIRM_ID), so the
 broker-admin paths run without overrides. system_admin paths override
 get_current_user.
 """
+
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 
 TEST_DB = Path(__file__).parent / "_test_admin_provisioning.db"
@@ -17,11 +19,12 @@ from datetime import date  # noqa: E402
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
-from app.core.auth import DEMO_BROKER_FIRM_ID, CurrentUser, get_current_user  # noqa: E402
+from app.core.auth import DEMO_BROKER_FIRM_ID, CurrentUser, Role, get_current_user  # noqa: E402
 from app.db.base import Base  # noqa: E402
 from app.db.session import SessionLocal, engine  # noqa: E402
 from app.main import app  # noqa: E402
-from app.models import BrokerFirm, Client, PolicyYear, User  # noqa: E402
+from app.models import BrokerFirm, Client, Dependant, Employee, PolicyYear, User  # noqa: E402
+from app.models.invitation import Invitation  # noqa: E402
 from app.models.policy_year import PolicyYearStatus  # noqa: E402
 from scripts.seed_demo import seed  # noqa: E402
 
@@ -31,7 +34,10 @@ CLIENT_F2_ID = "00000000-0000-0000-0000-0000000000a3"
 
 def _system_admin() -> CurrentUser:
     return CurrentUser(
-        user_id="sa-1", broker_firm_id=None, client_id=None, role="system_admin",
+        user_id="sa-1",
+        broker_firm_id=None,
+        client_id=None,
+        role="system_admin",
     )
 
 
@@ -63,6 +69,147 @@ def sysadmin() -> TestClient:
     app.dependency_overrides[get_current_user] = _system_admin
     try:
         yield TestClient(app)
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+
+
+@pytest.mark.parametrize("role", ["broker_admin", "broker_viewer", "client_admin", "client_hr"])
+def test_user_administration_requires_system_admin(role: Role) -> None:
+    """Reject list access and every management action, including known targets."""
+    app.dependency_overrides[get_current_user] = _system_admin
+    client = TestClient(app)
+    try:
+        created = client.post(
+            "/api/v1/admin/invitations",
+            json={
+                "email": f"restricted-{role}@inspro.test",
+                "role": "broker_viewer",
+                "broker_firm_id": DEMO_BROKER_FIRM_ID,
+            },
+        )
+        assert created.status_code == 201, created.text
+        invite = created.json()
+        app.dependency_overrides[get_current_user] = lambda: CurrentUser(
+            user_id="restricted-actor",
+            broker_firm_id=DEMO_BROKER_FIRM_ID,
+            client_id=None,
+            role=role,
+        )
+        requests = [
+            ("GET", "/api/v1/admin/users", None),
+            ("GET", "/api/v1/admin/invitations", None),
+            (
+                "POST",
+                "/api/v1/admin/invitations",
+                {
+                    "email": f"blocked-{role}@inspro.test",
+                    "role": "broker_admin",
+                },
+            ),
+            ("PATCH", f"/api/v1/admin/users/{invite['user_id']}", {"display_name": "Changed"}),
+            ("PATCH", f"/api/v1/admin/users/{invite['user_id']}", {"role": "broker_admin"}),
+            ("PATCH", f"/api/v1/admin/users/{invite['user_id']}", {"status": "disabled"}),
+            ("POST", f"/api/v1/admin/invitations/{invite['id']}/revoke", None),
+        ]
+        for method, path, payload in requests:
+            response = client.request(method, path, **({"json": payload} if payload else {}))
+            assert response.status_code == 403, (role, method, path, response.text)
+        with SessionLocal() as db:
+            target = db.get(User, invite["user_id"])
+            assert target is not None
+            assert (target.display_name, target.role, target.status) == (
+                None,
+                "broker_viewer",
+                "invited",
+            )
+            assert (
+                db.query(User).filter(User.email == f"blocked-{role}@inspro.test").first() is None
+            )
+            assert db.get(Invitation, invite["id"]).status == "pending"
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+
+
+@pytest.mark.parametrize("role", ["broker_admin", "broker_viewer", "client_admin", "client_hr"])
+def test_all_broker_delete_routes_require_system_admin(role: Role) -> None:
+    """Cover the registered API surface, including future deletion endpoints."""
+    from fastapi.routing import APIRoute
+
+    from app.core.deps import require_write_access
+
+    app.dependency_overrides[get_current_user] = lambda: CurrentUser(
+        user_id="delete-actor",
+        broker_firm_id=DEMO_BROKER_FIRM_ID,
+        client_id=None,
+        role=role,
+    )
+    try:
+        client = TestClient(app)
+        paths = [
+            re.sub(r"\{[^}]+\}", "known-target", route.path)
+            for route in app.routes
+            if isinstance(route, APIRoute)
+            and "DELETE" in route.methods
+            and any(dep.call == require_write_access for dep in route.dependant.dependencies)
+        ]
+        assert len(paths) >= 20  # The full broker surface, not one sample route.
+        for path in paths:
+            response = client.delete(path)
+            assert response.status_code == 403, (role, path, response.text)
+        for path, payload in [
+            ("/api/v1/wica/incidents/known-target/documents/known-target/remove", {"revision": 1}),
+            ("/api/v1/employees/known-target/coverage/revert", {"target": "default"}),
+            ("/api/v1/enrollments/known-target/reset", {}),
+        ]:
+            response = client.post(path, json=payload)
+            assert response.status_code == 403, (role, path, response.text)
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+
+
+@pytest.mark.parametrize("role", ["broker_admin", "broker_viewer", "client_admin", "client_hr"])
+def test_only_system_admin_can_unlink_a_dependant(role: Role) -> None:
+    with SessionLocal() as db:
+        policy_year = (
+            db.query(PolicyYear)
+            .join(Client, Client.id == PolicyYear.client_id)
+            .filter(Client.broker_firm_id == DEMO_BROKER_FIRM_ID)
+            .first()
+        )
+        assert policy_year is not None
+        employee = Employee(
+            client_id=policy_year.client_id,
+            policy_year_id=policy_year.id,
+            staff_id=f"permission-review-{role}",
+            employee_name="Permission review employee",
+        )
+        db.add(employee)
+        db.flush()
+        employee_id, client_id = employee.id, employee.client_id
+        dependant = Dependant(
+            client_id=client_id,
+            policy_year_id=employee.policy_year_id,
+            employee_id=employee_id,
+            link_method="staff_id",
+            attribute_values={"dependant_name": "Permission review child"},
+        )
+        db.add(dependant)
+        db.commit()
+        dependant_id = dependant.id
+    app.dependency_overrides[get_current_user] = lambda: CurrentUser(
+        user_id="unlink-actor",
+        broker_firm_id=DEMO_BROKER_FIRM_ID,
+        client_id=client_id,
+        role=role,
+    )
+    try:
+        response = TestClient(app).patch(
+            f"/api/v1/dependants/{dependant_id}",
+            json={"relink": True, "employee_id": None},
+        )
+        assert response.status_code == 403, response.text
+        with SessionLocal() as db:
+            assert db.get(Dependant, dependant_id).employee_id == employee_id
     finally:
         app.dependency_overrides.pop(get_current_user, None)
 
@@ -101,21 +248,27 @@ def test_broker_client_list_scoped_to_firm(broker: TestClient) -> None:
     assert CLIENT_F2_ID not in {c["id"] for c in rows}
 
 
-def test_broker_deletes_empty_client(broker: TestClient) -> None:
-    created = broker.post("/api/v1/admin/clients", json={"name": "Disposable Co"}).json()
-    res = broker.delete(f"/api/v1/admin/clients/{created['id']}")
+def test_sysadmin_deletes_empty_client(sysadmin: TestClient) -> None:
+    created = sysadmin.post(
+        "/api/v1/admin/clients",
+        json={"name": "Disposable Co", "broker_firm_id": DEMO_BROKER_FIRM_ID},
+    ).json()
+    res = sysadmin.delete(f"/api/v1/admin/clients/{created['id']}")
     assert res.status_code == 204
-    rows = broker.get("/api/v1/admin/clients").json()
+    rows = sysadmin.get(f"/api/v1/admin/clients?broker_firm_id={DEMO_BROKER_FIRM_ID}").json()
     assert created["id"] not in {c["id"] for c in rows}
 
 
 def test_broker_cannot_delete_other_firm_client(broker: TestClient) -> None:
     res = broker.delete(f"/api/v1/admin/clients/{CLIENT_F2_ID}")
-    assert res.status_code == 404
+    assert res.status_code == 403
 
 
-def test_delete_client_blocked_while_it_has_benefit_years(broker: TestClient) -> None:
-    created = broker.post("/api/v1/admin/clients", json={"name": "Has Years Co"}).json()
+def test_delete_client_blocked_while_it_has_benefit_years(sysadmin: TestClient) -> None:
+    created = sysadmin.post(
+        "/api/v1/admin/clients",
+        json={"name": "Has Years Co", "broker_firm_id": DEMO_BROKER_FIRM_ID},
+    ).json()
     with SessionLocal() as s:
         s.add(
             PolicyYear(
@@ -127,139 +280,191 @@ def test_delete_client_blocked_while_it_has_benefit_years(broker: TestClient) ->
             )
         )
         s.commit()
-    res = broker.delete(f"/api/v1/admin/clients/{created['id']}")
+    res = sysadmin.delete(f"/api/v1/admin/clients/{created['id']}")
     assert res.status_code == 409
-    rows = broker.get("/api/v1/admin/clients").json()
+    rows = sysadmin.get(f"/api/v1/admin/clients?broker_firm_id={DEMO_BROKER_FIRM_ID}").json()
     assert created["id"] in {c["id"] for c in rows}  # still present
 
 
 # ── Invitations / users ───────────────────────────────────────────────────────
-def test_invite_provisions_user_and_invitation(broker: TestClient) -> None:
-    res = broker.post(
+def test_invite_provisions_user_and_invitation(sysadmin: TestClient) -> None:
+    res = sysadmin.post(
         "/api/v1/admin/invitations",
-        json={"email": "New.Hire@Inspro.test", "role": "broker_viewer"},
+        json={
+            "broker_firm_id": DEMO_BROKER_FIRM_ID,
+            "email": "New.Hire@Inspro.test",
+            "role": "broker_viewer",
+        },
     )
     assert res.status_code == 201
     body = res.json()
     assert body["email"] == "new.hire@inspro.test"  # normalized
     assert body["token"]
-    users = broker.get("/api/v1/admin/users").json()
+    users = sysadmin.get(f"/api/v1/admin/users?broker_firm_id={DEMO_BROKER_FIRM_ID}").json()
     invited = next(u for u in users if u["email"] == "new.hire@inspro.test")
     assert invited["status"] == "invited"
     assert invited["role"] == "broker_viewer"
-    pending = broker.get("/api/v1/admin/invitations").json()
+    pending = sysadmin.get(f"/api/v1/admin/invitations?broker_firm_id={DEMO_BROKER_FIRM_ID}").json()
     assert any(i["email"] == "new.hire@inspro.test" for i in pending)
 
 
-def test_invite_client_role_grants_client_access(broker: TestClient) -> None:
+def test_invite_client_role_grants_client_access(sysadmin: TestClient) -> None:
     # Use a client in the demo firm.
-    clients = broker.get("/api/v1/admin/clients").json()
+    clients = sysadmin.get(f"/api/v1/admin/clients?broker_firm_id={DEMO_BROKER_FIRM_ID}").json()
     target_client = clients[0]["id"]
-    res = broker.post(
+    res = sysadmin.post(
         "/api/v1/admin/invitations",
-        json={"email": "hr2@inspro.test", "role": "client_hr",
-              "client_ids": [target_client]},
+        json={
+            "broker_firm_id": DEMO_BROKER_FIRM_ID,
+            "email": "hr2@inspro.test",
+            "role": "client_hr",
+            "client_ids": [target_client],
+        },
     )
     assert res.status_code == 201
-    users = broker.get("/api/v1/admin/users").json()
+    users = sysadmin.get(f"/api/v1/admin/users?broker_firm_id={DEMO_BROKER_FIRM_ID}").json()
     u = next(u for u in users if u["email"] == "hr2@inspro.test")
     assert u["client_ids"] == [target_client]
 
 
 def test_invite_can_carry_a_name_and_it_survives_to_the_user_row(
-    broker: TestClient,
+    sysadmin: TestClient,
 ) -> None:
     """Without this the users list shows the email as the name AND as the
     subtitle — the same string twice — until someone edits it by hand."""
-    res = broker.post(
+    res = sysadmin.post(
         "/api/v1/admin/invitations",
-        json={"email": "named@inspro.test", "role": "broker_viewer",
-              "display_name": "  Chee Leong Ong  "},
+        json={
+            "broker_firm_id": DEMO_BROKER_FIRM_ID,
+            "email": "named@inspro.test",
+            "role": "broker_viewer",
+            "display_name": "  Chee Leong Ong  ",
+        },
     )
     assert res.status_code == 201, res.text
-    users = broker.get("/api/v1/admin/users").json()
+    users = sysadmin.get(f"/api/v1/admin/users?broker_firm_id={DEMO_BROKER_FIRM_ID}").json()
     u = next(u for u in users if u["email"] == "named@inspro.test")
     assert u["display_name"] == "Chee Leong Ong"  # trimmed
 
 
 def test_a_users_name_can_be_set_and_cleared_after_the_fact(
-    broker: TestClient,
+    sysadmin: TestClient,
 ) -> None:
     """Most rows predate the name field, so editing is the path that matters.
     An emptied box CLEARS the name; omitting the key leaves it alone."""
-    broker.post("/api/v1/admin/invitations",
-                json={"email": "rename@inspro.test", "role": "broker_viewer"})
-    users = broker.get("/api/v1/admin/users").json()
+    sysadmin.post(
+        "/api/v1/admin/invitations",
+        json={
+            "broker_firm_id": DEMO_BROKER_FIRM_ID,
+            "email": "rename@inspro.test",
+            "role": "broker_viewer",
+        },
+    )
+    users = sysadmin.get(f"/api/v1/admin/users?broker_firm_id={DEMO_BROKER_FIRM_ID}").json()
     uid = next(u["id"] for u in users if u["email"] == "rename@inspro.test")
 
-    named = broker.patch(f"/api/v1/admin/users/{uid}",
-                         json={"display_name": "Fiona Lee"})
+    named = sysadmin.patch(f"/api/v1/admin/users/{uid}", json={"display_name": "Fiona Lee"})
     assert named.status_code == 200, named.text
     assert named.json()["display_name"] == "Fiona Lee"
 
     # A patch that doesn't mention the name must not wipe it.
-    kept = broker.patch(f"/api/v1/admin/users/{uid}", json={"role": "broker_admin"})
+    kept = sysadmin.patch(f"/api/v1/admin/users/{uid}", json={"role": "broker_admin"})
     assert kept.json()["display_name"] == "Fiona Lee"
 
-    cleared = broker.patch(f"/api/v1/admin/users/{uid}", json={"display_name": ""})
+    cleared = sysadmin.patch(f"/api/v1/admin/users/{uid}", json={"display_name": ""})
     assert cleared.json()["display_name"] is None
 
 
-def test_invite_duplicate_email_conflicts(broker: TestClient) -> None:
-    broker.post("/api/v1/admin/invitations",
-                json={"email": "dup@inspro.test", "role": "broker_viewer"})
-    res = broker.post("/api/v1/admin/invitations",
-                      json={"email": "dup@inspro.test", "role": "broker_viewer"})
+def test_invite_duplicate_email_conflicts(sysadmin: TestClient) -> None:
+    sysadmin.post(
+        "/api/v1/admin/invitations",
+        json={
+            "broker_firm_id": DEMO_BROKER_FIRM_ID,
+            "email": "dup@inspro.test",
+            "role": "broker_viewer",
+        },
+    )
+    res = sysadmin.post(
+        "/api/v1/admin/invitations",
+        json={
+            "broker_firm_id": DEMO_BROKER_FIRM_ID,
+            "email": "dup@inspro.test",
+            "role": "broker_viewer",
+        },
+    )
     assert res.status_code == 409
 
 
 def test_broker_cannot_grant_system_admin(broker: TestClient) -> None:
-    res = broker.post("/api/v1/admin/invitations",
-                      json={"email": "evil@inspro.test", "role": "system_admin"})
+    res = broker.post(
+        "/api/v1/admin/invitations", json={"email": "evil@inspro.test", "role": "system_admin"}
+    )
     assert res.status_code == 403
 
 
-def test_invite_to_other_firm_client_rejected(broker: TestClient) -> None:
-    res = broker.post(
+def test_invite_to_other_firm_client_rejected(sysadmin: TestClient) -> None:
+    res = sysadmin.post(
         "/api/v1/admin/invitations",
-        json={"email": "x@inspro.test", "role": "client_hr", "client_ids": [CLIENT_F2_ID]},
+        json={
+            "broker_firm_id": DEMO_BROKER_FIRM_ID,
+            "email": "x@inspro.test",
+            "role": "client_hr",
+            "client_ids": [CLIENT_F2_ID],
+        },
     )
     assert res.status_code == 404
 
 
-def test_revoke_invitation_disables_invited_user(broker: TestClient) -> None:
-    inv = broker.post("/api/v1/admin/invitations",
-                      json={"email": "torevoke@inspro.test", "role": "broker_viewer"}).json()
-    res = broker.post(f"/api/v1/admin/invitations/{inv['id']}/revoke")
+def test_revoke_invitation_disables_invited_user(sysadmin: TestClient) -> None:
+    inv = sysadmin.post(
+        "/api/v1/admin/invitations",
+        json={
+            "broker_firm_id": DEMO_BROKER_FIRM_ID,
+            "email": "torevoke@inspro.test",
+            "role": "broker_viewer",
+        },
+    ).json()
+    res = sysadmin.post(f"/api/v1/admin/invitations/{inv['id']}/revoke")
     assert res.status_code == 200
     with SessionLocal() as s:
         u = s.query(User).filter(User.email == "torevoke@inspro.test").one()
         assert u.status == "disabled"
 
 
-def test_patch_user_role_and_status(broker: TestClient) -> None:
-    inv = broker.post("/api/v1/admin/invitations",
-                      json={"email": "patchme@inspro.test", "role": "broker_viewer"}).json()
-    res = broker.patch(f"/api/v1/admin/users/{inv['user_id']}",
-                       json={"role": "broker_admin", "display_name": "Patched"})
+def test_patch_user_role_and_status(sysadmin: TestClient) -> None:
+    inv = sysadmin.post(
+        "/api/v1/admin/invitations",
+        json={
+            "broker_firm_id": DEMO_BROKER_FIRM_ID,
+            "email": "patchme@inspro.test",
+            "role": "broker_viewer",
+        },
+    ).json()
+    res = sysadmin.patch(
+        f"/api/v1/admin/users/{inv['user_id']}",
+        json={"role": "broker_admin", "display_name": "Patched"},
+    )
     assert res.status_code == 200
     assert res.json()["role"] == "broker_admin"
     assert res.json()["display_name"] == "Patched"
 
 
-def test_patch_other_firm_user_404(broker: TestClient) -> None:
+def test_broker_cannot_patch_other_firm_user(broker: TestClient) -> None:
     # A user that belongs to firm 2 (inserted directly to avoid installing a
     # global system_admin override that would also affect the broker client).
     with SessionLocal() as s:
         f2_user = User(
-            email="f2user@inspro.test", display_name=None,
-            broker_firm_id=FIRM2_ID, role="broker_viewer", status="active",
+            email="f2user@inspro.test",
+            display_name=None,
+            broker_firm_id=FIRM2_ID,
+            role="broker_viewer",
+            status="active",
         )
         s.add(f2_user)
         s.commit()
         f2_user_id = f2_user.id
     res = broker.patch(f"/api/v1/admin/users/{f2_user_id}", json={"status": "disabled"})
-    assert res.status_code == 404
+    assert res.status_code == 403
 
 
 # ── Firm resolution for system_admin ─────────────────────────────────────────
@@ -268,8 +473,10 @@ def test_patch_other_firm_user_404(broker: TestClient) -> None:
 # console was unusable for the very role that bootstraps the platform.
 def test_sysadmin_invite_ambiguous_when_several_firms(sysadmin: TestClient) -> None:
     """With more than one firm there is no unambiguous target, so still refuse."""
-    res = sysadmin.post("/api/v1/admin/invitations",
-                        json={"email": "ambiguous@inspro.test", "role": "broker_viewer"})
+    res = sysadmin.post(
+        "/api/v1/admin/invitations",
+        json={"email": "ambiguous@inspro.test", "role": "broker_viewer"},
+    )
     assert res.status_code == 400
     assert "broker_firm_id" in res.json()["detail"]
 
@@ -311,14 +518,18 @@ def test_sysadmin_list_includes_firmless_system_admins(sysadmin: TestClient) -> 
     """A platform system_admin has no broker firm, so a purely firm-scoped list
     hid the most privileged accounts on the platform behind "No users yet"."""
     with SessionLocal() as s:
-        s.add(User(
-            email="platform-owner@inspro.test", display_name=None,
-            broker_firm_id=None, role="system_admin", status="active",
-        ))
+        s.add(
+            User(
+                email="platform-owner@inspro.test",
+                display_name=None,
+                broker_firm_id=None,
+                role="system_admin",
+                status="active",
+            )
+        )
         s.commit()
     emails = {
-        u["email"]
-        for u in sysadmin.get(f"/api/v1/admin/users?broker_firm_id={FIRM2_ID}").json()
+        u["email"] for u in sysadmin.get(f"/api/v1/admin/users?broker_firm_id={FIRM2_ID}").json()
     }
     assert "platform-owner@inspro.test" in emails
 
@@ -333,13 +544,19 @@ def test_broker_admin_does_not_see_firmless_system_admins(broker: TestClient) ->
     email = "hidden-platform-owner@inspro.test"
     with SessionLocal() as s:
         if s.query(User).filter(User.email == email).one_or_none() is None:
-            s.add(User(
-                email=email, display_name=None, broker_firm_id=None,
-                role="system_admin", status="active",
-            ))
+            s.add(
+                User(
+                    email=email,
+                    display_name=None,
+                    broker_firm_id=None,
+                    role="system_admin",
+                    status="active",
+                )
+            )
             s.commit()
-    emails = {u["email"] for u in broker.get("/api/v1/admin/users").json()}
-    assert email not in emails
+    response = broker.get("/api/v1/admin/users")
+    assert response.status_code == 403
+    assert email not in response.text
 
 
 # ── Platform-admin guard rails ────────────────────────────────────────────────
@@ -350,11 +567,16 @@ def test_cannot_disable_last_system_admin(sysadmin: TestClient) -> None:
         # Park the other admins as disabled rather than DELETE-ing them: the
         # guard counts ACTIVE admins, and this module shares one DB across tests,
         # so deleting rows earlier tests created makes the suite order-dependent.
-        s.query(User).filter(
-            User.role == "system_admin", User.status == "active"
-        ).update({"status": "disabled"})
-        only = User(email="only-admin@inspro.test", display_name=None,
-                    broker_firm_id=None, role="system_admin", status="active")
+        s.query(User).filter(User.role == "system_admin", User.status == "active").update(
+            {"status": "disabled"}
+        )
+        only = User(
+            email="only-admin@inspro.test",
+            display_name=None,
+            broker_firm_id=None,
+            role="system_admin",
+            status="active",
+        )
         s.add(only)
         s.commit()
         only_id = only.id
@@ -366,8 +588,13 @@ def test_cannot_disable_last_system_admin(sysadmin: TestClient) -> None:
 def test_cannot_strand_firmless_admin_by_demoting(sysadmin: TestClient) -> None:
     """Demoting a firm-less admin leaves a row that matches no list query."""
     with SessionLocal() as s:
-        u = User(email="strandable@inspro.test", display_name=None,
-                 broker_firm_id=None, role="system_admin", status="active")
+        u = User(
+            email="strandable@inspro.test",
+            display_name=None,
+            broker_firm_id=None,
+            role="system_admin",
+            status="active",
+        )
         s.add(u)
         s.commit()
         uid = u.id
@@ -379,10 +606,20 @@ def test_cannot_strand_firmless_admin_by_demoting(sysadmin: TestClient) -> None:
 def test_admin_change_allowed_when_another_admin_remains(sysadmin: TestClient) -> None:
     """The guard must not block ordinary administration."""
     with SessionLocal() as s:
-        keeper = User(email="keeper@inspro.test", display_name=None,
-                      broker_firm_id=None, role="system_admin", status="active")
-        spare = User(email="spare@inspro.test", display_name=None,
-                     broker_firm_id=FIRM2_ID, role="system_admin", status="active")
+        keeper = User(
+            email="keeper@inspro.test",
+            display_name=None,
+            broker_firm_id=None,
+            role="system_admin",
+            status="active",
+        )
+        spare = User(
+            email="spare@inspro.test",
+            display_name=None,
+            broker_firm_id=FIRM2_ID,
+            role="system_admin",
+            status="active",
+        )
         s.add_all([keeper, spare])
         s.commit()
         spare_id = spare.id

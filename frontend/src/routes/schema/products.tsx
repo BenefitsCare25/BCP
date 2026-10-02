@@ -1,3 +1,4 @@
+import { SystemAdminOnly } from "@/components/auth/SystemAdminOnly";
 import { useState } from "react";
 import { Pencil, Trash2 } from "lucide-react";
 import { toast } from "sonner";
@@ -363,7 +364,7 @@ export function SchemaProductsPage({
                           >
                             <Pencil className="size-3.5" />
                           </Button>
-                          <Button
+                          <SystemAdminOnly><Button
                             variant="ghost"
                             size="icon-sm"
                             disabled={locked}
@@ -377,7 +378,7 @@ export function SchemaProductsPage({
                             className="text-error hover:text-error"
                           >
                             <Trash2 className="size-3.5" />
-                          </Button>
+                          </Button></SystemAdminOnly>
                         </div>
                       </TableCell>
                     </TableRow>
@@ -389,7 +390,7 @@ export function SchemaProductsPage({
         </CardContent>
       </Card>
 
-      <AlertDialog
+      <SystemAdminOnly><AlertDialog
         open={Boolean(deleting)}
         onOpenChange={(o) => !o && setDeleting(null)}
         title={`Delete product ${deleting?.display_name ?? ""}?`}
@@ -413,7 +414,7 @@ export function SchemaProductsPage({
             toast.error(formatError(err));
           }
         }}
-      />
+      /></SystemAdminOnly>
     </div>
   );
 }

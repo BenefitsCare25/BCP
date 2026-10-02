@@ -1,3 +1,4 @@
+import { SystemAdminOnly } from "@/components/auth/SystemAdminOnly";
 import { useState } from "react";
 import { toast } from "sonner";
 import { AttributeSchemaEditor } from "@/components/primitives/AttributeSchemaEditor";
@@ -371,7 +372,7 @@ export function SchemaAttributesPage({
         </CardContent>
       </Card>
 
-      <AlertDialog
+      <SystemAdminOnly><AlertDialog
         open={Boolean(deleting)}
         onOpenChange={(o) => !o && setDeleting(null)}
         title={`Delete attribute ${deleting?.display_name ?? ""}?`}
@@ -395,7 +396,7 @@ export function SchemaAttributesPage({
             toast.error(formatError(err));
           }
         }}
-      />
+      /></SystemAdminOnly>
     </div>
   );
 }

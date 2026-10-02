@@ -1,3 +1,4 @@
+import { SystemAdminOnly } from "@/components/auth/SystemAdminOnly";
 /** Voluntary cover: who is enrolled, who is only eligible, and the broker's
  * one-click record of a take-up.
  *
@@ -181,7 +182,7 @@ function CoveredDependants({
         <Badge key={d.id} variant="outline" className="gap-1">
           {depLabel(d)}
           {editable && (
-            <button
+            <SystemAdminOnly><button
               type="button"
               aria-label={`Remove ${d.name ?? "dependant"} from ${line.product_code}`}
               disabled={busy}
@@ -189,7 +190,7 @@ function CoveredDependants({
               className="rounded text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
             >
               <X className="size-3" aria-hidden />
-            </button>
+            </button></SystemAdminOnly>
           )}
         </Badge>
       ))}

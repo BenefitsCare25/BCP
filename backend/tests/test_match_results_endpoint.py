@@ -387,7 +387,7 @@ def test_multi_override_same_product_422(client: TestClient) -> None:
     assert res.status_code == 422
 
 
-def test_patch_dependant_updates_and_unlinks(client: TestClient) -> None:
+def test_patch_dependant_updates_and_unlinks(client: TestClient, system_admin_request) -> None:
     py_id = _policy_year_id(client)
     emp = client.get(
         "/api/v1/employees", params={"policy_year_id": py_id, "limit": 1}
@@ -412,8 +412,9 @@ def test_patch_dependant_updates_and_unlinks(client: TestClient) -> None:
     assert res.status_code == 200, res.text
     assert res.json()["attribute_values"]["dependant_name"] == "Kid B"
 
-    unlinked = client.patch(
-        f"/api/v1/dependants/{dep_id}", json={"relink": True, "employee_id": None}
+    unlinked = system_admin_request(
+        client, "PATCH", f"/api/v1/dependants/{dep_id}",
+        json={"relink": True, "employee_id": None}
     )
     assert unlinked.status_code == 200
     assert unlinked.json()["employee_id"] is None

@@ -1,3 +1,4 @@
+import { SystemAdminOnly } from "@/components/auth/SystemAdminOnly";
 import { useEffect, useState } from "react";
 import { Copy, Loader2, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
@@ -287,7 +288,7 @@ export function ReviewConfigEditor({
                       aria-label="Document field"
                       onChange={(e) => patchMap(i, { document_field: e.target.value })}
                     />
-                    <button
+                    <SystemAdminOnly><button
                       type="button"
                       className="grid size-8 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-card hover:text-error"
                       aria-label={`Remove mapping for ${m.portal_field || "this field"}`}
@@ -296,7 +297,7 @@ export function ReviewConfigEditor({
                       }
                     >
                       <Trash2 className="size-3.5" />
-                    </button>
+                    </button></SystemAdminOnly>
                   </div>
                   <div className="flex flex-wrap items-center gap-x-4 gap-y-2 pl-0.5">
                     <NativeSelect
@@ -409,7 +410,7 @@ export function ReviewConfigEditor({
                       className="flex-1 resize-y rounded-md border border-input bg-card p-2 text-xs leading-relaxed text-foreground shadow-sm transition-colors focus-visible:border-ring focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
                       onChange={(e) => patchRule(i, { rule: e.target.value })}
                     />
-                    <button
+                    <SystemAdminOnly><button
                       type="button"
                       className="grid size-8 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-card hover:text-error"
                       aria-label={`Remove ${r.category || "this"} rule`}
@@ -418,7 +419,7 @@ export function ReviewConfigEditor({
                       }
                     >
                       <Trash2 className="size-3.5" />
-                    </button>
+                    </button></SystemAdminOnly>
                   </div>
                   <div className="flex flex-wrap items-center gap-x-4 gap-y-2 pl-0.5">
                     <label className="flex items-center gap-1.5 text-xs text-muted-foreground">

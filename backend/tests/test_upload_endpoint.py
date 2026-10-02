@@ -208,7 +208,7 @@ def test_category_patch_flips_to_manual(client: TestClient) -> None:
     assert body["human_modified"] is True
 
 
-def test_discard_setup_draft_deletes_it(client: TestClient) -> None:
+def test_discard_setup_draft_deletes_it(client: TestClient, system_admin_request) -> None:
     """DELETE on a product-setup removes the draft so the form opens blank."""
     if not FIXTURE.exists():
         pytest.skip(f"Fixture not present: {FIXTURE}")
@@ -218,19 +218,23 @@ def test_discard_setup_draft_deletes_it(client: TestClient) -> None:
     assert len(setups) > 0
     code = setups[0]["product_code"]
 
-    res = client.delete(f"/api/v1/policy-years/{py_id}/product-setups/{code}")
+    res = system_admin_request(
+        client, "DELETE", f"/api/v1/policy-years/{py_id}/product-setups/{code}"
+    )
     assert res.status_code == 204
 
     after = client.get(f"/api/v1/policy-years/{py_id}/product-setups").json()
     assert all(s["product_code"] != code for s in after)
     # Idempotent — deleting a missing draft is still a 204.
     assert (
-        client.delete(f"/api/v1/policy-years/{py_id}/product-setups/{code}").status_code
+        system_admin_request(
+            client, "DELETE", f"/api/v1/policy-years/{py_id}/product-setups/{code}"
+        ).status_code
         == 204
     )
 
 
-def test_clear_all_cascades_to_setups_and_plans(client: TestClient) -> None:
+def test_clear_all_cascades_to_setups_and_plans(client: TestClient, system_admin_request) -> None:
     """'Clear all' removes categories AND the unconfirmed setup drafts +
     provisional plans that feed the setup form (regression: form stayed
     populated after clearing categories)."""
@@ -245,7 +249,9 @@ def test_clear_all_cascades_to_setups_and_plans(client: TestClient) -> None:
     ).json()
     assert len(setups_before) > 0
 
-    res = client.delete("/api/v1/categories", params={"policy_year_id": py_id})
+    res = system_admin_request(
+        client, "DELETE", "/api/v1/categories", params={"policy_year_id": py_id}
+    )
     assert res.status_code == 200, res.text
     body = res.json()
     assert body["deleted"] > 0
@@ -262,7 +268,7 @@ def test_clear_all_cascades_to_setups_and_plans(client: TestClient) -> None:
     assert len(setups_after) < len(setups_before)
 
 
-def test_vdl_split_ghs_upload_single_draft(client: TestClient) -> None:
+def test_vdl_split_ghs_upload_single_draft(client: TestClient, system_admin_request) -> None:
     """VDL splits GHS into Locals/Secondees/Dependants — all three map to product
     GHS. The upload must not trip the (policy_year_id, product_code) unique
     constraint, and must leave exactly one GHS draft with a populated SOB whose
@@ -272,7 +278,7 @@ def test_vdl_split_ghs_upload_single_draft(client: TestClient) -> None:
         pytest.skip(f"VDL fixture not present: {VDL_FIXTURE}")
 
     py_id = client.get("/api/v1/policy-years").json()[0]["id"]
-    client.delete("/api/v1/categories", params={"policy_year_id": py_id})
+    system_admin_request(client, "DELETE", "/api/v1/categories", params={"policy_year_id": py_id})
 
     with VDL_FIXTURE.open("rb") as f:
         res = client.post(
@@ -305,7 +311,7 @@ def test_vdl_split_ghs_upload_single_draft(client: TestClient) -> None:
     assert tpl.json()["rate_model"] == "tiered"
 
 
-def test_reupload_materializes_and_replaces_plans(client: TestClient) -> None:
+def test_reupload_materializes_and_replaces_plans(client: TestClient, system_admin_request) -> None:
     """Every schedule-bearing product materializes plans (including the
     descriptive term-life / GPA / WICI layouts), and re-uploading replaces the
     prior parse's auto plans instead of orphaning stale ones."""
@@ -314,7 +320,7 @@ def test_reupload_materializes_and_replaces_plans(client: TestClient) -> None:
 
     py_id = client.get("/api/v1/policy-years").json()[0]["id"]
     # Clean slate (clearing categories also drops provisional plans/setups).
-    client.delete("/api/v1/categories", params={"policy_year_id": py_id})
+    system_admin_request(client, "DELETE", "/api/v1/categories", params={"policy_year_id": py_id})
 
     def _upload():
         with FIXTURE.open("rb") as f:

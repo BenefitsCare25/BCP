@@ -162,26 +162,26 @@ def test_dependant_options_do_not_block_employee_category_readiness(
     assert ready["ready"] is True
 
 
-def test_cannot_delete_current_year(client: TestClient) -> None:
+def test_cannot_delete_current_year(client: TestClient, system_admin_request) -> None:
     y = client.post(
         API, json={"start_date": "2034-01-01", "end_date": "2034-12-31"}
     ).json()
     _make_ready(y["id"])
     client.post(f"{API}/{y['id']}/set-current")
-    res = client.delete(f"{API}/{y['id']}")
+    res = system_admin_request(client, "DELETE", f"{API}/{y['id']}")
     assert res.status_code == 409
     assert "live benefit year" in res.json()["detail"]
 
 
-def test_delete_draft_year(client: TestClient) -> None:
+def test_delete_draft_year(client: TestClient, system_admin_request) -> None:
     y = client.post(
         API, json={"start_date": "2035-01-01", "end_date": "2035-12-31"}
     ).json()
-    assert client.delete(f"{API}/{y['id']}").status_code == 204
+    assert system_admin_request(client, "DELETE", f"{API}/{y['id']}").status_code == 204
     assert client.get(f"{API}/{y['id']}").status_code == 404
 
 
-def test_delete_year_with_config_cascades(client: TestClient) -> None:
+def test_delete_year_with_config_cascades(client: TestClient, system_admin_request) -> None:
     """Deleting a year with categories must cascade-delete them, not NULL the
     FK (regression: the ORM tried to null categories.policy_year_id → 500)."""
     y = client.post(
@@ -203,7 +203,7 @@ def test_delete_year_with_config_cascades(client: TestClient) -> None:
     finally:
         db.close()
 
-    assert client.delete(f"{API}/{y['id']}").status_code == 204
+    assert system_admin_request(client, "DELETE", f"{API}/{y['id']}").status_code == 204
     assert client.get(f"{API}/{y['id']}").status_code == 404
     db = SessionLocal()
     try:

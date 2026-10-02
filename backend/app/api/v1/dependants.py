@@ -26,6 +26,7 @@ from app.core.deps import (
     assert_policy_year_for_user,
     load_dependant,
     require_client_id,
+    require_system_admin,
 )
 from app.core.pagination import MAX_LIMIT
 from app.core.rate_limit import limiter
@@ -273,6 +274,8 @@ def update_dependant(
     Pass `relink: true` with `employee_id` (or null to unlink). A target
     employee must belong to the same tenant + policy year as the dependant.
     """
+    if payload.relink and payload.employee_id is None:
+        require_system_admin(user)
     before = {
         "attribute_values": d.attribute_values,
         "employee_id": d.employee_id,

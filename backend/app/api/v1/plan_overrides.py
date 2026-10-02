@@ -22,7 +22,7 @@ from sqlalchemy.orm import Session
 
 from app.core.audit import write_audit
 from app.core.auth import CurrentUser, get_current_user
-from app.core.deps import load_employee, load_policy_year
+from app.core.deps import load_employee, load_policy_year, require_system_admin
 from app.core.pagination import MAX_LIMIT
 from app.db.base import new_uuid
 from app.db.session import get_db
@@ -537,6 +537,7 @@ def get_coverage_history(
 @router.post(
     "/employees/{employee_id}/coverage/revert",
     response_model=CoverageRevertResult,
+    dependencies=[Depends(require_system_admin)],
 )
 def revert_coverage(
     employee_id: str,

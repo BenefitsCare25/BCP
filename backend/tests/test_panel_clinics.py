@@ -298,7 +298,9 @@ def test_haversine_known_distance() -> None:
 # ── Broker CRUD + upload + tagging ───────────────────────────────────────────
 
 
-def test_full_broker_flow_and_member_locator(broker_a: TestClient, anon: TestClient) -> None:
+def test_full_broker_flow_and_member_locator(
+    broker_a: TestClient, anon: TestClient, system_admin_request
+) -> None:
     # Create SG GP + MY GP listings.
     res = broker_a.post(
         "/api/v1/panel-listings",
@@ -453,7 +455,7 @@ def test_full_broker_flow_and_member_locator(broker_a: TestClient, anon: TestCli
     assert res.json()["display_label"] == "AIA Alliance SG GP"
 
     # Delete the MY listing — clinics + tag go with it.
-    res = broker_a.delete(f"/api/v1/panel-listings/{my['id']}")
+    res = system_admin_request(broker_a, "DELETE", f"/api/v1/panel-listings/{my['id']}")
     assert res.status_code == 204
     res = broker_a.get(f"/api/v1/policy-years/{PY_A}/panels")
     assert res.json()["panel_listing_ids"] == [sg["id"]]
@@ -501,7 +503,8 @@ def test_cross_tenant_listing_access_404(broker_a: TestClient) -> None:
         ("delete", f"/api/v1/panel-listings/{LISTING_B}"),
     ]:
         res = getattr(broker_a, method)(path)
-        assert res.status_code == 404, f"{method} {path} → {res.status_code}"
+        expected = 403 if method == "delete" else 404
+        assert res.status_code == expected, f"{method} {path} → {res.status_code}"
     res = broker_a.patch(
         f"/api/v1/panel-listings/{LISTING_B}", json={"label": "hijack"}
     )

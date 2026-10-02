@@ -872,9 +872,10 @@ def test_readiness_warns_self_service_on_a_year_that_is_not_live(
 
 def test_roster_wipe_guard_counts_untouched_open_period_members(
     client: TestClient,
+    system_admin_request,
 ) -> None:
     _make_window(client)  # both members enrolled, neither has started
-    res = client.delete(f"/api/v1/employees?policy_year_id={PY_ID}")
+    res = system_admin_request(client, "DELETE", f"/api/v1/employees?policy_year_id={PY_ID}")
     assert res.status_code == 409, res.text
     assert res.json()["detail"]["open_period_members_at_risk"] == 2
 

@@ -1,3 +1,4 @@
+import { SystemAdminOnly } from "@/components/auth/SystemAdminOnly";
 import { useState } from "react";
 import {
   AlertTriangle,
@@ -485,14 +486,14 @@ export function LifeVoluntaryPanel({
                     </td>
                     {editable && (
                       <td className="px-2 py-2">
-                        <Button
+                        <SystemAdminOnly><Button
                           variant="ghost"
                           size="icon-sm"
                           onClick={() => removeBand(index)}
                           aria-label={`Remove ${band.label} age band`}
                         >
                           <Trash2 className="size-3.5" aria-hidden="true" />
-                        </Button>
+                        </Button></SystemAdminOnly>
                       </td>
                     )}
                   </tr>

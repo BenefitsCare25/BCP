@@ -345,12 +345,14 @@ def test_leave_folds_into_flex_balance_and_history(client: TestClient) -> None:
     assert any(e["action"] == "update_enrollment_leave" for e in hist)
 
 
-def test_revert_clears_leave_trade(client: TestClient) -> None:
+def test_revert_clears_leave_trade(client: TestClient, system_admin_request) -> None:
     client.put(f"/api/v1/enrollments/{ENROLL_ID}/leave", json={"action": "buy", "days": 4})
     client.post(f"/api/v1/enrollments/{ENROLL_ID}/submit")
     client.post(f"/api/v1/enrollments/{ENROLL_ID}/confirm")
 
-    res = client.post(f"/api/v1/employees/{EMP1}/coverage/revert", json={"target": "default"})
+    res = system_admin_request(
+        client, "POST", f"/api/v1/employees/{EMP1}/coverage/revert", json={"target": "default"}
+    )
     assert res.status_code == 200, res.text
     assert any(c["product_code"] == "(leave)" for c in res.json()["changes"])
     with SessionLocal() as s:

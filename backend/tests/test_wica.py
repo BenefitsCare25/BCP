@@ -61,7 +61,7 @@ def setup(client):
 
 
 @pytest.mark.parametrize("with_period", [False, True])
-def test_delete_company_cleans_unused_wica_configuration(ctx, with_period):
+def test_delete_company_cleans_unused_wica_configuration(ctx, with_period, system_admin_request):
     from app.models import WicaPeriod, WicaSettings
 
     client, _, ids = ctx
@@ -72,7 +72,7 @@ def test_delete_company_cleans_unused_wica_configuration(ctx, with_period):
             "/api/v1/wica/settings", json={"revision": 0, "enabled": False, "periods": []}
         )
         assert response.status_code == 200
-    response = client.delete(f"/api/v1/admin/clients/{ids[0]}")
+    response = system_admin_request(client, "DELETE", f"/api/v1/admin/clients/{ids[0]}")
     assert response.status_code == 204, response.text
     with SessionLocal() as db:
         assert db.get(Client, ids[0]) is None
@@ -81,12 +81,12 @@ def test_delete_company_cleans_unused_wica_configuration(ctx, with_period):
         assert db.get(Client, ids[1]) is not None
 
 
-def test_delete_company_refuses_retained_wica_incident(ctx):
+def test_delete_company_refuses_retained_wica_incident(ctx, system_admin_request):
     from app.models import WicaIncident, WicaSettings
 
     client, _, ids = ctx
     row, _ = new_incident(client)
-    response = client.delete(f"/api/v1/admin/clients/{ids[0]}")
+    response = system_admin_request(client, "DELETE", f"/api/v1/admin/clients/{ids[0]}")
     assert response.status_code == 409, response.text
     assert "retained WICA incidents" in response.json()["detail"]
     with SessionLocal() as db:
@@ -326,7 +326,7 @@ def test_settings_dates_lock_and_create_retry(ctx):
     assert client.post("/api/v1/wica/incidents", json=body).status_code == 422
 
 
-def test_upload_signature_scanner_failure_and_removal(ctx, monkeypatch):
+def test_upload_signature_scanner_failure_and_removal(ctx, monkeypatch, system_admin_request):
     from fastapi import HTTPException
 
     from app.api.v1 import wica
@@ -355,8 +355,8 @@ def test_upload_signature_scanner_failure_and_removal(ctx, monkeypatch):
     row = upload(client, row)
     doc = row["documents"][0]
     assert client.get(base + f"/documents/{doc['id']}/download").status_code == 200
-    response = client.post(
-        base + f"/documents/{doc['id']}/remove", json={"revision": row["revision"]}
+    response = system_admin_request(
+        client, "POST", base + f"/documents/{doc['id']}/remove", json={"revision": row["revision"]}
     )
     assert response.status_code == 200 and response.json()["documents"] == []
     assert client.get(base + f"/documents/{doc['id']}/download").status_code == 404
@@ -388,7 +388,7 @@ def test_repeated_upload_reuses_document_and_no_second_claim(ctx):
     assert row["documents"][0]["claim_id"] == claim_id
 
 
-def test_invalid_outcomes_and_tag_lock(ctx):
+def test_invalid_outcomes_and_tag_lock(ctx, system_admin_request):
     client, _, _ = ctx
     row, _ = new_incident(client)
     row = tag(client, upload(client, row))
@@ -431,7 +431,12 @@ def test_invalid_outcomes_and_tag_lock(ctx):
     row = action(client, row, doc_id, "submitted").json()
     payload.update(revision=row["revision"], benefit_type="Others")
     assert client.patch(base, json=payload).status_code == 409
-    assert client.post(base + "/remove", json={"revision": row["revision"]}).status_code == 409
+    assert (
+        system_admin_request(
+            client, "POST", base + "/remove", json={"revision": row["revision"]}
+        ).status_code
+        == 409
+    )
 
 
 def test_pack_integrity_failure_and_unknown_upload_type(ctx, monkeypatch):

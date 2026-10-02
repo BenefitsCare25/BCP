@@ -403,10 +403,13 @@ def test_placements_roundtrip_and_reject_unknown_key(client_as_a: TestClient) ->
     assert out_of_bounds.status_code == 422
 
 
-def test_delete_card_removes_it(client_as_a: TestClient) -> None:
+def test_delete_card_removes_it(client_as_a: TestClient, system_admin_request) -> None:
     card = _create_card(client_as_a, "Doomed Card")
     _upload_front(client_as_a, card["id"])
-    assert client_as_a.delete(f"/api/v1/panel-cards/{card['id']}").status_code == 204
+    assert (
+        system_admin_request(client_as_a, "DELETE", f"/api/v1/panel-cards/{card['id']}").status_code
+        == 204
+    )
     listed = client_as_a.get("/api/v1/panel-cards").json()
     assert all(c["id"] != card["id"] for c in listed)
 
@@ -434,7 +437,9 @@ def test_card_options_expose_vocabulary(client_as_a: TestClient) -> None:
 # ── Policy-year assignment ───────────────────────────────────────────────────
 
 
-def test_assignment_requires_artwork_then_succeeds(client_as_a: TestClient) -> None:
+def test_assignment_requires_artwork_then_succeeds(
+    client_as_a: TestClient, system_admin_request
+) -> None:
     card = _create_card(client_as_a, "Assignable Card")
     body = {
         "panel_card_id": card["id"],
@@ -464,8 +469,8 @@ def test_assignment_requires_artwork_then_succeeds(client_as_a: TestClient) -> N
     assert listed.status_code == 200
     assert [a["id"] for a in listed.json()] == [assignment["id"]]
 
-    deleted = client_as_a.delete(
-        f"/api/v1/policy-years/{PY_A}/cards/{assignment['id']}"
+    deleted = system_admin_request(
+        client_as_a, "DELETE", f"/api/v1/policy-years/{PY_A}/cards/{assignment['id']}"
     )
     assert deleted.status_code == 204
     assert client_as_a.get(f"/api/v1/policy-years/{PY_A}/cards").json() == []
@@ -549,13 +554,15 @@ def _assign(client: TestClient, **overrides) -> dict:
     return res.json()
 
 
-def _clear_assignments(client: TestClient) -> None:
+def _clear_assignments(client: TestClient, system_admin_request) -> None:
     for assignment in client.get(f"/api/v1/policy-years/{PY_A}/cards").json():
-        client.delete(f"/api/v1/policy-years/{PY_A}/cards/{assignment['id']}")
+        system_admin_request(
+            client, "DELETE", f"/api/v1/policy-years/{PY_A}/cards/{assignment['id']}"
+        )
 
 
-def test_build_member_cards_resolves_values(client_as_a: TestClient) -> None:
-    _clear_assignments(client_as_a)
+def test_build_member_cards_resolves_values(client_as_a: TestClient, system_admin_request) -> None:
+    _clear_assignments(client_as_a, system_admin_request=system_admin_request)
     _assign(client_as_a, card_name="Values Card")
     with SessionLocal() as session:
         employee = session.get(Employee, EMP_ALICE)
@@ -578,8 +585,10 @@ def test_build_member_cards_resolves_values(client_as_a: TestClient) -> None:
     assert dependant_card.values["relationship"] == "Spouse"
 
 
-def test_platform_id_source_suffixes_dependants(client_as_a: TestClient) -> None:
-    _clear_assignments(client_as_a)
+def test_platform_id_source_suffixes_dependants(
+    client_as_a: TestClient, system_admin_request
+) -> None:
+    _clear_assignments(client_as_a, system_admin_request=system_admin_request)
     _assign(
         client_as_a,
         card_name="Platform Card",
@@ -618,10 +627,11 @@ def test_dependant_platform_id_survives_a_new_dependant() -> None:
 
 def test_dependant_falls_back_to_employee_insurer_member_id(
     client_as_a: TestClient,
+    system_admin_request,
 ) -> None:
     """Rosters usually carry the insurer's number on the employee row only — a
     dependant card must not print a blank Member ID."""
-    _clear_assignments(client_as_a)
+    _clear_assignments(client_as_a, system_admin_request=system_admin_request)
     _assign(client_as_a, card_name="Fallback Card")
     with SessionLocal() as session:
         dependant = session.get(Dependant, DEP_SPOUSE)
@@ -642,8 +652,10 @@ def test_dependant_falls_back_to_employee_insurer_member_id(
             session.commit()
 
 
-def test_no_card_without_coverage_for_the_product(client_as_a: TestClient) -> None:
-    _clear_assignments(client_as_a)
+def test_no_card_without_coverage_for_the_product(
+    client_as_a: TestClient, system_admin_request
+) -> None:
+    _clear_assignments(client_as_a, system_admin_request=system_admin_request)
     _assign(client_as_a, card_name="Uncovered Card")
     empty = BenefitStatementOut(
         employee=StatementEmployee(
@@ -658,8 +670,8 @@ def test_no_card_without_coverage_for_the_product(client_as_a: TestClient) -> No
         assert build_member_cards(session, employee, empty) == []
 
 
-def test_dependant_card_only_when_covered(client_as_a: TestClient) -> None:
-    _clear_assignments(client_as_a)
+def test_dependant_card_only_when_covered(client_as_a: TestClient, system_admin_request) -> None:
+    _clear_assignments(client_as_a, system_admin_request=system_admin_request)
     _assign(client_as_a, card_name="Employee Only Card")
     with SessionLocal() as session:
         employee = session.get(Employee, EMP_ALICE)
@@ -671,9 +683,11 @@ def test_dependant_card_only_when_covered(client_as_a: TestClient) -> None:
 
 
 def test_portal_cards_and_preview_agree(
-    client_as_a: TestClient, member_client: TestClient
+    client_as_a: TestClient,
+    member_client: TestClient,
+    system_admin_request,
 ) -> None:
-    _clear_assignments(client_as_a)
+    _clear_assignments(client_as_a, system_admin_request=system_admin_request)
     _assign(client_as_a, card_name="Portal Card")
 
     portal = member_client.get("/api/v1/portal/cards")
@@ -693,11 +707,13 @@ def test_portal_cards_and_preview_agree(
 
 
 def test_preview_matches_portal_email_fallback(
-    client_as_a: TestClient, member_client: TestClient
+    client_as_a: TestClient,
+    member_client: TestClient,
+    system_admin_request,
 ) -> None:
     """The roster has no email column, so both surfaces must fall back to the
     member's portal-account email — the preview used to print a blank."""
-    _clear_assignments(client_as_a)
+    _clear_assignments(client_as_a, system_admin_request=system_admin_request)
     _assign(client_as_a, card_name="Email Card", employee_member_id_source="email")
 
     portal = member_client.get("/api/v1/portal/cards").json()["items"]
@@ -711,9 +727,11 @@ def test_preview_matches_portal_email_fallback(
 
 
 def test_portal_card_artwork_requires_assignment(
-    client_as_a: TestClient, member_client: TestClient
+    client_as_a: TestClient,
+    member_client: TestClient,
+    system_admin_request,
 ) -> None:
-    _clear_assignments(client_as_a)
+    _clear_assignments(client_as_a, system_admin_request=system_admin_request)
     assignment = _assign(client_as_a, card_name="Artwork Card")
     card_id = assignment["panel_card_id"]
 
@@ -739,8 +757,9 @@ def test_portal_card_artwork_requires_assignment(
 
 def test_setup_history_lists_years_with_their_selections(
     client_as_a: TestClient,
+    system_admin_request,
 ) -> None:
-    _clear_assignments(client_as_a)
+    _clear_assignments(client_as_a, system_admin_request=system_admin_request)
     assignment = _assign(client_as_a, card_name="History Card")
 
     res = client_as_a.get("/api/v1/panel-setup/history")
@@ -760,8 +779,10 @@ def test_setup_history_lists_years_with_their_selections(
     assert all(y["policy_year_id"] != PY_B for y in years)
 
 
-def test_setup_history_reflects_withdrawn_cards(client_as_a: TestClient) -> None:
-    _clear_assignments(client_as_a)
+def test_setup_history_reflects_withdrawn_cards(
+    client_as_a: TestClient, system_admin_request
+) -> None:
+    _clear_assignments(client_as_a, system_admin_request=system_admin_request)
     res = client_as_a.get("/api/v1/panel-setup/history")
     entry = next(y for y in res.json()["years"] if y["policy_year_id"] == PY_A)
     assert entry["cards"] == []

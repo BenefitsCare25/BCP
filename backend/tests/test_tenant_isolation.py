@@ -457,7 +457,7 @@ def test_policy_year_update_cross_tenant_404(client_as_a: TestClient) -> None:
 
 def test_policy_year_delete_cross_tenant_404(client_as_a: TestClient) -> None:
     res = client_as_a.delete(f"/api/v1/policy-years/{PY_B}")
-    assert res.status_code == 404
+    assert res.status_code == 403
 
 
 def test_policy_year_copy_cross_tenant_404(client_as_a: TestClient) -> None:
@@ -730,14 +730,14 @@ def test_product_term_reset_cross_tenant_404(client_as_a: TestClient) -> None:
     res = client_as_a.delete(
         f"/api/v1/policy-years/{PY_B}/product-terms/{PRODUCT_B}"
     )
-    assert res.status_code == 404
+    assert res.status_code == 403
 
 
 def test_remove_product_cross_tenant_404(client_as_a: TestClient) -> None:
     # The policy year belongs to tenant B — load_policy_year must 404 before any
     # delete touches B's products.
     res = client_as_a.delete(f"/api/v1/policy-years/{PY_B}/products/GHS")
-    assert res.status_code == 404
+    assert res.status_code == 403
 
 
 # ── Flex scheme (flexible benefits) ─────────────────────────────────────────
@@ -870,12 +870,12 @@ def test_category_bulk_confirm_cross_tenant_404(client_as_a: TestClient) -> None
 
 def test_category_delete_cross_tenant_404(client_as_a: TestClient) -> None:
     res = client_as_a.delete(f"/api/v1/categories/{CAT_B}")
-    assert res.status_code == 404
+    assert res.status_code == 403
 
 
 def test_category_bulk_delete_cross_tenant_404(client_as_a: TestClient) -> None:
     res = client_as_a.delete("/api/v1/categories", params={"policy_year_id": PY_B})
-    assert res.status_code == 404
+    assert res.status_code == 403
 
 
 def test_category_ai_suggest_cross_tenant_404(client_as_a: TestClient) -> None:
@@ -988,7 +988,7 @@ def test_employee_portal_preview_cross_tenant_404(client_as_a: TestClient) -> No
 
 def test_employee_bulk_delete_cross_tenant_404(client_as_a: TestClient) -> None:
     res = client_as_a.delete("/api/v1/employees", params={"policy_year_id": PY_B})
-    assert res.status_code == 404
+    assert res.status_code == 403
 
 
 def test_employee_patch_cross_tenant_404(client_as_a: TestClient) -> None:
@@ -1014,7 +1014,7 @@ def test_plan_overrides_put_cross_tenant_404(client_as_a: TestClient) -> None:
 
 def test_plan_overrides_delete_cross_tenant_404(client_as_a: TestClient) -> None:
     res = client_as_a.delete(f"/api/v1/employees/{EMP_B}/plan-overrides/GHS")
-    assert res.status_code == 404
+    assert res.status_code == 403
 
 
 def test_coverage_history_cross_tenant_404(client_as_a: TestClient) -> None:
@@ -1026,12 +1026,12 @@ def test_coverage_revert_cross_tenant_404(client_as_a: TestClient) -> None:
     res = client_as_a.post(
         f"/api/v1/employees/{EMP_B}/coverage/revert", json={"target": "default"}
     )
-    assert res.status_code == 404
+    assert res.status_code == 403
 
 
 def test_enrollment_reset_cross_tenant_404(client_as_a: TestClient) -> None:
     res = client_as_a.post(f"/api/v1/enrollments/{ENROLL_B}/reset")
-    assert res.status_code == 404
+    assert res.status_code == 403
 
 
 def test_enrollment_reopen_cross_tenant_404(client_as_a: TestClient) -> None:
@@ -1068,7 +1068,7 @@ def test_enrollment_window_patch_cross_tenant_404(client_as_a: TestClient) -> No
 
 def test_enrollment_window_delete_cross_tenant_404(client_as_a: TestClient) -> None:
     res = client_as_a.delete(f"/api/v1/enrollment-windows/{WINDOW_B}")
-    assert res.status_code == 404
+    assert res.status_code == 403
 
 
 def test_leave_policy_get_cross_tenant_404(client_as_a: TestClient) -> None:
@@ -1231,7 +1231,7 @@ def test_dual_coverage_decision_cross_tenant_404(client_as_a: TestClient) -> Non
     res = client_as_a.delete(
         f"/api/v1/policy-years/{PY_B}/dual-coverage/decisions/whatever"
     )
-    assert res.status_code == 404
+    assert res.status_code == 403
 
 
 def test_dual_coverage_set_cover_cross_tenant_404(client_as_a: TestClient) -> None:
@@ -1275,7 +1275,7 @@ def test_dependant_list_cross_tenant_404(client_as_a: TestClient) -> None:
 
 def test_dependant_bulk_delete_cross_tenant_404(client_as_a: TestClient) -> None:
     res = client_as_a.delete("/api/v1/dependants", params={"policy_year_id": PY_B})
-    assert res.status_code == 404
+    assert res.status_code == 403
 
 
 def test_match_results_cross_tenant_404(client_as_a: TestClient) -> None:
@@ -1347,11 +1347,12 @@ def test_product_setup_confirm_cross_tenant_404(client_as_a: TestClient) -> None
 
 def test_product_setup_discard_cross_tenant_404(client_as_a: TestClient) -> None:
     res = client_as_a.delete(f"/api/v1/policy-years/{PY_B}/product-setups/GHS")
-    assert res.status_code == 404
+    assert res.status_code == 403
 
 
 def test_product_setup_stale_conflict_is_structured(
     client_as_a: TestClient,
+    system_admin_request,
 ) -> None:
     policy_year_id = client_as_a.get("/api/v1/policy-years").json()[0]["id"]
     path = f"/api/v1/policy-years/{policy_year_id}/product-setups/GTPD"
@@ -1369,7 +1370,7 @@ def test_product_setup_stale_conflict_is_structured(
     assert stale.json()["detail"]["code"] == "stale_configuration"
     assert "Reload the latest version" in stale.json()["detail"]["message"]
 
-    assert client_as_a.delete(path).status_code == 204
+    assert system_admin_request(client_as_a, "DELETE", path).status_code == 204
 
 
 def test_member_counts_cross_tenant_404(client_as_a: TestClient) -> None:
@@ -1809,7 +1810,7 @@ def test_panel_listing_patch_cross_tenant_404(client_as_a: TestClient) -> None:
 
 def test_panel_listing_delete_cross_tenant_404(client_as_a: TestClient) -> None:
     res = client_as_a.delete(f"/api/v1/panel-listings/{PANEL_B}")
-    assert res.status_code == 404
+    assert res.status_code == 403
 
 
 def test_panel_listing_upload_cross_tenant_404(client_as_a: TestClient) -> None:
@@ -1856,7 +1857,7 @@ def test_panel_card_cross_tenant_404(client_as_a: TestClient) -> None:
     assert client_as_a.patch(
         f"/api/v1/panel-cards/{CARD_B}", json={"name": "hijack"}
     ).status_code == 404
-    assert client_as_a.delete(f"/api/v1/panel-cards/{CARD_B}").status_code == 404
+    assert client_as_a.delete(f"/api/v1/panel-cards/{CARD_B}").status_code == 403
     assert (
         client_as_a.get(f"/api/v1/panel-cards/{CARD_B}/artwork/front").status_code == 404
     )
@@ -1883,7 +1884,7 @@ def test_policy_year_cards_cross_tenant_404(client_as_a: TestClient) -> None:
     ).status_code == 404
     assert client_as_a.delete(
         f"/api/v1/policy-years/{PY_B}/cards/{CARD_ASSIGNMENT_B}"
-    ).status_code == 404
+    ).status_code == 403
 
 
 def test_card_assignment_probe_on_own_year_404s(client_as_a: TestClient) -> None:
@@ -1892,7 +1893,7 @@ def test_card_assignment_probe_on_own_year_404s(client_as_a: TestClient) -> None
     py_a = client_as_a.get("/api/v1/policy-years").json()[0]["id"]
     assert client_as_a.delete(
         f"/api/v1/policy-years/{py_a}/cards/{CARD_ASSIGNMENT_B}"
-    ).status_code == 404
+    ).status_code == 403
 
 
 def test_policy_year_cards_cannot_assign_foreign_card(client_as_a: TestClient) -> None:
@@ -1940,7 +1941,7 @@ def test_insurer_update_cross_tenant_404(client_as_a: TestClient) -> None:
 
 def test_insurer_delete_cross_tenant_404(client_as_a: TestClient) -> None:
     res = client_as_a.delete(f"/api/v1/schemas/insurers/{INSURER_B}")
-    assert res.status_code == 404
+    assert res.status_code == 403
 
 
 def test_entity_vocab_cross_tenant_404(client_as_a: TestClient) -> None:
@@ -1966,7 +1967,7 @@ def test_entity_alias_update_cross_tenant_404(client_as_a: TestClient) -> None:
 
 def test_entity_alias_delete_cross_tenant_404(client_as_a: TestClient) -> None:
     res = client_as_a.delete(f"/api/v1/entity-aliases/{ALIAS_B}")
-    assert res.status_code == 404
+    assert res.status_code == 403
 
 
 def test_claim_doc_types_list_excludes_other_tenant(client_as_a: TestClient) -> None:
@@ -1988,7 +1989,7 @@ def test_claim_doc_type_update_cross_tenant_404(client_as_a: TestClient) -> None
 
 def test_claim_doc_type_delete_cross_tenant_404(client_as_a: TestClient) -> None:
     res = client_as_a.delete(f"/api/v1/claim-doc-types/{DOCTYPE_B}")
-    assert res.status_code == 404
+    assert res.status_code == 403
 
 
 def test_claim_review_configs_list_excludes_other_tenant(client_as_a: TestClient) -> None:
@@ -2015,7 +2016,7 @@ def test_claim_review_config_update_cross_tenant_404(client_as_a: TestClient) ->
 
 def test_claim_review_config_delete_cross_tenant_404(client_as_a: TestClient) -> None:
     res = client_as_a.delete(f"/api/v1/claim-review-configs/{REVIEW_CONFIG_B}")
-    assert res.status_code == 404
+    assert res.status_code == 403
 
 
 def test_claim_review_options_requires_a_tenant(
@@ -2107,7 +2108,9 @@ def test_claim_review_import_source_other_firm_404(client_as_a: TestClient) -> N
     assert res.status_code == 404
 
 
-def test_claim_review_import_same_firm_source_allowed(client_as_a: TestClient) -> None:
+def test_claim_review_import_same_firm_source_allowed(
+    client_as_a: TestClient, system_admin_request
+) -> None:
     """Only shared current claim types are listed, with hospital scope context."""
     listed = client_as_a.get(f"/api/v1/claim-review-configs/from/{CLIENT_B_ID}").json()
     assert {r["id"] for r in listed} == {
@@ -2135,10 +2138,15 @@ def test_claim_review_import_same_firm_source_allowed(client_as_a: TestClient) -
     new_id = imported[0]["id"]
     assert new_id != REVIEW_CONFIG_B  # a copy, not a shared row
     # Clean up so A's list-isolation test stays order-independent.
-    assert client_as_a.delete(
-        f"/api/v1/claim-review-configs/{new_id}",
-        params={"expected_updated_at": imported[0]["updated_at"]},
-    ).status_code == 204
+    assert (
+        system_admin_request(
+            client_as_a,
+            "DELETE",
+            f"/api/v1/claim-review-configs/{new_id}",
+            params={"expected_updated_at": imported[0]["updated_at"]},
+        ).status_code
+        == 204
+    )
 
 
 def test_claim_review_import_rejects_product_missing_from_either_company(
@@ -2268,7 +2276,7 @@ def test_schemas_product_patch_cross_tenant_404(client_as_a: TestClient) -> None
 
 def test_schemas_product_delete_cross_tenant_404(client_as_a: TestClient) -> None:
     res = client_as_a.delete(f"/api/v1/schemas/products/{PRODUCT_B_OWNED}")
-    assert res.status_code == 404
+    assert res.status_code == 403
 
 
 def test_schemas_attribute_patch_cross_tenant_404(client_as_a: TestClient) -> None:
@@ -2281,7 +2289,7 @@ def test_schemas_attribute_patch_cross_tenant_404(client_as_a: TestClient) -> No
 
 def test_schemas_attribute_delete_cross_tenant_404(client_as_a: TestClient) -> None:
     res = client_as_a.delete(f"/api/v1/schemas/employee-attributes/{ATTR_B}")
-    assert res.status_code == 404
+    assert res.status_code == 403
 
 
 def test_reports_bundle_list_cross_tenant_404(client_as_a: TestClient) -> None:

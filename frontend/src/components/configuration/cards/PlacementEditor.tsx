@@ -1,3 +1,4 @@
+import { SystemAdminOnly } from "@/components/auth/SystemAdminOnly";
 /** Drag-to-position editor for a card's printed fields.
  *
  * Placements are fractions of the artwork box, so dragging just converts a
@@ -254,14 +255,14 @@ export function PlacementEditor({
                 {options?.placement_keys.find((o) => o.key === active.key)
                   ?.label ?? active.key}
               </span>
-              <Button
+              <SystemAdminOnly><Button
                 variant="ghost"
                 size="sm"
                 onClick={() => removeField(selected)}
                 title="Remove field"
               >
                 <Trash2 className="size-4 text-error" />
-              </Button>
+              </Button></SystemAdminOnly>
             </div>
             <div className="grid grid-cols-2 gap-2">
               <div className="space-y-1">

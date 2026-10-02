@@ -1,3 +1,4 @@
+import { SystemAdminOnly } from "@/components/auth/SystemAdminOnly";
 import { useState } from "react";
 import { Loader2, Plus, ShieldAlert, Trash2 } from "lucide-react";
 import {
@@ -107,7 +108,7 @@ export function AdminPage() {
           not a concept anyone administers. The single firm is created once at
           bootstrap by scripts/create_system_admin.py --firm-name. */}
       <ClientsCard isSystemAdmin={isSystemAdmin} />
-      <UsersCard meRole={me?.role ?? "broker_viewer"} isSystemAdmin={isSystemAdmin} />
+      {isSystemAdmin && <UsersCard />}
     </div>
   );
 }
@@ -380,7 +381,7 @@ function ClientsCard({ isSystemAdmin }: { isSystemAdmin: boolean }) {
                     >
                       Edit
                     </Button>
-                    <Button
+                    <SystemAdminOnly><Button
                       size="sm"
                       variant="ghost"
                       className="text-error hover:text-error"
@@ -388,7 +389,7 @@ function ClientsCard({ isSystemAdmin }: { isSystemAdmin: boolean }) {
                       onClick={() => setDeleteTarget({ id: c.id, name: c.name })}
                     >
                       <Trash2 className="size-3.5" />
-                    </Button>
+                    </Button></SystemAdminOnly>
                   </div>
                 </>
               )}
@@ -416,7 +417,7 @@ function ClientsCard({ isSystemAdmin }: { isSystemAdmin: boolean }) {
         if (aliasConfirm) void save(aliasConfirm);
       }}
     />
-    <AlertDialog
+    <SystemAdminOnly><AlertDialog
       open={deleteTarget !== null}
       onOpenChange={(open) => !open && setDeleteTarget(null)}
       title={`Delete ${deleteTarget?.name ?? "company"}?`}
@@ -425,15 +426,15 @@ function ClientsCard({ isSystemAdmin }: { isSystemAdmin: boolean }) {
       confirmVariant="destructive"
       loading={del.isPending}
       onConfirm={onDelete}
-    />
+    /></SystemAdminOnly>
     </>
   );
 }
 
-function UsersCard({ meRole, isSystemAdmin }: { meRole: string; isSystemAdmin: boolean }) {
+function UsersCard() {
   const { data: users = [] } = useAdminUsers();
   const { data: invites = [] } = useInvitations();
-  const { data: firms = [] } = useBrokerFirms(isSystemAdmin);
+  const { data: firms = [] } = useBrokerFirms(true);
   const [firmId, setFirmId] = useState("");
   const invite = useCreateInvitation();
   const patch = usePatchUser();
@@ -446,9 +447,7 @@ function UsersCard({ meRole, isSystemAdmin }: { meRole: string; isSystemAdmin: b
   const [editingUser, setEditingUser] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
 
-  const roleOptions = meRole === "system_admin"
-    ? [...ASSIGNABLE_ROLES, "system_admin"]
-    : ASSIGNABLE_ROLES;
+  const roleOptions = [...ASSIGNABLE_ROLES, "system_admin"];
 
   const onInvite = async () => {
     if (!email.trim()) return;
@@ -580,7 +579,7 @@ function UsersCard({ meRole, isSystemAdmin }: { meRole: string; isSystemAdmin: b
           {brokerUsers.map((u) => {
             const inv = pendingByEmail.get(u.email);
             return (
-              <li key={u.id} className="flex items-center justify-between gap-3 px-3 py-2.5">
+              <li key={u.id} className="flex flex-col items-stretch justify-between gap-3 px-3 py-2.5 sm:flex-row sm:items-center">
                 {editingUser === u.id ? (
                   <div className="flex min-w-0 flex-1 items-center gap-2">
                     <Input
@@ -633,7 +632,7 @@ function UsersCard({ meRole, isSystemAdmin }: { meRole: string; isSystemAdmin: b
                     </Button>
                   </div>
                 )}
-                <div className="flex items-center gap-2 shrink-0">
+                <div className="flex flex-wrap items-center gap-2 sm:shrink-0">
                   <Badge variant={statusVariant(u.status)}>{u.status}</Badge>
                   <Select value={u.role} onValueChange={(v) => onRoleChange(u, v)}>
                     <SelectTrigger className="h-8 w-[150px]"><SelectValue /></SelectTrigger>

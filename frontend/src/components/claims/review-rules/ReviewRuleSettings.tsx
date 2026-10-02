@@ -1,3 +1,4 @@
+import { SystemAdminOnly } from "@/components/auth/SystemAdminOnly";
 /** Claim review rules tab — the per-claim-type AI review rule setup.
  *
  * Lists the company's claim types (insured products + flex benefit categories
@@ -103,10 +104,10 @@ function TypeRow({
           <Badge variant="outline">Default</Badge>
         )}
         {config && (
-          <Button type="button" variant="ghost" size="sm" onClick={onRevert}>
+          <SystemAdminOnly><Button type="button" variant="ghost" size="sm" onClick={onRevert}>
             <RotateCcw className="size-3.5" />
             <span className="ml-1">Revert</span>
-          </Button>
+          </Button></SystemAdminOnly>
         )}
         <Button type="button" variant="outline" size="sm" onClick={onEdit}>
           <Pencil className="size-3.5" />
@@ -503,7 +504,7 @@ export function ReviewRuleSettings() {
           )}
           onClose={() => setEditing(null)}
         />
-        <AlertDialog
+        <SystemAdminOnly><AlertDialog
           open={reverting !== null}
           onOpenChange={(open) => !open && setReverting(null)}
           title={`Revert "${reverting?.display_label}" to the default rules?`}
@@ -517,7 +518,7 @@ export function ReviewRuleSettings() {
               onError: (e) => toast.error(formatError(e)),
             });
           }}
-        />
+        /></SystemAdminOnly>
       </Card>
     </div>
   );

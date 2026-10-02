@@ -1,3 +1,4 @@
+import { SystemAdminOnly } from "@/components/auth/SystemAdminOnly";
 import { useState } from "react";
 import {
   CalendarPlus,
@@ -315,7 +316,7 @@ export function BenefitYearPanel({ years, viewingId, onViewYear, readOnly = fals
                       >
                         {selected ? "Viewing" : "View setup"}
                       </Button>}
-                      {!readOnly && <Button
+                      {!readOnly && <SystemAdminOnly><Button
                         size="icon-sm"
                         variant="ghost"
                         className="text-error"
@@ -330,7 +331,7 @@ export function BenefitYearPanel({ years, viewingId, onViewYear, readOnly = fals
                       >
                         <Trash2 className="size-4" />
                         <span className="sr-only">Delete benefit year</span>
-                      </Button>}
+                      </Button></SystemAdminOnly>}
                     </div>
                   </div>
                 </section>
@@ -344,7 +345,7 @@ export function BenefitYearPanel({ years, viewingId, onViewYear, readOnly = fals
         )}
       </CardContent>
 
-      <AlertDialog
+      <SystemAdminOnly><AlertDialog
         open={Boolean(confirmDelete)}
         onOpenChange={(open) => {
           if (!open) {
@@ -406,7 +407,7 @@ export function BenefitYearPanel({ years, viewingId, onViewYear, readOnly = fals
             toast.error(message);
           }
         }}
-      />
+      /></SystemAdminOnly>
     </Card>
   );
 }

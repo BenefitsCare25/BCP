@@ -1,8 +1,8 @@
 """Provisioning / admin console.
 
 - `system_admin` creates broker firms.
-- firm admins (`broker_admin`, or `system_admin` naming a firm) manage their
-  firm's clients, users, and invitations.
+- firm admins (`broker_admin`, or `system_admin` naming a firm) manage clients.
+- only `system_admin` can view or manage users and invitations.
 
 Identity is DB-backed: inviting a user provisions a `User` row (status
 `invited`) plus an `Invitation` token record. On first Entra sign-in the oid is
@@ -430,7 +430,7 @@ def _load_firm_user(db: Session, user: CurrentUser, target_id: str) -> User:
 @router.get("/users", response_model=list[UserOut])
 def list_users(
     broker_firm_id: str | None = Query(None),
-    user: CurrentUser = Depends(require_firm_admin),
+    user: CurrentUser = Depends(require_system_admin),
     db: Session = Depends(get_db),
 ) -> list[UserOut]:
     firm_id = _resolve_target_firm(user, broker_firm_id, db)
@@ -509,7 +509,7 @@ def _assert_admin_change_is_recoverable(
 def patch_user(
     user_id: str,
     body: UserPatch,
-    user: CurrentUser = Depends(require_firm_admin),
+    user: CurrentUser = Depends(require_system_admin),
     db: Session = Depends(get_db),
 ) -> UserOut:
     target = _load_firm_user(db, user, user_id)
@@ -568,7 +568,7 @@ class InvitationOut(BaseModel):
 @router.post("/invitations", response_model=InvitationOut, status_code=201)
 def create_invitation(
     body: InvitationCreate,
-    user: CurrentUser = Depends(require_firm_admin),
+    user: CurrentUser = Depends(require_system_admin),
     db: Session = Depends(get_db),
 ) -> InvitationOut:
     firm_id = _resolve_target_firm(user, body.broker_firm_id, db)
@@ -634,7 +634,7 @@ def create_invitation(
 @router.get("/invitations", response_model=list[InvitationOut])
 def list_invitations(
     broker_firm_id: str | None = Query(None),
-    user: CurrentUser = Depends(require_firm_admin),
+    user: CurrentUser = Depends(require_system_admin),
     db: Session = Depends(get_db),
 ) -> list[InvitationOut]:
     firm_id = _resolve_target_firm(user, broker_firm_id, db)
@@ -658,7 +658,7 @@ def list_invitations(
 @router.post("/invitations/{invitation_id}/revoke", status_code=200)
 def revoke_invitation(
     invitation_id: str,
-    user: CurrentUser = Depends(require_firm_admin),
+    user: CurrentUser = Depends(require_system_admin),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     inv = db.get(Invitation, invitation_id)

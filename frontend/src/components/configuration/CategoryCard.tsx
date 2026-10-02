@@ -1,3 +1,4 @@
+import { SystemAdminOnly } from "@/components/auth/SystemAdminOnly";
 import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
 import { Check, CheckCheck, Pencil, Sparkles, X } from "lucide-react";
@@ -526,14 +527,14 @@ export function CategoryCard({
           <span className="text-xs font-medium text-muted-foreground">
             Plan assignment settings
           </span>
-          <Button
+          <SystemAdminOnly><Button
             size="sm"
             variant="ghost"
             className="text-error hover:text-error"
             onClick={() => setShowDelete(true)}
           >
             <X className="size-3.5" /> Remove assignment
-          </Button>
+          </Button></SystemAdminOnly>
         </div>
       )}
       {!assignmentOnly && <div className="mb-3 flex items-start justify-between gap-3">
@@ -590,7 +591,7 @@ export function CategoryCard({
           <Button size="sm" variant="outline" onClick={onEditRule}>
             <Pencil className="size-3.5" /> Edit rule
           </Button>
-          <Button
+          <SystemAdminOnly><Button
             size="icon"
             variant="ghost"
             aria-label="Delete category"
@@ -598,7 +599,7 @@ export function CategoryCard({
             onClick={() => setShowDelete(true)}
           >
             <X className="size-4" />
-          </Button>
+          </Button></SystemAdminOnly>
         </div>
       </div>}
 
@@ -915,7 +916,7 @@ export function CategoryCard({
         )}
       </div>}
 
-      <AlertDialog
+      <SystemAdminOnly><AlertDialog
         open={showDelete}
         onOpenChange={setShowDelete}
         title={assignmentOnly ? "Remove this plan assignment?" : "Delete this employee category?"}
@@ -932,7 +933,7 @@ export function CategoryCard({
           toast.success(assignmentOnly ? "Plan assignment removed" : "Employee category deleted");
           setShowDelete(false);
         }}
-      />
+      /></SystemAdminOnly>
     </div>
   );
 }
@@ -1011,7 +1012,7 @@ function TierRateGrid({
                 onBlur={onCommit}
                 className="h-8 text-sm"
               />
-              <Button
+              <SystemAdminOnly><Button
                 size="icon-sm"
                 variant="ghost"
                 aria-label={`Remove tier ${t.code}`}
@@ -1020,7 +1021,7 @@ function TierRateGrid({
                 onClick={() => onRemove(t.code)}
               >
                 <X className="size-3.5" />
-              </Button>
+              </Button></SystemAdminOnly>
             </div>
           );
         })}
