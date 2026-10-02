@@ -12,6 +12,7 @@ import subprocess
 import sys
 import threading
 import time
+from dataclasses import replace
 from pathlib import Path
 from uuid import uuid4
 
@@ -261,6 +262,11 @@ def test_same_worker_upload_contention_and_company_retention(pg, monkeypatch, tm
             response = await client.get(f"/api/v1/wica/incidents/{incident['id']}")
             assert len(response.json()["documents"]) == 1
             assert response.json()["revision"] == 2
+            response = await client.delete(f"/api/v1/admin/clients/{clients[0]}")
+            assert response.status_code == 403, response.text
+            app.dependency_overrides[get_current_user] = lambda: replace(
+                user, role="system_admin"
+            )
             response = await client.delete(f"/api/v1/admin/clients/{clients[0]}")
             assert response.status_code == 409, response.text
             assert "retained WICA incidents" in response.json()["detail"]
