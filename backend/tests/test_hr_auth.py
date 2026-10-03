@@ -568,7 +568,7 @@ def test_logout_is_recorded_in_the_auth_trail(api: TestClient):
         json={"token": acct["set_password_token"], "password": STRONG_PW},
         headers=_tenant(),
     )
-    api.post(
+    login = api.post(
         "/api/v1/hr/auth/login",
         json={"identifier": "hr.logout@democo.test", "password": STRONG_PW},
         headers=_tenant(),
@@ -576,7 +576,8 @@ def test_logout_is_recorded_in_the_auth_trail(api: TestClient):
     user_id = acct["user_id"]
     assert _events("logout", user_id) == []
 
-    assert api.post("/api/v1/hr/auth/logout", headers=_tenant()).status_code == 200
+    headers = {**_tenant(), **_bearer(login.json()["access_token"])}
+    assert api.post("/api/v1/hr/auth/logout", headers=headers).status_code == 200
     rows = _events("logout", user_id)
     assert len(rows) == 1
     assert rows[0].outcome == "success"
@@ -594,7 +595,7 @@ def test_a_spent_logout_cookie_records_nothing(api: TestClient):
         json={"token": acct["set_password_token"], "password": STRONG_PW},
         headers=_tenant(),
     )
-    api.post(
+    login = api.post(
         "/api/v1/hr/auth/login",
         json={"identifier": "hr.logout2@democo.test", "password": STRONG_PW},
         headers=_tenant(),
@@ -602,11 +603,14 @@ def test_a_spent_logout_cookie_records_nothing(api: TestClient):
     cookie_name = f"inspro_hr_refresh_{DEMO_CLIENT_ID}"
     refresh = api.cookies.get(cookie_name)
     assert refresh
-    api.post("/api/v1/hr/auth/logout", headers=_tenant())
+    headers = {**_tenant(), **_bearer(login.json()["access_token"])}
+    assert api.post("/api/v1/hr/auth/logout", headers=headers).status_code == 200
     before = len(_events("logout", acct["user_id"]))
 
     # Replay the same, now-revoked, cookie.
-    api.post("/api/v1/hr/auth/logout", headers=_tenant(), cookies={cookie_name: refresh})
+    assert api.post(
+        "/api/v1/hr/auth/logout", headers=headers, cookies={cookie_name: refresh},
+    ).status_code == 200
     assert len(_events("logout", acct["user_id"])) == before
 
 

@@ -294,7 +294,7 @@ export const portalApi = {
   },
   logout: async (): Promise<void> => {
     const res = await fetch(`${API_BASE}/portal/auth/logout`, {
-      method: "POST", credentials: "include", headers: tenantHeader(),
+      method: "POST", credentials: "include", headers: { ...tenantHeader(), ...authHeader() },
     });
     if (!res.ok) throw errorFromText(res.status, await res.text(), res.statusText);
   },

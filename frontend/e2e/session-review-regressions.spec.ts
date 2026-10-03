@@ -8,6 +8,40 @@ for (const role of ["portal", "hr"] as const) {
     ? { token, expires_at: "2100-01-01T00:00:00Z", member: { ...member, id: other ? "account-b" : member.id }, mfa_enrollment_required: required }
     : { access_token: token, expires_at: "2100-01-01T00:00:00Z", me: { ...me, user_id: other ? "account-b" : me.user_id }, mfa_enrollment_required: required };
 
+  test(`${role}: logout sends the tab token without refreshing another account's cookie`, async ({ page }) => {
+    let refreshes = 0;
+    const logoutHeaders: Record<string, string>[] = [];
+    await page.route("**/api/v1/**", async route => {
+      const path = new URL(route.request().url()).pathname;
+      if (path.endsWith("/auth/refresh")) {
+        refreshes++;
+        await route.fulfill({ json: session("account-a-token") });
+      } else if (path.endsWith("/auth/me")) await route.fulfill({ json: me });
+      else if (path.endsWith("/auth/security-status")) await route.fulfill({ json: { mfa_available: true, mfa_required: true, mfa_status: "none", mfa_enrollment_required: true } });
+      else if (path.endsWith("/auth/logout")) {
+        logoutHeaders.push(route.request().headers());
+        await route.fulfill({ json: { status: "signed_out" } });
+      } else await route.fulfill({ status: 404, json: {} });
+    });
+    await page.goto(security);
+    await expect(page.getByRole("button", { name: role === "portal" ? "Start setup" : "Begin setup", exact: true })).toBeVisible();
+    const before = refreshes;
+    // Another tab replaces the shared cookie while this tab retains A's token.
+    await page.context().addCookies([{
+      name: `inspro_${role}_refresh_acme`, value: "account-b-refresh",
+      url: page.url(), httpOnly: true, sameSite: "Strict",
+    }]);
+    await page.evaluate(async surface => {
+      const path = `/src/api/${surface === "portal" ? "portalClient" : "hrClient"}.ts`;
+      const client = await import(path);
+      await client[surface === "portal" ? "portalApi" : "hrApi"].logout();
+    }, role);
+    expect(logoutHeaders).toHaveLength(1);
+    expect(logoutHeaders[0].authorization).toBe("Bearer account-a-token");
+    expect(logoutHeaders[0]["x-inspro-tenant-slug"]).toBe("acme");
+    expect(refreshes).toBe(before);
+  });
+
   test(`${role}: never replays a pending POST as another account or revokes its cookie`, async ({ page }) => {
     let switched = false;
     let logouts = 0;

@@ -46,6 +46,7 @@ from app.core.portal_auth import (
 )
 from app.core.rate_limit import limiter
 from app.core.request_context import client_ip
+from app.core.session_logout import revoke_tab_session
 from app.core.settings import get_settings
 from app.core.tenancy_host import TenantContext
 from app.db.session import get_db
@@ -754,15 +755,17 @@ def member_logout(
     tenant: TenantContext = Depends(require_portal_tenant),
 ) -> dict[str, str]:
     require_same_origin(request)
-    token = request.cookies.get(PA.refresh_cookie_name(tenant.client_id))
-    if token:
-        row = SESS.revoke_token(db, token)
-        if row is not None:
-            EV.write_auth_event(
-                db, event_type=EV.EVENT_LOGOUT, outcome=EV.OUTCOME_SUCCESS, surface="portal",
-                subject_type=SUBJECT_MEMBER, subject_id=row.subject_id, client_id=row.client_id,
-                ip=_client_ip(request),
-            )
-        db.commit()
-    PA.clear_refresh_cookie(response, tenant.client_id)
+    row, clear_cookie = revoke_tab_session(
+        db, request, surface="portal", client_id=tenant.client_id,
+        cookie_name=PA.refresh_cookie_name(tenant.client_id),
+    )
+    if row is not None:
+        EV.write_auth_event(
+            db, event_type=EV.EVENT_LOGOUT, outcome=EV.OUTCOME_SUCCESS, surface="portal",
+            subject_type=SUBJECT_MEMBER, subject_id=row.subject_id, client_id=row.client_id,
+            ip=_client_ip(request),
+        )
+    db.commit()
+    if clear_cookie:
+        PA.clear_refresh_cookie(response, tenant.client_id)
     return {"status": "signed_out"}

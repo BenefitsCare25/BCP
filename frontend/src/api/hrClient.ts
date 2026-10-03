@@ -202,11 +202,11 @@ export const hrApi = {
     return (await res.json()) as T;
   },
   logout: async (): Promise<void> => {
-      const res = await fetch(`${API_BASE}/hr/auth/logout`, {
-        method: "POST",
-        credentials: "include",
-        headers: tenantHeader(),
-      });
-      if (!res.ok) throw errorFromText(res.status, await res.text(), res.statusText);
+    const res = await fetch(`${API_BASE}/hr/auth/logout`, {
+      method: "POST",
+      credentials: "include",
+      headers: { ...tenantHeader(), ...authHeader() },
+    });
+    if (!res.ok) throw errorFromText(res.status, await res.text(), res.statusText);
   },
 };

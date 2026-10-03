@@ -29,6 +29,7 @@ from app.core.breach_check import is_breached
 from app.core.cookie_auth import require_same_origin
 from app.core.rate_limit import limiter
 from app.core.request_context import client_ip, user_agent
+from app.core.session_logout import revoke_tab_session
 from app.core.tenancy_host import TenantContext
 from app.db.session import get_db
 from app.models import User
@@ -512,32 +513,32 @@ def logout(
     request: Request,
     response: Response,
     db: Session = Depends(get_db),
-    tenant: TenantContext | None = Depends(HR.optional_hr_tenant),
+    tenant: TenantContext = Depends(HR.require_hr_tenant),
 ) -> dict[str, str]:
     require_same_origin(request)
-    client_id = tenant.client_id if tenant else None
-    token = request.cookies.get(HR.refresh_cookie_name(client_id))
-    if token:
-        revoked = SESS.revoke_token(db, token)
-        # Only a session we actually revoked is a sign-out. A spent or unknown
-        # cookie changed nothing, and logging it would put unattributable rows
-        # in the trail that reviewers cannot distinguish from real sign-outs.
-        if revoked is not None:
-            EV.write_auth_event(
-                db,
-                event_type=EV.EVENT_LOGOUT,
-                outcome=EV.OUTCOME_SUCCESS,
-                surface="hr",
-                subject_type=revoked.subject_type,
-                subject_id=revoked.subject_id,
-                client_id=revoked.client_id,
-                broker_firm_id=revoked.broker_firm_id,
-                ip=_client_ip(request),
-                user_agent=_ua(request),
-                subdomain=request.headers.get("host"),
-            )
-        db.commit()
-    HR.clear_refresh_cookie(response, client_id)
+    client_id = tenant.client_id
+    revoked, clear_cookie = revoke_tab_session(
+        db, request, surface="hr", client_id=client_id,
+        cookie_name=HR.refresh_cookie_name(client_id),
+    )
+    if revoked is not None:
+        # Repeated sign-out of an already revoked session adds no audit event.
+        EV.write_auth_event(
+            db,
+            event_type=EV.EVENT_LOGOUT,
+            outcome=EV.OUTCOME_SUCCESS,
+            surface="hr",
+            subject_type=revoked.subject_type,
+            subject_id=revoked.subject_id,
+            client_id=revoked.client_id,
+            broker_firm_id=revoked.broker_firm_id,
+            ip=_client_ip(request),
+            user_agent=_ua(request),
+            subdomain=request.headers.get("host"),
+        )
+    db.commit()
+    if clear_cookie:
+        HR.clear_refresh_cookie(response, client_id)
     return {"status": "signed_out"}
 
 

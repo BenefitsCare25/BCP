@@ -81,12 +81,48 @@ def test_logout_invalidates_access_and_rotated_family(api, surface):
     assert api.get(target, headers=headers).status_code == 200
     refreshed = api.post(f"/api/v1/{surface}/auth/refresh", headers=TENANT)
     assert refreshed.status_code == 200, refreshed.text
-    assert api.post(f"/api/v1/{surface}/auth/logout", headers=TENANT).status_code == 200
+    assert api.post(f"/api/v1/{surface}/auth/logout", headers=headers).status_code == 200
     assert api.get(target, headers=headers).status_code == 401
     new_token = refreshed.json()["token" if surface == "portal" else "access_token"]
     assert api.get(target, headers={
         **TENANT, "Authorization": f"Bearer {new_token}",
     }).status_code == 401
+
+
+@pytest.mark.parametrize("surface", ["portal", "hr"])
+@pytest.mark.parametrize("same_account", [False, True])
+def test_logout_revokes_requesting_tab_and_preserves_other_family(api, surface, same_account):
+    authenticate = member if surface == "portal" else hr
+    name = f"{surface}-tab-a-{int(same_account)}"
+    first = authenticate(api, name)
+    key = "token" if surface == "portal" else "access_token"
+    first_headers = {**TENANT, "Authorization": f"Bearer {first[key]}"}
+    # A sibling tab can rotate A's cookie before another login replaces it.
+    rotated = api.post(f"/api/v1/{surface}/auth/refresh", headers=TENANT)
+    assert rotated.status_code == 200
+    if same_account:
+        second_response = api.post(f"/api/v1/{surface}/auth/login", headers=TENANT, json={
+            "identifier": f"{name}@example.test", "password": PASSWORD,
+        })
+        assert second_response.status_code == 200
+        second = second_response.json()
+    else:
+        second = authenticate(api, f"{surface}-tab-b")
+    cookie_name = f"inspro_{surface}_refresh_{DEMO_CLIENT_ID}"
+    second_cookie = api.cookies.get(cookie_name)
+    response = api.post(f"/api/v1/{surface}/auth/logout", headers=first_headers)
+    assert response.status_code == 200, response.text
+    assert "set-cookie" not in response.headers
+    assert api.cookies.get(cookie_name) == second_cookie
+    target = f"/api/v1/{surface}/auth/" + ("security-status" if surface == "portal" else "me")
+    for token in (first[key], rotated.json()[key]):
+        assert api.get(target, headers={
+            **TENANT, "Authorization": f"Bearer {token}",
+        }).status_code == 401
+    assert api.get(target, headers={
+        **TENANT, "Authorization": f"Bearer {second[key]}",
+    }).status_code == 200
+    assert api.post(f"/api/v1/{surface}/auth/refresh", headers=TENANT).status_code == 200
 
 
 @pytest.mark.parametrize("surface", ["portal", "hr"])
@@ -121,6 +157,62 @@ def test_required_mfa_restricts_api_until_confirmation(api, surface):
 
 
 @pytest.mark.parametrize("surface", ["portal", "hr"])
+def test_logout_requires_signed_session_bound_to_subject_surface_and_tenant(api, surface):
+    from app.core import hr_auth as HR
+
+    authenticate = member if surface == "portal" else hr
+    first = authenticate(api, f"{surface}-logout-validation")
+    token = first["token" if surface == "portal" else "access_token"]
+    claims = jwt.decode(token, options={"verify_signature": False})
+    key = (HR._derive_key(get_settings(), HR._HR_KEY_LABEL)
+           if surface == "hr" else get_settings().portal_jwt_secret)
+    tenant_claim = "cid" if surface == "hr" else "client_id"
+    cookie_name = f"inspro_{surface}_refresh_{DEMO_CLIENT_ID}"
+    original_cookie = api.cookies.get(cookie_name)
+    invalid_tokens = [None, "not-a-token", jwt.encode(claims, "wrong-key" * 8, algorithm="HS256")]
+    for field, value in (
+        ("typ", "member" if surface == "hr" else "hr"),
+        (tenant_claim, "another-company"), ("sub", "another-account"),
+        ("sid", "missing-session"), ("sid", ["invalid-type"]),
+    ):
+        invalid_tokens.append(jwt.encode({**claims, field: value}, key, algorithm="HS256"))
+    for invalid in invalid_tokens:
+        headers = {**TENANT, **({"Authorization": f"Bearer {invalid}"} if invalid else {})}
+        response = api.post(f"/api/v1/{surface}/auth/logout", headers=headers)
+        assert response.status_code == 401, response.text
+        assert "set-cookie" not in response.headers
+        assert api.cookies.get(cookie_name) == original_cookie
+    assert api.post(f"/api/v1/{surface}/auth/refresh", headers=TENANT).status_code == 200
+
+
+@pytest.mark.parametrize("surface", ["portal", "hr"])
+@pytest.mark.parametrize("with_cookie", [False, True])
+def test_logout_accepts_expired_access_without_refresh_and_is_idempotent(api, surface, with_cookie):
+    from app.core import hr_auth as HR
+
+    first = (member if surface == "portal" else hr)(
+        api, f"{surface}-expired-logout-{int(with_cookie)}",
+    )
+    token = first["token" if surface == "portal" else "access_token"]
+    claims = jwt.decode(token, options={"verify_signature": False})
+    claims["exp"] = int((datetime.now(UTC) - timedelta(minutes=1)).timestamp())
+    key = (HR._derive_key(get_settings(), HR._HR_KEY_LABEL)
+           if surface == "hr" else get_settings().portal_jwt_secret)
+    expired = jwt.encode(claims, key, algorithm="HS256")
+    if not with_cookie:
+        api.cookies.clear()
+    headers = {**TENANT, "Authorization": f"Bearer {expired}"}
+    response = api.post(f"/api/v1/{surface}/auth/logout", headers=headers)
+    assert response.status_code == 200, response.text
+    assert ("set-cookie" in response.headers) == with_cookie
+    assert api.post(f"/api/v1/{surface}/auth/logout", headers=headers).status_code == 200
+    target = f"/api/v1/{surface}/auth/" + ("security-status" if surface == "portal" else "me")
+    assert api.get(target, headers={
+        **TENANT, "Authorization": f"Bearer {token}",
+    }).status_code == 401
+
+
+@pytest.mark.parametrize("surface", ["portal", "hr"])
 def test_cookie_auth_rejects_cross_origin(api, surface):
     for operation in ("refresh", "logout"):
         response = api.post(f"/api/v1/{surface}/auth/{operation}", headers={
@@ -143,7 +235,7 @@ def test_company_cookies_refresh_and_logout_independently(api, surface):
         db.add(ClientAuthPolicy(client_id=other_id, breach_check_enabled=False))
         db.commit()
     authenticate = member if surface == "portal" else hr
-    authenticate(api, f"{surface}-cookie-first")
+    first = authenticate(api, f"{surface}-cookie-first")
     authenticate(api, f"{surface}-cookie-second", other_id, slug)
     cookie_names = [f"inspro_{surface}_refresh_{client}" for client in (DEMO_CLIENT_ID, other_id)]
     assert all(api.cookies.get(name) for name in cookie_names)
@@ -155,7 +247,10 @@ def test_company_cookies_refresh_and_logout_independently(api, surface):
     other_headers = {"X-Inspro-Tenant-Slug": slug}
     assert api.post(f"/api/v1/{surface}/auth/refresh", headers=TENANT).status_code == 200
     assert api.post(f"/api/v1/{surface}/auth/refresh", headers=other_headers).status_code == 200
-    assert api.post(f"/api/v1/{surface}/auth/logout", headers=TENANT).status_code == 200
+    token = first["token" if surface == "portal" else "access_token"]
+    assert api.post(f"/api/v1/{surface}/auth/logout", headers={
+        **TENANT, "Authorization": f"Bearer {token}",
+    }).status_code == 200
     assert api.post(f"/api/v1/{surface}/auth/refresh", headers=TENANT).status_code == 401
     assert api.post(f"/api/v1/{surface}/auth/refresh", headers=other_headers).status_code == 200
 

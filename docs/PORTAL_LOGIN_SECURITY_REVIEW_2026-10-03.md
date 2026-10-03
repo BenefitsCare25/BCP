@@ -10,6 +10,31 @@ outside the workspace; browser authentication probes are intercepted.
 
 ## Production release follow-up
 
+### Cross-tab logout correction
+
+The subsequent review identified cookie-only logout revoking a different tab's
+session after another account signed in for the same company. Employee and HR
+clients now send their memory-only bearer token on logout. The server verifies
+its signature, surface, subject, session and tenant before revoking that family;
+it clears a refresh cookie only when it belongs to the same family. A separate
+login by the same account is also preserved. An expired access token can identify
+its family for logout only, without refreshing into another account. Missing or
+invalid bearer credentials fail without mutating cookies or sessions. Frontend
+and backend must deploy together; an old open page must reload before sign-out.
+
+The clean-environment tenant-mode finding was already corrected by `99e96f3`:
+pytest and Playwright explicitly select header mode instead of relying on `.env`.
+The new logout regressions failed on both old endpoints and pass with the fix.
+Focused local checks: 84 backend authentication/tenancy tests and 12 desktop/phone
+browser session regressions passed. The full browser suite passed 151 tests with
+one intentional skip; frontend build, full Ruff and strict typing of all 368
+backend source files passed. The full local backend suite passed 2,580 tests with
+21 skips; PostgreSQL checks run in deployment CI. Deployment results are recorded
+separately when complete.
+The existing production acceptance limitations below still apply.
+
+### Prior release evidence
+
 The user authorized correcting every follow-up review finding, pushing for
 deployment and monitoring on 3 October 2026. Release `99e96f30e0626301031bb040fba4d8945e4ee0bb`
 deployed successfully in [run 37113839788](https://github.com/BenefitsCare25/BCP/actions/runs/37113839788).
