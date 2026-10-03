@@ -36,6 +36,11 @@ os.environ.setdefault(
 # unit tests, so the SlowAPI layer is switched off suite-wide.
 os.environ.setdefault("INSPRO_RATE_LIMIT_ENABLED", "0")
 
+# Shared-host API tests select companies by header and assert company-scoped
+# cookies. Pin this independently of a developer's .env; mode-specific tests
+# explicitly override it to exercise subdomain deployments.
+os.environ["INSPRO_TENANT_MODE"] = "header"
+
 # No live currency lookups from the suite. `services/fx.py` reaches out to
 # Frankfurter, and a test that quietly does so is a test whose result depends on
 # somebody else's uptime — it would pass on a laptop, hang for ~10s per foreign

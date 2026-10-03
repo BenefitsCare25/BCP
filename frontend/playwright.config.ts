@@ -25,6 +25,7 @@ const env = {
   ...process.env,
   INSPRO_AI_KEY_ENCRYPTION_KEY: e2eEncryptionKey,
   INSPRO_DATABASE_URL: databaseUrl,
+  INSPRO_TENANT_MODE: "header",
 };
 for (const args of [
   ["run", "alembic", "upgrade", "head"],
@@ -67,6 +68,7 @@ export default defineConfig({
       env: {
         INSPRO_ENV: "dev",
         INSPRO_AUTH_MODE: "mock",
+        INSPRO_TENANT_MODE: "header",
         INSPRO_MOCK_ROLE: "broker_admin",
         INSPRO_AI_KEY_ENCRYPTION_KEY: e2eEncryptionKey,
         INSPRO_DATABASE_URL: databaseUrl,
@@ -80,7 +82,7 @@ export default defineConfig({
       url: baseURL,
       reuseExistingServer: false,
       timeout: 120_000,
-      env: { INSPRO_DEV_API_TARGET: apiOrigin },
+      env: { INSPRO_DEV_API_TARGET: apiOrigin, VITE_TENANT_MODE: "header" },
     },
   ],
   projects: [

@@ -44,6 +44,19 @@ required GitHub gates; this section supersedes the earlier local-only scope.
   once the workflow and independent health/readiness checks finish.
 
 Unrelated pending runtime/packaging upgrades are excluded from this release.
+
+The first release run (`37110949505`, commit `0a29392`) correctly blocked
+deployment: six backend and six browser assertions exposed test servers that
+defaulted to subdomain mode in CI but inherited header mode from local `.env`
+files. Shared-host test configuration now explicitly selects header mode for
+pytest and both Playwright servers, including disposable database setup.
+Production defaults are unchanged; dedicated subdomain tests still override
+the setting. Container startup, typing and dependency audits passed on that
+run. Production remained on the prior healthy version during correction.
+The corrected local focused run passed 64 backend tests (three PostgreSQL
+checks skipped locally) and all 30 desktop/phone authentication browser tests.
+All three PostgreSQL migration/concurrency checks passed in the first CI run.
+
 No local database, credential file, review output, draft media or environment
 secret belongs in the commit. Only the referenced login video/poster ship.
 Existing optional MFA policies remain unchanged. Real-account enrolment,
