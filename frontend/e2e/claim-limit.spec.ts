@@ -114,19 +114,9 @@ function monitorRuntime(page: Page) {
 }
 
 async function mockClaimForm(page: Page) {
-  await page.addInitScript((member) => {
-    localStorage.setItem(
-      "inspro-portal-session",
-      JSON.stringify({
-        state: {
-          token: "e2e-member-token",
-          expiresAt: "2100-01-01T00:00:00Z",
-          member,
-        },
-        version: 0,
-      }),
-    );
-  }, MEMBER);
+  await page.route("**/api/v1/portal/auth/refresh", route => route.fulfill({ json: {
+    token: "e2e-member-token", expires_at: "2100-01-01T00:00:00Z", member: MEMBER,
+  } }));
 
   await page.route(/\/api\/v1\/portal\/me$/, (route) =>
     route.fulfill({

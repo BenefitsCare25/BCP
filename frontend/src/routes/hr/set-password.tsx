@@ -1,10 +1,12 @@
 /** HR set / reset password: redeem a single-use token (from the emailed link
  * or a forced-rotation redirect) and choose a password. */
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { Lock, ShieldCheck } from "lucide-react";
 import { adoptSession, isTokenResult, useHrMfa, useHrSetPassword } from "@/api/hr";
-import { formatError } from "@/lib/errors";
+import { errorCode, formatError } from "@/lib/errors";
+import { PASSWORD_MAX_LENGTH } from "@/lib/loginValidation";
+import { hrPath } from "@/lib/tenant";
 import { MFA_CODE_MAX_LENGTH, canSubmitMfaCode, normalizeMfaCode } from "@/lib/mfa";
 import { AuthScene } from "@/components/auth/AuthScene";
 import { Button } from "@/components/ui/button";
@@ -39,24 +41,30 @@ export function HrSetPasswordPage() {
   const [code, setCode] = useState("");
   const [challenge, setChallenge] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const submitting = useRef(false);
+  const [expired, setExpired] = useState(false);
 
   const st = strength(password);
   const match = password.length > 0 && password === confirm;
-  const canSubmit = st.ok && match && !!token;
+  const canSubmit = st.ok && match && !!token && password.length <= PASSWORD_MAX_LENGTH;
 
   const finish = () => void navigate({ to: "/hr/dashboard" });
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
+    if (submitting.current || setPw.isPending) return;
     setError(null);
     if (!token) {
       setError("This link is missing its token. Ask your administrator to resend it.");
       return;
     }
+    if (!canSubmit) { setError("Choose a strong password and enter the same password twice."); return; }
+    submitting.current = true;
     setPw.mutate(
       { token, password },
       {
         onSuccess: (data) => {
+          setPassword(""); setConfirm("");
           if (isTokenResult(data)) {
             adoptSession(data);
             finish();
@@ -67,13 +75,16 @@ export function HrSetPasswordPage() {
           }
         },
         onError: (err) => setError(formatError(err)),
+        onSettled: () => { submitting.current = false; },
       },
     );
   };
 
   const submitMfa = (e: React.FormEvent) => {
     e.preventDefault();
+    if (submitting.current || mfa.isPending || expired || !challenge || !canSubmitMfaCode(code)) return;
     setError(null);
+    submitting.current = true;
     mfa.mutate(
       { challenge_token: challenge, code: code.trim() },
       {
@@ -81,7 +92,11 @@ export function HrSetPasswordPage() {
           adoptSession(data);
           finish();
         },
-        onError: (err) => setError(formatError(err)),
+        onError: (err) => {
+          if (errorCode(err) === "challenge_expired") { setExpired(true); setCode(""); setChallenge(""); }
+          setError(formatError(err));
+        },
+        onSettled: () => { submitting.current = false; },
       },
     );
   };
@@ -114,11 +129,12 @@ export function HrSetPasswordPage() {
               className="h-12 text-center text-lg font-semibold tracking-[0.5em]"
             />
           </div>
-          {error && <p className="text-sm text-error">{error}</p>}
+          {error && <p className="text-sm text-error" role="alert">{error}</p>}
+          {expired && <a className="block text-sm underline" href={hrPath("/hr/sign-in")}>Sign in with your new password</a>}
           <Button
             type="submit"
             className="h-12 w-full text-md transition-transform duration-150 active:scale-[0.99]"
-            disabled={mfa.isPending || !canSubmitMfaCode(code)}
+            disabled={expired || mfa.isPending || !canSubmitMfaCode(code)}
           >
             {mfa.isPending ? "Verifying…" : "Verify & sign in"}
           </Button>
@@ -147,6 +163,9 @@ export function HrSetPasswordPage() {
             <Lock className="pointer-events-none absolute left-3.5 top-1/2 size-[18px] -translate-y-1/2 text-muted-foreground" />
             <Input
               id="hr-new-password"
+              required
+              minLength={MIN_LENGTH}
+              maxLength={PASSWORD_MAX_LENGTH}
               type="password"
               autoComplete="new-password"
               placeholder="••••••••••••"
@@ -173,6 +192,8 @@ export function HrSetPasswordPage() {
             <Lock className="pointer-events-none absolute left-3.5 top-1/2 size-[18px] -translate-y-1/2 text-muted-foreground" />
             <Input
               id="hr-confirm-password"
+              required
+              maxLength={PASSWORD_MAX_LENGTH}
               type="password"
               autoComplete="new-password"
               placeholder="••••••••••••"
@@ -185,7 +206,7 @@ export function HrSetPasswordPage() {
             <p className="text-xs text-error">Passwords don't match</p>
           )}
         </div>
-        {error && <p className="text-sm text-error">{error}</p>}
+        {error && <p className="text-sm text-error" role="alert">{error}</p>}
         <Button
           type="submit"
           className="h-12 w-full text-md transition-transform duration-150 active:scale-[0.99]"

@@ -149,6 +149,8 @@ function SignInSettingsCard({ clientId }: { clientId: string }) {
       await update.mutateAsync({
         mfa_hr_enabled: draft.mfa_hr_enabled,
         mfa_portal_enabled: draft.mfa_portal_enabled,
+        mfa_hr_required: draft.mfa_hr_required,
+        mfa_portal_required: draft.mfa_portal_required,
         hr_login_source: draft.hr_login_source,
         portal_login_source: draft.portal_login_source,
         breach_check_enabled: draft.breach_check_enabled,
@@ -177,6 +179,7 @@ function SignInSettingsCard({ clientId }: { clientId: string }) {
   ) => {
     const sourceKey = surface === "hr" ? "hr_login_source" : "portal_login_source";
     const mfaKey = surface === "hr" ? "mfa_hr_enabled" : "mfa_portal_enabled";
+    const requiredKey = surface === "hr" ? "mfa_hr_required" : "mfa_portal_required";
     return (
       <Card>
         <CardHeader>
@@ -207,8 +210,15 @@ function SignInSettingsCard({ clientId }: { clientId: string }) {
             </div>
             <Switch
               checked={draft[mfaKey]}
-              onCheckedChange={(v) => set(mfaKey, v)}
+              onCheckedChange={(v) => setDraft({ ...draft, [mfaKey]: v, [requiredKey]: v && draft[requiredKey] })}
+              aria-label={`Enable two-factor authentication for ${who.toLowerCase()}`}
             />
+          </div>
+          <div className="flex items-center justify-between gap-4">
+            <Label className="text-sm">Require two-factor authentication</Label>
+            <Switch checked={!!draft[requiredKey]} disabled={!draft[mfaKey]}
+              onCheckedChange={(v) => set(requiredKey, v)}
+              aria-label={`Require two-factor authentication for ${who.toLowerCase()}`} />
           </div>
           <SaveButton />
         </CardContent>

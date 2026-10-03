@@ -73,6 +73,9 @@ param entraClientId string
 @description('CORS origins (comma-separated).')
 param corsOrigins string
 
+@description('Exact trusted reverse-proxy peers for Uvicorn. Never use a wildcard on a public listener.')
+param forwardedAllowIps string = '127.0.0.1'
+
 // Claims AI provider is configured per-tenant via the frontend BYOK page
 // (client_ai_configs, encrypted), NOT via deployment env vars — so no AI
 // provider params are declared here.
@@ -459,6 +462,7 @@ var commonAppSettings = [
   { name: 'INSPRO_ENTRA_ISSUER', value: '${environment().authentication.loginEndpoint}${entraTenantId}/v2.0' }
   { name: 'INSPRO_ENTRA_JWKS_URL', value: '${environment().authentication.loginEndpoint}${entraTenantId}/discovery/v2.0/keys' }
   { name: 'INSPRO_CORS_ORIGINS', value: corsOrigins }
+  { name: 'FORWARDED_ALLOW_IPS', value: forwardedAllowIps }
   // Tenant routing. On a single host the Host header can't name a tenant, so
   // the SPA sends X-Inspro-Tenant-Slug instead — see app/core/tenancy_host.py.
   { name: 'INSPRO_TENANT_MODE', value: tenantMode }

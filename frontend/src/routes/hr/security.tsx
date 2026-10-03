@@ -10,7 +10,10 @@ import {
   useHrMfaEnrollStart,
   type MfaStart,
 } from "@/api/hr";
-import { formatError } from "@/lib/errors";
+import { errorStatus, formatError } from "@/lib/errors";
+import { useNavigate } from "@tanstack/react-router";
+import { refreshHrSession } from "@/api/hrClient";
+import { useHrSession } from "@/stores/hrSession";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -86,7 +89,9 @@ function EnrollFlow({ onEnrolled }: { onEnrolled: (codes: string[]) => void }) {
       // Hand the codes UP: they are shown once and stored hashed, so they must
       // not live in this component's state — see the note in HrSecurityPage.
       onSuccess: (data) => onEnrolled(data.recovery_codes),
-      onError: () => setError("That code didn't match — check your app and try again."),
+      onError: (e) => setError(errorStatus(e) === 401
+        ? "That code didn't match - check your app and try again."
+        : formatError(e)),
     });
   };
 
@@ -205,6 +210,7 @@ function DisablePanel() {
 }
 
 export function HrSecurityPage() {
+  const navigate = useNavigate();
   const { data: me, refetch, isLoading, isError, error } = useHrMe();
   const enrolled = me?.mfa_status === "confirmed";
   const available = me?.mfa_available ?? false;
@@ -237,8 +243,13 @@ export function HrSecurityPage() {
             <RecoveryCodes
               codes={recovery}
               onDone={() => {
-                setRecovery(null);
-                void refetch();
+                void refreshHrSession().then(async restored => {
+                  if (!restored) { toast.error("Sign in again to continue."); return; }
+                  setRecovery(null);
+                  await refetch();
+                  useHrSession.setState({ mfaRecoveryPending: false, mfaEnrollmentRequired: false });
+                  void navigate({ to: "/hr/dashboard" });
+                });
               }}
             />
           ) : isLoading ? (
@@ -249,9 +260,12 @@ export function HrSecurityPage() {
               <Button variant="outline" onClick={() => void refetch()}>Try again</Button>
             </div>
           ) : enrolled ? (
-            <DisablePanel />
+            me?.mfa_required ? <p className="text-sm text-muted-foreground">Two-factor authentication is required by your company.</p> : <DisablePanel />
           ) : available ? (
-            <EnrollFlow onEnrolled={setRecovery} />
+            <EnrollFlow onEnrolled={codes => {
+              useHrSession.setState({ mfaRecoveryPending: useHrSession.getState().mfaEnrollmentRequired });
+              setRecovery(codes);
+            }} />
           ) : (
             <p className="text-sm text-muted-foreground">
               Your company hasn't enabled two-factor authentication for the HR

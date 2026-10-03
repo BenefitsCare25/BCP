@@ -113,6 +113,8 @@ class AuthPolicyOut(BaseModel):
     client_id: str
     mfa_hr_enabled: bool
     mfa_portal_enabled: bool
+    mfa_hr_required: bool
+    mfa_portal_required: bool
     hr_login_source: str
     portal_login_source: str
     password_min_entropy: int
@@ -128,6 +130,8 @@ _LOGIN_SOURCES = frozenset({"email", "system_id", "staff_id"})
 class AuthPolicyPatch(BaseModel):
     mfa_hr_enabled: bool | None = None
     mfa_portal_enabled: bool | None = None
+    mfa_hr_required: bool | None = None
+    mfa_portal_required: bool | None = None
     hr_login_source: str | None = None
     portal_login_source: str | None = None
     password_min_entropy: int | None = Field(default=None, ge=20, le=256)
@@ -367,6 +371,13 @@ def put_policy(
     changes: dict[str, Any] = body.model_dump(exclude_unset=True)
     for field, value in changes.items():
         setattr(row, field, value)
+    for surface in ("hr", "portal"):
+        required = f"mfa_{surface}_required"
+        enabled = f"mfa_{surface}_enabled"
+        if changes.get(enabled) is False:
+            setattr(row, required, False)
+        elif getattr(row, required):
+            setattr(row, enabled, True)
     write_audit(db, user, action="update", entity_type="client_auth_policy",
                 entity_id=client_id, after=changes)
     db.commit()

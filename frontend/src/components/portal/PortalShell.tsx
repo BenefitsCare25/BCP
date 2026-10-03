@@ -22,6 +22,9 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { usePortalMe, useMemberSecurityStatus } from "@/api/portal";
+import { portalApi } from "@/api/portalClient";
+import { queryClient } from "@/lib/queryClient";
+import { toast } from "sonner";
 import { usePortalConversations } from "@/api/portalMessages";
 import { UnreadBadge, messagesLabel } from "./leaf/MessageMount";
 import { usePortalSession } from "@/stores/portalSession";
@@ -110,6 +113,41 @@ const ICON_BUTTON =
   "text-label transition-colors duration-200 ease-leaf hover:bg-shade hover:text-record";
 
 export function PortalShell() {
+  const restricted = usePortalSession(s => s.mfaEnrollmentRequired);
+  const company = useCompany();
+  const navigate = useNavigate();
+  const signOut = async () => {
+    try {
+      await portalApi.logout();
+      usePortalSession.getState().clearSession();
+      void queryClient.cancelQueries({ queryKey: ["portal"] });
+      queryClient.removeQueries({ queryKey: ["portal"] });
+      void navigate({ to: "/portal/$company/sign-in", params: { company } });
+    } catch {
+      toast.error("Couldn't complete sign-out. Try again.");
+    }
+  };
+  if (restricted) {
+    return (
+      <LeafScopeContext.Provider value>
+        <main className="leaf portal-clay portal-ui min-h-screen bg-background px-4 py-6">
+          <div className="mx-auto max-w-3xl">
+            <header className="mb-6 flex items-center justify-between gap-4">
+              <h1 className="text-xl font-bold">Complete two-step sign-in</h1>
+              <button type="button" className="leaf-focus text-sm underline" onClick={() => void signOut()}>
+                Sign out
+              </button>
+            </header>
+            <Outlet />
+          </div>
+        </main>
+      </LeafScopeContext.Provider>
+    );
+  }
+  return <PortalMainShell />;
+}
+
+function PortalMainShell() {
   const { location } = useRouterState();
   const navigate = useNavigate();
   const member = usePortalSession((s) => s.member);
@@ -147,9 +185,14 @@ export function PortalShell() {
     security.mfa_status !== "confirmed" &&
     location.pathname !== portalPath(company, "/security");
 
-  const signOut = () => {
-    clearSession();
-    void navigate({ to: "/portal/$company/sign-in", params: { company } });
+  const signOut = async () => {
+    try {
+      await portalApi.logout();
+      clearSession();
+      void queryClient.cancelQueries({ queryKey: ["portal"] });
+      queryClient.removeQueries({ queryKey: ["portal"] });
+      void navigate({ to: "/portal/$company/sign-in", params: { company } });
+    } catch { toast.error("Couldn't complete sign-out. Check your connection and try again."); }
   };
 
   /** Resolve a NAV subpath against the company actually in the URL. */
@@ -404,7 +447,7 @@ export function PortalShell() {
                 carry it at all. */}
             <AccessNotice access={me?.access} />
             <HeadRailProvider value={rail}>
-              <Outlet />
+        {security?.mfa_enrollment_required && !location.pathname.endsWith("/security") ? null : <Outlet />}
             </HeadRailProvider>
           </div>
         </main>

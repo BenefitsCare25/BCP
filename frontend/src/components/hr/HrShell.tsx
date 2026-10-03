@@ -15,6 +15,8 @@ import { useHrSession } from "@/stores/hrSession";
 import { NotificationBell } from "@/components/shell/NotificationBell";
 import { LeafScopeContext } from "@/lib/leaf-scope";
 import { cn } from "@/lib/cn";
+import { toast } from "sonner";
+import { queryClient } from "@/lib/queryClient";
 
 const HR_NAV = [
   { to: "/hr/dashboard", label: "Overview", icon: LayoutDashboard },
@@ -29,12 +31,17 @@ export function HrShell() {
   const clearSession = useHrSession((s) => s.clearSession);
   const { data } = useHrMe();
   const company = data?.company_name ?? me?.company_name;
+  const restricted = useHrSession(s => s.mfaEnrollmentRequired);
   const isOverview = path === "/hr/dashboard";
 
   const signOut = async () => {
-    await hrApi.logout();
-    clearSession();
-    void navigate({ to: "/hr/sign-in" });
+    try {
+      await hrApi.logout();
+      clearSession();
+      void queryClient.cancelQueries({ predicate: query => query.queryKey[0] === "hr" || query.queryKey[0] === "hr-me" });
+      queryClient.removeQueries({ predicate: query => query.queryKey[0] === "hr" || query.queryKey[0] === "hr-me" });
+      void navigate({ to: "/hr/sign-in" });
+    } catch { toast.error("Couldn't complete sign-out. Check your connection and try again."); }
   };
 
   return (
@@ -53,7 +60,7 @@ export function HrShell() {
             </Link>
             <span aria-hidden className="portal-nav-divider mx-5 hidden h-8 w-px shrink-0 bg-hairline lg:block" />
             <nav aria-label="HR navigation" className="hr-navigation flex items-center gap-0.5">
-              {HR_NAV.map(({ to, label, icon: Icon }) => (
+              {(restricted ? [] : HR_NAV).map(({ to, label, icon: Icon }) => (
                 <Link
                   key={to}
                   to={to}
@@ -68,7 +75,7 @@ export function HrShell() {
               ))}
             </nav>
           <div className="portal-nav-actions ml-auto flex shrink-0 items-center gap-1 pl-2 lg:pl-6">
-            <NotificationBell largeTarget />
+            {!restricted && <NotificationBell largeTarget />}
             <Link
               to="/hr/security"
               aria-label="Security"

@@ -26,6 +26,7 @@ from app.core import passwords as PW
 from app.core import sessions as SESS
 from app.core.auth import CurrentUser
 from app.core.breach_check import is_breached
+from app.core.cookie_auth import require_same_origin
 from app.core.rate_limit import limiter
 from app.core.request_context import client_ip, user_agent
 from app.core.tenancy_host import TenantContext
@@ -65,6 +66,7 @@ class HrMeOut(BaseModel):
     company_name: str | None = None
     mfa_status: str = "none"  # none | pending | confirmed
     mfa_available: bool = False  # broker has enabled 2FA for the HR surface
+    mfa_required: bool = False
 
 
 class MfaStartOut(BaseModel):
@@ -126,6 +128,7 @@ def _me(db: Session, user: User, client_id: str) -> HrMeOut:
         company_name=_company_name(db, client_id),
         mfa_status=HR.user_mfa_status(db, user.id),
         mfa_available=HR.get_auth_policy(db, client_id).mfa_hr_enabled,
+        mfa_required=HR.get_auth_policy(db, client_id).mfa_hr_required,
     )
 
 
@@ -137,15 +140,15 @@ def _issue_login(
     tenant: TenantContext,
     *,
     mfa_enrollment_required: bool = False,
+    mfa_verified: bool = False,
 ) -> TokenOut:
     """Mint access + refresh for a fully-authenticated HR user. Commits."""
     policy = HR.get_auth_policy(db, tenant.client_id)
-    access, exp = HR.issue_hr_access_token(
-        user_id=user.id,
-        client_id=tenant.client_id,
-        broker_firm_id=tenant.broker_firm_id,
-        role=user.role,
-    )
+    from app.models import AuthCredential
+
+    cred = db.query(AuthCredential).filter(AuthCredential.user_id == user.id).one()
+    HR.reset_failures(cred)
+    cred.last_login_at = datetime.now(UTC)
     issued = SESS.issue_session(
         db,
         subject_type=SUBJECT_USER,
@@ -156,6 +159,12 @@ def _issue_login(
         ip=_client_ip(request),
         user_agent=_ua(request),
         subdomain=request.headers.get("host"),
+        mfa_verified=mfa_verified,
+    )
+    access, exp = HR.issue_hr_access_token(
+        user_id=user.id, client_id=tenant.client_id,
+        broker_firm_id=tenant.broker_firm_id, role=user.role,
+        session_id=issued.session_id,
     )
     EV.write_auth_event(
         db,
@@ -172,7 +181,7 @@ def _issue_login(
         detail={"mfa_enrollment_required": mfa_enrollment_required},
     )
     db.commit()
-    HR.set_refresh_cookie(response, issued.token, issued.expires_at)
+    HR.set_refresh_cookie(response, issued.token, issued.expires_at, client_id=tenant.client_id)
     return TokenOut(
         access_token=access,
         expires_at=exp,
@@ -234,8 +243,6 @@ def login(
         raise _INVALID
 
     # Password correct.
-    HR.reset_failures(cred)
-    cred.last_login_at = now
     if PW.needs_rehash(cred.password_hash):
         cred.password_hash = PW.hash_password(body.password)
 
@@ -278,7 +285,7 @@ def login(
     # enrolment is required, so the shell forces set-up before real work.
     return _issue_login(
         db, response, request, user, tenant,
-        mfa_enrollment_required=policy.mfa_hr_enabled and not enrolled,
+        mfa_enrollment_required=policy.mfa_hr_required and not enrolled,
     )
 
 
@@ -297,7 +304,10 @@ def verify_mfa(
     try:
         user_id, cid = HR.verify_mfa_challenge_token(body.challenge_token)
     except jwt.InvalidTokenError as exc:
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Challenge expired.") from exc
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, {
+            "code": "challenge_expired",
+            "message": "Your authentication challenge expired. Sign in again.",
+        }) from exc
     if cid != tenant.client_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Unknown tenant.")
 
@@ -342,7 +352,7 @@ def verify_mfa(
         )
         db.commit()
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid authentication code.")
-    return _issue_login(db, response, request, user, tenant)
+    return _issue_login(db, response, request, user, tenant, mfa_verified=True)
 
 
 # ── MFA enrolment (authenticated, self-service) ────────────────────────────────
@@ -375,6 +385,8 @@ def mfa_enroll_confirm(
     recovery = HR.confirm_user_mfa_enrollment(db, current.user_id, body.code.strip())
     if recovery is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "That code didn't match — try again.")
+    claims = HR._decode_hr_access_token(request.headers.get("authorization", "")[7:])
+    SESS.confirm_session_mfa(db, str(claims["sid"]))
     EV.write_auth_event(
         db, event_type=EV.EVENT_MFA_SUCCESS, outcome=EV.OUTCOME_SUCCESS, surface="hr",
         subject_type=SUBJECT_USER, subject_id=current.user_id, client_id=client_id,
@@ -393,6 +405,11 @@ def mfa_disable(
     db: Session = Depends(get_db),
 ) -> dict[str, str]:
     from app.models import AuthCredential
+
+    if HR.get_auth_policy(db, _current_client_id(current)).mfa_hr_required:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN, "Your company requires two-factor authentication.",
+        )
 
     # Re-authenticate with the password before removing a security factor.
     cred = (
@@ -418,7 +435,9 @@ def refresh(
 ) -> TokenOut:
     from app.models import User
 
-    token = request.cookies.get(HR.REFRESH_COOKIE_NAME)
+    require_same_origin(request)
+
+    token = request.cookies.get(HR.refresh_cookie_name(tenant.client_id))
     if not token:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "No session.")
     policy = HR.get_auth_policy(db, tenant.client_id)
@@ -436,11 +455,11 @@ def refresh(
             subdomain=request.headers.get("host"),
         )
         db.commit()
-        HR.clear_refresh_cookie(response)
+        HR.clear_refresh_cookie(response, tenant.client_id)
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Session revoked. Sign in again.")
     if result.session is None:
         db.commit()
-        HR.clear_refresh_cookie(response)
+        HR.clear_refresh_cookie(response, tenant.client_id)
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Session expired.")
 
     from app.models import AuthSession
@@ -449,19 +468,29 @@ def refresh(
     # Resolve the subject from the freshly-issued child row and re-verify the
     # session is pinned to the subdomain's tenant.
     row = db.get(AuthSession, child.session_id)
-    if row is None or row.client_id != tenant.client_id:
+    if row is None or row.client_id != tenant.client_id or row.subject_type != SUBJECT_USER:
         db.commit()
-        HR.clear_refresh_cookie(response)
+        HR.clear_refresh_cookie(response, tenant.client_id)
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Unknown tenant.")
     user = db.get(User, row.subject_id)
     if user is None or user.role not in HR.HR_ROLES or user.status != USER_STATUS_ACTIVE:
         db.commit()
-        HR.clear_refresh_cookie(response)
+        HR.clear_refresh_cookie(response, tenant.client_id)
+        raise _INVALID
+    if HR.resolve_hr_credential(db, tenant, user.email) is None:
+        SESS.revoke_family(db, row.family_id)
+        db.commit()
+        raise _INVALID
+    if (policy.mfa_hr_required and not row.mfa_verified
+            and HR.user_has_confirmed_mfa(db, user.id)):
+        SESS.revoke_family(db, row.family_id)
+        db.commit()
         raise _INVALID
 
     access, exp = HR.issue_hr_access_token(
         user_id=user.id, client_id=tenant.client_id,
         broker_firm_id=tenant.broker_firm_id, role=user.role,
+        session_id=child.session_id,
     )
     EV.write_auth_event(
         db, event_type=EV.EVENT_TOKEN_REFRESH, outcome=EV.OUTCOME_SUCCESS, surface="hr",
@@ -470,8 +499,11 @@ def refresh(
         user_agent=_ua(request), subdomain=request.headers.get("host"),
     )
     db.commit()
-    HR.set_refresh_cookie(response, child.token, child.expires_at)
-    return TokenOut(access_token=access, expires_at=exp, me=_me(db, user, tenant.client_id))
+    HR.set_refresh_cookie(response, child.token, child.expires_at, client_id=tenant.client_id)
+    return TokenOut(
+        access_token=access, expires_at=exp, me=_me(db, user, tenant.client_id),
+        mfa_enrollment_required=policy.mfa_hr_required and not row.mfa_verified,
+    )
 
 
 # ── Logout ─────────────────────────────────────────────────────────────────────
@@ -480,8 +512,11 @@ def logout(
     request: Request,
     response: Response,
     db: Session = Depends(get_db),
+    tenant: TenantContext | None = Depends(HR.optional_hr_tenant),
 ) -> dict[str, str]:
-    token = request.cookies.get(HR.REFRESH_COOKIE_NAME)
+    require_same_origin(request)
+    client_id = tenant.client_id if tenant else None
+    token = request.cookies.get(HR.refresh_cookie_name(client_id))
     if token:
         revoked = SESS.revoke_token(db, token)
         # Only a session we actually revoked is a sign-out. A spent or unknown
@@ -502,7 +537,7 @@ def logout(
                 subdomain=request.headers.get("host"),
             )
         db.commit()
-    HR.clear_refresh_cookie(response)
+    HR.clear_refresh_cookie(response, client_id)
     return {"status": "signed_out"}
 
 
@@ -601,7 +636,7 @@ def set_password(
     # commit happens inside _issue_login
     return _issue_login(
         db, response, request, user, tenant,
-        mfa_enrollment_required=policy.mfa_hr_enabled and not enrolled,
+        mfa_enrollment_required=policy.mfa_hr_required and not enrolled,
     )
 
 

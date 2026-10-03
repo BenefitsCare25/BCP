@@ -2,8 +2,8 @@
 
 Rate limits apply to cheap-DOS-vector endpoints — placement-slip parse,
 employee/dependant upload, and matching-run — which all do meaningful DB or
-AI work. Per-client keys so one client's misbehaviour can't choke another.
-Tunable via env vars.
+AI work. Buckets use the trusted ASGI client address, not caller-supplied
+tenant headers. Limits and shared storage are tunable via environment variables.
 """
 from __future__ import annotations
 
@@ -15,28 +15,10 @@ from slowapi.errors import RateLimitExceeded
 
 
 def _key_func(request: Request) -> str:
-    """Rate-limit key: per active client when known, else per-IP.
+    """Use the ASGI peer, resolved only by the server's trusted-proxy policy.
 
-    The frontend sends the active tenant as `X-Inspro-Client` on every request,
-    so bucketing on it keeps one tenant's bursts from consuming another's quota
-    (the limit is enforced after auth validates the client, so a spoofed value
-    only ever throttles that same value's bucket). Requests without the header
-    (anonymous / pre-auth) fall back to the originating IP.
-
-    App Service / Front Door forward the real client IP as the first
-    comma-separated entry in X-Forwarded-For; SlowAPI's stock
-    `get_remote_address` reads only the immediate peer (the LB), which would
-    turn the default into a global cap.
+    Never let anonymous callers select a bucket with tenant or forwarding headers.
     """
-    client = request.headers.get("x-inspro-client", "").strip()
-    if client:
-        return f"client:{client}"
-    fwd = request.headers.get("x-forwarded-for", "")
-    if fwd:
-        ip = fwd.split(",")[0].strip()
-        if ip:
-            return f"ip:{ip}"
-    # Direct peer fallback (e.g. dev server).
     if request.client and request.client.host:
         return f"ip:{request.client.host}"
     return "ip:unknown"

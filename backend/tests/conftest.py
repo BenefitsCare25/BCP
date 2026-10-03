@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import pytest
 
@@ -56,7 +57,8 @@ os.environ.setdefault("INSPRO_FX_ENABLED", "0")
 # Pin the path here, before any test module is imported, and give each module a
 # freshly-created schema below. Modules keep their own `_setup_db` fixtures
 # (create_all + seed); those now run against an empty database whatever the order.
-_SUITE_DB = Path(__file__).parent / "_test_suite.db"
+_SUITE_DIRECTORY = TemporaryDirectory(prefix="inspro-pytest-")
+_SUITE_DB = Path(_SUITE_DIRECTORY.name) / "inspro.db"
 os.environ["INSPRO_DATABASE_URL"] = f"sqlite:///{_SUITE_DB}"
 
 # Import app.db.session HERE, while the env var above is still the one in
@@ -65,7 +67,7 @@ os.environ["INSPRO_DATABASE_URL"] = f"sqlite:///{_SUITE_DB}"
 # alphabetically-first one would otherwise win the race and own the database.
 # Those reassignments are now no-ops — which is what they always were, just
 # non-deterministically so.
-import app.db.session  # noqa: E402,F401
+import app.db.session  # noqa: E402
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -97,6 +99,12 @@ def pytest_sessionstart(session):
         except OSError:
             # Locked by another process — the per-module unlink will report it.
             pass
+
+
+def pytest_sessionfinish(session, exitstatus):
+    """Dispose the test engine before removing its temporary database on Windows."""
+    app.db.session.engine.dispose()
+    _SUITE_DIRECTORY.cleanup()
 
 
 @pytest.fixture

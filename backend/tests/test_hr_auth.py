@@ -206,7 +206,8 @@ def test_refresh_and_reuse_detection(api: TestClient):
         headers=_tenant(),
     )
     assert login.status_code == 200
-    old_refresh = api.cookies.get("inspro_hr_refresh")
+    cookie_name = f"inspro_hr_refresh_{DEMO_CLIENT_ID}"
+    old_refresh = api.cookies.get(cookie_name)
     assert old_refresh
 
     # Rotate.
@@ -218,7 +219,7 @@ def test_refresh_and_reuse_detection(api: TestClient):
     reuse = api.post(
         "/api/v1/hr/auth/refresh",
         headers=_tenant(),
-        cookies={"inspro_hr_refresh": old_refresh},
+        cookies={cookie_name: old_refresh},
     )
     assert reuse.status_code == 401
 
@@ -432,8 +433,8 @@ def test_set_password_does_not_bypass_mfa(api: TestClient):
     _set_policy(api, mfa_hr_enabled=False)
 
 
-def test_login_flags_enrollment_required_when_mfa_on_but_unenrolled(api: TestClient):
-    _set_policy(api, breach_check_enabled=False, mfa_hr_enabled=True)
+def test_login_flags_enrollment_required_when_mfa_required_but_unenrolled(api: TestClient):
+    _set_policy(api, breach_check_enabled=False, mfa_hr_required=True)
     acct = api.post(
         "/api/v1/hr-admin/accounts",
         json={"client_id": DEMO_CLIENT_ID, "email": "hr.enrol@democo.test"},
@@ -540,6 +541,7 @@ def test_idle_timeout_kills_refresh(api: TestClient):
         assert rows
         for r in rows:
             r.issued_at = datetime.now(UTC) - timedelta(minutes=10)
+            r.last_seen_at = r.issued_at
         s.commit()
 
     stale = client.post("/api/v1/hr/auth/refresh", headers=_tenant())
@@ -574,7 +576,7 @@ def test_logout_is_recorded_in_the_auth_trail(api: TestClient):
     user_id = acct["user_id"]
     assert _events("logout", user_id) == []
 
-    assert api.post("/api/v1/hr/auth/logout").status_code == 200
+    assert api.post("/api/v1/hr/auth/logout", headers=_tenant()).status_code == 200
     rows = _events("logout", user_id)
     assert len(rows) == 1
     assert rows[0].outcome == "success"
@@ -597,12 +599,14 @@ def test_a_spent_logout_cookie_records_nothing(api: TestClient):
         json={"identifier": "hr.logout2@democo.test", "password": STRONG_PW},
         headers=_tenant(),
     )
-    refresh = api.cookies.get("inspro_hr_refresh")
-    api.post("/api/v1/hr/auth/logout")
+    cookie_name = f"inspro_hr_refresh_{DEMO_CLIENT_ID}"
+    refresh = api.cookies.get(cookie_name)
+    assert refresh
+    api.post("/api/v1/hr/auth/logout", headers=_tenant())
     before = len(_events("logout", acct["user_id"]))
 
     # Replay the same, now-revoked, cookie.
-    api.post("/api/v1/hr/auth/logout", cookies={"inspro_hr_refresh": refresh})
+    api.post("/api/v1/hr/auth/logout", headers=_tenant(), cookies={cookie_name: refresh})
     assert len(_events("logout", acct["user_id"])) == before
 
 

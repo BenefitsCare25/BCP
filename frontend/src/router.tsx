@@ -16,13 +16,14 @@ import { ENTRA_ENABLED, clearLocalSession, getActiveAccount } from "@/auth/msal"
 import { DENIED_SEARCH, NoAccessError, SIGN_IN_PATH } from "@/api/client";
 import { ensureMe } from "@/api/me";
 import { PortalShell } from "@/components/portal/PortalShell";
-import { hasValidPortalSession } from "@/stores/portalSession";
+import { hasValidPortalSession, usePortalSession } from "@/stores/portalSession";
 import { currentPortalTenantSlug } from "@/lib/tenant";
 import type { SetupSearch } from "@/lib/setupLink";
 import { activateNotificationClaimContext, notificationClaimId } from "@/lib/claimNotificationLink";
 import { HrShell } from "@/components/hr/HrShell";
-import { hasValidHrSession } from "@/stores/hrSession";
+import { hasValidHrSession, useHrSession } from "@/stores/hrSession";
 import { refreshHrSession } from "@/api/hrClient";
+import { refreshPortalSession } from "@/api/portalClient";
 
 // Each page is split into its own chunk; the initial bundle ships only the
 // shell + router + the heavy infra (MSAL, react-query, tanstack-router).
@@ -222,9 +223,12 @@ const signInRoute = createRoute({
 const portalSignInRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/portal/$company/sign-in",
-  beforeLoad: ({ params }) => {
+  beforeLoad: async ({ params }) => {
     // Already signed in (and not following a fresh magic link) → straight in.
-    if (hasValidPortalSession() && !window.location.search.includes("code=")) {
+    if ((hasValidPortalSession() || await refreshPortalSession()) && !window.location.search.includes("code=")) {
+      if (usePortalSession.getState().mfaEnrollmentRequired) {
+        throw redirect({ to: "/portal/$company/security", params: { company: params.company } });
+      }
       const claimId = notificationClaimId();
       if (claimId) {
         activateNotificationClaimContext();
@@ -337,9 +341,9 @@ const portalLegacyClaimRoute = createRoute({
 const hrSignInRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/hr/sign-in",
-  beforeLoad: () => {
-    if (hasValidHrSession()) {
-      throw redirect({ to: "/hr/dashboard" });
+  beforeLoad: async () => {
+    if (hasValidHrSession() || await refreshHrSession()) {
+      throw redirect({ to: useHrSession.getState().mfaEnrollmentRequired ? "/hr/security" : "/hr/dashboard" });
     }
   },
   component: HrSignInPage,
@@ -366,6 +370,9 @@ const hrLayoutRoute = createRoute({
     // to sign-in — otherwise navigation forces a full re-login every 10 minutes.
     if (!hasValidHrSession() && !(await refreshHrSession())) {
       throw redirect({ to: "/hr/sign-in" });
+    }
+    if (useHrSession.getState().mfaEnrollmentRequired && location.pathname !== "/hr/security") {
+      throw redirect({ to: "/hr/security" });
     }
   },
   component: HrShell,
@@ -401,8 +408,8 @@ const hrEnrollmentFormsRoute = createRoute({
 const portalLayoutRoute = createRoute({
   getParentRoute: () => rootRoute,
   id: "portal-shell",
-  beforeLoad: ({ params }) => {
-    if (!hasValidPortalSession()) {
+  beforeLoad: async ({ params, location }) => {
+    if (!hasValidPortalSession() && !(await refreshPortalSession())) {
       // Back to THIS company's sign-in, not the pathless one — an expired
       // session must not cost the member the company their link named.
       const company = (params as { company?: string }).company;
@@ -410,6 +417,9 @@ const portalLayoutRoute = createRoute({
         throw redirect({ to: "/portal/$company/sign-in", params: { company } });
       }
       throw redirect({ to: "/portal/sign-in" });
+    }
+    if (usePortalSession.getState().mfaEnrollmentRequired && !location.pathname.endsWith("/security")) {
+      throw redirect({ to: "/portal/$company/security", params: { company: (params as { company: string }).company } });
     }
   },
   component: PortalShell,

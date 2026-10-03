@@ -41,6 +41,7 @@ class OtpVerifyOut(BaseModel):
     token: str
     expires_at: datetime
     member: PortalMemberOut
+    mfa_enrollment_required: bool = False
 
 
 # ── Portal profile ────────────────────────────────────────────────────────────

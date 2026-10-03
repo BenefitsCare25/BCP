@@ -28,6 +28,7 @@ import { portalApi } from "@/api/portalClient";
 import type { BenefitStatement, Dependant, Utilization } from "@/types";
 import type { PortalMember } from "@/stores/portalSession";
 import { usePortalSession } from "@/stores/portalSession";
+import { queryClient } from "@/lib/queryClient";
 
 export interface OtpRequestResult {
   status: string;
@@ -39,6 +40,13 @@ export interface OtpVerifyResult {
   token: string;
   expires_at: string;
   member: PortalMember;
+  mfa_enrollment_required?: boolean;
+}
+
+function adoptMemberSession(out: OtpVerifyResult): void {
+  void queryClient.cancelQueries({ queryKey: ["portal"] });
+  queryClient.removeQueries({ queryKey: ["portal"] });
+  usePortalSession.getState().setSession(out.token, out.expires_at, out.member, out.mfa_enrollment_required);
 }
 
 /** What this member may still do, and until when. SERVED — the client renders
@@ -93,11 +101,10 @@ export function useRequestOtp() {
 }
 
 export function useVerifyOtp() {
-  const setSession = usePortalSession((s) => s.setSession);
   return useMutation({
     mutationFn: (input: { email: string; code: string }) =>
       portalApi.postPublic<OtpVerifyResult>("/portal/auth/verify", input),
-    onSuccess: (out) => setSession(out.token, out.expires_at, out.member),
+    onSuccess: adoptMemberSession,
     meta: { localErrorHandling: true },
   });
 }
@@ -107,6 +114,7 @@ export interface MemberTokenResult {
   token: string;
   expires_at: string;
   member: PortalMember;
+  mfa_enrollment_required?: boolean;
 }
 
 export interface MemberChallengeResult {
@@ -121,36 +129,33 @@ export function isMemberToken(r: MemberLoginResult): r is MemberTokenResult {
 }
 
 export function useMemberLogin() {
-  const setSession = usePortalSession((s) => s.setSession);
   return useMutation({
     mutationFn: (input: { identifier: string; password: string }) =>
       portalApi.postPublic<MemberLoginResult>("/portal/auth/login", input),
     onSuccess: (out) => {
-      if (isMemberToken(out)) setSession(out.token, out.expires_at, out.member);
+      if (isMemberToken(out)) adoptMemberSession(out);
     },
     meta: { localErrorHandling: true },
   });
 }
 
 export function useMemberMfa() {
-  const setSession = usePortalSession((s) => s.setSession);
   return useMutation({
     mutationFn: (input: { challenge_token: string; code: string }) =>
       portalApi.postPublic<MemberTokenResult>("/portal/auth/mfa", input),
-    onSuccess: (out) => setSession(out.token, out.expires_at, out.member),
+    onSuccess: adoptMemberSession,
     meta: { localErrorHandling: true },
   });
 }
 
 export function useMemberSetPassword() {
-  const setSession = usePortalSession((s) => s.setSession);
   // May return a full session OR an `mfa_required` challenge (2FA on + enrolled)
   // — a reset link never skips MFA. The caller drives the follow-up step.
   return useMutation({
     mutationFn: (input: { token: string; password: string }) =>
       portalApi.postPublic<MemberLoginResult>("/portal/auth/set-password", input),
     onSuccess: (out) => {
-      if (isMemberToken(out)) setSession(out.token, out.expires_at, out.member);
+      if (isMemberToken(out)) adoptMemberSession(out);
     },
     meta: { localErrorHandling: true },
   });
@@ -169,6 +174,8 @@ export interface MemberSecurityStatus {
   mfa_status: string;
   /** Whether the company has enabled 2FA for the employee portal. */
   mfa_available: boolean;
+  mfa_required?: boolean;
+  mfa_enrollment_required?: boolean;
 }
 
 export interface MemberMfaStart {

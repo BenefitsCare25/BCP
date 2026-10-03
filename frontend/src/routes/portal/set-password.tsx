@@ -1,10 +1,12 @@
 /** Employee-portal set / reset password: redeem a single-use token and choose
  * a password, then land in the portal. */
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { Lock, ShieldCheck } from "lucide-react";
 import { isMemberToken, useMemberMfa, useMemberSetPassword } from "@/api/portal";
-import { formatError } from "@/lib/errors";
+import { errorCode, formatError } from "@/lib/errors";
+import { PASSWORD_MAX_LENGTH } from "@/lib/loginValidation";
+import { portalPath } from "@/lib/tenant";
 import { MFA_CODE_MAX_LENGTH, canSubmitMfaCode, normalizeMfaCode } from "@/lib/mfa";
 import { AuthScene } from "@/components/auth/AuthScene";
 import { Button } from "@/components/ui/button";
@@ -42,10 +44,12 @@ export function PortalSetPasswordPage() {
   const [code, setCode] = useState("");
   const [challenge, setChallenge] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const submitting = useRef(false);
+  const [expired, setExpired] = useState(false);
 
   const st = strength(password);
   const match = password.length > 0 && password === confirm;
-  const canSubmit = st.ok && match && !!token;
+  const canSubmit = st.ok && match && !!token && password.length <= PASSWORD_MAX_LENGTH;
 
   const finish = () => {
     const claimId = notificationClaimId();
@@ -59,15 +63,19 @@ export function PortalSetPasswordPage() {
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
+    if (submitting.current || setPw.isPending) return;
     setError(null);
     if (!token) {
       setError("This link is missing its token. Ask your HR team to resend it.");
       return;
     }
+    if (!canSubmit) { setError("Choose a strong password and enter the same password twice."); return; }
+    submitting.current = true;
     setPw.mutate(
       { token, password },
       {
         onSuccess: (out) => {
+          setPassword(""); setConfirm("");
           if (isMemberToken(out)) {
             finish();
           } else {
@@ -77,18 +85,25 @@ export function PortalSetPasswordPage() {
           }
         },
         onError: (err) => setError(formatError(err)),
+        onSettled: () => { submitting.current = false; },
       },
     );
   };
 
   const submitMfa = (e: React.FormEvent) => {
     e.preventDefault();
+    if (submitting.current || mfa.isPending || expired || !challenge || !canSubmitMfaCode(code)) return;
     setError(null);
+    submitting.current = true;
     mfa.mutate(
       { challenge_token: challenge, code: code.trim() },
       {
         onSuccess: finish,
-        onError: (err) => setError(formatError(err)),
+        onError: (err) => {
+          if (errorCode(err) === "challenge_expired") { setExpired(true); setCode(""); setChallenge(""); }
+          setError(formatError(err));
+        },
+        onSettled: () => { submitting.current = false; },
       },
     );
   };
@@ -121,11 +136,12 @@ export function PortalSetPasswordPage() {
               className="h-12 text-center text-lg font-semibold tracking-[0.5em]"
             />
           </div>
-          {error && <p className="text-sm text-error">{error}</p>}
+          {error && <p className="text-sm text-error" role="alert">{error}</p>}
+          {expired && <a className="block text-sm underline" href={portalPath(company, "/sign-in")}>Sign in with your new password</a>}
           <Button
             type="submit"
             className="h-12 w-full text-md transition-transform duration-150 active:scale-[0.99]"
-            disabled={mfa.isPending || !canSubmitMfaCode(code)}
+            disabled={expired || mfa.isPending || !canSubmitMfaCode(code)}
           >
             {mfa.isPending ? "Verifying…" : "Verify & sign in"}
           </Button>
@@ -154,6 +170,9 @@ export function PortalSetPasswordPage() {
             <Lock className="pointer-events-none absolute left-3.5 top-1/2 size-[18px] -translate-y-1/2 text-muted-foreground" />
             <Input
               id="portal-new-password"
+              required
+              minLength={MIN_LENGTH}
+              maxLength={PASSWORD_MAX_LENGTH}
               type="password"
               autoComplete="new-password"
               placeholder="••••••••••••"
@@ -180,6 +199,8 @@ export function PortalSetPasswordPage() {
             <Lock className="pointer-events-none absolute left-3.5 top-1/2 size-[18px] -translate-y-1/2 text-muted-foreground" />
             <Input
               id="portal-confirm-password"
+              required
+              maxLength={PASSWORD_MAX_LENGTH}
               type="password"
               autoComplete="new-password"
               placeholder="••••••••••••"
@@ -192,7 +213,7 @@ export function PortalSetPasswordPage() {
             <p className="text-xs text-error">Passwords don't match</p>
           )}
         </div>
-        {error && <p className="text-sm text-error">{error}</p>}
+        {error && <p className="text-sm text-error" role="alert">{error}</p>}
         <Button
           type="submit"
           className="h-12 w-full text-md transition-transform duration-150 active:scale-[0.99]"

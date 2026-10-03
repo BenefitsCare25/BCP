@@ -1,0 +1,110 @@
+.portal-login {
+  --color-primary: #df0024;
+  --color-primary-foreground: #fff;
+  --color-foreground: #101e30;
+  --color-muted-foreground: #465a79;
+  --color-ring: #c60024;
+  --color-error: #b00020;
+  --login-surface: #fff;
+  --login-wash: #f3f7fc;
+  --login-line: #c3cede;
+  --login-input-line: #98a9c0;
+  --login-hover: #ffe9ed;
+  --login-red-hover: #ba0020;
+  --login-red-soft: #f6bec8;
+  --login-red-ink: #803044;
+  --login-selection: #ffd8de;
+  --login-panel-corner: 64px;
+  --login-scene-width: min(62%, max(720px, 100svh));
+  font-family: "Figtree Variable", Figtree, sans-serif;
+  color: var(--color-foreground);
+  background: var(--login-surface);
+  min-height: 100svh;
+  letter-spacing: 0;
+  color-scheme: light;
+}
+.portal-login *, .portal-login *::before, .portal-login *::after { letter-spacing: 0; }
+.portal-login ::selection { background: var(--login-selection); color: var(--login-red-ink); }
+.portal-login__brand { height: 64px; margin-bottom: 24px; display: flex; align-items: center; }
+.portal-login__logo { width: 200px; height: 64px; object-fit: contain; }
+.portal-login__stage { position: relative; display: flow-root; isolation: isolate; min-height: 100svh; overflow: clip; }
+.portal-login__scenery { position: absolute; inset: 0 auto 0 0; width: calc(var(--login-scene-width) + var(--login-panel-corner)); pointer-events: none; }
+.portal-login__landscape { position: absolute; inset: 0; overflow: hidden; }
+.portal-login__plate, .portal-login__video { position: absolute; width: 100%; height: 100%; object-fit: cover; object-position: left bottom; }
+/* The full scene is opaque. Its loop join is already finished in the media. */
+.portal-login__video { visibility: hidden; }
+.portal-login__scenery[data-video-ready="true"] .portal-login__video { visibility: visible; }
+.portal-login__content { position: relative; z-index: 1; margin-left: var(--login-scene-width); min-height: inherit; padding: 80px 48px 84px 44px; background: var(--login-surface); border-top-left-radius: var(--login-panel-corner); display: flex; flex-direction: column; justify-content: center; }
+.portal-login__form { width: 100%; max-width: 410px; margin: 0 auto; }
+.portal-login h1 { font-size: 40px; font-weight: 700; line-height: 1.15; margin: 0; text-wrap: balance; overflow-wrap: anywhere; }
+.portal-login__subtitle { font-size: 18px; color: var(--color-muted-foreground); line-height: 1.5; margin: 10px 0 0; }
+.portal-login__roles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); margin: 28px 0; border: 1px solid var(--login-line); border-radius: 8px; background: var(--login-wash); overflow: hidden; }
+.portal-login__roles a { min-height: 48px; padding: 12px; display: grid; place-items: center; text-align: center; font-size: 16px; font-weight: 600; color: var(--color-muted-foreground); transition: background-color 160ms, color 160ms; }
+.portal-login__roles a[aria-current] { background: var(--color-primary); color: var(--color-primary-foreground); }
+.portal-login__roles a:not([aria-current]):hover { background: var(--login-hover); color: var(--color-error); }
+.portal-login :is(a, button):focus-visible { outline: 3px solid var(--color-ring); outline-offset: 3px; }
+.portal-login__roles a:focus-visible { outline-offset: -4px; }
+.portal-login__roles a[aria-current]:focus-visible { outline-color: var(--color-primary-foreground); }
+.portal-login form { display: flex; flex-direction: column; gap: 20px; }
+.portal-login form > * { margin-top: 0; margin-bottom: 0; min-width: 0; }
+.portal-login form label { display: block; font-size: 15px; line-height: 1.4; font-weight: 500; text-transform: none; color: var(--color-foreground); }
+.portal-login input { height: 50px; background: var(--login-surface); border: 1px solid var(--login-input-line); border-radius: 8px; font-size: 16px; box-shadow: none; color: var(--color-foreground); caret-color: var(--color-primary); transition: border-color 160ms, outline-color 160ms; }
+.portal-login input::placeholder { color: var(--color-muted-foreground); opacity: 1; }
+.portal-login input:hover { border-color: var(--color-muted-foreground); }
+.portal-login input:focus-visible { border-color: var(--color-ring); outline: 2px solid var(--color-ring); outline-offset: 2px; box-shadow: none; }
+.portal-login input.portal-login__password { padding-left: 14px; padding-right: 52px; }
+.portal-login__reveal { position: absolute; right: 3px; top: 3px; width: 44px; height: 44px; display: grid; place-items: center; color: var(--color-muted-foreground); border-radius: 6px; }
+.portal-login__reveal:hover { background: var(--login-hover); color: var(--color-error); }
+.portal-login form p { font-size: 13px; line-height: 1.5; }
+.portal-login form [role="alert"] { padding: 10px 12px; border-radius: 6px; background: var(--login-hover); color: var(--color-error); overflow-wrap: anywhere; }
+.portal-login form button[type="submit"] { position: relative; min-height: 54px; height: auto; width: 100%; padding: 12px 52px; font-size: 18px; font-weight: 600; border-radius: 8px; background: var(--color-primary); color: var(--color-primary-foreground); margin-top: 4px; white-space: normal; }
+.portal-login form button[type="submit"]:hover:not(:disabled) { background: var(--login-red-hover); }
+.portal-login form button[type="submit"]:disabled { opacity: 1; background: var(--login-red-soft); color: var(--login-red-ink); }
+.portal-login form button[type="submit"] .portal-login__arrow { position: absolute; right: 20px; }
+.portal-login form button[type="button"]:not(.portal-login__reveal) { min-height: 44px; font-size: 14px; }
+.portal-login__support { font-size: 14px; text-align: center; color: var(--color-muted-foreground); margin-top: 28px; line-height: 1.6; }
+.portal-login__support span { color: var(--color-foreground); }
+.portal-login__footer { position: absolute; bottom: 28px; left: 44px; right: 48px; display: flex; justify-content: center; align-items: center; gap: 7px; font-size: 12px; color: var(--color-muted-foreground); }
+@media (min-width: 1800px) {
+  .portal-login__form { max-width: 430px; }
+  .portal-login__content { padding-right: 72px; }
+  .portal-login__footer { right: 72px; }
+}
+@media (max-width: 1200px) and (min-width: 901px) {
+  .portal-login { --login-scene-width: 55%; }
+  .portal-login__content { padding-right: 32px; padding-left: 44px; }
+  .portal-login__footer { left: 44px; right: 32px; }
+  .portal-login h1 { font-size: 36px; }
+}
+@media (max-width: 900px) {
+  .portal-login { --login-panel-corner: 32px; }
+  .portal-login__brand { height: 55px; margin-bottom: 28px; }
+  .portal-login__logo { width: 172px; height: 55px; }
+  .portal-login__stage { min-height: 100svh; }
+  .portal-login__scenery { position: relative; width: 100%; height: 230px; }
+  .portal-login__plate, .portal-login__video { object-position: left 20%; }
+  .portal-login__content { margin-left: 0; margin-top: calc(-1 * var(--login-panel-corner)); min-height: calc(100svh - 230px + var(--login-panel-corner)); padding: 28px 24px 76px; justify-content: flex-start; }
+  .portal-login__form { max-width: 440px; }
+  .portal-login h1 { font-size: 32px; }
+  .portal-login__subtitle { font-size: 17px; }
+  .portal-login__roles { margin: 24px 0; }
+  .portal-login__footer { left: 24px; right: 24px; bottom: 24px; }
+  .portal-login__support { margin-top: 24px; }
+}
+@media (min-width: 601px) and (max-width: 900px) {
+  .portal-login__scenery { height: auto; aspect-ratio: 16 / 9; }
+  .portal-login__content { min-height: auto; }
+}
+@media (max-width: 400px) {
+  .portal-login__scenery { height: 200px; }
+  .portal-login__content { min-height: calc(100svh - 200px + var(--login-panel-corner)); padding-inline: 20px; }
+  .portal-login h1 { font-size: 30px; }
+  .portal-login form { gap: 18px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .portal-login *, .portal-login *::before, .portal-login *::after { animation: none !important; transition: none !important; }
+  .portal-login__video { display: none; }
+}
+@media (forced-colors: active) {
+  .portal-login__roles a[aria-current] { outline: 2px solid Highlight; outline-offset: -3px; }
+}

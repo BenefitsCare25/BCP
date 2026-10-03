@@ -1,13 +1,16 @@
 /** Employee-portal sign-in: username (email / member ID / employee ID) +
  * password, with an optional two-factor step. */
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
-import { KeyRound, Lock, User } from "lucide-react";
+import { ArrowRight, User } from "lucide-react";
 import { isMemberToken, useMemberLogin, useMemberMfa } from "@/api/portal";
 import { takeAccessEndedMessage } from "@/api/portalClient";
-import { errorStatus, formatError } from "@/lib/errors";
+import { errorCode, formatError } from "@/lib/errors";
+import { loginError, validateCredentials, IDENTIFIER_MAX_LENGTH, type LoginFieldErrors } from "@/lib/loginValidation";
+import { usePortalSession } from "@/stores/portalSession";
 import { MFA_CODE_MAX_LENGTH, canSubmitMfaCode, normalizeMfaCode } from "@/lib/mfa";
-import { AuthScene } from "@/components/auth/AuthScene";
+import { PortalLoginScene } from "@/components/auth/PortalLoginScene";
+import { LoginPasswordField } from "@/components/auth/LoginPasswordField";
 import {
   CompanyField,
   commitCompany,
@@ -56,6 +59,8 @@ export function PortalSignInPage() {
   );
   const [company, setCompany] = useState("");
   const companyRequired = useCompanyRequired();
+  const [fieldErrors, setFieldErrors] = useState<LoginFieldErrors>({});
+  const submitting = useRef(false);
 
   // The company in the PATH when there is one; otherwise the code the member
   // just typed and `commitCompany` stored. Both are needed: the pathless
@@ -63,6 +68,10 @@ export function PortalSignInPage() {
   // after a successful sign-in would be a loop.
   const claimId = notificationClaimId();
   const finish = () => {
+    if (usePortalSession.getState().mfaEnrollmentRequired) {
+      void navigate({ to: "/portal/$company/security", params: { company: routeCompany || company.trim().toLowerCase() } });
+      return;
+    }
     if (claimId) {
       activateNotificationClaimContext();
       void navigate({ to: "/portal/$company/claims/$claimId", params: { company: routeCompany || company.trim().toLowerCase(), claimId } });
@@ -76,17 +85,23 @@ export function PortalSignInPage() {
 
   const submitCredentials = (e: React.FormEvent) => {
     e.preventDefault();
+    if (submitting.current || login.isPending) return;
     setError(null);
+    const errors = validateCredentials(identifier, password, companyRequired ? company : undefined);
+    setFieldErrors(errors);
+    if (Object.keys(errors).length) return;
     // The tenant must be settled BEFORE the request — the API client reads it
     // synchronously to build the X-Inspro-Tenant-Slug header.
     if (companyRequired && !commitCompany(company)) {
       setError("Enter your company code — it's in your invitation email.");
       return;
     }
+    submitting.current = true;
     login.mutate(
       { identifier: identifier.trim(), password },
       {
         onSuccess: (out) => {
+          setPassword("");
           if (isMemberToken(out)) {
             finish();
           } else if (out.status === "password_reset_required") {
@@ -119,49 +134,53 @@ export function PortalSignInPage() {
         // this, with the DATE their access ended — the one fact they cannot
         // look up — and it was being replaced by "check and try again", which
         // reads as a typo and ends with the member locking their own account.
-        onError: (err) => {
-          const status = errorStatus(err);
           // Only a 401/400 is about what they typed. A 5xx or no response at
           // all read as "wrong password", and the member retyped a correct one
           // until the lockout fired.
-          setError(
-            status === 423 || status === 429 || status === 403
-              ? formatError(err)
-              : status === 401 || status === 400 || status === 422
-                ? "Those details weren't recognised. Check and try again."
-                : "We couldn't reach the portal just now. Your details weren't checked — try again in a moment.",
-          );
-        },
+        onError: (err) => setError(loginError(err)),
+        onSettled: () => { submitting.current = false; },
       },
     );
   };
 
   const submitMfa = (e: React.FormEvent) => {
     e.preventDefault();
+    if (submitting.current || mfa.isPending) return;
+    if (!canSubmitMfaCode(code) || !challenge) {
+      setError("Enter a 6-digit authentication code or a recovery code such as a1b2-c3d4-e5f6.");
+      return;
+    }
     setError(null);
+    submitting.current = true;
     mfa.mutate(
       { challenge_token: challenge, code: code.trim() },
       {
         onSuccess: finish,
-        onError: (err) => setError(formatError(err)),
+        onError: (err) => {
+          if (errorCode(err) === "challenge_expired") {
+            setStep("credentials"); setCode(""); setChallenge(""); setPassword("");
+          }
+          setError(formatError(err));
+        },
+        onSettled: () => { submitting.current = false; },
       },
     );
   };
 
   return (
-    <AuthScene
-      portalTheme="employee"
-      eyebrow="Employee benefits portal"
-      title={step === "credentials" ? "Sign in" : "Two-factor authentication"}
+    <PortalLoginScene
+      role="employee"
+      company={company}
+      title={step === "credentials" ? "Welcome back" : "Two-factor authentication"}
       subtitle={
         step === "credentials"
-          ? "Sign in to access your benefits, claims and coverage."
+          ? "Sign in to your employee portal"
           : "Enter the 6-digit code from your authenticator app, or one of your recovery codes."
       }
     >
       {step === "credentials" ? (
-        <form onSubmit={submitCredentials} className="space-y-4">
-          <CompanyField id="portal-company" value={company} onChange={setCompany} />
+        <form noValidate onSubmit={submitCredentials} className="space-y-4">
+          <CompanyField id="portal-company" value={company} onChange={setCompany} error={fieldErrors.company} />
           <div className="space-y-1.5">
             <Label
               htmlFor="portal-identifier"
@@ -173,40 +192,27 @@ export function PortalSignInPage() {
               <User className="pointer-events-none absolute left-3.5 top-1/2 size-[18px] -translate-y-1/2 text-muted-foreground" />
               <Input
                 id="portal-identifier"
+                name="username"
+                required
+                maxLength={IDENTIFIER_MAX_LENGTH}
+                aria-invalid={!!fieldErrors.identifier}
+                aria-describedby={fieldErrors.identifier ? "portal-identifier-error" : undefined}
                 type="text"
                 autoComplete="username"
                 spellCheck={false}
-                placeholder="you@company.com  or  EM-7Q2M8K"
+                placeholder="Email or ID"
                 value={identifier}
                 onChange={(e) => setIdentifier(e.target.value)}
-                autoFocus
                 className="h-12 pl-11"
               />
             </div>
+            {fieldErrors.identifier && <p id="portal-identifier-error" className="text-sm text-error" role="alert">{fieldErrors.identifier}</p>}
           </div>
-          <div className="space-y-1.5">
-            <Label
-              htmlFor="portal-password"
-              className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground"
-            >
-              Password
-            </Label>
-            <div className="relative">
-              <Lock className="pointer-events-none absolute left-3.5 top-1/2 size-[18px] -translate-y-1/2 text-muted-foreground" />
-              <Input
-                id="portal-password"
-                type="password"
-                autoComplete="current-password"
-                placeholder="••••••••••••"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className="h-12 pl-11"
-              />
-            </div>
-          </div>
-          {error && <p className="text-sm text-error">{error}</p>}
+          <LoginPasswordField id="portal-password" value={password} onChange={setPassword} error={fieldErrors.password} />
+          {error && <p className="text-sm text-error" role="alert">{error}</p>}
           <Button
             type="submit"
+            loading={login.isPending}
             className="h-12 w-full text-md transition-transform duration-150 active:scale-[0.99]"
             disabled={
               login.isPending ||
@@ -215,7 +221,7 @@ export function PortalSignInPage() {
               (companyRequired && !company.trim())
             }
           >
-            <KeyRound className="size-[18px]" />
+            <ArrowRight className="portal-login__arrow size-5" aria-hidden="true" />
             {login.isPending ? "Signing in…" : "Sign in"}
           </Button>
         </form>
@@ -230,6 +236,8 @@ export function PortalSignInPage() {
             </Label>
             <Input
               id="portal-totp"
+              name="one-time-code"
+              required
               inputMode="text"
               autoComplete="one-time-code"
               placeholder="123456"
@@ -240,9 +248,10 @@ export function PortalSignInPage() {
               className="h-12 text-center text-lg font-semibold tracking-[0.5em]"
             />
           </div>
-          {error && <p className="text-sm text-error">{error}</p>}
+          {error && <p className="text-sm text-error" role="alert">{error}</p>}
           <Button
             type="submit"
+            loading={mfa.isPending}
             className="h-12 w-full text-md transition-transform duration-150 active:scale-[0.99]"
             disabled={mfa.isPending || !canSubmitMfaCode(code)}
           >
@@ -250,10 +259,13 @@ export function PortalSignInPage() {
           </Button>
           <button
             type="button"
+            disabled={mfa.isPending}
             className="w-full text-center text-xs text-muted-foreground transition-colors hover:text-foreground"
             onClick={() => {
               setStep("credentials");
               setCode("");
+              setChallenge("");
+              setPassword("");
               setError(null);
             }}
           >
@@ -261,6 +273,6 @@ export function PortalSignInPage() {
           </button>
         </form>
       )}
-    </AuthScene>
+    </PortalLoginScene>
   );
 }

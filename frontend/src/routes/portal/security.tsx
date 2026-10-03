@@ -15,6 +15,9 @@
  *    refetches on window focus — so alt-tabbing to a password manager to save
  *    them flipped `enrolled`, unmounted the enrol flow and destroyed the codes. */
 import { useState } from "react";
+import { useNavigate } from "@tanstack/react-router";
+import { refreshPortalSession } from "@/api/portalClient";
+import { useCompany } from "@/components/portal/useCompany";
 import { QRCodeSVG } from "qrcode.react";
 import { toast } from "sonner";
 import { Copy, Loader2 } from "lucide-react";
@@ -35,6 +38,7 @@ import { PortalErrorState } from "@/components/portal/PortalErrorState";
 import { errorStatus, formatError } from "@/lib/errors";
 import { cn } from "@/lib/cn";
 import { useDocumentTitle } from "@/lib/useDocumentTitle";
+import { usePortalSession } from "@/stores/portalSession";
 
 /** The shared leaf actions — this page used to carry its own copy of both class
  * strings. `primaryAction` is the ONE brand fill on whichever step is on
@@ -284,6 +288,7 @@ function DisablePanel({ onDisabled }: { onDisabled: () => void }) {
 
 function ChangePasswordPanel() {
   const change = useMemberChangePassword();
+  const company = useCompany();
   const [current, setCurrent] = useState("");
   const [next, setNext] = useState("");
   const [confirm, setConfirm] = useState("");
@@ -301,10 +306,11 @@ function ChangePasswordPanel() {
       { current_password: current, new_password: next },
       {
         onSuccess: () => {
-          toast.success("Password changed");
+          toast.success("Password changed. Sign in with your new password.");
           setCurrent("");
           setNext("");
           setConfirm("");
+          window.location.assign(`/portal/${encodeURIComponent(company)}/sign-in`);
         },
         onError: (e) => setError(credentialError(e, "Your current password is incorrect.")),
       },
@@ -317,24 +323,24 @@ function ChangePasswordPanel() {
       <form onSubmit={submit} className="grid gap-4 sm:max-w-md">
         <Field label="Current password" required>
           {(props) => (
-            <input {...props} type="password" autoComplete="current-password" value={current}
+            <input {...props} type="password" autoComplete="current-password" maxLength={256} value={current}
               onChange={(e) => setCurrent(e.target.value)} className={leafControl} />
           )}
         </Field>
         <Field label="New password" required>
           {(props) => (
-            <input {...props} type="password" autoComplete="new-password" minLength={12} value={next}
+            <input {...props} type="password" autoComplete="new-password" minLength={12} maxLength={256} value={next}
               onChange={(e) => setNext(e.target.value)} className={leafControl} />
           )}
         </Field>
         <Field label="Confirm new password" required error={mismatch ? "Doesn't match the new password." : error}>
           {(props) => (
-            <input {...props} type="password" autoComplete="new-password" value={confirm}
+            <input {...props} type="password" autoComplete="new-password" maxLength={256} value={confirm}
               onChange={(e) => setConfirm(e.target.value)} className={leafControl} />
           )}
         </Field>
         <div>
-          <Action tone="primary" type="submit" disabled={change.isPending || !current || next.length < 12 || mismatch}>
+          <Action tone="primary" type="submit" disabled={change.isPending || !current || next.length < 12 || next !== confirm}>
             {change.isPending && <Loader2 className="size-4 animate-spin" aria-hidden />}
             Change password
           </Action>
@@ -345,6 +351,8 @@ function ChangePasswordPanel() {
 }
 
 export function PortalSecurityPage() {
+  const navigate = useNavigate();
+  const company = useCompany();
   useDocumentTitle("Sign-in & security");
   const { data, refetch, isLoading, isError } = useMemberSecurityStatus();
   const enrolled = data?.mfa_status === "confirmed";
@@ -353,10 +361,10 @@ export function PortalSecurityPage() {
 
   return (
     <div className="portal-security grid items-start gap-3 md:grid-cols-2">
-    <ChangePasswordPanel />
-    {isLoading ? (
+    {!data?.mfa_enrollment_required && <ChangePasswordPanel />}
+    {isLoading && !recovery ? (
       <LeafSkeleton label="Loading your sign-in settings" mounts={1} />
-    ) : isError ? (
+    ) : isError && !recovery ? (
       // A failed status read is NOT "your company hasn't switched this on".
       <PortalErrorState onRetry={() => void refetch()} />
     ) : (
@@ -372,14 +380,22 @@ export function PortalSecurityPage() {
         <RecoveryCodes
           codes={recovery}
           onDone={() => {
-            setRecovery(null);
-            void refetch();
+            void refreshPortalSession().then(async restored => {
+              if (!restored) { toast.error("Sign in again to continue."); return; }
+              setRecovery(null);
+              await refetch();
+              usePortalSession.setState({ mfaRecoveryPending: false, mfaEnrollmentRequired: false });
+              void navigate({ to: "/portal/$company", params: { company } });
+            });
           }}
         />
       ) : enrolled ? (
-        <DisablePanel onDisabled={() => void refetch()} />
+        data?.mfa_required ? <p className="text-row text-label">Two-step sign-in is required by your company.</p> : <DisablePanel onDisabled={() => void refetch()} />
       ) : available ? (
-        <EnrollFlow onEnrolled={setRecovery} />
+        <EnrollFlow onEnrolled={codes => {
+          usePortalSession.setState({ mfaRecoveryPending: usePortalSession.getState().mfaEnrollmentRequired });
+          setRecovery(codes);
+        }} />
       ) : (
         <p className="text-row text-label">
           Your company hasn't switched this on for the employee portal. Your HR

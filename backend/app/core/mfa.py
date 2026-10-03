@@ -22,7 +22,7 @@ def _row(db: Session, subject_type: str, subject_id: str) -> AuthMfa | None:
     return db.execute(
         select(AuthMfa).where(
             AuthMfa.subject_type == subject_type, AuthMfa.subject_id == subject_id
-        )
+        ).with_for_update()
     ).scalar_one_or_none()
 
 

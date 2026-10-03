@@ -5,6 +5,8 @@
 # by the Dockerfile, but neither should be handed to the daemon either.
 **/inspro.db
 **/inspro.db-*
+**/*.db*
+**/*.sqlite*
 reference/
 **/var/
 **/*.xls
@@ -28,6 +30,20 @@ frontend/dist/
 .git/
 .github/
 .claude/
+.21st/
+.impeccable/
+.pnpm-store/
+output/
+tmp/
+tools/
+handover/
+**/test-results/
+**/playwright-report/
+**/*.zip
+**/*.tsbuildinfo
+**/*.pem
+**/*.key
+**/*.pfx
 docs/
 infra/
 *.md
@@ -37,3 +53,7 @@ infra/
 **/.DS_Store
 **/.env
 **/.env.*
+
+# The persistent SQLite launcher is for the local workspace only.
+backend/scripts/local_dev.py
+backend/scripts/seed_portal_ui_review.py

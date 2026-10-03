@@ -79,12 +79,15 @@ async function assertAccessible(page: Page) {
 }
 
 test.beforeEach(async ({ page }) => {
-  await page.addInitScript((session) => {
-    localStorage.setItem("inspro-hr-session", JSON.stringify(session));
+  await page.addInitScript(() => {
     // Header tenancy (what prod runs) sends the slug HR sign-in stored; the
     // subdomain default only covers dev servers without VITE_TENANT_MODE.
-    localStorage.setItem("inspro.tenantSlug", "demo");
-  }, HR_SESSION);
+    sessionStorage.setItem("inspro.tenantSlug.hr", "demo");
+  });
+  await page.route("**/api/v1/hr/auth/refresh", route => fulfilJson(route, {
+    status: "authenticated", access_token: HR_SESSION.state.token,
+    expires_at: HR_SESSION.state.expiresAt, me: HR_SESSION.state.me,
+  }));
 });
 
 test("HR submits and tracks one employee claim with evidence", async ({ page }, testInfo) => {
@@ -110,6 +113,13 @@ test("HR submits and tracks one employee claim with evidence", async ({ page }, 
       headers: request.headers(),
       body: request.postData(),
     });
+    if (url.pathname === "/api/v1/hr/auth/refresh") {
+      await fulfilJson(route, {
+        status: "authenticated", access_token: HR_SESSION.state.token,
+        expires_at: HR_SESSION.state.expiresAt, me: HR_SESSION.state.me,
+      });
+      return;
+    }
 
     if (url.pathname === "/api/v1/hr/auth/me") {
       await fulfilJson(route, HR_SESSION.state.me);
@@ -182,6 +192,7 @@ test("HR submits and tracks one employee claim with evidence", async ({ page }, 
       await fulfilJson(route, claim);
       return;
     }
+    if (url.pathname === "/api/v1/hr/auth/refresh") return route.fallback();
     await fulfilJson(route, { detail: "Unhandled HR E2E route" }, 404);
   });
 
@@ -260,7 +271,7 @@ test("an unauthenticated HR visitor is returned to sign in", async ({ page }) =>
   );
   await page.goto("/hr/claims");
   await expect(page).toHaveURL(/\/hr\/sign-in$/);
-  await expect(page.getByRole("heading", { name: /Sign in/i })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Welcome back" })).toBeVisible();
 });
 
 test("the HR ledger paginates and searches on the server", async ({ page }) => {
@@ -297,6 +308,7 @@ test("the HR ledger paginates and searches on the server", async ({ page }) => {
       );
       return;
     }
+    if (url.pathname === "/api/v1/hr/auth/refresh") return route.fallback();
     await fulfilJson(route, { detail: "Unhandled HR E2E route" }, 404);
   });
 
@@ -339,6 +351,7 @@ test("HR can upload valid claim evidence between 10 MB and 15 MB", async ({ page
       }];
       await fulfilJson(route, claim, 201);
     } else {
+      if (url.pathname === "/api/v1/hr/auth/refresh") return route.fallback();
       await fulfilJson(route, { detail: "Unhandled HR E2E route" }, 404);
     }
   });
@@ -420,6 +433,7 @@ test("HR preserves a foreign receipt currency and acknowledges the displayed con
     } else if (url.pathname === `/api/v1/hr/claims/${claim.id}`) {
       await fulfilJson(route, claim);
     } else {
+      if (url.pathname === "/api/v1/hr/auth/refresh") return route.fallback();
       await fulfilJson(route, { detail: "Unhandled HR E2E route" }, 404);
     }
   });
@@ -515,6 +529,7 @@ test("HR reuses a referral upload when a claim-create response is lost", async (
     } else if (url.pathname === `/api/v1/hr/claims/${claim.id}`) {
       await fulfilJson(route, claim);
     } else {
+      if (url.pathname === "/api/v1/hr/auth/refresh") return route.fallback();
       await fulfilJson(route, { detail: "Unhandled HR E2E route" }, 404);
     }
   });

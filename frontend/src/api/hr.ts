@@ -3,12 +3,14 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { hrApi } from "@/api/hrClient";
 import type { HrMe } from "@/stores/hrSession";
 import { useHrSession } from "@/stores/hrSession";
+import { queryClient } from "@/lib/queryClient";
 
 export interface HrTokenResult {
   status: "authenticated";
   access_token: string;
   expires_at: string;
   me: HrMe;
+  mfa_enrollment_required?: boolean;
 }
 
 export interface HrChallengeResult {
@@ -22,13 +24,14 @@ export function isTokenResult(r: HrLoginResult): r is HrTokenResult {
   return r.status === "authenticated";
 }
 
-/** Persist a token result into the session store. The MFA-enrolment nudge is
- * derived from the live identity (`mfa_available` + `mfa_status`), not carried
- * as a session flag — so it survives token refresh without special handling. */
+/** A new sign-in must not reuse another identity's cached HR data. */
 export function adoptSession(result: HrTokenResult): void {
+  const scope = { predicate: (q: { queryKey: readonly unknown[] }) => q.queryKey[0] === "hr" || q.queryKey[0] === "hr-me" };
+  void queryClient.cancelQueries(scope);
+  queryClient.removeQueries(scope);
   useHrSession
     .getState()
-    .setSession(result.access_token, result.expires_at, result.me);
+    .setSession(result.access_token, result.expires_at, result.me, !!result.mfa_enrollment_required && !!result.me.mfa_required);
 }
 
 export function useHrLogin() {
@@ -56,8 +59,10 @@ export function useHrSetPassword() {
 
 export function useHrMe() {
   const token = useHrSession((s) => s.token);
+  const me = useHrSession((s) => s.me);
   return useQuery({
-    queryKey: ["hr-me", token],
+    // Token rotation is not an identity change and must not remount MFA setup.
+    queryKey: ["hr-me", me?.user_id, me?.client_id],
     queryFn: () => hrApi.get<HrMe>("/hr/auth/me"),
     enabled: !!token,
     staleTime: 60_000,
@@ -81,7 +86,7 @@ export function useHrMfaEnrollConfirm() {
   // the user clicks "I've saved them" (which flips the page to the enrolled view).
   return useMutation({
     mutationFn: (code: string) =>
-      hrApi.post<{ status: string; recovery_codes: string[] }>(
+      hrApi.verify<{ status: string; recovery_codes: string[] }>(
         "/hr/auth/mfa/enroll/confirm",
         { code },
       ),
@@ -92,7 +97,7 @@ export function useHrMfaDisable() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (password: string) =>
-      hrApi.post<{ status: string }>("/hr/auth/mfa/disable", { password }),
+      hrApi.verify<{ status: string }>("/hr/auth/mfa/disable", { password }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["hr-me"] }),
   });
 }

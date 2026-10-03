@@ -105,8 +105,8 @@ STOPSIGNAL SIGTERM
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
     CMD python -c "import urllib.request,sys; r=urllib.request.urlopen('http://127.0.0.1:8000/health',timeout=3); sys.exit(0 if r.status==200 else 1)"
 
-# `--forwarded-allow-ips=*` so SlowAPI / request-ID middleware can read
-# X-Forwarded-For from the App Service load balancer.
+# Trust forwarded addresses only from configured proxy peers. Never use `*`
+# on a public listener: the resolved address controls anonymous rate limits.
 # `--limit-request-line` / `--limit-request-field_size` left at defaults;
 # multipart upload size is capped by FastAPI / saved_upload, not gunicorn.
 #
@@ -127,7 +127,7 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
 # front-end idle timeout, which is the real ceiling on a request here.
 CMD ["sh", "-c", "exec gunicorn -w ${WEB_CONCURRENCY:-2} -k uvicorn.workers.UvicornWorker \
      --bind 0.0.0.0:8000 \
-     --forwarded-allow-ips '*' \
+     --forwarded-allow-ips \"${FORWARDED_ALLOW_IPS:-127.0.0.1}\" \
      --timeout 120 \
      --graceful-timeout 60 \
      --access-logfile - \

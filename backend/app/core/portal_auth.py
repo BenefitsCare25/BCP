@@ -27,7 +27,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import jwt
-from fastapi import Depends, Header, HTTPException, Request, status
+from fastapi import Depends, Header, HTTPException, Request, Response, status
 from sqlalchemy.orm import Session
 
 from app.core.settings import Settings, get_settings
@@ -77,7 +77,8 @@ def hash_otp_code(code: str) -> str:
 
 
 def issue_member_token(
-    member_account_id: str, client_id: str, credential_version: int = 0
+    member_account_id: str, client_id: str, credential_version: int = 0,
+    *, session_id: str | None = None,
 ) -> tuple[str, datetime]:
     """Mint a member session token.
 
@@ -89,13 +90,29 @@ def issue_member_token(
     """
     settings = get_settings()
     now = datetime.now(UTC)
-    expires_at = now + timedelta(hours=settings.portal_token_ttl_hours)
+    expires_at = now + timedelta(minutes=10)
+    if session_id is None:
+        # Trusted internal issuers also create a revocable session.
+        from app.core import sessions as SESS
+        from app.core.hr_auth import get_auth_policy
+        from app.db.session import SessionLocal
+        from app.models.auth import SUBJECT_MEMBER
+
+        with SessionLocal() as db:
+            issued = SESS.issue_session(
+                db, subject_type=SUBJECT_MEMBER, subject_id=member_account_id,
+                client_id=client_id, broker_firm_id=None,
+                absolute_hours=get_auth_policy(db, client_id).session_absolute_hours,
+            )
+            session_id = issued.session_id
+            db.commit()
     token = jwt.encode(
         {
             "sub": member_account_id,
             "client_id": client_id,
             "typ": _TOKEN_TYPE_MEMBER,
             "cv": credential_version,
+            "sid": session_id,
             "iat": int(now.timestamp()),
             "exp": int(expires_at.timestamp()),
         },
@@ -240,6 +257,7 @@ def _unauthorized(detail: str) -> HTTPException:
 
 
 def get_current_member(
+    request: Request,
     authorization: str | None = Header(default=None),
     db: Session = Depends(get_db),
 ) -> CurrentMember:
@@ -276,6 +294,32 @@ def get_current_member(
 
     if int(claims.get("cv") or 0) != _cred_version(account):
         raise _unauthorized("Session ended — sign in again")
+    from app.core import sessions as SESS
+    from app.core.hr_auth import get_auth_policy
+    from app.models.auth import SUBJECT_MEMBER
+
+    policy = get_auth_policy(db, account.client_id)
+    session = SESS.validate_access_session(
+        db, str(claims.get("sid", "")), subject_type=SUBJECT_MEMBER,
+        subject_id=account.id, client_id=account.client_id,
+        idle_minutes=policy.session_idle_minutes,
+    )
+    if policy.mfa_portal_required and not session.mfa_verified:
+        from app.core import mfa as MFA
+
+        if MFA.has_confirmed(db, SUBJECT_MEMBER, account.id):
+            SESS.revoke_family(db, session.family_id)
+            db.commit()
+            raise _unauthorized("Sign in again to verify two-factor authentication.")
+        allowed = {
+            "/api/v1/portal/auth/security-status", "/api/v1/portal/auth/mfa/enroll/start",
+            "/api/v1/portal/auth/mfa/enroll/confirm",
+        }
+        if request.url.path not in allowed:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, {
+                "code": "mfa_enrollment_required",
+                "message": "Complete two-factor setup before continuing.",
+            })
 
     client = db.get(Client, account.client_id)
     broker_firm_id = client.broker_firm_id if client else None
@@ -287,6 +331,33 @@ def get_current_member(
         email=account.email,
         staff_id=account.staff_id,
         display_name=account.display_name,
+    )
+
+
+REFRESH_COOKIE_NAME = "inspro_portal_refresh"
+REFRESH_COOKIE_PATH = "/api/v1/portal/auth"
+
+
+def refresh_cookie_name(client_id: str | None = None) -> str:
+    if get_settings().tenant_mode == "header" and client_id:
+        return f"{REFRESH_COOKIE_NAME}_{client_id}"
+    return REFRESH_COOKIE_NAME
+
+
+def set_refresh_cookie(
+    response: Response, token: str, expires_at: datetime, client_id: str,
+) -> None:
+    response.set_cookie(
+        refresh_cookie_name(client_id), token,
+        max_age=max(0, int((expires_at - datetime.now(UTC)).total_seconds())),
+        httponly=True, secure=get_settings().env != "dev", samesite="strict",
+        path=REFRESH_COOKIE_PATH,
+    )
+
+
+def clear_refresh_cookie(response: Response, client_id: str | None = None) -> None:
+    response.delete_cookie(
+        refresh_cookie_name(client_id), path=REFRESH_COOKIE_PATH, samesite="strict",
     )
 
 

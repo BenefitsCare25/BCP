@@ -17,7 +17,7 @@ import logging
 from datetime import UTC, datetime
 
 import jwt
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -26,7 +26,10 @@ from app.core import auth_events as EV
 from app.core import credentials as CRED
 from app.core import mfa
 from app.core import passwords as PW
+from app.core import portal_auth as PA
+from app.core import sessions as SESS
 from app.core.breach_check import is_breached
+from app.core.cookie_auth import require_same_origin
 from app.core.hr_auth import get_auth_policy
 from app.core.portal_auth import (
     OTP_MAX_ATTEMPTS,
@@ -153,6 +156,7 @@ def request_code(
 def verify_code(
     request: Request,
     body: OtpVerifyIn,
+    response: Response,
     tenant: TenantContext = Depends(require_portal_tenant),
     db: Session = Depends(get_db),
 ) -> OtpVerifyOut | MemberChallengeOut:
@@ -247,7 +251,7 @@ def verify_code(
         db.commit()
         return MemberChallengeOut(challenge_token=challenge)
 
-    return _issue_member_login(db, request, matched, matched.client_id)
+    return _issue_member_login(db, request, matched, matched.client_id, response=response)
 
 
 # ── Credential login (username + password) ────────────────────────────────────
@@ -273,6 +277,7 @@ def _issue_member_login(
     request: Request,
     account: MemberAccount,
     client_id: str,
+    *, response: Response, mfa_verified: bool = False,
 ) -> OtpVerifyOut:
     # **The one choke point for every session this surface issues** — password
     # login, OTP verify, MFA and set-password all end here, so the leaver
@@ -319,11 +324,22 @@ def _issue_member_login(
         subject_type=SUBJECT_MEMBER, subject_id=account.id, client_id=client_id,
         ip=_client_ip(request), subdomain=request.headers.get("host"),
     )
+    policy = get_auth_policy(db, client_id)
+    client = db.get(Client, client_id)
+    issued = SESS.issue_session(
+        db, subject_type=SUBJECT_MEMBER, subject_id=account.id, client_id=client_id,
+        broker_firm_id=client.broker_firm_id if client else None,
+        absolute_hours=policy.session_absolute_hours, ip=_client_ip(request),
+        mfa_verified=mfa_verified,
+    )
     token, expires_at = issue_member_token(
-        account.id, client_id, CRED.credential_version(account)
+        account.id, client_id, CRED.credential_version(account), session_id=issued.session_id,
     )
     db.commit()
-    return _member_out(token, expires_at, account)
+    PA.set_refresh_cookie(response, issued.token, issued.expires_at, client_id)
+    out = _member_out(token, expires_at, account)
+    out.mfa_enrollment_required = policy.mfa_portal_required and not mfa_verified
+    return out
 
 
 @router.post("/login")
@@ -331,6 +347,7 @@ def _issue_member_login(
 def member_login(
     request: Request,
     body: MemberLoginIn,
+    response: Response,
     tenant: TenantContext = Depends(require_portal_tenant),
     db: Session = Depends(get_db),
 ) -> OtpVerifyOut | MemberChallengeOut:
@@ -381,7 +398,8 @@ def member_login(
         db.commit()
         raise HTTPException(
             status.HTTP_401_UNAUTHORIZED,
-            "This invite has expired. Ask your HR team to send a new one.",
+            {"code": "invite_expired",
+             "message": "This invite has expired. Ask your HR team to send a new one."},
         )
 
     policy = get_auth_policy(db, tenant.client_id)
@@ -407,7 +425,7 @@ def member_login(
         challenge = issue_member_mfa_challenge_token(account.id, tenant.client_id)
         db.commit()
         return MemberChallengeOut(challenge_token=challenge)
-    return _issue_member_login(db, request, account, tenant.client_id)
+    return _issue_member_login(db, request, account, tenant.client_id, response=response)
 
 
 @router.post("/mfa", response_model=OtpVerifyOut)
@@ -415,13 +433,17 @@ def member_login(
 def member_mfa(
     request: Request,
     body: MemberMfaIn,
+    response: Response,
     tenant: TenantContext = Depends(require_portal_tenant),
     db: Session = Depends(get_db),
 ) -> OtpVerifyOut:
     try:
         member_id, cid = verify_member_mfa_challenge_token(body.challenge_token)
     except jwt.InvalidTokenError as exc:
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Challenge expired.") from exc
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, {
+            "code": "challenge_expired",
+            "message": "Your authentication challenge expired. Sign in again.",
+        }) from exc
     if cid != tenant.client_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Unknown tenant.")
     account = db.get(MemberAccount, member_id)
@@ -452,7 +474,9 @@ def member_mfa(
         )
         db.commit()
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid authentication code.")
-    return _issue_member_login(db, request, account, tenant.client_id)
+    return _issue_member_login(
+        db, request, account, tenant.client_id, response=response, mfa_verified=True,
+    )
 
 
 @router.post("/set-password")
@@ -460,6 +484,7 @@ def member_mfa(
 def member_set_password(
     request: Request,
     body: MemberSetPasswordIn,
+    response: Response,
     tenant: TenantContext = Depends(require_portal_tenant),
     db: Session = Depends(get_db),
 ) -> OtpVerifyOut | MemberChallengeOut:
@@ -499,6 +524,7 @@ def member_set_password(
     # password they just chose, locking them out of the account they just made.
     clear_invite_expiry(account)
     CRED.reset_failures(account)
+    SESS.revoke_all_for_subject(db, SUBJECT_MEMBER, account.id)
     EV.write_auth_event(
         db, event_type=EV.EVENT_PASSWORD_RESET_COMPLETE, outcome=EV.OUTCOME_SUCCESS,
         surface="portal", subject_type=SUBJECT_MEMBER, subject_id=account.id,
@@ -510,7 +536,7 @@ def member_set_password(
         challenge = issue_member_mfa_challenge_token(account.id, tenant.client_id)
         db.commit()
         return MemberChallengeOut(challenge_token=challenge)
-    return _issue_member_login(db, request, account, tenant.client_id)
+    return _issue_member_login(db, request, account, tenant.client_id, response=response)
 
 
 class MemberChangePasswordIn(BaseModel):
@@ -559,6 +585,7 @@ def member_change_password(
     )
     clear_invite_expiry(account)
     CRED.reset_failures(account)
+    SESS.revoke_all_for_subject(db, SUBJECT_MEMBER, account.id)
     EV.write_auth_event(
         db, event_type=EV.EVENT_PASSWORD_CHANGE, outcome=EV.OUTCOME_SUCCESS,
         surface="portal", subject_type=SUBJECT_MEMBER, subject_id=account.id,
@@ -597,6 +624,7 @@ def member_mfa_start(
 @router.post("/mfa/enroll/confirm")
 def member_mfa_confirm(
     body: MemberMfaConfirmIn,
+    request: Request,
     member: CurrentMember = Depends(get_current_member),
     db: Session = Depends(get_db),
 ) -> dict[str, str | list[str]]:
@@ -605,6 +633,11 @@ def member_mfa_confirm(
     )
     if recovery is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "That code didn't match — try again.")
+    claims = jwt.decode(
+        request.headers.get("authorization", "")[7:], get_settings().portal_jwt_secret,
+        algorithms=["HS256"],
+    )
+    SESS.confirm_session_mfa(db, str(claims["sid"]))
     db.commit()
     return {"status": "enrolled", "recovery_codes": recovery}
 
@@ -615,6 +648,10 @@ def member_mfa_disable(
     member: CurrentMember = Depends(get_current_member),
     db: Session = Depends(get_db),
 ) -> dict[str, str]:
+    if get_auth_policy(db, member.client_id).mfa_portal_required:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN, "Your company requires two-factor authentication.",
+        )
     account = db.get(MemberAccount, member.member_account_id)
     if (
         account is None
@@ -629,10 +666,103 @@ def member_mfa_disable(
 
 @router.get("/security-status")
 def member_security_status(
+    request: Request,
     member: CurrentMember = Depends(get_current_member),
     db: Session = Depends(get_db),
 ) -> dict[str, str | bool]:
+    policy = get_auth_policy(db, member.client_id)
+    claims = jwt.decode(
+        request.headers.get("authorization", "")[7:], get_settings().portal_jwt_secret,
+        algorithms=["HS256"],
+    )
+    from app.models import AuthSession
+
+    session = db.get(AuthSession, str(claims["sid"]))
     return {
         "mfa_status": mfa.status_for(db, SUBJECT_MEMBER, member.member_account_id),
-        "mfa_available": get_auth_policy(db, member.client_id).mfa_portal_enabled,
+        "mfa_available": policy.mfa_portal_enabled,
+        "mfa_required": policy.mfa_portal_required,
+        "mfa_enrollment_required": (
+            policy.mfa_portal_required and not bool(session and session.mfa_verified)
+        ),
     }
+
+
+@router.post("/refresh", response_model=OtpVerifyOut)
+@limiter.limit("30/minute")
+def member_refresh(
+    request: Request, response: Response,
+    tenant: TenantContext = Depends(require_portal_tenant),
+    db: Session = Depends(get_db),
+) -> OtpVerifyOut:
+    from app.models import AuthSession
+
+    require_same_origin(request)
+    token = request.cookies.get(PA.refresh_cookie_name(tenant.client_id))
+    if not token:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "No session.")
+    row = db.execute(select(AuthSession).where(
+        AuthSession.refresh_hash == SESS.hash_refresh(token),
+    )).scalar_one_or_none()
+    if row is None or row.subject_type != SUBJECT_MEMBER or row.client_id != tenant.client_id:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid session.")
+    account = db.get(MemberAccount, row.subject_id)
+    if (account is None or account.status != MEMBER_STATUS_ACTIVE
+            or account.client_id != tenant.client_id):
+        SESS.revoke_family(db, row.family_id)
+        db.commit()
+        raise _INVALID
+    policy = get_auth_policy(db, tenant.client_id)
+    result = SESS.rotate_session(
+        db, token, absolute_hours=policy.session_absolute_hours,
+        idle_minutes=policy.session_idle_minutes, ip=_client_ip(request),
+    )
+    if result.session is None:
+        db.commit()
+        PA.clear_refresh_cookie(response, tenant.client_id)
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Session ended. Sign in again.")
+    issued = result.session
+    access = access_for_account(
+        db, member_account_id=account.id, client_id=account.client_id, staff_id=account.staff_id,
+    )
+    if access.state == "ended":
+        SESS.revoke_family(db, row.family_id)
+        db.commit()
+        raise HTTPException(status.HTTP_403_FORBIDDEN, refusal(access, Capability.RECORD))
+    access_token, expiry = issue_member_token(
+        account.id, account.client_id, CRED.credential_version(account),
+        session_id=issued.session_id,
+    )
+    db.commit()
+    PA.set_refresh_cookie(response, issued.token, issued.expires_at, tenant.client_id)
+    out = _member_out(access_token, expiry, account)
+    child = db.get(AuthSession, issued.session_id)
+    if (policy.mfa_portal_required and not bool(child and child.mfa_verified)
+            and mfa.has_confirmed(db, SUBJECT_MEMBER, account.id)):
+        SESS.revoke_family(db, row.family_id)
+        db.commit()
+        raise _INVALID
+    out.mfa_enrollment_required = (
+        policy.mfa_portal_required and not bool(child and child.mfa_verified)
+    )
+    return out
+
+
+@router.post("/logout")
+def member_logout(
+    request: Request, response: Response, db: Session = Depends(get_db),
+    tenant: TenantContext = Depends(require_portal_tenant),
+) -> dict[str, str]:
+    require_same_origin(request)
+    token = request.cookies.get(PA.refresh_cookie_name(tenant.client_id))
+    if token:
+        row = SESS.revoke_token(db, token)
+        if row is not None:
+            EV.write_auth_event(
+                db, event_type=EV.EVENT_LOGOUT, outcome=EV.OUTCOME_SUCCESS, surface="portal",
+                subject_type=SUBJECT_MEMBER, subject_id=row.subject_id, client_id=row.client_id,
+                ip=_client_ip(request),
+            )
+        db.commit()
+    PA.clear_refresh_cookie(response, tenant.client_id)
+    return {"status": "signed_out"}

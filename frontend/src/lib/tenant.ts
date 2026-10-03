@@ -29,12 +29,13 @@
  * edited path grants nothing — it can only ever name the wrong company, which
  * `PortalMe.company.slug` lets the shell detect and correct.
  *
- * The HR surface is deliberately untouched and still uses the stored slug: it
- * has its own auth (a host-only `SameSite=Strict` refresh cookie) and none of
- * the shareable-link problems above.
+ * HR keeps its entry query and a role-specific, tab-local fallback. Refresh
+ * cookies are isolated by role and company on a shared hostname.
  */
 
 const STORAGE_KEY = "inspro.tenantSlug";
+const tabSlugs: Partial<Record<Surface, string>> = {};
+const activeSurface = (): Surface => window.location.pathname.startsWith("/hr") ? "hr" : "portal";
 
 /** The portal's path root. The company alias is the segment straight after it. */
 export const PORTAL_BASE = "/portal";
@@ -71,7 +72,7 @@ export const TENANT_QUERY_PARAM = "company";
 
 type Surface = "hr" | "portal";
 
-function isHeaderMode(): boolean {
+export function isHeaderMode(): boolean {
   return (
     ((import.meta.env.VITE_TENANT_MODE as string | undefined) ?? "subdomain")
       .trim()
@@ -125,9 +126,12 @@ function validSlug(raw: string | null | undefined): string | null {
   return /^(?!-)(?!.*--)[a-z0-9-]+(?<!-)$/.test(slug) ? slug : null;
 }
 
-function storedSlug(): string | null {
+function storedSlug(surface: Surface = activeSurface()): string | null {
+  if (tabSlugs[surface]) return tabSlugs[surface]!;
   try {
-    return validSlug(window.localStorage.getItem(STORAGE_KEY));
+    const value = validSlug(window.sessionStorage.getItem(`${STORAGE_KEY}.${surface}`));
+    if (value) tabSlugs[surface] = value;
+    return value;
   } catch {
     // Private-mode / disabled storage — fall through to the other sources
     // rather than breaking sign-in entirely.
@@ -135,11 +139,12 @@ function storedSlug(): string | null {
   }
 }
 
-export function rememberTenantSlug(slug: string): boolean {
+export function rememberTenantSlug(slug: string, surface: Surface = activeSurface()): boolean {
   const ok = validSlug(slug);
   if (!ok) return false;
+  tabSlugs[surface] = ok;
   try {
-    window.localStorage.setItem(STORAGE_KEY, ok);
+    window.sessionStorage.setItem(`${STORAGE_KEY}.${surface}`, ok);
   } catch {
     // Non-fatal: the in-URL param still drives this page load.
   }
@@ -159,7 +164,7 @@ export function rememberTenantSlug(slug: string): boolean {
  * survives a browser with storage disabled — the one case the strip-and-remember
  * design could not handle at all.
  *
- * Elsewhere (HR) it is stored and stripped, as before.
+ * HR keeps its query so entry links also work with browser storage blocked.
  */
 export function captureTenantSlugFromUrl(): void {
   if (!isHeaderMode()) return;
@@ -189,8 +194,8 @@ export function captureTenantSlugFromUrl(): void {
   if (!slug) return;
   // Remembered either way: it is still the fallback for a bare `/portal`.
   rememberTenantSlug(slug);
-  url.searchParams.delete(TENANT_QUERY_PARAM);
   if (url.pathname === PORTAL_BASE || url.pathname.startsWith(`${PORTAL_BASE}/`)) {
+    url.searchParams.delete(TENANT_QUERY_PARAM);
     // Only when the path does not already name one — an explicit path alias
     // outranks a stale query param, same precedence as `currentPortalTenantSlug`.
     if (tenantSlugFromPath() === null) {
@@ -212,7 +217,8 @@ function currentTenantSlug(surface: Surface): string {
   // Single-host: the hostname can't tell us, so an explicitly chosen slug is
   // the only honest answer. Empty makes the backend 400 with a clear message
   // instead of silently signing the user into someone else's tenant.
-  return storedSlug() ?? "";
+  const query = surface === "hr" ? validSlug(new URLSearchParams(window.location.search).get(TENANT_QUERY_PARAM)) : null;
+  return query ?? storedSlug(surface) ?? "";
 }
 
 export function currentHrTenantSlug(): string {
@@ -231,14 +237,24 @@ export function currentHrTenantSlug(): string {
  * who is mid-sign-in before any company path exists, still resolves. */
 export function currentPortalTenantSlug(): string {
   if (!isHeaderMode()) return currentTenantSlug("portal");
-  return tenantSlugFromPath() ?? storedSlug() ?? "";
+  return tenantSlugFromPath() ?? storedSlug("portal") ?? "";
 }
 
 /** True when the UI must ask the user which company they belong to. */
 export function needsTenantSelection(): boolean {
-  return (
-    isHeaderMode() && tenantSlugFromPath() === null && storedSlug() === null
-  );
+  return isHeaderMode() && !(activeSurface() === "hr" ? currentHrTenantSlug() : currentPortalTenantSlug());
+}
+
+export function clearTenantSelection(): void {
+  const surface = activeSurface();
+  delete tabSlugs[surface];
+  try { sessionStorage.removeItem(`${STORAGE_KEY}.${surface}`); } catch { /* Use memory fallback. */ }
+  window.location.assign(surface === "hr" ? "/hr/sign-in" : "/portal/sign-in");
+}
+
+export function hrPath(path: string): string {
+  const slug = currentHrTenantSlug();
+  return isHeaderMode() && slug ? `${path}${path.includes("?") ? "&" : "?"}company=${encodeURIComponent(slug)}` : path;
 }
 
 /**
@@ -256,7 +272,7 @@ export function needsTenantSelection(): boolean {
  *
  * **Portal links carry it in the path** (`/portal/cdl/sign-in`), so what the
  * member receives is the same address they will use forever after. HR keeps the
- * `?company=` form, which `captureTenantSlugFromUrl` stores and strips.
+ * `?company=` form, retained by `captureTenantSlugFromUrl`.
  *
  * `path` is the surface-rooted path as it is written everywhere else
  * (`/portal/sign-in`); the alias is inserted, never appended by the caller.

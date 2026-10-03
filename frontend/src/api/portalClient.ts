@@ -4,10 +4,12 @@
  * never `X-Inspro-Client` — a member is pinned to one client server-side).
  * A 401 clears the session and sends the member back to the portal sign-in.
  */
-import { errorFromText } from "@/lib/errors";
+import { errorCode, errorFromText } from "@/lib/errors";
+import { withSessionRefreshLock } from "@/lib/sessionRefresh";
 import { currentPortalTenantSlug, portalPath } from "@/lib/tenant";
 import { usePortalSession } from "@/stores/portalSession";
 import { claimPeriodHeaders } from "@/lib/claimPeriod";
+import { queryClient } from "@/lib/queryClient";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "/api/v1";
 
@@ -122,12 +124,19 @@ async function failed(
   if (res.status === 403) {
     const ended = accessEndedMessage(text);
     if (ended !== null) return handleAccessEnded(ended);
+    if (errorCode(errorFromText(res.status, text, res.statusText)) === "mfa_enrollment_required") {
+      usePortalSession.setState({ mfaEnrollmentRequired: true });
+      const target = portalPath(currentPortalTenantSlug(), "/security");
+      if (window.location.pathname !== target) window.location.assign(target);
+    }
   }
   throw errorFromText(res.status, text, res.statusText);
 }
 
 function handleUnauthorized(): never {
   usePortalSession.getState().clearSession();
+  void queryClient.cancelQueries({ queryKey: ["portal"] });
+  queryClient.removeQueries({ queryKey: ["portal"] });
   // Back to THIS company's sign-in. Dropping the segment on a routine session
   // expiry sent the member to the pathless page, which turns the company field
   // back on and sends an EMPTY tenant header — so their re-sign-in 400s until
@@ -144,6 +153,51 @@ function handleUnauthorized(): never {
   throw new PortalUnauthorizedError();
 }
 
+let refreshInFlight: Promise<boolean> | null = null;
+
+export async function refreshPortalSession(): Promise<boolean> {
+  if (!refreshInFlight) {
+    const expectedMember = usePortalSession.getState().member?.id ?? null;
+    refreshInFlight = withSessionRefreshLock("portal", currentPortalTenantSlug(), async () => {
+      try {
+        const res = await fetch(`${API_BASE}/portal/auth/refresh`, {
+          method: "POST", credentials: "include", headers: tenantHeader(),
+        });
+        if (!res.ok) {
+          if (res.status === 403) {
+            const ended = accessEndedMessage(await res.text());
+            if (ended !== null) handleAccessEnded(ended);
+          }
+          return false;
+        }
+        const data = await res.json() as import("@/api/portal").MemberTokenResult;
+        const currentMember = usePortalSession.getState().member?.id ?? null;
+        if (currentMember !== expectedMember || (expectedMember !== null && data.member.id !== expectedMember)) {
+          // Do not adopt another tab's account or replay this tab's work.
+          // Leave its valid refresh cookie alone; only clear this tab.
+          return handleUnauthorized();
+        }
+        usePortalSession.getState().setSession(data.token, data.expires_at, data.member, data.mfa_enrollment_required);
+        return true;
+      } catch { return false; }
+      finally { refreshInFlight = null; }
+    });
+  }
+  return refreshInFlight;
+}
+
+async function authenticatedFetch(path: string, init: RequestInit = {}, credential = false): Promise<Response> {
+  const send = () => fetch(`${API_BASE}${path}`, {
+    ...init, credentials: "include",
+    headers: { ...init.headers, ...tenantHeader(), ...authHeader(), ...claimPeriodHeaders(path) },
+  });
+  let res = await send();
+  if (res.status === 401 && !credential) {
+    if (await refreshPortalSession()) res = await send();
+  }
+  return res;
+}
+
 async function request<T>(
   path: string,
   init: RequestInit = {},
@@ -151,7 +205,10 @@ async function request<T>(
    * see `portalApi.verify`. */
   opts: { credential?: boolean } = {},
 ): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
+  if (opts.credential && Date.parse(usePortalSession.getState().expiresAt ?? "") <= Date.now()) {
+    if (!(await refreshPortalSession())) return handleUnauthorized();
+  }
+  const res = await authenticatedFetch(path, {
     ...init,
     headers: {
       "Content-Type": "application/json",
@@ -160,7 +217,7 @@ async function request<T>(
       ...claimPeriodHeaders(path),
       ...init.headers,
     },
-  });
+  }, !!opts.credential);
   // Coded 409s (e.g. unpriced_elections / flex_overdrawn on enrollment submit)
   // surface as ConflictDetailError so pages can offer a choice — see `failed`.
   if (!res.ok) return failed(res, opts);
@@ -205,7 +262,7 @@ export const portalApi = {
    * header, so images can't be loaded via a plain <img src> — callers turn
    * the blob into an object URL. */
   blob: async (path: string): Promise<Blob> => {
-    const res = await fetch(`${API_BASE}${path}`, {
+    const res = await authenticatedFetch(path, {
       headers: { ...tenantHeader(), ...authHeader(), ...claimPeriodHeaders(path) },
     });
     if (!res.ok) return failed(res);
@@ -213,7 +270,7 @@ export const portalApi = {
   },
   /** Multipart upload — no Content-Type so the browser sets the boundary. */
   upload: async <T>(path: string, formData: FormData): Promise<T> => {
-    const res = await fetch(`${API_BASE}${path}`, {
+    const res = await authenticatedFetch(path, {
       method: "POST",
       body: formData,
       headers: { ...tenantHeader(), ...authHeader(), ...claimPeriodHeaders(path) },
@@ -226,6 +283,7 @@ export const portalApi = {
   postPublic: async <T>(path: string, body: unknown): Promise<T> => {
     const res = await fetch(`${API_BASE}${path}`, {
       method: "POST",
+      credentials: "include",
       headers: { "Content-Type": "application/json", ...tenantHeader() },
       body: JSON.stringify(body),
     });
@@ -233,5 +291,11 @@ export const portalApi = {
       throw errorFromText(res.status, await res.text(), res.statusText);
     }
     return (await res.json()) as T;
+  },
+  logout: async (): Promise<void> => {
+    const res = await fetch(`${API_BASE}/portal/auth/logout`, {
+      method: "POST", credentials: "include", headers: tenantHeader(),
+    });
+    if (!res.ok) throw errorFromText(res.status, await res.text(), res.statusText);
   },
 };

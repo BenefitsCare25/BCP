@@ -5,7 +5,18 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
-const baseURL = process.env.PLAYWRIGHT_BASE_URL ?? "http://127.0.0.1:5176";
+function testPort(name: string, fallback: number): number {
+  const port = Number(process.env[name] ?? fallback);
+  if (!Number.isInteger(port) || port < 1024 || port > 65535) {
+    throw new Error(`${name} must be a port between 1024 and 65535`);
+  }
+  return port;
+}
+
+const apiPort = testPort("INSPRO_E2E_API_PORT", 8006);
+const webPort = testPort("INSPRO_E2E_WEB_PORT", 5176);
+const apiOrigin = `http://127.0.0.1:${apiPort}`;
+const baseURL = process.env.PLAYWRIGHT_BASE_URL ?? `http://127.0.0.1:${webPort}`;
 const e2eDirectory = mkdtempSync(join(tmpdir(), "inspro-e2e-"));
 const e2eDatabase = join(e2eDirectory, "inspro.db");
 const databaseUrl = `sqlite:///${e2eDatabase.replaceAll("\\", "/")}`;
@@ -24,6 +35,7 @@ for (const args of [
     env,
     encoding: "utf8",
     shell: process.platform === "win32",
+    windowsHide: true,
   });
   if (result.status !== 0) {
     throw new Error(result.stderr || result.stdout || "E2E database setup failed");
@@ -47,9 +59,9 @@ export default defineConfig({
   webServer: [
     {
       command:
-        "uv run uvicorn app.main:app --host 127.0.0.1 --port 8006",
+        `uv run uvicorn app.main:app --host 127.0.0.1 --port ${apiPort}`,
       cwd: "../backend",
-      url: "http://127.0.0.1:8006/health",
+      url: `${apiOrigin}/health`,
       reuseExistingServer: false,
       timeout: 120_000,
       env: {
@@ -59,15 +71,16 @@ export default defineConfig({
         INSPRO_AI_KEY_ENCRYPTION_KEY: e2eEncryptionKey,
         INSPRO_DATABASE_URL: databaseUrl,
         INSPRO_E2E: "1",
+        INSPRO_CORS_ORIGINS: new URL(baseURL).origin,
       },
     },
     {
-      command: "pnpm dev --host 127.0.0.1 --port 5176",
+      command: `pnpm dev --host 127.0.0.1 --port ${webPort}`,
       cwd: ".",
       url: baseURL,
       reuseExistingServer: false,
       timeout: 120_000,
-      env: { INSPRO_DEV_API_TARGET: "http://127.0.0.1:8006" },
+      env: { INSPRO_DEV_API_TARGET: apiOrigin },
     },
   ],
   projects: [

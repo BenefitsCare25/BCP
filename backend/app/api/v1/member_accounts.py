@@ -46,6 +46,7 @@ from app.core.portal_auth import (
 )
 from app.core.rate_limit import limiter
 from app.core.request_context import client_ip, user_agent
+from app.core.sessions import revoke_all_for_subject
 from app.core.settings import get_settings
 from app.db.session import SessionLocal, get_db
 from app.models import Client, Employee, MemberAccount
@@ -305,6 +306,9 @@ def _issue_and_send_invite(db: Session, account: MemberAccount) -> bool:
     policy = get_auth_policy(db, account.client_id)
     prior = snapshot_credential(account)
     password = issue_invite_credential(account, policy.password_min_entropy)
+    # Revoke before publishing the reset, including the mail-delivery window.
+    # A failed delivery restores the password, never a revoked session.
+    revoke_all_for_subject(db, SUBJECT_MEMBER, account.id)
     db.commit()
     sent = send_member_invite(
         account,
@@ -430,6 +434,7 @@ def member_set_password_direct(
     if not account.system_login_id:
         account.system_login_id = _unique_member_login_id(db, account.client_id)
     account.password_hash = PW.hash_password(body.password)
+    revoke_all_for_subject(db, SUBJECT_MEMBER, account.id)
     account.password_updated_at = datetime.now(UTC)
     account.must_rotate_after = next_rotation_deadline(
         policy.password_rotation_days, account.password_updated_at
@@ -664,6 +669,7 @@ def _deliver_invites(account_ids: list[str], client_id: str) -> None:
                 continue  # delivered by a concurrent run — never send twice
             prior = snapshot_credential(account)
             password = issue_invite_credential(account, policy.password_min_entropy)
+            revoke_all_for_subject(db, SUBJECT_MEMBER, account.id)
             db.commit()
             if send_member_invite(account, password, slug, source):
                 account.invite_sent_at = datetime.now(UTC)

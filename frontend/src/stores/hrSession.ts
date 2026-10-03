@@ -1,5 +1,4 @@
 import { create } from "zustand";
-import { persist } from "zustand/middleware";
 
 export interface HrMe {
   user_id: string;
@@ -12,6 +11,7 @@ export interface HrMe {
   mfa_status?: string;
   /** Whether the broker has enabled 2FA for the HR surface. */
   mfa_available?: boolean;
+  mfa_required?: boolean;
 }
 
 interface HrSessionState {
@@ -20,24 +20,30 @@ interface HrSessionState {
   token: string | null;
   expiresAt: string | null;
   me: HrMe | null;
-  setSession: (token: string, expiresAt: string, me: HrMe) => void;
+  mfaEnrollmentRequired: boolean;
+  mfaRecoveryPending: boolean;
+  setSession: (token: string, expiresAt: string, me: HrMe, mfaEnrollmentRequired?: boolean) => void;
   clearSession: () => void;
 }
 
-export const useHrSession = create<HrSessionState>()(
-  persist(
-    (set) => ({
-      token: null,
-      expiresAt: null,
-      me: null,
-      setSession: (token, expiresAt, me) => set({ token, expiresAt, me }),
-      clearSession: () => set({ token: null, expiresAt: null, me: null }),
+try { localStorage.removeItem("inspro-hr-session"); } catch { /* Storage may be blocked. */ }
+
+export const useHrSession = create<HrSessionState>()((set) => ({
+  token: null,
+  expiresAt: null,
+  me: null,
+  mfaEnrollmentRequired: false,
+  mfaRecoveryPending: false,
+  setSession: (token, expiresAt, me, mfaEnrollmentRequired = false) =>
+    set(state => {
+      const mfaRecoveryPending = state.me?.user_id === me.user_id &&
+        state.me?.client_id === me.client_id && state.mfaRecoveryPending;
+      return { token, expiresAt, me, mfaRecoveryPending,
+        mfaEnrollmentRequired: mfaEnrollmentRequired || mfaRecoveryPending };
     }),
-    // Distinct key from the broker + portal sessions — three surfaces, one
-    // browser, must never clobber each other.
-    { name: "inspro-hr-session" },
-  ),
-);
+  clearSession: () =>
+    set({ token: null, expiresAt: null, me: null, mfaEnrollmentRequired: false, mfaRecoveryPending: false }),
+}));
 
 export function hasValidHrSession(): boolean {
   const { token, expiresAt } = useHrSession.getState();

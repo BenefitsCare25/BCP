@@ -8,9 +8,11 @@
  * - On 401, transparently tries ONE silent refresh (the whole point of a short
  *   access token); if that fails, clears the session and returns to sign-in.
  */
-import { errorFromText } from "@/lib/errors";
-import { currentHrTenantSlug } from "@/lib/tenant";
+import { errorCode, errorFromText } from "@/lib/errors";
+import { currentHrTenantSlug, hrPath } from "@/lib/tenant";
+import { withSessionRefreshLock } from "@/lib/sessionRefresh";
 import { useHrSession } from "@/stores/hrSession";
+import { queryClient } from "@/lib/queryClient";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "/api/v1";
 
@@ -32,8 +34,12 @@ function authHeader(): Record<string, string> {
 
 function handleUnauthorized(): never {
   useHrSession.getState().clearSession();
+  const predicate = (query: { queryKey: readonly unknown[] }) =>
+    query.queryKey[0] === "hr" || query.queryKey[0] === "hr-me";
+  void queryClient.cancelQueries({ predicate });
+  queryClient.removeQueries({ predicate });
   if (window.location.pathname !== "/hr/sign-in") {
-    window.location.assign("/hr/sign-in");
+    window.location.assign(hrPath("/hr/sign-in"));
   }
   throw new HrUnauthorizedError();
 }
@@ -47,7 +53,8 @@ let refreshInFlight: Promise<boolean> | null = null;
  * a single in-flight request. */
 export async function refreshHrSession(): Promise<boolean> {
   if (!refreshInFlight) {
-    refreshInFlight = (async () => {
+    const expected = useHrSession.getState().me;
+    refreshInFlight = withSessionRefreshLock("hr", currentHrTenantSlug(), async () => {
       try {
         const res = await fetch(`${API_BASE}/hr/auth/refresh`, {
           method: "POST",
@@ -59,15 +66,21 @@ export async function refreshHrSession(): Promise<boolean> {
           access_token: string;
           expires_at: string;
           me: import("@/stores/hrSession").HrMe;
+          mfa_enrollment_required?: boolean;
         };
-        useHrSession.getState().setSession(data.access_token, data.expires_at, data.me);
+        const current = useHrSession.getState().me;
+        if (current?.user_id !== expected?.user_id || current?.client_id !== expected?.client_id ||
+            (expected && (data.me.user_id !== expected.user_id || data.me.client_id !== expected.client_id))) {
+          return handleUnauthorized();
+        }
+        useHrSession.getState().setSession(data.access_token, data.expires_at, data.me, !!data.mfa_enrollment_required && !!data.me.mfa_required);
         return true;
       } catch {
         return false;
       } finally {
         refreshInFlight = null;
       }
-    })();
+    });
   }
   return refreshInFlight;
 }
@@ -86,7 +99,11 @@ async function request<T>(
   path: string,
   init: RequestInit = {},
   retried = false,
+  credential = false,
 ): Promise<T> {
+  if (credential && Date.parse(useHrSession.getState().expiresAt ?? "") <= Date.now()) {
+    if (!(await refreshHrSession())) return handleUnauthorized();
+  }
   const headers = new Headers(init.headers);
   if (!(init.body instanceof FormData) && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
@@ -103,6 +120,7 @@ async function request<T>(
     headers,
   });
   if (res.status === 401) {
+    if (credential) throw errorFromText(res.status, await res.text(), res.statusText);
     // Never auto-refresh the UNAUTHENTICATED auth endpoints — a 401 there is an
     // inline credential error, not a session expiry.
     //
@@ -113,12 +131,17 @@ async function request<T>(
     // out despite holding a valid refresh cookie. The genuinely public calls
     // go through `postPublic` and never reach here anyway.
     if (!retried && !PUBLIC_AUTH_PATHS.has(path)) {
-      if (await refreshHrSession()) return request<T>(path, init, true);
+      if (await refreshHrSession()) return request<T>(path, init, true, credential);
     }
     return handleUnauthorized();
   }
   if (!res.ok) {
-    throw errorFromText(res.status, await res.text(), res.statusText);
+    const error = errorFromText(res.status, await res.text(), res.statusText);
+    if (errorCode(error) === "mfa_enrollment_required") {
+      useHrSession.setState({ mfaEnrollmentRequired: true });
+      if (window.location.pathname !== "/hr/security") window.location.assign(hrPath("/hr/security"));
+    }
+    throw error;
   }
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
@@ -128,6 +151,8 @@ export const hrApi = {
   get: <T>(path: string) => request<T>(path),
   post: <T>(path: string, body: unknown) =>
     request<T>(path, { method: "POST", body: JSON.stringify(body) }),
+  verify: <T>(path: string, body: unknown) =>
+    request<T>(path, { method: "POST", body: JSON.stringify(body) }, false, true),
   postWithHeaders: <T>(
     path: string,
     body: unknown,
@@ -177,14 +202,11 @@ export const hrApi = {
     return (await res.json()) as T;
   },
   logout: async (): Promise<void> => {
-    try {
-      await fetch(`${API_BASE}/hr/auth/logout`, {
+      const res = await fetch(`${API_BASE}/hr/auth/logout`, {
         method: "POST",
         credentials: "include",
         headers: tenantHeader(),
       });
-    } catch {
-      // Best-effort; the local session is cleared regardless.
-    }
+      if (!res.ok) throw errorFromText(res.status, await res.text(), res.statusText);
   },
 };

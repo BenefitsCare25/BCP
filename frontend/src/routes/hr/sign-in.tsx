@@ -1,13 +1,17 @@
 /** HR credential sign-in: email OR HR ID + password, with an optional TOTP
  * step. Lives on `{slug}.hr.<base>`, where the subdomain scopes the tenant; on
  * a single-host deployment the company field does instead. */
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
-import { KeyRound, Lock } from "lucide-react";
+import { ArrowRight } from "lucide-react";
 import { adoptSession, isTokenResult, useHrLogin, useHrMfa } from "@/api/hr";
-import { errorStatus, formatError } from "@/lib/errors";
+import { errorCode, formatError } from "@/lib/errors";
+import { loginError, validateCredentials, type LoginFieldErrors } from "@/lib/loginValidation";
+import { useHrSession } from "@/stores/hrSession";
+import { hrPath } from "@/lib/tenant";
 import { MFA_CODE_MAX_LENGTH, canSubmitMfaCode, normalizeMfaCode } from "@/lib/mfa";
-import { AuthScene } from "@/components/auth/AuthScene";
+import { PortalLoginScene } from "@/components/auth/PortalLoginScene";
+import { LoginPasswordField } from "@/components/auth/LoginPasswordField";
 import {
   CompanyField,
   commitCompany,
@@ -31,22 +35,30 @@ export function HrSignInPage() {
   const [error, setError] = useState<string | null>(null);
   const [company, setCompany] = useState("");
   const companyRequired = useCompanyRequired();
+  const [fieldErrors, setFieldErrors] = useState<LoginFieldErrors>({});
+  const submitting = useRef(false);
 
-  const finish = () => void navigate({ to: "/hr/dashboard" });
+  const finish = () => void navigate({ to: useHrSession.getState().mfaEnrollmentRequired ? "/hr/security" : "/hr/dashboard" });
 
   const submitCredentials = (e: React.FormEvent) => {
     e.preventDefault();
+    if (submitting.current || login.isPending) return;
     setError(null);
+    const errors = validateCredentials(identifier, password, companyRequired ? company : undefined);
+    setFieldErrors(errors);
+    if (Object.keys(errors).length) return;
     // Settle the tenant BEFORE the request — the API client reads it
     // synchronously to build the X-Inspro-Tenant-Slug header.
     if (companyRequired && !commitCompany(company)) {
       setError("Enter your company code — it's in your invitation email.");
       return;
     }
+    submitting.current = true;
     login.mutate(
       { identifier: identifier.trim(), password },
       {
         onSuccess: (data) => {
+          setPassword("");
           if (isTokenResult(data)) {
             adoptSession(data);
             finish();
@@ -55,28 +67,28 @@ export function HrSignInPage() {
             setStep("mfa");
           } else if (data.status === "password_reset_required") {
             window.location.assign(
-              `/hr/set-password?token=${encodeURIComponent(data.challenge_token)}`,
+              hrPath(`/hr/set-password?token=${encodeURIComponent(data.challenge_token)}`),
             );
           }
         },
         // 423 (locked out) and 429 (rate limited) must reach the user —
         // retrying against either only extends the backoff. 401 stays generic
         // so it can't confirm whether an account exists.
-        onError: (err) => {
-          const status = errorStatus(err);
-          setError(
-            status === 423 || status === 429
-              ? formatError(err)
-              : "Those credentials weren't recognised. Check and try again.",
-          );
-        },
+        onError: (err) => setError(loginError(err)),
+        onSettled: () => { submitting.current = false; },
       },
     );
   };
 
   const submitMfa = (e: React.FormEvent) => {
     e.preventDefault();
+    if (submitting.current || mfa.isPending) return;
+    if (!canSubmitMfaCode(code) || !challenge) {
+      setError("Enter a 6-digit authentication code or a recovery code such as a1b2-c3d4-e5f6.");
+      return;
+    }
     setError(null);
+    submitting.current = true;
     mfa.mutate(
       { challenge_token: challenge, code: code.trim() },
       {
@@ -84,49 +96,37 @@ export function HrSignInPage() {
           adoptSession(data);
           finish();
         },
-        onError: (err) => setError(formatError(err)),
+        onError: (err) => {
+          if (errorCode(err) === "challenge_expired") {
+            setStep("credentials"); setCode(""); setChallenge(""); setPassword("");
+          }
+          setError(formatError(err));
+        },
+        onSettled: () => { submitting.current = false; },
       },
     );
   };
 
   return (
-    <AuthScene
-      portalTheme="hr"
-      eyebrow="HR administration"
-      title={step === "credentials" ? "Sign in" : "Two-factor authentication"}
+    <PortalLoginScene
+      role="hr"
+      company={company}
+      title={step === "credentials" ? "Welcome back" : "Two-factor authentication"}
       subtitle={
         step === "credentials"
-          ? "Manage employee claims and enrolment forms."
+          ? "Sign in to your HR portal"
           : "Enter the 6-digit code from your authenticator app, or one of your recovery codes."
       }
     >
       {step === "credentials" ? (
-        <form onSubmit={submitCredentials} className="space-y-4">
-          <CompanyField id="hr-company" value={company} onChange={setCompany} />
-          <IdentifierField value={identifier} onChange={setIdentifier} autoFocus />
-          <div className="space-y-1.5">
-            <Label
-              htmlFor="hr-password"
-              className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground"
-            >
-              Password
-            </Label>
-            <div className="relative">
-              <Lock className="pointer-events-none absolute left-3.5 top-1/2 size-[18px] -translate-y-1/2 text-muted-foreground" />
-              <Input
-                id="hr-password"
-                type="password"
-                autoComplete="current-password"
-                placeholder="••••••••••••"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className="h-12 pl-11"
-              />
-            </div>
-          </div>
+        <form noValidate onSubmit={submitCredentials} className="space-y-4">
+          <CompanyField id="hr-company" value={company} onChange={setCompany} error={fieldErrors.company} />
+          <IdentifierField value={identifier} onChange={setIdentifier} placeholder="Email or HR ID" error={fieldErrors.identifier} />
+          <LoginPasswordField id="hr-password" value={password} onChange={setPassword} error={fieldErrors.password} />
           {error && <p className="text-sm text-error" role="alert">{error}</p>}
           <Button
             type="submit"
+            loading={login.isPending}
             className="h-12 w-full text-md transition-transform duration-150 active:scale-[0.99]"
             disabled={
               login.isPending ||
@@ -135,7 +135,7 @@ export function HrSignInPage() {
               (companyRequired && !company.trim())
             }
           >
-            <KeyRound className="size-[18px]" />
+            <ArrowRight className="portal-login__arrow size-5" aria-hidden="true" />
             {login.isPending ? "Signing in…" : "Sign in"}
           </Button>
         </form>
@@ -150,6 +150,8 @@ export function HrSignInPage() {
             </Label>
             <Input
               id="hr-totp"
+              required
+              name="one-time-code"
               inputMode="text"
               autoComplete="one-time-code"
               placeholder="123456"
@@ -163,6 +165,7 @@ export function HrSignInPage() {
           {error && <p className="text-sm text-error" role="alert">{error}</p>}
           <Button
             type="submit"
+            loading={mfa.isPending}
             className="h-12 w-full text-md transition-transform duration-150 active:scale-[0.99]"
             disabled={mfa.isPending || !canSubmitMfaCode(code)}
           >
@@ -170,10 +173,13 @@ export function HrSignInPage() {
           </Button>
           <button
             type="button"
+            disabled={mfa.isPending}
             className="w-full text-center text-xs text-muted-foreground transition-colors hover:text-foreground"
             onClick={() => {
               setStep("credentials");
               setCode("");
+              setChallenge("");
+              setPassword("");
               setError(null);
             }}
           >
@@ -181,6 +187,6 @@ export function HrSignInPage() {
           </button>
         </form>
       )}
-    </AuthScene>
+    </PortalLoginScene>
   );
 }

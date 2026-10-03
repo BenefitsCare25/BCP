@@ -21,11 +21,15 @@ export function IdentifierField({
   onChange,
   id = "hr-identifier",
   autoFocus,
+  placeholder = "you@company.com  or  HR-7Q2M8K",
+  error,
 }: {
   value: string;
   onChange: (value: string) => void;
   id?: string;
   autoFocus?: boolean;
+  placeholder?: string;
+  error?: string;
 }) {
   const kind = detectIdentifier(value);
   const Icon = kind === "hr-id" ? IdCard : AtSign;
@@ -41,16 +45,22 @@ export function IdentifierField({
         <Icon className="pointer-events-none absolute left-3.5 top-1/2 size-[18px] -translate-y-1/2 text-muted-foreground" />
         <Input
           id={id}
+          name="username"
+          required
+          maxLength={320}
+          aria-invalid={!!error}
+          aria-describedby={error ? `${id}-error` : undefined}
           type="text"
           autoComplete="username"
           spellCheck={false}
-          placeholder="you@company.com  or  HR-7Q2M8K"
+          placeholder={placeholder}
           value={value}
           onChange={(e) => onChange(e.target.value)}
           autoFocus={autoFocus}
           className="h-12 pl-11"
         />
       </div>
+      {error && <p id={`${id}-error`} className="text-sm text-error" role="alert">{error}</p>}
       {kind !== "unknown" && (
         <p className="text-xs text-muted-foreground">
           {kind === "email" ? "Signing in with your email" : "Signing in with your HR ID"}

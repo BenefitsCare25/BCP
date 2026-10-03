@@ -30,6 +30,8 @@ export interface HrAuthPolicy {
   client_id: string;
   mfa_hr_enabled: boolean;
   mfa_portal_enabled: boolean;
+  mfa_hr_required: boolean;
+  mfa_portal_required: boolean;
   hr_login_source: LoginSource;
   portal_login_source: LoginSource;
   password_min_entropy: number;

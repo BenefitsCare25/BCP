@@ -80,7 +80,8 @@ def _derive_key(settings: Settings, label: bytes) -> str:
 
 # ── Access token ──────────────────────────────────────────────────────────────
 def issue_hr_access_token(
-    *, user_id: str, client_id: str, broker_firm_id: str | None, role: str
+    *, user_id: str, client_id: str, broker_firm_id: str | None, role: str,
+    session_id: str,
 ) -> tuple[str, datetime]:
     settings = get_settings()
     now = datetime.now(UTC)
@@ -92,6 +93,7 @@ def issue_hr_access_token(
             "fid": broker_firm_id,
             "role": role,
             "typ": _TOKEN_TYPE_HR,
+            "sid": session_id,
             "iat": int(now.timestamp()),
             "exp": int(expires_at.timestamp()),
         },
@@ -188,6 +190,8 @@ class ResolvedAuthPolicy:
     session_idle_minutes: int
     session_absolute_hours: int
     breach_check_enabled: bool
+    mfa_hr_required: bool = False
+    mfa_portal_required: bool = False
 
 
 def get_auth_policy(db: Session, client_id: str) -> ResolvedAuthPolicy:
@@ -216,6 +220,8 @@ def get_auth_policy(db: Session, client_id: str) -> ResolvedAuthPolicy:
         session_idle_minutes=row.session_idle_minutes,
         session_absolute_hours=row.session_absolute_hours,
         breach_check_enabled=row.breach_check_enabled,
+        mfa_hr_required=row.mfa_hr_required,
+        mfa_portal_required=row.mfa_portal_required,
     )
 
 
@@ -360,12 +366,13 @@ def optional_hr_tenant(
 
 # ── Refresh cookie ─────────────────────────────────────────────────────────────
 def set_refresh_cookie(
-    response: Response, token: str, expires_at: datetime, settings: Settings | None = None
+    response: Response, token: str, expires_at: datetime, settings: Settings | None = None,
+    *, client_id: str | None = None,
 ) -> None:
     settings = settings or get_settings()
     max_age = max(0, int((expires_at - datetime.now(UTC)).total_seconds()))
     response.set_cookie(
-        key=REFRESH_COOKIE_NAME,
+        key=refresh_cookie_name(client_id, settings),
         value=token,
         max_age=max_age,
         httponly=True,
@@ -376,9 +383,16 @@ def set_refresh_cookie(
     )
 
 
-def clear_refresh_cookie(response: Response) -> None:
+def refresh_cookie_name(client_id: str | None = None, settings: Settings | None = None) -> str:
+    settings = settings or get_settings()
+    if settings.tenant_mode == "header" and client_id:
+        return f"{REFRESH_COOKIE_NAME}_{client_id}"
+    return REFRESH_COOKIE_NAME
+
+
+def clear_refresh_cookie(response: Response, client_id: str | None = None) -> None:
     response.delete_cookie(
-        key=REFRESH_COOKIE_NAME, path=REFRESH_COOKIE_PATH, samesite="strict"
+        key=refresh_cookie_name(client_id), path=REFRESH_COOKIE_PATH, samesite="strict"
     )
 
 
@@ -389,7 +403,9 @@ def get_current_hr_user(
     tenant: TenantContext | None = Depends(optional_hr_tenant),
     db: Session = Depends(get_db),
 ) -> CurrentUser:
-    from app.models import User
+    from app.core import sessions as SESS
+    from app.models import User, UserClientAccess
+    from app.models.auth import SUBJECT_USER
     from app.models.user import USER_STATUS_ACTIVE
 
     unauthorized = HTTPException(
@@ -411,6 +427,30 @@ def get_current_hr_user(
     client_id = claims.get("cid")
     if not client_id:
         raise unauthorized
+    grant = db.execute(select(UserClientAccess.id).where(
+        UserClientAccess.user_id == user.id, UserClientAccess.client_id == client_id,
+    )).scalar_one_or_none()
+    if grant is None:
+        raise unauthorized
+    policy = get_auth_policy(db, str(client_id))
+    session = SESS.validate_access_session(
+        db, str(claims.get("sid", "")), subject_type=SUBJECT_USER,
+        subject_id=user.id, client_id=str(client_id), idle_minutes=policy.session_idle_minutes,
+    )
+    if policy.mfa_hr_required and not session.mfa_verified:
+        if user_has_confirmed_mfa(db, user.id):
+            SESS.revoke_family(db, session.family_id)
+            db.commit()
+            raise unauthorized
+        permitted = {
+            "/api/v1/hr/auth/me", "/api/v1/hr/auth/mfa/enroll/start",
+            "/api/v1/hr/auth/mfa/enroll/confirm",
+        }
+        if request.url.path not in permitted:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, {
+                "code": "mfa_enrollment_required",
+                "message": "Complete two-factor setup before continuing.",
+            })
     # Token must belong to the tenant the request arrived on. When there's no
     # subdomain context (dev/localhost direct), the token's own cid governs.
     if tenant is not None and tenant.client_id != client_id:

@@ -9,10 +9,12 @@ export function formatError(error: unknown): string {
  * branch on status codes (404 → empty state) instead of message substrings. */
 export class ApiError extends Error {
   status: number;
-  constructor(message: string, status: number) {
+  code?: string;
+  constructor(message: string, status: number, code?: string) {
     super(message);
     this.name = "ApiError";
     this.status = status;
+    this.code = code;
   }
 }
 
@@ -21,6 +23,10 @@ export function errorStatus(error: unknown): number | null {
   if (error instanceof ApiError) return error.status;
   if (error instanceof ConflictDetailError) return 409;
   return null;
+}
+
+export function errorCode(error: unknown): string | undefined {
+  return error instanceof ApiError ? error.code : undefined;
 }
 
 /** True when the caught value is an API 404 ("not found" / no-resource). */
@@ -87,7 +93,12 @@ export function errorFromText(
   // The status alone is enough to make it reportable.
   const message =
     parseErrorText(text, statusText) || `Request failed (HTTP ${status})`;
-  return new ApiError(message, status);
+  let code: string | undefined;
+  try {
+    const detail = (JSON.parse(text) as { detail?: { code?: unknown } }).detail;
+    if (typeof detail?.code === "string") code = detail.code;
+  } catch { /* A gateway response need not be JSON. */ }
+  return new ApiError(message, status, code);
 }
 
 /** One FastAPI validation item ({loc, msg, type}) → its message. */

@@ -140,6 +140,12 @@ class AuthSession(Base, TimestampMixin):
     revoked_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    mfa_verified: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=false(), default=False
+    )
+    last_seen_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     ip: Mapped[str | None] = mapped_column(String(45), nullable=True)
     user_agent: Mapped[str | None] = mapped_column(String(255), nullable=True)
     subdomain: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -208,6 +214,12 @@ class ClientAuthPolicy(Base, TimestampMixin):
         Boolean, nullable=False, server_default=false(), default=False
     )
     mfa_portal_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=false(), default=False
+    )
+    mfa_hr_required: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=false(), default=False
+    )
+    mfa_portal_required: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=false(), default=False
     )
     # ── Login username source per surface ──

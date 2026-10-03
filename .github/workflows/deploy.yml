@@ -273,6 +273,22 @@ jobs:
             .
           docker run --rm --entrypoint python "$IMAGE" -c \
             "from app.services.claims_ai_confidence import load_confidence_profile; load_confidence_profile()"
+          # Exercise the image's real CMD, not an overridden entrypoint.
+          # This disposable container has no production secrets or database.
+          trap 'docker logs inspro-startup; docker rm -f inspro-startup >/dev/null' EXIT
+          docker run -d --name inspro-startup \
+            -e INSPRO_ENV=dev -e INSPRO_AUTH_MODE=mock \
+            -e INSPRO_REQUIRE_DOCUMENT_SCAN=false "$IMAGE"
+          READY=false
+          for ATTEMPT in {1..30}; do
+            if docker exec inspro-startup python -c \
+              "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"; then
+              READY=true
+              break
+            fi
+            sleep 2
+          done
+          [ "$READY" = true ] || { echo "::error::Production container CMD did not start"; exit 1; }
           docker push "$IMAGE"
 
   # ── Production ─────────────────────────────────────────────────────────────

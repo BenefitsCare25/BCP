@@ -1,5 +1,4 @@
 import { create } from "zustand";
-import { persist } from "zustand/middleware";
 
 export interface PortalMember {
   id: string;
@@ -14,24 +13,29 @@ interface PortalSessionState {
   /** ISO expiry of the token — checked by the route guard. */
   expiresAt: string | null;
   member: PortalMember | null;
-  setSession: (token: string, expiresAt: string, member: PortalMember) => void;
+  mfaEnrollmentRequired: boolean;
+  mfaRecoveryPending: boolean;
+  setSession: (token: string, expiresAt: string, member: PortalMember, mfaEnrollmentRequired?: boolean) => void;
   clearSession: () => void;
 }
 
-export const usePortalSession = create<PortalSessionState>()(
-  persist(
-    (set) => ({
-      token: null,
-      expiresAt: null,
-      member: null,
-      setSession: (token, expiresAt, member) => set({ token, expiresAt, member }),
-      clearSession: () => set({ token: null, expiresAt: null, member: null }),
+try { localStorage.removeItem("inspro-portal-session"); } catch { /* Storage may be blocked. */ }
+
+export const usePortalSession = create<PortalSessionState>()((set) => ({
+  token: null,
+  expiresAt: null,
+  member: null,
+  mfaEnrollmentRequired: false,
+  mfaRecoveryPending: false,
+  setSession: (token, expiresAt, member, mfaEnrollmentRequired = false) =>
+    set(state => {
+      const mfaRecoveryPending = state.member?.id === member.id && state.mfaRecoveryPending;
+      return { token, expiresAt, member, mfaRecoveryPending,
+        mfaEnrollmentRequired: mfaEnrollmentRequired || mfaRecoveryPending };
     }),
-    // Separate storage key from the broker session — the two sign-in surfaces
-    // must never clobber each other in the same browser.
-    { name: "inspro-portal-session" },
-  ),
-);
+  clearSession: () =>
+    set({ token: null, expiresAt: null, member: null, mfaEnrollmentRequired: false, mfaRecoveryPending: false }),
+}));
 
 export function hasValidPortalSession(): boolean {
   const { token, expiresAt } = usePortalSession.getState();
