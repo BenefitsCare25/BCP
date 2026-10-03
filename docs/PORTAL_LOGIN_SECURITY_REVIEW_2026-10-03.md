@@ -29,8 +29,17 @@ Focused local checks: 84 backend authentication/tenancy tests and 12 desktop/pho
 browser session regressions passed. The full browser suite passed 151 tests with
 one intentional skip; frontend build, full Ruff and strict typing of all 368
 backend source files passed. The full local backend suite passed 2,580 tests with
-21 skips; PostgreSQL checks run in deployment CI. Deployment results are recorded
-separately when complete.
+21 skips; PostgreSQL checks run in deployment CI.
+
+Release `66a8bbb3fc65b82f187d46b516d593e6eb9a3234` deployed successfully in
+[run 37117113525](https://github.com/BenefitsCare25/BCP/actions/runs/37117113525).
+Every workflow job passed, including backend/frontend/static checks, container
+build and production smoke checks. Independent HTTPS probes confirmed HTTP 200
+and that exact SHA on API health and worker readiness. At 19:13 Singapore time
+on 3 October, API readiness reported database and Redis OK and worker readiness
+remained healthy. The Actions API denied raw-log download (HTTP 403), so no new
+CI test counts are asserted here; job conclusions were read successfully.
+Unrelated pre-existing local deployment/container edits were not included.
 The existing production acceptance limitations below still apply.
 
 ### Prior release evidence
