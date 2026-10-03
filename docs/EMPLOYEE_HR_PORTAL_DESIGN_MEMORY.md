@@ -4,6 +4,26 @@ Approved user requirements, saved 2 October 2026. Scope: employee/member and HR 
 
 ## Sign-in preview exception, 3 October 2026
 
+### Authorized production release follow-up
+
+The user's later "fix all for production ready and push for deployment and
+monitor" instruction authorizes this production release and supersedes the
+historical local-only statements below. Release `99e96f30e0626301031bb040fba4d8945e4ee0bb`
+deployed successfully in run `37113839788`, including the private additive
+authentication migration. API/worker health return the exact SHA and database/
+Redis readiness is healthy. CI passed 2,469 backend tests (115 skips), including
+three PostgreSQL checks, and 147 desktop/phone browser tests (one skip).
+Fifteen additional live health/security/login checks passed; desktop and 320px
+phone screenshots were visually reviewed with no overflow or page errors.
+Both roles' 1440x1440 video playback and reduced-motion stills were verified.
+Credential errors were intercepted in-browser; no real account was changed.
+SMTP remains disabled, and real delivery/MFA/Safari acceptance is not claimed.
+The existing video-motion caveats and lack of a pause control remain; an axe
+pass does not establish complete motion accessibility. No further paid
+generation, local database copy or fixture deployment occurred. Detailed
+evidence: `docs/PORTAL_LOGIN_SECURITY_REVIEW_2026-10-03.md` and gitignored
+`tmp/login-production-release/`.
+
 ### Current local implementation
 
 The user subsequently said "okay proceed to redesign the login page". The employee and HR sign-in pages now use the Seedance scene locally. This authorizes integration, not a production deployment, further paid generation or a claim of a perfectly seamless loop.

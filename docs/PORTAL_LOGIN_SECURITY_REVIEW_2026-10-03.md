@@ -3,15 +3,43 @@
 Scope: both sign-in pages, their API clients, session stores, authentication
 endpoints and shared security controls. The initial review was read-only. The
 user subsequently authorized implementation of all findings. The local fixes
-below supersede the original findings; production has not been changed. This is
+below supersede the original findings; the authorized production follow-up is
+recorded next. This is
 not a production security certification. Backend tests use disposable databases
 outside the workspace; browser authentication probes are intercepted.
 
 ## Production release follow-up
 
 The user authorized correcting every follow-up review finding, pushing for
-deployment and monitoring on 3 October 2026. Release execution is pending the
-required GitHub gates; this section supersedes the earlier local-only scope.
+deployment and monitoring on 3 October 2026. Release `99e96f30e0626301031bb040fba4d8945e4ee0bb`
+deployed successfully in [run 37113839788](https://github.com/BenefitsCare25/BCP/actions/runs/37113839788).
+This section supersedes the earlier local-only scope.
+
+- CI passed 2,469 backend tests (115 skips), including all three real PostgreSQL
+  migration/concurrent-refresh checks, and 147 desktop/phone browser tests (one
+  intentional skip). Strict typing, lint, frontend build, dependency audits and
+  the image's actual-command startup smoke check passed. Bicep validation passed
+  in the preceding run; the corrected run also applied Bicep successfully.
+- Private production migrations succeeded before the API/worker image switch.
+  Both services independently returned HTTP 200 with the exact release SHA;
+  readiness reports database and Redis OK. The workflow's stable-window smoke
+  check passed, and independent probes remained healthy several minutes later.
+- Fifteen deployed health/security/browser checks passed: employee and HR at
+  1440/768/390/320px, required-field validation, generic invalid-credential
+  feedback, no persisted bearer tokens, no page errors/horizontal overflow,
+  zero automated axe violations, reduced-motion stills and 1440x1440 moving
+  video. Both roles reject cross-origin refresh/logout. Browser credential
+  responses were intercepted; no real password or account mutation was sent.
+  Desktop and narrow-phone screenshots were visually reviewed. Evidence:
+  gitignored `tmp/login-production-release/results.json` and screenshots.
+- Outbound email remains disabled in the existing production setup. SMTP
+  configuration and a real delivery acceptance test are still required for
+  invitations. Real-account MFA/recovery, Safari and motion-accessibility
+  acceptance remain gaps; automated axe results do not certify motion behavior.
+- Production continues to use PostgreSQL and Azure storage. No local database,
+  uploaded documents, fixture records or credentials were deployed. Existing
+  company MFA policy choices were preserved. Existing shared-host sessions may
+  need a fresh sign-in after this authentication upgrade.
 
 - Docker's exec-form command now has valid escaped JSON quotes. CI starts the
   image with that actual command and requires its health endpoint to respond.

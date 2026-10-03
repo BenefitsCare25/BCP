@@ -31,6 +31,14 @@ The launcher preserves existing authentication configuration and the development
 
 ## Production isolation
 
+The authorized login-security release subsequently deployed successfully as
+`99e96f30e0626301031bb040fba4d8945e4ee0bb` in run `37113839788` on 3 October.
+The workflow ran the private additive PostgreSQL migration before updating API
+and worker images. Both serve the exact release SHA, and database/Redis
+readiness is healthy. No local SQLite database, documents, review fixtures or
+credentials were deployed. This does not change the sole working local store
+or authorize local backups. The earlier consolidation record remains historical.
+
 The user subsequently authorized a separate login-security production release
 on 3 October 2026. This does not relax local-store isolation: the release must
 use production PostgreSQL/Azure storage, never the workspace SQLite database or
