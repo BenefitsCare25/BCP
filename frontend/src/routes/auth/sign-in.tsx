@@ -1,8 +1,8 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useRouterState } from "@tanstack/react-router";
-import { LogIn, ShieldAlert } from "lucide-react";
+import { ArrowRight, ShieldAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { AuthScene } from "@/components/auth/AuthScene";
+import { BrokerLoginScene } from "@/components/auth/BrokerLoginScene";
 import { ENTRA_ENABLED, signIn } from "@/auth/msal";
 import { formatError } from "@/lib/errors";
 
@@ -21,12 +21,15 @@ export function SignInPage() {
   // disable the button between click and navigate. If the redirect never
   // happens (signIn rejected), re-enable the button and show why.
   const [submitting, setSubmitting] = useState(false);
+  const submittingRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const denied = useRouterState({
     select: (s) => Boolean((s.location.search as { denied?: unknown }).denied),
   });
 
   const handleSignIn = async () => {
+    if (submittingRef.current) return;
+    submittingRef.current = true;
     setSubmitting(true);
     setError(null);
     try {
@@ -35,45 +38,44 @@ export function SignInPage() {
       // rejected account back in and they could never switch.
       await signIn({ selectAccount: denied });
     } catch (err) {
+      submittingRef.current = false;
       setSubmitting(false);
       setError(formatError(err));
     }
   };
 
   return (
-    <AuthScene
-      eyebrow="Broker workspace"
-      title="Sign in"
-      subtitle={
-        ENTRA_ENABLED
-          ? "Sign in with your Microsoft work account."
-          : "Authentication is not configured for this build."
-      }
-    >
+    <BrokerLoginScene>
+      <p className="broker-login__explanation">
+        {ENTRA_ENABLED
+          ? "Continue with your Microsoft work account."
+          : "Authentication is not configured for this build."}
+      </p>
       {denied && (
         <div
           role="alert"
-          className="mb-4 flex items-start gap-2.5 rounded-md border border-error/30 bg-error-soft px-3 py-2.5"
+          className="broker-login__alert"
         >
-          <ShieldAlert className="mt-0.5 size-4 shrink-0 text-error" />
-          <p className="text-sm leading-relaxed text-foreground">
-            Account no access. Contact your administrator.
+          <ShieldAlert size={18} aria-hidden="true" />
+          <p>
+            This account does not have access. Contact your administrator or sign in with another Microsoft account.
           </p>
         </div>
       )}
       <Button
         onClick={() => void handleSignIn()}
         disabled={!ENTRA_ENABLED || submitting}
-        className="h-12 w-full text-md transition-transform duration-150 active:scale-[0.99]"
+        loading={submitting}
+        className="broker-login__submit"
       >
-        <LogIn className="size-[18px]" />
+        <ArrowRight size={18} className="broker-login__arrow" aria-hidden="true" />
         {submitting ? "Redirecting…" : "Sign in with Microsoft"}
       </Button>
       {error && (
-        <p className="mt-3 text-center text-sm text-error">
+        <p role="alert" className="broker-login__alert broker-login__error">
           Sign-in failed: {error} — try again.
         </p>
       )}
-    </AuthScene>
+    </BrokerLoginScene>
   );
 }
