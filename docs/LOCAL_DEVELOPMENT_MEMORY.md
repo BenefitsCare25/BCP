@@ -55,6 +55,39 @@ Local `.env` files, SQLite databases and `backend/var/` are excluded by both Doc
 
 ## Consolidation evidence
 
+On 4 October 2026, the shared database was brought to migration
+`a5c7e9b1d3f6`. This additive change stores a broker account's authenticator
+requirement, off by default as explicitly requested during development. Only
+`system_admin` may change it under Users; changing it revokes broker sessions.
+Existing enrolled authenticators are retained. Employee and HR company MFA
+policies stay independent. Microsoft sign-in remains the broker's first factor,
+including any separate MFA required by its Entra tenant policy.
+
+The local upgrade preserved six users, one authenticator, 470 member accounts,
+9,151 employees and six companies. SQLite integrity was OK, foreign-key checks
+were clear, and all six user policies defaulted off. No database copy, backup,
+reseeding or credential replacement was performed.
+
+The source deployed as `c79298c3080fded2034219f5583012cbf4780911` in successful
+[release run 37189523203](https://github.com/BenefitsCare25/BCP/actions/runs/37189523203).
+The private PostgreSQL migration execution `inspro-prod-migrate-m4cgfub`
+succeeded before the image rollout. CI passed 2,514 backend tests with 115 skips
+and 203 browser checks with one skip; local focused runs passed 83 backend and
+56 browser checks. Both services report the exact release, and database/Redis
+readiness passed. Live desktop/mobile checks exercised the deployed policy gate
+and admin control with intercepted synthetic identities, leaving production
+accounts unchanged; real tenant credentials or authenticator codes were not
+submitted. Continuous animation and media restrictions passed live checks.
+Evidence is in `tmp/broker-policy-release-c79298c/` and
+`tmp/broker-loop-restored-c79298c/`.
+
+Post-deployment monitoring found zero HTTP 5xx across 190 portal and 19 worker
+requests in ingested logs through 08:51:59 and 08:52:11 UTC respectively. Two
+INFO-level socket-close messages at 08:49:11 explicitly belong to the previous
+container shutting down. The subsequent console window, from 08:49:12 through
+08:52:50 UTC, has zero error markers. Retained evidence records ingestion
+timestamps; the log window is not claimed to cover every later request.
+
 Subsequent login-security work on 3 October 2026 brought this same database to
 `f4a6b8c0d2e4`. The additive migration stores mandatory-MFA policy and session
 activity/proof metadata; it does not copy or replace application data. Read-only
