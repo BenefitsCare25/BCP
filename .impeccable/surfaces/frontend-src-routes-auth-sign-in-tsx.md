@@ -7,7 +7,7 @@ related_targets: ["frontend/src/components/auth/BrokerLoginScene.tsx", "frontend
 
 # Broker sign-in
 
-Scope: the broker `/sign-in` entry point. The user authorized the supplied screenshot direction, Seedance scenery and deployment without another visual review. This record describes the built surface; deployment remains pending in the [release record](../../docs/BROKER_LOGIN_RELEASE_2026-10-04.md).
+Scope: the broker `/sign-in` entry point. The user authorized the supplied screenshot direction, Seedance scenery and deployment without another visual review. This surface is deployed and verified in production; exact revision, CI and live evidence are recorded in the [release record](../../docs/BROKER_LOGIN_RELEASE_2026-10-04.md).
 
 Authority: [product context](../../PRODUCT.md), the [broker sign-in exception](../../DESIGN.md#broker-sign-in-exception), and the source files above. All visual rules are scoped to `.broker-login`; employee/HR sign-in and authenticated interfaces keep their existing guidance.
 
@@ -31,4 +31,4 @@ The Seedance 2.5 source received a 12-frame/0.5-second tail-to-head blend for re
 
 The implementation run passed the production build, production dependency audit, 14 focused desktop/mobile Playwright tests and 14 local QA groups. The [local report](../../tmp/broker-login-release-20261004/local/checks.json) records 12 viewport widths (1920, 1440, 1280, 1024, 940, 901, 900, 768, 697, 600, 390 and 320px), no overflow/page errors, motion across three browser loop wraps and denied-access rendering. Desktop and phone axe checks reported zero violations.
 
-The scoped Impeccable detector returned no findings; provenance scanning found one raster and no missing provenance. The independent finish review returned **SHIP**, with no material findings, using [desktop](../review/broker-login/desktop.png) and [mobile](../review/broker-login/mobile.png) captures. These checks do not establish physical-device Safari behavior or completion with real user credentials. Live deployment verification must be recorded separately.
+The scoped Impeccable detector returned no findings; provenance scanning found one raster and no missing provenance. The independent finish review returned **SHIP**, with no material findings, using [desktop](../review/broker-login/desktop.png) and [mobile](../review/broker-login/mobile.png) captures. CI passed 165 browser tests with one skipped. Production passed all 14 layout/motion QA groups and nine release checks, including the exact portal/worker revision, matching media hashes, healthy database/Redis, real Microsoft authorization handoff and preserved HR/employee pages. Reviewed live [desktop](../review/broker-login/desktop-live.png) and [mobile](../review/broker-login/mobile-live.png) captures are retained locally. These checks do not establish physical-device Safari behavior or completion with real user credentials.

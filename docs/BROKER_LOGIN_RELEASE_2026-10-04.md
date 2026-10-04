@@ -1,6 +1,6 @@
 # Broker sign-in release — 2026-10-04
 
-Status: local implementation and finish review complete; push, CI, deployment and live verification pending. The user authorized deployment without another visual review. This record does not establish a successful deployment.
+Status: **deployed and verified in production**. Release `b7eb5af34a37f6b9c400531c44a18871f2d1ec2c` completed deployment on 2026-10-04 at 11:50:02 SGT (03:50:02 UTC). The user authorized deployment without another visual review.
 
 ## Change
 
@@ -51,19 +51,21 @@ The implementation run completed these checks before documentation:
 
 The [local QA report](../tmp/broker-login-release-20261004/local/checks.json) and neighboring captures contain the layout/motion evidence, with no recorded failures or page errors. Reviewed [desktop](../.impeccable/review/broker-login/desktop.png) and [mobile](../.impeccable/review/broker-login/mobile.png) screenshots are retained locally. Generated evidence paths may be gitignored and are not production artifacts.
 
-Limits: no physical-device Safari check or real-user-credential completion was performed. Local verification and the finish review do not replace CI or live verification.
+Limits: no physical-device Safari check or real-user-credential completion was performed. Production verification reached the real Microsoft authorization endpoint without submitting credentials.
 
-## Deployment evidence — pending
+## Deployment evidence
 
-Append observed results here after deployment; do not infer them from local checks.
+The release workflow and independent live checks completed successfully. The deployed portal and review worker both reported the exact release SHA through `X-Inspro-Version`; `/readiness` separately returned healthy database and Redis status.
 
 | Field | Recorded result |
 | --- | --- |
-| Commit SHA | Pending |
-| Push/branch | Pending |
-| CI run URL and conclusion | Pending |
-| Deployment run/revision and completion time | Pending |
-| Live origin and sign-in route | Pending |
-| Live page/media responses and served asset hashes | Pending |
-| Live desktop/mobile, motion/fallback and authentication checks | Pending |
-| Final release disposition | Pending |
+| Commit SHA | `b7eb5af34a37f6b9c400531c44a18871f2d1ec2c` |
+| Push/branch | Pushed to `BenefitsCare25/BCP`, `main` |
+| CI run URL and conclusion | [Deploy run 37174814049](https://github.com/BenefitsCare25/BCP/actions/runs/37174814049): **success**. Production frontend build and dependency audit passed; full browser suite: **165 passed, 1 skipped**. Backend/static jobs were skipped by the workflow's UI-only change classification. |
+| Deployment run/revision and completion time | Production deployment succeeded at 2026-10-04 11:50:02 SGT; exact release SHA verified on portal and worker; workflow stable readiness window passed. |
+| Live origin and sign-in route | [Broker sign-in](https://inspro-portal.azurewebsites.net/sign-in) |
+| Live page/media responses and served asset hashes | Live page rendered successfully. Both media GETs returned 200 and matched the hashes above. MP4 byte-range request returned 206 with the requested 1,024 bytes. Portal health, readiness and worker readiness returned 200; database and Redis reported `ok`. |
+| Live desktop/mobile, motion/fallback and authentication checks | **14 live QA groups passed**, including 12 widths from 1920px to 320px, desktop/mobile axe scans with zero violations, reduced-motion stills without MP4 requests, three actual 1080×1080 video wraps, measurable water/orchid/foliage/hair movement, pause/resume and denied-access rendering. **9 production verification checks passed**, including visible keyboard focus, enabled Microsoft action and real Entra redirect with the correct production callback, scope and code flow. HR and employee pages retained their existing scene and role controls. No page errors recorded. |
+| Final release disposition | **SHIPPED**. Independent finish review and production verification passed. |
+
+Local evidence: [live QA report](../tmp/broker-login-release-20261004/live/checks.json), [production verification](../tmp/broker-login-release-20261004/live/production-verification.json), and reviewed [desktop](../.impeccable/review/broker-login/desktop-live.png) / [mobile](../.impeccable/review/broker-login/mobile-live.png) captures. A documentation-only follow-up records these observations; the deployed application revision remains the release SHA above.
