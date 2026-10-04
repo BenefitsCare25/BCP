@@ -37,6 +37,20 @@ export const loginRequest = {
 // Singleton — instantiated once even with React strict-mode double-render.
 let _msal: PublicClientApplication | null = null;
 let _initialisationPromise: Promise<void> | null = null;
+const signedOutKey = "inspro-broker-signed-out";
+
+function restorationSuppressed(): boolean {
+  // The URL also covers browsers that refuse sessionStorage writes.
+  if (new URLSearchParams(window.location.search).get("signed_out") === "1") return true;
+  try { return sessionStorage.getItem(signedOutKey) === "1"; } catch { return false; }
+}
+
+function setRestorationSuppressed(suppressed: boolean): void {
+  try {
+    if (suppressed) sessionStorage.setItem(signedOutKey, "1");
+    else sessionStorage.removeItem(signedOutKey);
+  } catch { /* The sign-out URL retains this tab's explicit choice. */ }
+}
 
 function removeLegacyBrokerTokens(): void {
   for (const name of ["sessionStorage", "localStorage"] as const) {
@@ -76,8 +90,9 @@ export async function initializeMsal(): Promise<PublicClientApplication | null> 
       if (response?.account) {
         await msal.clearCache();
         const session = await brokerAuthRequest<BrokerSession>("/exchange", { access_token: response.accessToken });
+        setRestorationSuppressed(false);
         useBrokerSession.getState().set(session);
-      } else if (!window.location.pathname.startsWith("/portal/") && !window.location.pathname.startsWith("/hr/")) {
+      } else if (!restorationSuppressed() && !window.location.pathname.startsWith("/portal/") && !window.location.pathname.startsWith("/hr/")) {
         await refreshBrokerSession();
       }
     })().catch((err: unknown) => {
@@ -145,7 +160,14 @@ export async function clearLocalSession(): Promise<void> {
 
 export async function signOut(): Promise<void> {
   const token = useBrokerSession.getState().session?.access_token;
-  if (token) await brokerAuthRequest<void>("/logout", {}, token);
+  if (token) {
+    try { await brokerAuthRequest<void>("/logout", {}, token); }
+    catch (error) {
+      // An already-ended session still permits local sign-out.
+      if ((error as { status?: number }).status !== 401) throw error;
+    }
+  }
+  setRestorationSuppressed(true);
   await clearLocalSession();
-  window.location.assign("/sign-in");
+  window.location.replace("/sign-in?signed_out=1");
 }

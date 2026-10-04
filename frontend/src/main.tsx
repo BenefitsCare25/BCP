@@ -12,7 +12,10 @@ import {
 import { DENIED_SEARCH, SIGN_IN_PATH, isDeniedSignInUrl } from "./api/client";
 import { queryClient, setNoAccessHandler } from "./lib/queryClient";
 import { captureTenantSlugFromUrl } from "./lib/tenant";
+import { installMediaInteractionGuards } from "./lib/mediaInteractions";
 import "./styles.css";
+
+installMediaInteractionGuards();
 
 // A query failing with NoAccessError means the signed-in account isn't
 // provisioned (or was just disabled mid-session). The query client can't

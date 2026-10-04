@@ -245,6 +245,14 @@
   box-shadow: 0 16px 38px -18px color-mix(in srgb, var(--color-foreground) 20%, transparent);
 }
 
+/* Decorative and displayed media have no drag or touch save/copy affordance.
+   Text selection and explicit document download controls remain available. */
+img, video, audio, [data-protected-media] {
+  -webkit-user-drag: none;
+  -webkit-touch-callout: none;
+}
+[data-protected-media] { user-select: none; }
+
 /* One short shake when a NEW notification arrives. The bell is quieter than a
    toast, so the badge alone would be easy to miss; repeats of the same message
    never re-fire it. */

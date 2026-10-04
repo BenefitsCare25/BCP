@@ -1,14 +1,28 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { QRCodeSVG } from "qrcode.react";
-import { brokerAccessToken, brokerAuthRequest } from "@/auth/brokerSession";
-import { signOut } from "@/auth/msal";
+import { brokerAccessToken, brokerAuthRequest, refreshBrokerSession } from "@/auth/brokerSession";
+import { clearLocalSession, signOut } from "@/auth/msal";
 import { useBrokerSession, type BrokerSession } from "@/stores/brokerSession";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+
+async function requestMfa<T>(path: string, body?: unknown): Promise<T> {
+  const token = await brokerAccessToken();
+  if (!token) throw new Error("Session ended. Sign in again.");
+  try {
+    return await brokerAuthRequest<T>(path, body, token);
+  } catch (error) {
+    const status = (error as { status?: number }).status;
+    // A wrong code also returns 401. Confirm session validity without replaying
+    // the code: a valid session keeps inline feedback; an ended one is cleared.
+    if (status === 401 || status === 403) await refreshBrokerSession();
+    throw error;
+  }
+}
 
 export function BrokerSecurityPage() {
   const navigate = useNavigate();
@@ -19,9 +33,14 @@ export function BrokerSecurityPage() {
   const [pending, setPending] = useState(false);
   const pendingRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    if (session) return;
+    void clearLocalSession().then(() => navigate({ to: "/sign-in", replace: true }));
+  }, [session, navigate]);
   const status = useQuery({
     queryKey: ["broker-mfa", session?.user.id],
-    queryFn: async () => brokerAuthRequest<{ status: string; verified: boolean }>("/mfa", undefined, (await brokerAccessToken()) ?? ""),
+    queryFn: () => requestMfa<{ status: string; verified: boolean }>("/mfa"),
+    enabled: Boolean(session),
     meta: { localErrorHandling: true }, retry: false,
   });
 
@@ -30,13 +49,11 @@ export function BrokerSecurityPage() {
     pendingRef.current = true; setPending(true); setError(null);
     try {
       if (operation === "logout") { await signOut(); return; }
-      const token = await brokerAccessToken();
-      if (!token) throw Object.assign(new Error("Session ended. Sign in again."), { status: 401 });
       if (operation === "start") {
-        setSetup(await brokerAuthRequest("/mfa/start", {}, token));
+        setSetup(await requestMfa("/mfa/start", {}));
       } else {
-        const result = await brokerAuthRequest<BrokerSession & { recovery_codes?: string[] }>(
-          `/mfa/${operation}`, { code }, token,
+        const result = await requestMfa<BrokerSession & { recovery_codes?: string[] }>(
+          `/mfa/${operation}`, { code },
         );
         const { recovery_codes, ...authenticated } = result;
         useBrokerSession.getState().set(authenticated);

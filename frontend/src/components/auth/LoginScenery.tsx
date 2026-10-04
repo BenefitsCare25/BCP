@@ -50,7 +50,7 @@ export function LoginScenery() {
   }, [moving, mediaAllowed, videoFailed]);
 
   return (
-    <div className="portal-login__scenery" aria-hidden="true" data-video-ready={videoReady}>
+    <div className="portal-login__scenery" data-protected-media aria-hidden="true" data-video-ready={videoReady}>
       <div className="portal-login__landscape">
         <img className="portal-login__plate" src="/portal/login/scene-seedance-light-poster.webp" alt="" width="1440" height="1440" fetchPriority="high" />
         {mediaAllowed && !videoFailed && (
@@ -59,7 +59,8 @@ export function LoginScenery() {
             className="portal-login__video"
             src="/portal/login/scene-seedance-light.mp4"
             poster="/portal/login/scene-seedance-light-poster.webp"
-            muted loop playsInline preload="auto" disablePictureInPicture tabIndex={-1}
+            muted loop playsInline preload="auto" disablePictureInPicture disableRemotePlayback
+            controls={false} controlsList="nodownload nofullscreen noremoteplayback" draggable={false} tabIndex={-1}
             onPlaying={() => setVideoReady(true)}
             onError={() => { setVideoFailed(true); setVideoReady(false); }}
           />

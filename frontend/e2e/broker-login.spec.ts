@@ -37,19 +37,16 @@ test("broker login: accessible layout and reduced-motion still without a video d
   expect(scan.violations).toEqual([]);
 });
 
-test("broker login: video plays, pauses, resumes and follows visibility and motion preferences", async ({ page }) => {
+test("broker login: animation has no controls and settles within five seconds", async ({ page }, testInfo) => {
   await page.goto("/sign-in");
   const video = page.locator(".broker-login video");
-  await expect(page.getByRole("button", { name: "Pause background animation" })).toBeVisible({ timeout: 20_000 });
+  await expect(video).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByRole("button", { name: /background animation/ })).toHaveCount(0);
   await expect.poll(() => video.evaluate((v: HTMLVideoElement) => v.currentTime)).toBeGreaterThan(0);
-  expect(await video.evaluate((v: HTMLVideoElement) => ({ width: v.videoWidth, height: v.videoHeight, muted: v.muted, loop: v.loop }))).toEqual({ width: 1080, height: 1080, muted: true, loop: true });
-  await page.getByRole("button", { name: "Pause background animation" }).click();
-  await expect.poll(() => video.evaluate((v: HTMLVideoElement) => v.paused)).toBe(true);
-  const time = await video.evaluate((v: HTMLVideoElement) => v.currentTime);
-  await page.waitForTimeout(250);
-  expect(await video.evaluate((v: HTMLVideoElement) => v.currentTime)).toBe(time);
-  await page.getByRole("button", { name: "Play background animation" }).click();
-  await expect.poll(() => video.evaluate((v: HTMLVideoElement) => v.paused)).toBe(false);
+  expect(await video.evaluate((v: HTMLVideoElement) => ({ width: v.videoWidth, height: v.videoHeight,
+    muted: v.muted, loop: v.loop, controls: v.controls, pip: v.disablePictureInPicture,
+    remote: v.disableRemotePlayback, controlsList: v.getAttribute("controlsList") }))).toEqual({ width: 1080, height: 1080,
+    muted: true, loop: false, controls: false, pip: true, remote: true, controlsList: "nodownload nofullscreen noremoteplayback" });
   await page.evaluate(() => {
     Object.defineProperty(document, "hidden", { configurable: true, value: true });
     document.dispatchEvent(new Event("visibilitychange"));
@@ -60,11 +57,17 @@ test("broker login: video plays, pauses, resumes and follows visibility and moti
     document.dispatchEvent(new Event("visibilitychange"));
   });
   await expect.poll(() => video.evaluate((v: HTMLVideoElement) => v.paused)).toBe(false);
+  await expect.poll(() => video.evaluate((v: HTMLVideoElement) => v.paused), { timeout: 7000 }).toBe(true);
+  const time = await video.evaluate((v: HTMLVideoElement) => v.currentTime);
+  expect(time).toBeLessThan(5.5);
+  await page.waitForTimeout(250);
+  expect(await video.evaluate((v: HTMLVideoElement) => v.currentTime)).toBe(time);
+  await page.screenshot({ path: testInfo.outputPath("broker-login-without-media-controls.png"), fullPage: true });
   await page.emulateMedia({ reducedMotion: "reduce" });
   await expect(video).toHaveCount(0);
   await expect(page.locator(".broker-login__poster")).toBeVisible();
   await page.emulateMedia({ reducedMotion: "no-preference" });
-  await expect(page.getByRole("button", { name: "Pause background animation" })).toBeVisible();
+  await expect.poll(() => video.evaluate((v: HTMLVideoElement) => v.paused)).toBe(true);
 });
 
 test("broker login: data-saving mode does not request the video", async ({ page }) => {

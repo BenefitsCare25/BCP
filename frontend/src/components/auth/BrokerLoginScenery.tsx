@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from "react";
-import { Pause, Play } from "lucide-react";
 
 type Connection = EventTarget & { saveData?: boolean };
 
@@ -7,7 +6,7 @@ type Connection = EventTarget & { saveData?: boolean };
 export function BrokerLoginScenery() {
   const [allowed, setAllowed] = useState(false);
   const [visible, setVisible] = useState(true);
-  const [paused, setPaused] = useState(false);
+  const [finished, setFinished] = useState(false);
   const [ready, setReady] = useState(false);
   const [failed, setFailed] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -35,7 +34,7 @@ export function BrokerLoginScenery() {
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
-    if (!visible || paused) {
+    if (!allowed || !visible || finished) {
       video.pause();
       return;
     }
@@ -50,10 +49,18 @@ export function BrokerLoginScenery() {
       cancelled = true;
       video.pause();
     };
-  }, [allowed, visible, paused, failed]);
+  }, [allowed, visible, finished, failed]);
+
+  useEffect(() => {
+    if (!ready) return;
+    // Without a visible pause control, decorative autoplay stops within five
+    // seconds (WCAG 2.2.2). Keep the final frame instead of snapping to the still.
+    const timer = window.setTimeout(() => setFinished(true), 4800);
+    return () => window.clearTimeout(timer);
+  }, [ready]);
 
   return (
-    <div className="broker-login__scenery" data-video-ready={ready && !failed}>
+    <div className="broker-login__scenery" data-protected-media aria-hidden="true" data-video-ready={ready && !failed}>
       <div className="broker-login__landscape" aria-hidden="true">
         <img
           className="broker-login__poster"
@@ -62,6 +69,7 @@ export function BrokerLoginScenery() {
           height="1080"
           alt=""
           fetchPriority="high"
+          draggable={false}
         />
         {allowed && !failed && (
           <video
@@ -70,27 +78,19 @@ export function BrokerLoginScenery() {
             src="/broker/login/marina-bay-v1.mp4"
             poster="/broker/login/marina-bay-v1.webp"
             muted
-            loop
             playsInline
             preload="auto"
             disablePictureInPicture
+            disableRemotePlayback
+            controls={false}
+            controlsList="nodownload nofullscreen noremoteplayback"
+            draggable={false}
             tabIndex={-1}
             onPlaying={() => setReady(true)}
             onError={() => { setFailed(true); setReady(false); }}
           />
         )}
       </div>
-      {allowed && ready && !failed && (
-        <button
-          type="button"
-          className="broker-login__motion"
-          aria-label={paused ? "Play background animation" : "Pause background animation"}
-          title={paused ? "Play animation" : "Pause animation"}
-          onClick={() => setPaused((value) => !value)}
-        >
-          {paused ? <Play size={17} aria-hidden="true" /> : <Pause size={17} aria-hidden="true" />}
-        </button>
-      )}
     </div>
   );
 }

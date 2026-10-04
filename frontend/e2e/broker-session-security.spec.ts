@@ -51,6 +51,98 @@ async function broker(page: Page, enrolled = false) {
     role: "broker_admin", broker_firm_id: "review-firm", active_client_id: null, accessible_clients: [],
     } });
   });
+  return { expire: () => { ended = true; } };
+}
+
+async function expireLocalAccess(page: Page) {
+  await page.evaluate(async () => {
+    const { useBrokerSession } = await import(/* @vite-ignore */ "/src/stores/brokerSession.ts");
+    const current = useBrokerSession.getState().session;
+    useBrokerSession.getState().set({ ...current, expires_at: "2000-01-01T00:00:00Z" });
+  });
+}
+
+for (const operation of ["start", "confirm", "verify", "status-retry", "server-expiry"] as const) {
+  test(`broker session: expired MFA ${operation} returns to sign-in`, async ({ page }) => {
+    const account = await broker(page, operation === "verify");
+    let statusCalls = 0;
+    if (operation === "status-retry") {
+      await page.route("**/api/v1/broker/auth/mfa", async route => {
+        statusCalls++;
+        await route.fulfill({ status: 503, json: { detail: "Temporarily unavailable." } });
+      });
+    }
+    await page.goto("/broker/security");
+    if (operation === "confirm") {
+      await page.getByRole("button", { name: "Set up authenticator" }).click();
+      await page.getByLabel("Six-digit authenticator code").fill("123456");
+    } else if (operation === "verify") {
+      await page.getByLabel("Authenticator or recovery code").fill("123456");
+    } else if (operation === "status-retry") {
+      await expect(page.getByRole("button", { name: "Try again", exact: true })).toBeVisible();
+    } else await expect(page.getByRole("button", { name: "Set up authenticator" })).toBeVisible();
+    account.expire();
+    if (operation !== "server-expiry") await expireLocalAccess(page);
+    await page.getByRole("button", { name: operation === "status-retry" ? "Try again"
+      : operation === "confirm" || operation === "verify" ? "Verify and continue" : "Set up authenticator", exact: true }).click();
+    await expect(page).toHaveURL(/\/sign-in$/);
+    await expect(page.getByRole("button", { name: "Sign in with Microsoft" })).toBeVisible();
+    if (operation === "status-retry") expect(statusCalls).toBe(1);
+  });
+}
+
+for (const storageBlocked of [false, true]) {
+test(`broker real MSAL: explicit logout stays signed out while another tab retains its account (${storageBlocked ? "marker storage blocked" : "tab storage"})`, async ({ page, context, baseURL }) => {
+  if (storageBlocked) await page.addInitScript(() => {
+    for (const method of ["getItem", "setItem", "removeItem"] as const) {
+      const original = Storage.prototype[method];
+      Storage.prototype[method] = function(key: string, value?: string) {
+        if (key === "inspro-broker-signed-out") throw new DOMException("Storage blocked", "SecurityError");
+        return original.call(this, key, value!);
+      } as typeof original;
+    }
+  });
+  const other = await context.newPage();
+  for (const tab of [page, other]) {
+    await tab.route("**/src/auth/msal.ts*", async route => {
+      const response = await route.fetch();
+      const source = (await response.text())
+        .replace(/const tenantId = .*?;/, "const tenantId = '11111111-1111-4111-8111-111111111111';")
+        .replace(/const clientId = .*?;/, "const clientId = '22222222-2222-4222-8222-222222222222';");
+      await route.fulfill({ response, body: source });
+    });
+  }
+  let loggedOut = false;
+  let refreshesAfterLogout = 0;
+  await context.route("**/api/v1/broker/auth/**", async route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("/logout")) {
+      expect(route.request().headers().authorization).toBe("Bearer broker-memory-only-token");
+      loggedOut = true;
+      await route.fulfill({ status: 204 });
+    } else if (path.endsWith("/refresh")) {
+      if (loggedOut && route.request().frame().page() === page) refreshesAfterLogout++;
+      const otherCookie = (route.request().headers().cookie ?? "").includes("inspro_broker_refresh=other-family");
+      await route.fulfill({ json: otherCookie ? { ...session, access_token: "other-broker-token",
+        user: { id: "other-broker", email: "other@example.test", display_name: "Other Broker" } } : session });
+    } else await route.fulfill({ json: { status: "none", verified: false } });
+  });
+  await page.goto("/broker/security");
+  await expect(page.getByText(session.user.email, { exact: true })).toBeVisible();
+  await context.addCookies([{ name: "inspro_broker_refresh", value: "other-family", url: baseURL!, httpOnly: true, sameSite: "Strict" }]);
+  await other.goto("/broker/security");
+  await expect(other.getByText("other@example.test", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Sign out", exact: true }).click();
+  await expect(page).toHaveURL(/\/sign-in(?:\?signed_out=1)?$/);
+  await expect(page.getByRole("button", { name: "Sign in with Microsoft" })).toBeVisible();
+  await page.reload();
+  await expect(page.getByRole("button", { name: "Sign in with Microsoft" })).toBeVisible();
+  expect(refreshesAfterLogout).toBe(0);
+  expect((await context.cookies()).find(cookie => cookie.name === "inspro_broker_refresh")?.value).toBe("other-family");
+  await other.reload();
+  await expect(other.getByText("other@example.test", { exact: true })).toBeVisible();
+  await other.close();
+});
 }
 
 test("broker session: unverified user is restricted to accessible MFA setup and saves recovery codes", async ({ page }, testInfo) => {
@@ -128,6 +220,7 @@ test("broker cookie writers use the same browser lock", async ({ page }) => {
 
 for (const outcome of ["allowed", "refused"] as const) {
 test(`broker real MSAL: PKCE ${outcome} callback clears tokens and permits account switching`, async ({ page, baseURL }) => {
+  await page.addInitScript(() => sessionStorage.setItem("inspro-broker-signed-out", "1"));
   const tenant = "11111111-1111-4111-8111-111111111111";
   const client = "22222222-2222-4222-8222-222222222222";
   const authority = `https://login.microsoftonline.com/${tenant}`;
@@ -224,5 +317,6 @@ test(`broker real MSAL: PKCE ${outcome} callback clears tokens and permits accou
   expect(storage).not.toContain("synthetic-microsoft-access");
   expect(storage).not.toContain("synthetic-microsoft-refresh");
   expect(storage).not.toContain("broker-memory-only-token");
+  expect(await page.evaluate(() => sessionStorage.getItem("inspro-broker-signed-out"))).toBeNull();
 });
 }
