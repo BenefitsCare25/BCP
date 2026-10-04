@@ -399,6 +399,7 @@ class UserOut(BaseModel):
     broker_firm_id: str | None
     client_ids: list[str]
     external_id: str | None = None
+    broker_mfa_required: bool = False
 
 
 class UserPatch(BaseModel):
@@ -407,6 +408,7 @@ class UserPatch(BaseModel):
     status: str | None = None
     client_ids: list[str] | None = None
     external_id: str | None = None
+    broker_mfa_required: bool | None = None
 
 
 def _user_out(db: Session, u: User) -> UserOut:
@@ -419,6 +421,7 @@ def _user_out(db: Session, u: User) -> UserOut:
         id=u.id, email=u.email, display_name=u.display_name, role=u.role,
         status=u.status, broker_firm_id=u.broker_firm_id, client_ids=cids,
         external_id=u.external_id,
+        broker_mfa_required=u.broker_mfa_required,
     )
 
 
@@ -523,7 +526,14 @@ def patch_user(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found")
     _assert_admin_change_is_recoverable(db, user, target, body)
     before = {"role": target.role, "status": target.status, "display_name": target.display_name,
-              "external_id": target.external_id}
+              "external_id": target.external_id, "broker_mfa_required": target.broker_mfa_required}
+    mfa_changed = (body.broker_mfa_required is not None
+                   and body.broker_mfa_required != target.broker_mfa_required)
+    if body.broker_mfa_required is not None:
+        next_role = body.role if body.role is not None else target.role
+        if next_role not in {"system_admin", "broker_admin", "broker_viewer"}:
+            raise HTTPException(422, "This setting applies only to broker accounts.")
+        target.broker_mfa_required = body.broker_mfa_required
     if body.external_id is not None:
         try:
             oid = str(UUID(body.external_id))
@@ -562,10 +572,13 @@ def patch_user(
     if body.role is not None or body.status is not None or body.client_ids is not None:
         revoke_all_for_subject(db, "broker", target.id)
         revoke_all_for_subject(db, "user", target.id)
+    elif mfa_changed:
+        revoke_all_for_subject(db, "broker", target.id)
     write_audit(db, user, action="update", entity_type="user", entity_id=target.id,
                 before=before,
                 after={"role": target.role, "status": target.status,
-                       "display_name": target.display_name, "external_id": target.external_id})
+                       "display_name": target.display_name, "external_id": target.external_id,
+                       "broker_mfa_required": target.broker_mfa_required})
     db.commit()
     db.refresh(target)
     return _user_out(db, target)

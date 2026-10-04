@@ -1,5 +1,47 @@
 import { expect, test } from "@playwright/test";
 
+test("system admin changes each broker's authenticator requirement and handles failed saves", async ({ page, request }, testInfo) => {
+  const me = await (await request.get("/api/v1/me")).json();
+  await page.route("**/api/v1/me", route => route.fulfill({ json: { ...me, role: "system_admin" } }));
+  let current = { id: "review-mfa-user", email: "mfa-review@example.test", display_name: "MFA Review",
+    role: "broker_viewer", status: "active", broker_firm_id: "review-firm", client_ids: [],
+    external_id: "11111111-1111-4111-8111-111111111111", broker_mfa_required: false };
+  let reject = true;
+  const changes: boolean[] = [];
+  await page.route("**/api/v1/admin/users**", route => {
+    if (route.request().method() === "PATCH") {
+      const body = route.request().postDataJSON();
+      expect(Object.keys(body)).toEqual(["broker_mfa_required"]);
+      if (reject) return route.fulfill({ status: 503, json: { detail: "Policy save unavailable" } });
+      changes.push(body.broker_mfa_required);
+      current = { ...current, ...body };
+      return route.fulfill({ json: current });
+    }
+    return route.fulfill({ json: [current] });
+  });
+  await page.route("**/api/v1/admin/invitations**", route => route.fulfill({ json: [] }));
+  await page.route("**/api/v1/admin/broker-firms", route => route.fulfill({ json: [
+    { id: "review-firm", name: "Review Brokerage", client_count: 1 },
+  ] }));
+  await page.goto("/firm/access");
+  const setting = page.getByRole("combobox", { name: "Authenticator for mfa-review@example.test" });
+  await expect(setting).toHaveText("Off");
+  await setting.click();
+  await page.getByRole("option", { name: "Required", exact: true }).click();
+  await expect(page.getByText("Policy save unavailable", { exact: true })).toBeVisible();
+  await expect(setting).toHaveText("Off");
+  reject = false;
+  await setting.click();
+  await page.getByRole("option", { name: "Required", exact: true }).click();
+  await expect(setting).toHaveText("Required");
+  await setting.click();
+  await page.getByRole("option", { name: "Off", exact: true }).click();
+  await expect(setting).toHaveText("Off");
+  expect(changes).toEqual([true, false]);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)).toBe(false);
+  await page.screenshot({ path: testInfo.outputPath("broker-authenticator-policy.png"), fullPage: true });
+});
+
 for (const role of ["broker_admin", "broker_viewer", "system_admin"]) {
   test(`${role} has the correct user administration visibility`, async ({ page, request }, testInfo) => {
     const me = await (await request.get("/api/v1/me")).json();
@@ -27,6 +69,7 @@ for (const role of ["broker_admin", "broker_viewer", "system_admin"]) {
       await expect(page.getByRole("button", { name: "Invite", exact: true })).toBeVisible();
       await expect(page.getByRole("button", { name: "Rename", exact: true })).toBeVisible();
       await expect(page.getByRole("button", { name: "Disable", exact: true })).toBeVisible();
+      await expect(page.getByRole("combobox", { name: "Authenticator for review@example.test" })).toHaveText("Off");
       await expect(page.getByText("Review User", { exact: true })).toBeVisible();
       await expect(page.getByRole("button", { name: "Bind Microsoft identity" })).toBeVisible();
       const invite = page.getByRole("button", { name: "Invite", exact: true });
@@ -40,6 +83,7 @@ for (const role of ["broker_admin", "broker_viewer", "system_admin"]) {
     } else {
       await expect(page.getByText(role === "broker_admin" ? "Client companies" : "Access restricted", { exact: true })).toBeVisible();
       await expect(page.getByText("Users", { exact: true })).toHaveCount(0);
+      await expect(page.getByRole("combobox", { name: /Authenticator for/ })).toHaveCount(0);
       await expect(page.getByRole("button", { name: /^(Invite|Rename|Disable|Revoke)$/ })).toHaveCount(0);
       expect(userRequests).toEqual([]);
     }

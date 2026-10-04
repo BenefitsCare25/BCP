@@ -109,6 +109,7 @@ def test_user_administration_requires_system_admin(role: Role) -> None:
             ("PATCH", f"/api/v1/admin/users/{invite['user_id']}", {"display_name": "Changed"}),
             ("PATCH", f"/api/v1/admin/users/{invite['user_id']}", {"role": "broker_admin"}),
             ("PATCH", f"/api/v1/admin/users/{invite['user_id']}", {"status": "disabled"}),
+            ("PATCH", f"/api/v1/admin/users/{invite['user_id']}", {"broker_mfa_required": True}),
             ("PATCH", f"/api/v1/admin/users/{invite['user_id']}", {
                 "external_id": "11111111-1111-4111-8111-111111111111",
             }),
@@ -125,6 +126,7 @@ def test_user_administration_requires_system_admin(role: Role) -> None:
                 "broker_viewer",
                 "invited",
             )
+            assert target.broker_mfa_required is False
             assert (
                 db.query(User).filter(User.email == f"blocked-{role}@inspro.test").first() is None
             )
@@ -168,6 +170,28 @@ def test_all_broker_delete_routes_require_system_admin(role: Role) -> None:
             assert response.status_code == 403, (role, path, response.text)
     finally:
         app.dependency_overrides.pop(get_current_user, None)
+
+
+def test_broker_authenticator_setting_defaults_off_and_is_audited(sysadmin):
+    from app.models import AuditLog
+
+    invited = sysadmin.post("/api/v1/admin/invitations", json={
+        "email": "auth-policy-review@inspro.test", "role": "broker_viewer",
+        "broker_firm_id": DEMO_BROKER_FIRM_ID,
+    })
+    assert invited.status_code == 201, invited.text
+    uid = invited.json()["user_id"]
+    response = sysadmin.get("/api/v1/admin/users", params={"broker_firm_id": DEMO_BROKER_FIRM_ID})
+    assert response.status_code == 200, response.text
+    listed = response.json()
+    assert next(u for u in listed if u["id"] == uid)["broker_mfa_required"] is False
+    changed = sysadmin.patch("/api/v1/admin/users/" + uid, json={"broker_mfa_required": True})
+    assert changed.status_code == 200, changed.text
+    with SessionLocal() as db:
+        audit = db.query(AuditLog).filter(AuditLog.entity_id == uid,
+                                         AuditLog.action == "update").one()
+        assert audit.before["broker_mfa_required"] is False
+        assert audit.after["broker_mfa_required"] is True
 
 
 @pytest.mark.parametrize("role", ["broker_admin", "broker_viewer", "client_admin", "client_hr"])

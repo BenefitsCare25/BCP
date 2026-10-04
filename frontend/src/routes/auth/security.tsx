@@ -72,7 +72,9 @@ export function BrokerSecurityPage() {
       <CardHeader><h1 className="text-xl font-semibold">Secure your broker account</h1></CardHeader>
       <CardContent className="space-y-5">
         <p className="break-words text-sm text-muted-foreground">{session?.user.email}</p>
-        <p className="text-sm">Two-factor verification is required to access the broker platform.</p>
+        <p className="text-sm">{session?.mfa_required === false
+          ? "Your administrator has not required an authenticator for this account. Microsoft sign-in is required."
+          : "Your administrator requires two-factor verification to access the broker platform."}</p>
         {status.isPending && <p role="status">Checking account security…</p>}
         {status.isError && <div role="alert"><p>Couldn't check account security.</p><Button variant="outline" onClick={() => void status.refetch()}>Try again</Button></div>}
         {codes ? <>
@@ -80,6 +82,8 @@ export function BrokerSecurityPage() {
           <p className="text-sm">Each code works once if you lose your authenticator. Store them safely; they won't be shown again.</p>
           <div className="grid grid-cols-1 gap-2 rounded-md bg-muted p-3 font-mono sm:grid-cols-2">{codes.map(value => <span key={value}>{value}</span>)}</div>
           <Button onClick={() => void navigate({ to: "/", replace: true })}>I've saved them — continue</Button>
+        </> : session?.mfa_required === false ? <>
+          <Button onClick={() => void navigate({ to: "/", replace: true })}>Continue to broker platform</Button>
         </> : session?.mfa_verified ? <>
           <p role="status">Two-factor verification is complete.</p>
           <Button onClick={() => void navigate({ to: "/", replace: true })}>Continue to broker platform</Button>

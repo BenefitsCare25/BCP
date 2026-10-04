@@ -510,6 +510,15 @@ function UsersCard() {
     }
   };
 
+  const onMfaChange = async (u: AdminUser, required: boolean) => {
+    try {
+      await patch.mutateAsync({ id: u.id, patch: { broker_mfa_required: required } });
+      toast.success(`Authenticator ${required ? "required" : "turned off"}. This user must sign in again.`);
+    } catch (e) {
+      toast.error(formatError(e));
+    }
+  };
+
   const pendingByEmail = new Map(invites.map((i) => [i.email, i]));
   // Firm-wide user management is brokerage staff only; a company's HR logins
   // live under Company settings → Authentication, so keep them out of here.
@@ -528,6 +537,8 @@ function UsersCard() {
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
+        <p className="text-sm text-muted-foreground">Authenticator verification is off by default.
+          Only a system administrator can require it per account. Changing it signs that user out.</p>
         <div className="rounded-md border border-border p-3 space-y-3 bg-muted/30">
           <div className="grid grid-cols-1 md:grid-cols-[1fr_1fr_180px_auto] gap-2 items-end">
             <div className="flex flex-col gap-1.5">
@@ -654,6 +665,18 @@ function UsersCard() {
                     <Button size="sm" variant="ghost" onClick={() => setBindingUser(null)}>Cancel</Button>
                   </div> : <Button size="sm" variant="outline" onClick={() => { setBindingUser(u.id); setBindingId(""); }}>Bind Microsoft identity</Button>)}
                   <Badge variant={statusVariant(u.status)}>{u.status}</Badge>
+                  <div className="flex flex-col gap-1">
+                    <Label htmlFor={`broker-mfa-${u.id}`} className="text-xs">Authenticator</Label>
+                    <Select value={u.broker_mfa_required ? "required" : "off"}
+                      disabled={patch.isPending} onValueChange={value => void onMfaChange(u, value === "required")}>
+                      <SelectTrigger id={`broker-mfa-${u.id}`} className="h-8 w-[130px]"
+                        aria-label={`Authenticator for ${u.email}`}><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="off">Off</SelectItem>
+                        <SelectItem value="required">Required</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
                   <Select value={u.role} onValueChange={(v) => onRoleChange(u, v)}>
                     <SelectTrigger className="h-8 w-[150px]"><SelectValue /></SelectTrigger>
                     <SelectContent>

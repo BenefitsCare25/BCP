@@ -1,4 +1,4 @@
-"""Microsoft token exchange, mandatory broker MFA and revocable sessions."""
+"""Microsoft token exchange, per-account broker MFA and revocable sessions."""
 
 from __future__ import annotations
 
@@ -32,7 +32,14 @@ class Code(BaseModel):
 
 
 def _auth(request: Request, db: Session) -> tuple[User, AuthSession]:
-    return BA.authenticate(request.headers.get("authorization"), db)
+    return BA.authenticate(request.headers.get("authorization"), db, lock_user=True)
+
+
+def _require_mfa(user: User) -> None:
+    if not user.broker_mfa_required:
+        raise HTTPException(
+            409, "Your administrator has not required an authenticator for this account."
+        )
 
 
 def _account_bucket(request: Request) -> str:
@@ -79,8 +86,8 @@ def exchange(
         )
         db.commit()
         raise
-    user = BA.active_user(db, principal.user_id)
-    # The first factor only permits MFA for five minutes, never business access.
+    user = BA.active_user(db, principal.user_id, lock=True)
+    # Required accounts get only a five-minute enrollment/verification session.
     issued = sessions.issue_session(
         db,
         subject_type=BA.SUBJECT,
@@ -88,11 +95,13 @@ def exchange(
         client_id=None,
         broker_firm_id=user.broker_firm_id,
         absolute_hours=BA.ABSOLUTE_HOURS,
-        expires_at=datetime.now(UTC) + timedelta(minutes=5),
+        expires_at=(datetime.now(UTC) + timedelta(minutes=5)
+                    if user.broker_mfa_required else None),
     )
     row = db.get(AuthSession, issued.session_id)
     assert row is not None
-    _event(db, request, user, events.EVENT_MFA_CHALLENGE, events.OUTCOME_SUCCESS)
+    _event(db, request, user, events.EVENT_MFA_CHALLENGE if user.broker_mfa_required
+           else events.EVENT_LOGIN_SUCCESS, events.OUTCOME_SUCCESS)
     db.commit()
     BA.set_cookie(response, issued.token, issued.expires_at)
     return BA.response_session(user, row)
@@ -114,7 +123,7 @@ def refresh(request: Request, response: Response, db: Session = Depends(get_db))
     )
     if row is None or row.subject_type != BA.SUBJECT or row.client_id is not None:
         raise HTTPException(401, "Session ended. Sign in again.")
-    user = BA.active_user(db, row.subject_id)
+    user = BA.active_user(db, row.subject_id, lock=True)
     result = sessions.rotate_session(
         db, token, absolute_hours=BA.ABSOLUTE_HOURS, idle_minutes=BA.IDLE_MINUTES
     )
@@ -170,7 +179,8 @@ def mfa_status(
 ) -> dict[str, Any]:
     user, row = _auth(request, db)
     response.headers["Cache-Control"] = "no-store"
-    return {"status": mfa.status_for(db, BA.SUBJECT, user.id), "verified": row.mfa_verified}
+    return {"status": mfa.status_for(db, BA.SUBJECT, user.id), "verified": row.mfa_verified,
+            "required": user.broker_mfa_required}
 
 
 @router.post("/mfa/start")
@@ -179,6 +189,7 @@ def mfa_start(
     request: Request, response: Response, db: Session = Depends(get_db)
 ) -> dict[str, str]:
     user, _ = _auth(request, db)
+    _require_mfa(user)
     secret, uri = mfa.start_enrollment(db, BA.SUBJECT, user.id, user.email)
     db.commit()
     response.headers["Cache-Control"] = "no-store"
@@ -232,6 +243,7 @@ def mfa_confirm(
     body: Code, request: Request, response: Response, db: Session = Depends(get_db)
 ) -> dict[str, Any]:
     user, row = _auth(request, db)
+    _require_mfa(user)
     codes = mfa.confirm_enrollment(db, BA.SUBJECT, user.id, body.code)
     if codes is None:
         _event(db, request, user, events.EVENT_MFA_FAIL, events.OUTCOME_FAIL)
@@ -248,6 +260,7 @@ def mfa_verify(
     body: Code, request: Request, response: Response, db: Session = Depends(get_db)
 ) -> dict[str, Any]:
     user, row = _auth(request, db)
+    _require_mfa(user)
     if row.mfa_verified:
         raise HTTPException(409, "This session is already verified.")
     if not mfa.has_confirmed(db, BA.SUBJECT, user.id) or not (

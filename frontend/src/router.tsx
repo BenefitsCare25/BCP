@@ -176,7 +176,7 @@ const CompanyDashboardPage = lazyRouteComponent(
 );
 
 // Routes that are reachable without being signed in. Everything else goes
-// through the AppShell which requires a broker session with verified MFA.
+// through the AppShell which enforces the account's broker MFA requirement.
 const PUBLIC_PATHS = new Set(["/auth/callback", SIGN_IN_PATH]);
 
 const rootRoute = createRootRoute({
@@ -572,7 +572,8 @@ const appLayoutRoute = createRoute({
         search: { from: location.pathname } as Record<string, string>,
       });
     }
-    if (!useBrokerSession.getState().session?.mfa_verified) {
+    const brokerSession = useBrokerSession.getState().session;
+    if (brokerSession?.mfa_required !== false && !brokerSession?.mfa_verified) {
       throw redirect({ to: "/broker/security" });
     }
     // A Microsoft account is not access. The platform grants access from its

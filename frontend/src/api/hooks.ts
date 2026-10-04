@@ -1086,6 +1086,7 @@ export interface AdminUser {
   broker_firm_id: string | null;
   client_ids: string[];
   external_id?: string | null;
+  broker_mfa_required: boolean;
 }
 
 export interface AdminInvitation {
@@ -1195,7 +1196,7 @@ export function usePatchUser() {
       patch,
     }: {
       id: string;
-      patch: Partial<Pick<AdminUser, "display_name" | "role" | "status" | "external_id">> & {
+      patch: Partial<Pick<AdminUser, "display_name" | "role" | "status" | "external_id" | "broker_mfa_required">> & {
         client_ids?: string[];
       };
     }) => api.patch<AdminUser>(`/admin/users/${id}`, patch),

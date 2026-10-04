@@ -8,6 +8,7 @@ from typing import Any
 
 import jwt
 from fastapi import HTTPException, Response
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core import sessions
@@ -56,8 +57,14 @@ def bearer(authorization: str | None) -> str:
     return token
 
 
-def active_user(db: Session, user_id: str, oid: str | None = None) -> User:
-    user = db.get(User, user_id)
+def active_user(
+    db: Session, user_id: str, oid: str | None = None, *, lock: bool = False,
+) -> User:
+    # Cookie writers serialize with administrative policy edits and revocation.
+    user = (db.execute(
+        select(User).where(User.id == user_id).with_for_update()
+        .execution_options(populate_existing=True)
+    ).scalar_one_or_none() if lock else db.get(User, user_id))
     if (
         user is None
         or user.status != "active"
@@ -69,9 +76,11 @@ def active_user(db: Session, user_id: str, oid: str | None = None) -> User:
     return user
 
 
-def authenticate(authorization: str | None, db: Session) -> tuple[User, AuthSession]:
+def authenticate(
+    authorization: str | None, db: Session, *, lock_user: bool = False,
+) -> tuple[User, AuthSession]:
     claims = decode(bearer(authorization))
-    user = active_user(db, claims["sub"], claims["oid"])
+    user = active_user(db, claims["sub"], claims["oid"], lock=lock_user)
     row = sessions.validate_access_session(
         db,
         claims["sid"],
@@ -85,7 +94,7 @@ def authenticate(authorization: str | None, db: Session) -> tuple[User, AuthSess
 
 def broker_principal(authorization: str | None, db: Session) -> Principal:
     user, row = authenticate(authorization, db)
-    if not row.mfa_verified:
+    if user.broker_mfa_required and not row.mfa_verified:
         raise HTTPException(
             403, {"code": "broker_mfa_required", "message": "Complete two-factor verification."}
         )
@@ -115,6 +124,7 @@ def response_session(user: User, row: AuthSession) -> dict[str, Any]:
         "expires_at": expiry.isoformat(),
         "user": {"id": user.id, "email": user.email, "display_name": user.display_name},
         "mfa_verified": row.mfa_verified,
+        "mfa_required": user.broker_mfa_required,
     }
 
 

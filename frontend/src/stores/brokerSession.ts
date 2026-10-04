@@ -6,6 +6,7 @@ export interface BrokerSession {
   expires_at: string;
   user: { id: string; email: string; display_name: string | null };
   mfa_verified: boolean;
+  mfa_required: boolean;
 }
 
 export const useBrokerSession = create<{

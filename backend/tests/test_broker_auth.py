@@ -32,6 +32,7 @@ def actor(monkeypatch):
                 email=uid + "@example.test",
                 status="active",
                 role="broker_admin",
+                broker_mfa_required=True,
             )
         )
         db.commit()
@@ -72,12 +73,78 @@ def verified(client):
 def test_microsoft_first_factor_cannot_access_business(client, actor):
     session = login(client)
     assert session["mfa_verified"] is False
+    assert session["mfa_required"] is True
     result = client.get("/api/v1/me", headers=header(session))
     assert result.status_code == 403
     assert result.json()["detail"]["code"] == "broker_mfa_required"
     assert (
         client.get("/api/v1/me", headers={"Authorization": "Bearer signed-stub"}).status_code == 401
     )
+
+
+def test_off_policy_skips_authenticator_without_claiming_mfa_verification(client, actor):
+    with SessionLocal() as db:
+        db.get(User, actor[0]).broker_mfa_required = False
+        db.commit()
+    session = login(client)
+    assert session["mfa_required"] is False
+    assert session["mfa_verified"] is False
+    assert client.get("/api/v1/me", headers=header(session)).status_code == 200
+    with SessionLocal() as db:
+        row = db.get(AuthSession, BA.decode(session["access_token"])["sid"])
+        assert row.expires_at.replace(tzinfo=UTC) > datetime.now(UTC) + timedelta(hours=11)
+    refreshed = client.post("/api/v1/broker/auth/refresh")
+    assert refreshed.status_code == 200
+    assert refreshed.json()["mfa_required"] is False
+    for path, body in [("start", {}), ("confirm", {"code": "123456"}),
+                       ("verify", {"code": "123456"})]:
+        response = client.post("/api/v1/broker/auth/mfa/" + path,
+                               headers=header(refreshed.json()), json=body)
+        assert response.status_code == 409
+
+
+def test_off_policy_skips_even_if_authenticator_was_previously_enrolled(client, actor):
+    completed = verified(client)
+    with SessionLocal() as db:
+        db.get(User, actor[0]).broker_mfa_required = False
+        db.commit()
+    session = login(client)
+    assert session["mfa_verified"] is False
+    assert client.get("/api/v1/me", headers=header(session)).status_code == 200
+    status = client.get("/api/v1/broker/auth/mfa", headers=header(session)).json()
+    assert status == {"status": "confirmed", "verified": False, "required": False}
+    assert completed["recovery_codes"]
+
+
+def test_admin_policy_change_revokes_sessions_and_preserves_enrollment(client, actor):
+    completed = verified(client)
+
+    def set_requirement(required):
+        app.dependency_overrides[auth.get_current_user] = lambda: auth.CurrentUser(
+            user_id=actor[0], broker_firm_id=None, client_id=None, role="system_admin",
+        )
+        try:
+            result = client.patch("/api/v1/admin/users/" + actor[0],
+                                  json={"broker_mfa_required": required})
+            assert result.status_code == 200, result.text
+            assert result.json()["broker_mfa_required"] is required
+        finally:
+            app.dependency_overrides.pop(auth.get_current_user, None)
+
+    set_requirement(False)
+    assert client.get("/api/v1/me", headers=header(completed)).status_code == 401
+    assert client.post("/api/v1/broker/auth/refresh").status_code == 401
+    off_session = login(client)
+    assert client.get("/api/v1/me", headers=header(off_session)).status_code == 200
+    set_requirement(True)
+    assert client.get("/api/v1/me", headers=header(off_session)).status_code == 401
+    pending = login(client)
+    assert pending["mfa_required"] is True
+    assert client.get("/api/v1/me", headers=header(pending)).status_code == 403
+    result = client.post("/api/v1/broker/auth/mfa/verify", headers=header(pending),
+                         json={"code": completed["recovery_codes"][0]})
+    assert result.status_code == 200, result.text
+    assert client.get("/api/v1/me", headers=header(result.json())).status_code == 200
 
 
 def test_enrollment_refresh_and_logout_revoke_access(client, actor):

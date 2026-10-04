@@ -12,7 +12,7 @@ email.
 """
 from __future__ import annotations
 
-from sqlalchemy import ForeignKey, String, UniqueConstraint
+from sqlalchemy import Boolean, ForeignKey, String, UniqueConstraint, false
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampMixin, new_uuid
@@ -39,6 +39,9 @@ class User(Base, TimestampMixin):
     role: Mapped[str] = mapped_column(String(32), nullable=False)
     status: Mapped[str] = mapped_column(
         String(32), nullable=False, default=USER_STATUS_ACTIVE, index=True
+    )
+    broker_mfa_required: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=false()
     )
 
 

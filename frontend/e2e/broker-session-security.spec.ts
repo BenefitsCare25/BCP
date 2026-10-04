@@ -5,9 +5,10 @@ const session = {
   access_token: "broker-memory-only-token", expires_at: "2100-01-01T00:00:00Z",
   user: { id: "broker-review", email: "broker@example.test", display_name: "Review Broker" },
   mfa_verified: false,
+  mfa_required: true,
 };
 
-async function broker(page: Page, enrolled = false) {
+async function broker(page: Page, enrolled = false, required = true) {
   await page.route("**/src/auth/msal.ts*", route => route.fulfill({
     contentType: "application/javascript",
     body: `
@@ -28,7 +29,7 @@ async function broker(page: Page, enrolled = false) {
       };
     `,
   }));
-  let current = { ...session };
+  let current = { ...session, mfa_required: required };
   let ended = false;
   await page.route("**/api/v1/broker/auth/**", async route => {
     const path = new URL(route.request().url()).pathname;
@@ -53,6 +54,19 @@ async function broker(page: Page, enrolled = false) {
   });
   return { expire: () => { ended = true; } };
 }
+
+test("broker session: an account with authenticator off can enter without a code", async ({ page }) => {
+  await broker(page, true, false);
+  await page.goto("/home");
+  await expect(page).toHaveURL(/\/home$/);
+  await expect(page.getByRole("heading", { name: "Secure your broker account" })).toHaveCount(0);
+  await page.goto("/broker/security");
+  await expect(page.getByText(/Your administrator has not required an authenticator/)).toBeVisible();
+  await expect(page.getByRole("button", { name: "Set up authenticator" })).toHaveCount(0);
+  await expect(page.getByLabel("Authenticator or recovery code")).toHaveCount(0);
+  await page.getByRole("button", { name: "Continue to broker platform" }).click();
+  await expect(page).not.toHaveURL(/\/broker\/security/);
+});
 
 async function expireLocalAccess(page: Page) {
   await page.evaluate(async () => {
