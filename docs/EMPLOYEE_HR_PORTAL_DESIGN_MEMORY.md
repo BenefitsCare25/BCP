@@ -4,6 +4,33 @@ Approved user requirements, saved 2 October 2026. Scope: employee/member and HR 
 
 ## Sign-in preview exception, 3 October 2026
 
+### Platform media interaction follow-up, 4 October 2026
+
+The user's platform-wide media request authorizes suppressing native media
+save/copy menus, image/video dragging and mobile touch callouts. Login scenery
+now receives context-menu events while its still/video layers remain decorative;
+this changes pointer handling without changing the approved portal layout or
+palette. Both videos have no native controls, remote playback or picture-in-picture.
+Employee/HR loop behavior and reduced-motion/data-saving/failure fallbacks are
+preserved. Text selection, credential fields, role links and explicit document
+downloads remain usable. The combined 80-check desktop/phone broker and portal
+authentication review passed, including actual right-click cancellation on all
+three login surfaces and password-field input. Automated fixtures use disposable
+OS-temp databases; no working-store identity, coverage or credentials changed.
+The existing portal motion-conformance and real-device Safari limitations remain.
+Public media remains retrievable by URL despite browser menu suppression.
+
+Released as `790d57c8e90d7035254418dd7aab9dbf5b6083ca` in successful
+[deployment run 37186194616](https://github.com/BenefitsCare25/BCP/actions/runs/37186194616).
+CI passed 199 browser checks with one skip. Independent live media guards passed
+for broker desktop/phone and employee/HR phone, without page errors or overflow;
+real Microsoft PKCE handoff and the deployed bundle's two session regressions
+also passed using intercepted synthetic sessions. Both services serve the exact
+SHA and database/Redis readiness is healthy. One brief 502 during the container
+handoff recovered; the subsequent ingested HTTP/application logs have no ongoing
+errors. Live evidence is under `tmp/broker-media-release-790d57c/`. No real tenant
+credentials or TOTP codes were submitted and no application data was changed.
+
 ### Authorized production release follow-up
 
 The user's later "fix all for production ready and push for deployment and
