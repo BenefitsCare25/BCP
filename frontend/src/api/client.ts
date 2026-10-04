@@ -2,8 +2,7 @@ import {
   ENTRA_ENABLED,
   acquireAccessToken,
   getActiveAccount,
-  getMsal,
-  signIn,
+  clearLocalSession,
 } from "@/auth/msal";
 import { errorFromText, parseErrorText } from "@/lib/errors";
 import { useSession } from "@/stores/session";
@@ -132,8 +131,6 @@ function uploadError(text: string, statusText: string, status: number): Error {
 
 async function authHeader(): Promise<Record<string, string>> {
   if (!ENTRA_ENABLED) return {};
-  const msal = getMsal();
-  if (!msal) return {};
   const account = getActiveAccount();
   if (!account) return {};
   const token = await acquireAccessToken(account);
@@ -141,11 +138,11 @@ async function authHeader(): Promise<Record<string, string>> {
 }
 
 async function handleUnauthorized(): Promise<never> {
-  // If Entra is wired, a 401 means our token has been rejected — kick the
-  // user back through sign-in. The promise from `signIn` does not resolve
-  // (the page navigates) but we still throw so callers don't proceed.
+  // End the local session after a rejected token. The user starts sign-in
+  // explicitly, so Microsoft SSO cannot silently undo platform idle expiry.
   if (ENTRA_ENABLED) {
-    await signIn();
+    await clearLocalSession();
+    window.location.assign("/sign-in");
   }
   throw new UnauthorizedError(
     ENTRA_ENABLED
@@ -169,6 +166,12 @@ async function fail(
   if (res.status === 401) return handleUnauthorized();
   const text = await res.text();
   if (res.status === 403) {
+    try {
+      if ((JSON.parse(text) as { detail?: { code?: string } }).detail?.code === "broker_mfa_required") {
+        window.location.assign("/broker/security");
+        throw new UnauthorizedError("Two-factor verification required");
+      }
+    } catch (error) { if (error instanceof UnauthorizedError) throw error; }
     const denied = noAccessDetail(text);
     if (denied) throw new NoAccessError(denied.message, denied.code);
   }

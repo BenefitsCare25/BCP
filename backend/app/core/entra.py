@@ -104,6 +104,17 @@ def verify_entra_token(
     except jwt.InvalidTokenError as exc:
         raise EntraAuthError(f"invalid token: {exc}") from exc
 
+    if claims.get("tid") != settings.entra_tenant_id:
+        raise EntraAuthError("tenant mismatch")
+    if claims.get("azp") != settings.entra_client_id:
+        raise EntraAuthError("unauthorized client application")
+    scopes = claims.get("scp")
+    if not isinstance(scopes, str) or "access_as_user" not in scopes.split():
+        raise EntraAuthError("missing delegated API permission")
+    if claims.get("idtyp") == "app":
+        raise EntraAuthError("app-only tokens are not accepted")
+    if not isinstance(claims.get("oid"), str) or not claims["oid"]:
+        raise EntraAuthError("missing immutable user identifier")
     return claims
 
 

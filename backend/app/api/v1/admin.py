@@ -14,6 +14,7 @@ from __future__ import annotations
 import secrets
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel, Field
@@ -397,6 +398,7 @@ class UserOut(BaseModel):
     status: str
     broker_firm_id: str | None
     client_ids: list[str]
+    external_id: str | None = None
 
 
 class UserPatch(BaseModel):
@@ -404,6 +406,7 @@ class UserPatch(BaseModel):
     role: str | None = None
     status: str | None = None
     client_ids: list[str] | None = None
+    external_id: str | None = None
 
 
 def _user_out(db: Session, u: User) -> UserOut:
@@ -415,6 +418,7 @@ def _user_out(db: Session, u: User) -> UserOut:
     return UserOut(
         id=u.id, email=u.email, display_name=u.display_name, role=u.role,
         status=u.status, broker_firm_id=u.broker_firm_id, client_ids=cids,
+        external_id=u.external_id,
     )
 
 
@@ -512,9 +516,29 @@ def patch_user(
     user: CurrentUser = Depends(require_system_admin),
     db: Session = Depends(get_db),
 ) -> UserOut:
-    target = _load_firm_user(db, user, user_id)
+    target = db.execute(
+        select(User).where(User.id == user_id).with_for_update()
+    ).scalar_one_or_none()
+    if target is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found")
     _assert_admin_change_is_recoverable(db, user, target, body)
-    before = {"role": target.role, "status": target.status, "display_name": target.display_name}
+    before = {"role": target.role, "status": target.status, "display_name": target.display_name,
+              "external_id": target.external_id}
+    if body.external_id is not None:
+        try:
+            oid = str(UUID(body.external_id))
+        except ValueError:
+            raise HTTPException(422, "Microsoft object ID must be a valid UUID.") from None
+        if target.external_id and target.external_id != oid:
+            raise HTTPException(409, "This account is already bound to a Microsoft identity.")
+        if db.query(User).filter(User.external_id == oid, User.id != target.id).first():
+            raise HTTPException(409, "That Microsoft identity is already registered.")
+        target.external_id = oid
+        try:
+            db.flush()
+        except IntegrityError:
+            db.rollback()
+            raise HTTPException(409, "That Microsoft identity is already registered.") from None
     if body.display_name is not None:
         target.display_name = body.display_name.strip() or None
     if body.role is not None:
@@ -533,10 +557,15 @@ def patch_user(
                 "Cannot grant client access to a user without a broker firm.",
             )
         _set_client_access(db, target.id, target.broker_firm_id, body.client_ids)
+    from app.core.sessions import revoke_all_for_subject
+
+    if body.role is not None or body.status is not None or body.client_ids is not None:
+        revoke_all_for_subject(db, "broker", target.id)
+        revoke_all_for_subject(db, "user", target.id)
     write_audit(db, user, action="update", entity_type="user", entity_id=target.id,
                 before=before,
                 after={"role": target.role, "status": target.status,
-                       "display_name": target.display_name})
+                       "display_name": target.display_name, "external_id": target.external_id})
     db.commit()
     db.refresh(target)
     return _user_out(db, target)
@@ -552,6 +581,7 @@ class InvitationCreate(BaseModel):
     role: str
     client_ids: list[str] = Field(default_factory=list)
     broker_firm_id: str | None = None  # system_admin only
+    external_id: str | None = None
 
 
 class InvitationOut(BaseModel):
@@ -579,9 +609,8 @@ def create_invitation(
     if "@" not in email or "." not in email.split("@")[-1]:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid email address.")
 
-    # A user's email is a global platform identity (one person → one firm),
-    # required for DB-backed Entra matching by email. So an email already in
-    # use anywhere can't be re-invited.
+    # Email remains globally unique for invitations and HR password sign-in.
+    # Broker Microsoft sign-in uses only the administrator-bound object ID.
     if db.query(User).filter(User.email == email).one_or_none() is not None:
         raise HTTPException(
             status.HTTP_409_CONFLICT,
@@ -590,16 +619,30 @@ def create_invitation(
 
     client_ids = body.client_ids if body.role in _CLIENT_ROLES else []
     _clients_in_firm(db, firm_id, client_ids)
+    oid = None
+    if body.external_id:
+        try:
+            oid = str(UUID(body.external_id))
+        except ValueError:
+            raise HTTPException(422, "Microsoft object ID must be a valid UUID.") from None
+        if db.query(User).filter(User.external_id == oid).first():
+            raise HTTPException(409, "That Microsoft identity is already registered.")
 
-    # Provision the user up front (status invited); first Entra sign-in links
-    # the oid by email and flips status to active.
+    # Provision the user up front. First sign-in accepts a live invitation only
+    # when the Microsoft object ID was already bound by an administrator.
     display_name = (body.display_name or "").strip() or None
     new_user = User(
-        external_id=None, email=email, display_name=display_name,
+        external_id=oid, email=email, display_name=display_name,
         broker_firm_id=firm_id, role=body.role, status=USER_STATUS_INVITED,
     )
     db.add(new_user)
-    db.flush()
+    try:
+        db.flush()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            409, "That email or Microsoft identity is already registered."
+        ) from None
     for cid in client_ids:
         db.add(UserClientAccess(user_id=new_user.id, client_id=cid))
 

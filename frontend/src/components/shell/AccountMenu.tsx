@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { LogIn, LogOut, ShieldCheck, User } from "lucide-react";
-import { useMsal } from "@azure/msal-react";
+import { brokerAccount, useBrokerSession } from "@/stores/brokerSession";
 import { Badge } from "@/components/ui/badge";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { ENTRA_ENABLED, signIn, signOut } from "@/auth/msal";
 
@@ -38,8 +39,8 @@ function initialsOf(name: string): string {
 }
 
 function SignedInOrOut() {
-  const { accounts } = useMsal();
-  const account = accounts[0];
+  useBrokerSession((state) => state.session);
+  const account = brokerAccount();
   const [open, setOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -109,7 +110,7 @@ function SignedInOrOut() {
             role="menuitem"
             onClick={() => {
               setOpen(false);
-              void signOut();
+              void signOut().catch(() => toast.error("Couldn't sign out. Please try again."));
             }}
             className="flex w-full items-center gap-2 px-3 py-2 text-sm text-foreground hover:bg-muted"
           >

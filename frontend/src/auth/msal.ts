@@ -1,14 +1,14 @@
 import {
   Configuration,
-  InteractionRequiredAuthError,
   PublicClientApplication,
   type AccountInfo,
-  type AuthenticationResult,
 } from "@azure/msal-browser";
+import { brokerAccount, useBrokerSession, type BrokerSession } from "@/stores/brokerSession";
+import { brokerAccessToken, brokerAuthRequest, refreshBrokerSession } from "./brokerSession";
 
 const tenantId = import.meta.env.VITE_ENTRA_TENANT_ID ?? "";
 const clientId = import.meta.env.VITE_ENTRA_CLIENT_ID ?? "";
-const audience = import.meta.env.VITE_ENTRA_AUDIENCE ?? `api://${clientId}`;
+const audience = import.meta.env.VITE_ENTRA_AUDIENCE || `api://${clientId}`;
 
 export const ENTRA_ENABLED = Boolean(tenantId && clientId);
 
@@ -24,6 +24,8 @@ export const msalConfig: Configuration = {
       typeof window !== "undefined" ? window.location.origin + "/" : "/",
   },
   cache: {
+    // MSAL requires this for redirects. Clear the first-factor credentials
+    // immediately on return; platform sessions never use browser storage.
     cacheLocation: "sessionStorage",
   },
 };
@@ -36,6 +38,19 @@ export const loginRequest = {
 let _msal: PublicClientApplication | null = null;
 let _initialisationPromise: Promise<void> | null = null;
 
+function removeLegacyBrokerTokens(): void {
+  for (const name of ["sessionStorage", "localStorage"] as const) {
+    try {
+      const storage = window[name];
+      for (const key of Object.keys(storage)) {
+        let value: { clientId?: string; credentialType?: string };
+        try { value = JSON.parse(storage.getItem(key) ?? "null"); } catch { continue; }
+        if (value?.clientId === clientId && /token/i.test(value.credentialType ?? "")) storage.removeItem(key);
+      }
+    } catch { /* Redirect state requires browser storage; no bearer tokens are persisted. */ }
+  }
+}
+
 export function getMsal(): PublicClientApplication | null {
   if (!ENTRA_ENABLED) return null;
   if (_msal === null) {
@@ -45,7 +60,7 @@ export function getMsal(): PublicClientApplication | null {
 }
 
 /**
- * MSAL v3 requires explicit `initialize()` before any other call. Idempotent —
+ * MSAL requires explicit `initialize()` before any other call. Idempotent —
  * the same promise is returned across callers so concurrent boots don't double-init.
  */
 export async function initializeMsal(): Promise<PublicClientApplication | null> {
@@ -54,22 +69,26 @@ export async function initializeMsal(): Promise<PublicClientApplication | null> 
   if (_initialisationPromise === null) {
     _initialisationPromise = (async () => {
       await msal.initialize();
+      removeLegacyBrokerTokens();
       // Process the response from a redirect-flow sign-in BEFORE the app
       // renders. If we're not in the callback URL this is a no-op.
       const response = await msal.handleRedirectPromise();
       if (response?.account) {
-        msal.setActiveAccount(response.account);
-      } else if (msal.getActiveAccount() === null) {
-        const accounts = msal.getAllAccounts();
-        if (accounts.length > 0) {
-          msal.setActiveAccount(accounts[0]);
-        }
+        await msal.clearCache();
+        const session = await brokerAuthRequest<BrokerSession>("/exchange", { access_token: response.accessToken });
+        useBrokerSession.getState().set(session);
+      } else if (!window.location.pathname.startsWith("/portal/") && !window.location.pathname.startsWith("/hr/")) {
+        await refreshBrokerSession();
       }
     })().catch((err: unknown) => {
       // Reset the cached promise on failure so a retry (e.g. from the sign-in
       // page) can attempt initialization again instead of re-awaiting the
       // same rejection forever.
       _initialisationPromise = null;
+      // MSAL memoizes redirect results, including failures. A fresh instance
+      // lets a refused identity choose another account without re-exchanging
+      // the earlier callback or awaiting its cached error.
+      _msal = null;
       throw err;
     });
   }
@@ -78,39 +97,17 @@ export async function initializeMsal(): Promise<PublicClientApplication | null> 
 }
 
 export function getActiveAccount(): AccountInfo | null {
-  const msal = getMsal();
-  if (!msal) return null;
-  return msal.getActiveAccount() ?? msal.getAllAccounts()[0] ?? null;
+  return brokerAccount();
 }
 
 /**
- * Get an access token for the API audience. On `InteractionRequiredAuthError`
- * (most commonly: refresh-token expired, or first call after a session reset)
- * trigger a redirect-flow sign-in. The promise will not resolve in that case
- * — the browser navigates away.
+ * Return a platform access token; Microsoft tokens are never used by data APIs.
+ * Expired platform sessions require an explicit sign-in.
  */
 export async function acquireAccessToken(
-  account: AccountInfo,
+  _account: AccountInfo,
 ): Promise<string | null> {
-  const msal = getMsal();
-  if (!msal) return null;
-  try {
-    const result: AuthenticationResult = await msal.acquireTokenSilent({
-      ...loginRequest,
-      account,
-    });
-    return result.accessToken;
-  } catch (err) {
-    if (err instanceof InteractionRequiredAuthError) {
-      // Falls through to a full-page redirect — promise won't resolve.
-      await msal.acquireTokenRedirect({ ...loginRequest, account });
-      return null;
-    }
-    // Network/transient failures fall through as null so the caller can
-    // surface a 401 to the user rather than spinning.
-    console.warn("acquireTokenSilent failed", err);
-    return null;
-  }
+  return brokerAccessToken();
 }
 
 export async function signIn(options?: {
@@ -129,31 +126,26 @@ export async function signIn(options?: {
 }
 
 /**
- * Drop the LOCAL Microsoft session (cached tokens + active account) without a
- * round trip to Microsoft's logout endpoint.
- *
- * Used when the platform refuses an authenticated account: we need the sign-in
- * page's "already signed in" guard to stop bouncing them into the app. A full
- * `logoutRedirect` would work too, but its post-logout return URL has to be
- * registered in the Entra app registration — this keeps the fix entirely in
- * our own code.
+ * Clear platform memory, cached data and any remaining Microsoft credentials.
+ * Server revocation belongs to signOut(); access refusals use this local cleanup.
  */
 export async function clearLocalSession(): Promise<void> {
+  useBrokerSession.getState().set(null);
+  const { queryClient } = await import("@/lib/queryClient");
+  queryClient.clear();
   const msal = getMsal();
   if (!msal) return;
   try {
     await msal.clearCache();
-  } catch (err) {
-    // Non-fatal: the sign-in page also refuses to bounce when `denied` is set,
-    // so a failed clear can't trap the user in a redirect loop.
-    console.warn("clearCache failed", err);
+  } catch {
+    console.warn("Could not clear the Microsoft sign-in cache.");
   }
   msal.setActiveAccount(null);
 }
 
 export async function signOut(): Promise<void> {
-  const msal = await initializeMsal();
-  if (!msal) return;
-  const account = getActiveAccount() ?? undefined;
-  await msal.logoutRedirect({ account });
+  const token = useBrokerSession.getState().session?.access_token;
+  if (token) await brokerAuthRequest<void>("/logout", {}, token);
+  await clearLocalSession();
+  window.location.assign("/sign-in");
 }

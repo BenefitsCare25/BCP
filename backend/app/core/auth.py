@@ -90,13 +90,12 @@ def _mock_principal() -> Principal:
 def _entra_principal(authorization: str | None, db: Session) -> Principal:
     """Verify the Bearer token and resolve the DB-backed user.
 
-    Tenant binding comes from the `users` table (matched by Entra `oid`, or by
-    email on first sign-in), not from custom token claims. An unknown or
-    disabled user is refused so a missing binding is visible.
+    Only a pre-provisioned immutable Entra object id grants access. Email
+    claims never bind identities or determine authorization.
     """
     from app.models import User  # lazy: avoid import cost at module load
     from app.models.invitation import INVITE_STATUS_ACCEPTED, INVITE_STATUS_PENDING, Invitation
-    from app.models.user import USER_STATUS_ACTIVE, USER_STATUS_DISABLED, USER_STATUS_INVITED
+    from app.models.user import USER_STATUS_ACTIVE, USER_STATUS_INVITED
 
     settings = get_settings()
     if not authorization or not authorization.startswith("Bearer "):
@@ -109,79 +108,42 @@ def _entra_principal(authorization: str | None, db: Session) -> Principal:
     try:
         claims = verify_entra_token(token, settings)
     except EntraAuthError as exc:
-        logger.warning("Entra token rejected: %s", exc)
+        logger.warning("Entra token rejected")
         raise HTTPException(
             status.HTTP_401_UNAUTHORIZED,
             "Invalid Entra token",
             headers={"WWW-Authenticate": "Bearer"},
         ) from exc
 
-    oid = claims.get("oid") or claims.get("sub")
+    oid = claims.get("oid")
     if not oid:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Token missing user identifier")
     oid = str(oid)
-    email = claims.get("email") or claims.get("preferred_username")
-    email = email.strip().lower() if isinstance(email, str) else None
-
     user = db.query(User).filter(User.external_id == oid).one_or_none()
-    if user is None and email:
-        # First sign-in for an invited/provisioned user: link the Entra oid and
-        # activate the account, marking any pending invitation accepted. Only an
-        # UNLINKED row (external_id is None) may be claimed by email — a row
-        # already bound to a different oid must NOT be re-bound, or a reused
-        # email could authenticate as someone else's account.
-        candidate = db.query(User).filter(User.email == email).one_or_none()
-        if candidate is not None and candidate.external_id is None:
-            pending = (
-                db.query(Invitation)
-                .filter(
-                    Invitation.email == email,
-                    Invitation.broker_firm_id == candidate.broker_firm_id,
-                    Invitation.status == INVITE_STATUS_PENDING,
-                )
-                .all()
-            )
-            now = datetime.now(UTC)
-            valid_pending = [
-                inv
-                for inv in pending
-                if inv.expires_at is None
-                or (
-                    inv.expires_at.replace(tzinfo=UTC)
-                    if inv.expires_at.tzinfo is None
-                    else inv.expires_at
-                )
-                > now
-            ]
-            if candidate.status == USER_STATUS_INVITED and not valid_pending:
-                logger.warning("Expired invitation rejected for email %s", email)
-                raise HTTPException(
-                    status.HTTP_403_FORBIDDEN,
-                    {
-                        "code": "invitation_expired",
-                        "message": (
-                            "Invitation has expired. Contact your administrator "
-                            "for a new invitation."
-                        ),
-                    },
-                )
-            candidate.external_id = oid
-            if candidate.status == USER_STATUS_INVITED:
-                candidate.status = USER_STATUS_ACTIVE
-                for inv in valid_pending:
-                    inv.status = INVITE_STATUS_ACCEPTED
-                    inv.accepted_at = now
-            db.commit()
-            user = candidate
-        elif candidate is not None:
-            # Email belongs to an account already linked to a different oid.
-            logger.warning(
-                "Entra oid %s presented email %s already linked to oid %s — refusing",
-                oid, email, candidate.external_id,
-            )
+    if user is not None and user.status == USER_STATUS_INVITED:
+        pending = db.query(Invitation).filter(
+            Invitation.email == user.email,
+            Invitation.broker_firm_id == user.broker_firm_id,
+            Invitation.status == INVITE_STATUS_PENDING,
+        ).all()
+        now = datetime.now(UTC)
+        valid_pending = [inv for inv in pending if inv.expires_at is not None and (
+            inv.expires_at.replace(tzinfo=UTC) if inv.expires_at.tzinfo is None
+            else inv.expires_at
+        ) > now]
+        if not valid_pending:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, {
+                "code": "invitation_expired",
+                "message": "Invitation expired. Contact your administrator.",
+            })
+        user.status = USER_STATUS_ACTIVE
+        for inv in valid_pending:
+            inv.status = INVITE_STATUS_ACCEPTED
+            inv.accepted_at = now
+        db.commit()
 
-    if user is None or user.status == USER_STATUS_DISABLED:
-        logger.warning("No active Inspro user for Entra oid %s (email %s)", oid, email)
+    if user is None or user.status != USER_STATUS_ACTIVE:
+        logger.warning("Entra identity has no active provisioned account")
         # Coded detail, not a bare string: this is the IDENTITY-level 403 (the
         # person authenticated with Microsoft but no Inspro user row grants them
         # access), which must end the session — unlike a permission 403 on one
@@ -265,7 +227,9 @@ def get_current_user(
     requested = x_inspro_client.strip() if x_inspro_client else None
 
     if settings.auth_mode == "entra":
-        principal = _entra_principal(authorization, db)
+        from app.core.broker_auth import broker_principal
+
+        principal = broker_principal(authorization, db)
         user = _build_current_user(principal, requested, db)
     elif not requested:
         # Mock mode, no explicit client selection: fixed demo user, no DB hit

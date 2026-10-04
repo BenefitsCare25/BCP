@@ -13,6 +13,7 @@ import {
   NotFoundComponent,
 } from "@/components/shell/ErrorBoundary";
 import { ENTRA_ENABLED, clearLocalSession, getActiveAccount } from "@/auth/msal";
+import { useBrokerSession } from "@/stores/brokerSession";
 import { DENIED_SEARCH, NoAccessError, SIGN_IN_PATH } from "@/api/client";
 import { ensureMe } from "@/api/me";
 import { PortalShell } from "@/components/portal/PortalShell";
@@ -175,8 +176,7 @@ const CompanyDashboardPage = lazyRouteComponent(
 );
 
 // Routes that are reachable without being signed in. Everything else goes
-// through the AppShell which requires an active MSAL account when Entra is
-// enabled.
+// through the AppShell which requires a broker session with verified MFA.
 const PUBLIC_PATHS = new Set(["/auth/callback", SIGN_IN_PATH]);
 
 const rootRoute = createRootRoute({
@@ -187,6 +187,15 @@ const authCallbackRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/auth/callback",
   component: AuthCallbackPage,
+});
+
+const brokerSecurityRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/broker/security",
+  beforeLoad: () => {
+    if (ENTRA_ENABLED && getActiveAccount() === null) throw redirect({ to: "/sign-in" });
+  },
+  component: lazyRouteComponent(() => import("@/routes/auth/security"), "BrokerSecurityPage"),
 });
 
 const signInRoute = createRoute({
@@ -563,6 +572,9 @@ const appLayoutRoute = createRoute({
         search: { from: location.pathname } as Record<string, string>,
       });
     }
+    if (!useBrokerSession.getState().session?.mfa_verified) {
+      throw redirect({ to: "/broker/security" });
+    }
     // A Microsoft account is not access. The platform grants access from its
     // OWN user list, so resolve /me before rendering anything — otherwise an
     // unprovisioned account lands in the shell and every request 403s.
@@ -863,6 +875,7 @@ const platformAIReleaseRoute = createRoute({
 
 const routeTree = rootRoute.addChildren([
   authCallbackRoute,
+  brokerSecurityRoute,
   signInRoute,
   hrSignInRoute,
   hrSetPasswordRoute,

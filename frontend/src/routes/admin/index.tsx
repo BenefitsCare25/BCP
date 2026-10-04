@@ -448,6 +448,9 @@ function UsersCard() {
   const [editName, setEditName] = useState("");
 
   const roleOptions = [...ASSIGNABLE_ROLES, "system_admin"];
+  const [objectId, setObjectId] = useState("");
+  const [bindingUser, setBindingUser] = useState<string | null>(null);
+  const [bindingId, setBindingId] = useState("");
 
   const onInvite = async () => {
     if (!email.trim()) return;
@@ -456,15 +459,16 @@ function UsersCard() {
         email: email.trim(),
         ...(name.trim() ? { display_name: name.trim() } : {}),
         role,
+        external_id: objectId.trim(),
         client_ids: [],
         ...(firmId ? { broker_firm_id: firmId } : {}),
       });
       // Deliberately not "Invitation sent": with SMTP unconfigured nothing is
-      // emailed, and the access grant is what actually matters — first Entra
-      // sign-in matches this row by email, with or without a delivered token.
-      toast.success("User invited — they can now sign in with Microsoft");
+      // emailed. Sign-in checks the bound Microsoft identity and live invitation.
+      toast.success("User invited with their verified Microsoft identity");
       setEmail("");
       setName("");
+      setObjectId("");
     } catch (e) {
       toast.error(formatError(e));
     }
@@ -517,7 +521,7 @@ function UsersCard() {
         <CardTitle className="flex items-center gap-1.5 text-sm">
           Users
           <InfoHint>
-            Invite by email — access is granted on first sign-in. Status: invited
+            Bind the Microsoft object ID from your tenant before granting access. Status: invited
             = awaiting first sign-in, active = has signed in, disabled = access
             revoked.
           </InfoHint>
@@ -527,8 +531,9 @@ function UsersCard() {
         <div className="rounded-md border border-border p-3 space-y-3 bg-muted/30">
           <div className="grid grid-cols-1 md:grid-cols-[1fr_1fr_180px_auto] gap-2 items-end">
             <div className="flex flex-col gap-1.5">
-              <Label>Email</Label>
+              <Label htmlFor="broker-invite-email">Email</Label>
               <Input
+                id="broker-invite-email"
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
@@ -539,12 +544,17 @@ function UsersCard() {
                 often sent from an email address alone. Without it the list
                 shows the email twice until someone fills the name in. */}
             <div className="flex flex-col gap-1.5">
-              <Label>Name</Label>
+              <Label htmlFor="broker-invite-name">Name</Label>
               <Input
+                id="broker-invite-name"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 placeholder="Optional"
               />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="broker-invite-oid">Microsoft object ID</Label>
+              <Input id="broker-invite-oid" value={objectId} onChange={event => setObjectId(event.target.value)} placeholder="Object ID from Microsoft Entra" />
             </div>
             <div className="flex flex-col gap-1.5">
               <FieldLabel
@@ -568,7 +578,7 @@ function UsersCard() {
               </Select>
             </div>
             <FirmPicker firms={firms} value={firmId} onChange={setFirmId} />
-            <Button onClick={onInvite} disabled={invite.isPending || !email.trim()}>
+            <Button onClick={onInvite} disabled={invite.isPending || !email.trim() || !/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(objectId.trim())}>
               {invite.isPending ? <Loader2 className="size-4 animate-spin" /> : <Plus className="size-4" />}
               Invite
             </Button>
@@ -633,6 +643,16 @@ function UsersCard() {
                   </div>
                 )}
                 <div className="flex flex-wrap items-center gap-2 sm:shrink-0">
+                  {!u.external_id && (bindingUser === u.id ? <div className="flex flex-wrap items-center gap-2">
+                    <Input aria-label={`Microsoft object ID for ${u.email}`} value={bindingId} onChange={event => setBindingId(event.target.value)} className="max-w-80" />
+                    <Button size="sm" disabled={patch.isPending || !bindingId.trim()} onClick={async () => {
+                      try {
+                        await patch.mutateAsync({ id: u.id, patch: { external_id: bindingId.trim() } });
+                        setBindingUser(null); setBindingId(""); toast.success("Microsoft identity bound");
+                      } catch (error) { toast.error(formatError(error)); }
+                    }}>Save identity</Button>
+                    <Button size="sm" variant="ghost" onClick={() => setBindingUser(null)}>Cancel</Button>
+                  </div> : <Button size="sm" variant="outline" onClick={() => { setBindingUser(u.id); setBindingId(""); }}>Bind Microsoft identity</Button>)}
                   <Badge variant={statusVariant(u.status)}>{u.status}</Badge>
                   <Select value={u.role} onValueChange={(v) => onRoleChange(u, v)}>
                     <SelectTrigger className="h-8 w-[150px]"><SelectValue /></SelectTrigger>

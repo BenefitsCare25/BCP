@@ -81,6 +81,9 @@ def _base_claims(now: int) -> dict[str, Any]:
         "iat": now,
         "nbf": now,
         "oid": "u",
+        "tid": "tenant-x",
+        "scp": "access_as_user",
+        "azp": AUDIENCE,
     }
 
 
@@ -173,3 +176,13 @@ def test_role_from_claims_unknown_role_dropped() -> None:
     """Unrecognised role strings are not trusted verbatim."""
     claims = {"oid": "u", "roles": ["root", "superuser"]}
     assert role_from_claims(claims, _settings()) == "broker_viewer"
+
+
+@pytest.mark.parametrize("overrides", [
+    {"scp": None}, {"scp": "other_permission"}, {"scp": ["access_as_user"]},
+    {"tid": "other-tenant"}, {"oid": None}, {"idtyp": "app"}, {"azp": "other-client"},
+])
+def test_non_delegated_or_wrong_tenant_tokens_refused(rsa_keypair, jwks, overrides) -> None:
+    token = _sign(rsa_keypair, {**_base_claims(int(time.time())), **overrides})
+    with pytest.raises(EntraAuthError):
+        verify_entra_token(token, _settings(), jwks=jwks)

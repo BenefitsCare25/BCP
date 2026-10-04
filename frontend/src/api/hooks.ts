@@ -1085,6 +1085,7 @@ export interface AdminUser {
   status: string;
   broker_firm_id: string | null;
   client_ids: string[];
+  external_id?: string | null;
 }
 
 export interface AdminInvitation {
@@ -1194,7 +1195,7 @@ export function usePatchUser() {
       patch,
     }: {
       id: string;
-      patch: Partial<Pick<AdminUser, "display_name" | "role" | "status">> & {
+      patch: Partial<Pick<AdminUser, "display_name" | "role" | "status" | "external_id">> & {
         client_ids?: string[];
       };
     }) => api.patch<AdminUser>(`/admin/users/${id}`, patch),
@@ -1218,6 +1219,7 @@ export function useCreateInvitation() {
       role: string;
       client_ids?: string[];
       broker_firm_id?: string; // system_admin only; see useCreateClient
+      external_id?: string;
     }) => api.post<AdminInvitation>("/admin/invitations", body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["admin", "invitations"] });

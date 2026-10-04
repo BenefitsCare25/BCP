@@ -30,6 +30,7 @@ from app.api.v1 import (
     ai_policies,
     ai_spend,
     audit_log,
+    broker_auth,
     bulk_plan_updates,
     categories,
     claim_doc_types,
@@ -284,6 +285,7 @@ def create_app() -> FastAPI:
     # own abuse guards); `portal` authenticates via its router-level
     # `get_current_member` dependency.
     app.include_router(portal_auth.router, prefix=api_prefix)
+    app.include_router(broker_auth.router, prefix=api_prefix)
     # HR credential-login surface — public auth, its own tenant + lockout guards
     # (mirrors portal_auth: registered OUTSIDE the broker require_write_access gate).
     app.include_router(hr_auth.router, prefix=api_prefix)

@@ -4,7 +4,8 @@ The refresh token is an opaque 256-bit secret; only its SHA-256 hash is stored
 (`auth_sessions.refresh_hash`). Each rotation issues a child in the same
 `family_id` and marks the parent `rotated_at`. Presenting a token whose row is
 already rotated or revoked means the token was replayed (stolen) — the whole
-family is revoked. Surface-agnostic: `subject_type` is "user" (HR) or "member".
+family is revoked. Subject types isolate broker, HR ("user") and employee
+("member") sessions.
 """
 from __future__ import annotations
 
@@ -240,7 +241,7 @@ def revoke_token(db: Session, token: str) -> AuthSession | None:
 
 def validate_access_session(
     db: Session, session_id: str, *, subject_type: str, subject_id: str,
-    client_id: str, idle_minutes: int,
+    client_id: str | None, idle_minutes: int,
 ) -> AuthSession:
     """Reject revoked families and enforce inactivity on access-token requests."""
     from app.models import AuthSession

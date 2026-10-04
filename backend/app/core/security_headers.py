@@ -22,7 +22,7 @@ DEFAULT_CSP = (
     "connect-src 'self' https://login.microsoftonline.com; "
     # Claim review renders authenticated PDF bytes through an object URL. Keep
     # framing limited to same-origin content and blobs created by this app.
-    "frame-src 'self' blob:; "
+    "frame-src 'self' blob: https://login.microsoftonline.com; "
     "frame-ancestors 'none'; "
     "base-uri 'self'; "
     "form-action 'self'; "

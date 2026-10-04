@@ -109,6 +109,9 @@ def test_user_administration_requires_system_admin(role: Role) -> None:
             ("PATCH", f"/api/v1/admin/users/{invite['user_id']}", {"display_name": "Changed"}),
             ("PATCH", f"/api/v1/admin/users/{invite['user_id']}", {"role": "broker_admin"}),
             ("PATCH", f"/api/v1/admin/users/{invite['user_id']}", {"status": "disabled"}),
+            ("PATCH", f"/api/v1/admin/users/{invite['user_id']}", {
+                "external_id": "11111111-1111-4111-8111-111111111111",
+            }),
             ("POST", f"/api/v1/admin/invitations/{invite['id']}/revoke", None),
         ]
         for method, path, payload in requests:
