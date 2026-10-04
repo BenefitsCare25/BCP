@@ -6,7 +6,6 @@ type Connection = EventTarget & { saveData?: boolean };
 export function BrokerLoginScenery() {
   const [allowed, setAllowed] = useState(false);
   const [visible, setVisible] = useState(true);
-  const [finished, setFinished] = useState(false);
   const [ready, setReady] = useState(false);
   const [failed, setFailed] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -34,7 +33,7 @@ export function BrokerLoginScenery() {
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
-    if (!allowed || !visible || finished) {
+    if (!allowed || !visible) {
       video.pause();
       return;
     }
@@ -49,15 +48,7 @@ export function BrokerLoginScenery() {
       cancelled = true;
       video.pause();
     };
-  }, [allowed, visible, finished, failed]);
-
-  useEffect(() => {
-    if (!ready) return;
-    // Without a visible pause control, decorative autoplay stops within five
-    // seconds (WCAG 2.2.2). Keep the final frame instead of snapping to the still.
-    const timer = window.setTimeout(() => setFinished(true), 4800);
-    return () => window.clearTimeout(timer);
-  }, [ready]);
+  }, [allowed, visible, failed]);
 
   return (
     <div className="broker-login__scenery" data-protected-media aria-hidden="true" data-video-ready={ready && !failed}>
@@ -78,6 +69,7 @@ export function BrokerLoginScenery() {
             src="/broker/login/marina-bay-v1.mp4"
             poster="/broker/login/marina-bay-v1.webp"
             muted
+            loop
             playsInline
             preload="auto"
             disablePictureInPicture

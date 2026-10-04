@@ -37,16 +37,16 @@ test("broker login: accessible layout and reduced-motion still without a video d
   expect(scan.violations).toEqual([]);
 });
 
-test("broker login: animation has no controls and settles within five seconds", async ({ page }, testInfo) => {
+test("broker login: animation loops continuously without media controls", async ({ page }, testInfo) => {
   await page.goto("/sign-in");
   const video = page.locator(".broker-login video");
   await expect(video).toBeVisible({ timeout: 20_000 });
   await expect(page.getByRole("button", { name: /background animation/ })).toHaveCount(0);
   await expect.poll(() => video.evaluate((v: HTMLVideoElement) => v.currentTime)).toBeGreaterThan(0);
   expect(await video.evaluate((v: HTMLVideoElement) => ({ width: v.videoWidth, height: v.videoHeight,
-    muted: v.muted, loop: v.loop, controls: v.controls, pip: v.disablePictureInPicture,
+    muted: v.muted, controls: v.controls, pip: v.disablePictureInPicture,
     remote: v.disableRemotePlayback, controlsList: v.getAttribute("controlsList") }))).toEqual({ width: 1080, height: 1080,
-    muted: true, loop: false, controls: false, pip: true, remote: true, controlsList: "nodownload nofullscreen noremoteplayback" });
+    muted: true, controls: false, pip: true, remote: true, controlsList: "nodownload nofullscreen noremoteplayback" });
   await page.evaluate(() => {
     Object.defineProperty(document, "hidden", { configurable: true, value: true });
     document.dispatchEvent(new Event("visibilitychange"));
@@ -57,17 +57,20 @@ test("broker login: animation has no controls and settles within five seconds", 
     document.dispatchEvent(new Event("visibilitychange"));
   });
   await expect.poll(() => video.evaluate((v: HTMLVideoElement) => v.paused)).toBe(false);
-  await expect.poll(() => video.evaluate((v: HTMLVideoElement) => v.paused), { timeout: 7000 }).toBe(true);
-  const time = await video.evaluate((v: HTMLVideoElement) => v.currentTime);
-  expect(time).toBeLessThan(5.5);
-  await page.waitForTimeout(250);
-  expect(await video.evaluate((v: HTMLVideoElement) => v.currentTime)).toBe(time);
+  // Reproduce the unwanted five-second freeze, then exercise a real native wrap.
+  await page.waitForTimeout(5500);
+  expect(await video.evaluate((v: HTMLVideoElement) => v.paused)).toBe(false);
+  expect(await video.evaluate((v: HTMLVideoElement) => v.loop)).toBe(true);
+  await video.evaluate((v: HTMLVideoElement) => { v.currentTime = v.duration - 0.3; });
+  await expect.poll(() => video.evaluate((v: HTMLVideoElement) => v.currentTime)).toBeLessThan(1.5);
+  expect(await video.evaluate((v: HTMLVideoElement) => v.paused)).toBe(false);
   await page.screenshot({ path: testInfo.outputPath("broker-login-without-media-controls.png"), fullPage: true });
   await page.emulateMedia({ reducedMotion: "reduce" });
   await expect(video).toHaveCount(0);
   await expect(page.locator(".broker-login__poster")).toBeVisible();
   await page.emulateMedia({ reducedMotion: "no-preference" });
-  await expect.poll(() => video.evaluate((v: HTMLVideoElement) => v.paused)).toBe(true);
+  await expect.poll(() => video.evaluate((v: HTMLVideoElement) => v.paused)).toBe(false);
+  await expect.poll(() => video.evaluate((v: HTMLVideoElement) => v.currentTime)).toBeGreaterThan(0);
 });
 
 test("broker login: data-saving mode does not request the video", async ({ page }) => {
