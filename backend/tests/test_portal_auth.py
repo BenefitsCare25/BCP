@@ -481,6 +481,21 @@ def test_list_member_accounts(broker_client: TestClient):
     assert body["total"] == len(body["items"])
 
 
+def test_bulk_invite_without_mail_changes_nothing(broker_client: TestClient, monkeypatch):
+    from app.api.v1 import member_accounts
+
+    monkeypatch.setattr(member_accounts, "mail_deliverable", lambda: False)
+    with SessionLocal() as session:
+        before = [(a.id, a.password_hash, a.invite_sent_at) for a in session.query(MemberAccount)]
+    response = broker_client.post(
+        "/api/v1/member-accounts/bulk-invite", json={"policy_year_id": PY_ACTIVE}
+    )
+    assert response.status_code == 503
+    with SessionLocal() as session:
+        after = [(a.id, a.password_hash, a.invite_sent_at) for a in session.query(MemberAccount)]
+    assert after == before
+
+
 def test_bulk_invite_never_sends_twice(broker_client: TestClient):
     """The whole point of the feature: pressing it again must not re-email."""
     first = broker_client.post(
@@ -569,21 +584,21 @@ def test_shared_roster_email_is_reported_not_provisioned(broker_client: TestClie
         "/api/v1/member-accounts/rollout", params={"policy_year_id": PY_ACTIVE}
     )
     roll = res.json()
-    assert roll["duplicate"] == 1
+    assert roll["duplicate"] == 2
     dup = [m for m in roll["needs_attention"] if m["reason"] == "duplicate"]
-    assert len(dup) == 1 and dup[0]["email"] == shared
+    assert len(dup) == 2 and all(m["email"] == shared for m in dup)
 
     # The run must not 500 on the constraint, and must leave the loser alone.
     res = broker_client.post(
         "/api/v1/member-accounts/bulk-invite", json={"policy_year_id": PY_ACTIVE}
     )
     assert res.status_code == 200, res.text
-    assert res.json()["duplicate"] == 1
+    assert res.json()["duplicate"] == 2
     with SessionLocal() as session:
         holders = (
             session.query(MemberAccount).filter(MemberAccount.email == shared).all()
         )
-        assert len(holders) == 1  # exactly one employee owns the address
+        assert len(holders) == 0  # neither employee receives credentials at the shared mailbox
 
     # And on the NEXT read — now that the colleague's account exists — the loser
     # must still be reported as a duplicate. Resolving an employee to an account
@@ -593,10 +608,28 @@ def test_shared_roster_email_is_reported_not_provisioned(broker_client: TestClie
     roll = broker_client.get(
         "/api/v1/member-accounts/rollout", params={"policy_year_id": PY_ACTIVE}
     ).json()
-    assert roll["duplicate"] == 1
+    assert roll["duplicate"] == 2
     assert broker_client.post(
         "/api/v1/member-accounts/bulk-invite", json={"policy_year_id": PY_ACTIVE}
-    ).json()["duplicate"] == 1
+    ).json()["duplicate"] == 2
+
+    # An explicit assisted activation bypasses the roster mailbox, not account
+    # identity or tenant checks. The link lets this employee choose a password.
+    blocked = broker_client.post(f"/api/v1/employees/{EMP_NO_EMAIL}/member-account", json={})
+    assert blocked.status_code == 409
+    activation = broker_client.post(
+        f"/api/v1/employees/{EMP_NO_EMAIL}/member-account",
+        json={"delivery": "individual_link"},
+    )
+    assert activation.status_code == 201, activation.text
+    assert activation.json()["email"] is None
+    assert activation.json()["set_password_token"]
+    assert activation.json()["system_login_id"]
+    with SessionLocal() as session:
+        account = session.get(MemberAccount, activation.json()["id"])
+        assert account.password_hash is None
+        assert account.invite_sent_at is None
+        assert session.get(Employee, EMP_NO_EMAIL).member_account_id == account.id
 
     # Restore the fixture for any later test in this module.
     with SessionLocal() as session:

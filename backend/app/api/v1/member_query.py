@@ -101,7 +101,7 @@ def member_query_list(
     product = (
         resolve_product_by_code(db, py, body.product_code) if body.product_code else None
     )
-    rows, _idx = svc.resolve_listing(
+    rows, idx = svc.resolve_listing(
         db, py, body.query, product_id=product.id if product else None
     )
     page = rows[body.offset : body.offset + body.limit]
@@ -110,6 +110,7 @@ def member_query_list(
     for emp in page:
         out = EmployeeOut.model_validate(emp)
         out.matched_plans = plans_by_emp.get(emp.id, [])
+        out.unmatched_product_codes = sorted(idx.gaps.missing(emp))
         items.append(out)
     return EmployeeList(
         total=len(rows), offset=body.offset, limit=body.limit, items=items

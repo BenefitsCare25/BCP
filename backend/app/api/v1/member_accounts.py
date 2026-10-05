@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from collections import Counter
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -248,7 +249,9 @@ def create_member_account(
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> MemberAccountOut:
-    raw_email = body.email or first_value(employee.attribute_values or {}, EMAIL_KEYS)
+    raw_email = None if body.delivery == "individual_link" else (
+        body.email or first_value(employee.attribute_values or {}, EMAIL_KEYS)
+    )
     if not raw_email:
         # Email-less employee: create the account with a system login id + a
         # set-password token (no OTP — they sign in with username + password).
@@ -272,6 +275,12 @@ def create_member_account(
         out.tenant_slug = _tenant_slug(db, account.client_id)
         return out
     email = _validated_email(raw_email)
+    if _shared_roster_email(db, employee.client_id, email, employee.staff_id):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "This email address is shared by employees. Use an individual activation link "
+            "or the employee's own email address.",
+        )
 
     try:
         account = _create_account(db, employee, email, user.user_id)
@@ -348,6 +357,11 @@ def resend_invite(
         raise HTTPException(
             status.HTTP_409_CONFLICT,
             "No email address on file — use a set-password link instead.",
+        )
+    if _shared_roster_email(db, account.client_id, account.email, account.staff_id):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "This email address is shared by employees. Use a set-password link instead.",
         )
     write_audit(
         db, user, "member_account.invite_resent", "member_account", account.id,
@@ -543,14 +557,26 @@ def _roster_email(employee: Employee) -> str | None:
     return email
 
 
+def _shared_roster_email(db: Session, client_id: str, email: str, staff_id: str) -> bool:
+    """No employee's credential may be mailed to a known shared HR mailbox."""
+    target = email.strip().casefold()
+    return any(
+        _roster_email(employee) == target
+        for employee in db.scalars(select(Employee).where(
+            Employee.client_id == client_id,
+            Employee.status == "active",
+            Employee.staff_id != staff_id,
+        ))
+    )
+
+
 def _roster_entries(
     db: Session, client_id: str, policy_year_id: str
 ) -> list[_RosterEntry]:
     """Every active employee of the year, joined to its portal account (if any).
 
-    Accounts are matched the same three ways provisioning writes them: the
-    stamped `member_account_id`, then staff id, then email — both of the latter
-    being unique per client.
+    Accounts are joined by their stamped account id or staff id. Email ownership
+    is checked separately for collisions; sharing an address never joins accounts.
     """
     accounts = db.execute(
         select(MemberAccount).where(MemberAccount.client_id == client_id)
@@ -571,14 +597,10 @@ def _roster_entries(
 
     # Accounts are unique per client on BOTH email and staff id, so two roster
     # rows sharing either cannot both be provisioned. Detected here, in the one
-    # shared classifier, so the count and the send agree — and so the second
-    # employee is REPORTED rather than silently dropped or, worse, handed an
-    # account on a mailbox that belongs to someone else. (A shared address is
-    # real: spouses at the same employer, a department inbox, a copy-paste
-    # error. Mailing both people's credentials there would put one member's
-    # benefits in another's inbox.) Employees are ordered by staff id, so which
-    # row wins is stable between the preview and the run.
-    seen_emails: set[str] = set()
+    # shared classifier, so the count and the send agree. Every employee using
+    # a shared mailbox needs individual activation; arbitrarily choosing the
+    # first staff id still sends that person's credentials to an HR mailbox.
+    email_counts = Counter(email for employee in employees if (email := _roster_email(employee)))
     seen_staff: set[str] = set()
 
     entries: list[_RosterEntry] = []
@@ -586,8 +608,8 @@ def _roster_entries(
         account = by_id.get(employee.member_account_id or "") or by_staff.get(
             employee.staff_id
         )
-        email = _roster_email(employee)
-        duplicate = False
+        email = account.email if account is not None else _roster_email(employee)
+        duplicate = bool(email and email_counts[email] > 1)
         if account is None:
             # An account already on this address belongs to a DIFFERENT staff id
             # — it is a colleague's, not this employee's. Adopting it here would
@@ -597,15 +619,12 @@ def _roster_entries(
             # legitimate case of an account whose employee link was never
             # stamped.)
             owner = by_email.get(email) if email else None
-            duplicate = (
+            duplicate = duplicate or (
                 owner is not None
                 or employee.staff_id in seen_staff
-                or (email is not None and email in seen_emails)
             )
             if not duplicate:
                 seen_staff.add(employee.staff_id)
-                if email:
-                    seen_emails.add(email)
         entries.append(
             _RosterEntry(
                 employee=employee, account=account, email=email, duplicate=duplicate
@@ -628,7 +647,7 @@ def _bucket(entry: _RosterEntry) -> str:
             return _BUCKET_SIGNED_IN
         if account.invite_sent_at:
             return _BUCKET_INVITED
-    elif entry.duplicate:
+    if entry.duplicate:
         return _BUCKET_DUPLICATE
     if not entry.email:
         return _BUCKET_NO_EMAIL
@@ -771,6 +790,11 @@ def bulk_invite(
     """
     client_id = require_client_id(user)
     assert_policy_year_for_user(body.policy_year_id, user, db)
+    if not mail_deliverable():
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "Email delivery is not configured. No invitations were queued or credentials changed.",
+        )
 
     # A run already in flight has targets it has not stamped yet; re-queueing
     # them here is how a member ends up with two emails.

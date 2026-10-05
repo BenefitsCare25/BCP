@@ -14,6 +14,7 @@ import { cn } from "@/lib/cn";
 import { DraftPeriodPanel } from "./DraftPeriodPanel";
 import { LivePeriodPanel } from "./LivePeriodPanel";
 import { PeriodForm } from "./PeriodForm";
+import { PortalRolloutCard } from "@/components/settings/PortalRolloutCard";
 import { PHASE_META, deadlineSentence, focusPeriod, phaseOf, useNow } from "./periodMeta";
 
 export function PeriodOverview({ readOnly }: { readOnly: boolean }) {
@@ -80,6 +81,12 @@ export function PeriodOverview({ readOnly }: { readOnly: boolean }) {
         />
       ) : (
         <ClosedPeriodPanel window={focus} />
+      )}
+
+      {focus?.member_self_service && (
+        <div id="enrolment-portal-invitations">
+          <PortalRolloutCard policyYearId={policyYearId} readOnly={readOnly} />
+        </div>
       )}
 
       {list.length > 0 && (

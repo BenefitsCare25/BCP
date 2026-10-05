@@ -73,14 +73,13 @@ class MemberFilters(BaseModel):
     # people who have left.
     include_terminated: bool = False
     category_ids: list[str] = Field(default_factory=list, max_length=500)
-    # Members covered by ALL of these products (a matched category per product).
+    # Covered by ALL selected products; with match_status=unmatched, missing
+    # at least one selected product within its insured entities instead.
     product_codes: list[str] = Field(default_factory=list, max_length=50)
     # Members whose EFFECTIVE plan for the request's product is one of these.
     current_plan_codes: list[str] = Field(default_factory=list, max_length=100)
     coverage_state: CoverageStateStr = "any"
-    # Whether roster matching found the member a cohort. An unmatched member has
-    # no coverage at all, so this is the roster's most-used triage filter — and
-    # it is a legitimate bulk selection too ("everyone matching nothing").
+    # Unmatched includes partial coverage gaps, within insured entity scope.
     match_status: Literal["any", "matched", "unmatched"] = "any"
     attributes: list[AttributeFilter] = Field(default_factory=list, max_length=20)
     age: AgeFilter | None = None

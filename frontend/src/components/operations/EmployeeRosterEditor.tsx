@@ -1,4 +1,5 @@
 import { useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useBlocker } from "@tanstack/react-router";
 import { Check, Pencil, Save } from "lucide-react";
 import { toast } from "sonner";
@@ -56,7 +57,10 @@ function parseValue(value: string, type: string, label: string): unknown {
   return value;
 }
 
-export function EmployeeRosterEditor({ employee }: { employee: Employee }) {
+export function EmployeeRosterEditor({ employee, actionContainer, disabled = false, onEditingChange }: {
+  employee: Employee; actionContainer?: HTMLElement | null; disabled?: boolean;
+  onEditingChange?: (editing: boolean) => void;
+}) {
   const { data: me } = useMe();
   const update = useUpdateEmployee();
   const [editing, setEditing] = useState(false);
@@ -117,6 +121,7 @@ export function EmployeeRosterEditor({ employee }: { employee: Employee }) {
   blockerRef.current = blocker;
 
   const startEditing = () => {
+    onEditingChange?.(true);
     setBaseline(employee);
     setName(employee.employee_name ?? "");
     setDraft(Object.fromEntries(fields.map((field) => [
@@ -128,6 +133,7 @@ export function EmployeeRosterEditor({ employee }: { employee: Employee }) {
     setEditing(true);
   };
   const finishEditing = () => {
+    onEditingChange?.(false);
     setEditing(false);
     setCancelPrompt(false);
     setError(null);
@@ -186,21 +192,42 @@ export function EmployeeRosterEditor({ employee }: { employee: Employee }) {
     }
   };
 
+  const actions = (
+    <div className="w-full">
+          {error && <p role="alert" className="mb-3 text-sm text-error">{error}</p>}
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div role="status" className="text-sm text-muted-foreground">
+              {update.isPending ? "Saving changes…" : dirty
+                ? `${changeCount} unsaved change${changeCount === 1 ? "" : "s"}` : "No changes yet"}
+            </div>
+            <div className="flex gap-2">
+              <Button variant="outline" disabled={update.isPending}
+                onClick={() => dirty ? setCancelPrompt(true) : finishEditing()}>Cancel</Button>
+              <Button disabled={!dirty} loading={update.isPending} onClick={() => void save()}>
+                <Save className="size-4" aria-hidden="true" />Save changes
+              </Button>
+            </div>
+          </div>
+          <p className="mt-2 text-xs text-muted-foreground">Saving updates matching fields. Run matching to re-evaluate plan assignments.</p>
+        </div>
+  );
+
   return (
     <section ref={editorSection} aria-labelledby="employee-roster-heading" className="space-y-3">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h3 id="employee-roster-heading" className="text-sm font-semibold">Roster data</h3>
           <p className="mt-1 text-xs text-muted-foreground">
-            {editing ? "Changes are saved only when you select Save changes." : "Uploaded fields include empty values. Select Edit to make changes."}
+            {editing ? "Changes are saved only when you select Save changes." : "Select Edit roster data to change employee category or other uploaded fields, then Save changes."}
           </p>
         </div>
         {!editing && canEdit && (
-          <Button ref={editButton} variant="outline" size="sm" onClick={startEditing}>
+          <Button ref={editButton} variant="outline" size="sm" disabled={disabled} onClick={startEditing}>
             <Pencil className="size-4" aria-hidden="true" />Edit roster data
           </Button>
         )}
       </div>
+      {disabled && <p className="text-xs text-muted-foreground">Save the mapping changes before editing roster data.</p>}
       {!editing && saved && (
         <p role="status" className="flex items-center gap-1.5 text-sm text-success">
           <Check className="size-4" aria-hidden="true" />All changes saved
@@ -252,25 +279,7 @@ export function EmployeeRosterEditor({ employee }: { employee: Employee }) {
           );
         })}
       </div>
-      {editing && (
-        <div className="sticky -bottom-5 -mx-6 border-t border-border bg-card px-6 py-4">
-          {error && <p role="alert" className="mb-3 text-sm text-error">{error}</p>}
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div role="status" className="text-sm text-muted-foreground">
-              {update.isPending ? "Saving changes…" : dirty
-                ? `${changeCount} unsaved change${changeCount === 1 ? "" : "s"}` : "No changes yet"}
-            </div>
-            <div className="flex gap-2">
-              <Button variant="outline" disabled={update.isPending}
-                onClick={() => dirty ? setCancelPrompt(true) : finishEditing()}>Cancel</Button>
-              <Button disabled={!dirty} loading={update.isPending} onClick={() => void save()}>
-                <Save className="size-4" aria-hidden="true" />Save changes
-              </Button>
-            </div>
-          </div>
-          <p className="mt-2 text-xs text-muted-foreground">Saving updates matching fields. Run matching to re-evaluate plan assignments.</p>
-        </div>
-      )}
+      {editing && (actionContainer ? createPortal(actions, actionContainer) : actions)}
       <AlertDialog open={cancelPrompt || leaving}
         onOpenChange={(open) => {
           if (open || update.isPending) return;

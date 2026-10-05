@@ -336,7 +336,7 @@ def _two_categories_distinct_products(client: TestClient, py_id: str) -> list[st
     return list(by_product.values())[:2]
 
 
-def test_multi_override_assigns_then_clears(client: TestClient) -> None:
+def test_multi_override_assigns_then_clears(client: TestClient, system_admin_request) -> None:
     py_id = _policy_year_id(client)
     cat_ids = _two_categories_distinct_products(client, py_id)
     if len(cat_ids) < 2:
@@ -359,8 +359,8 @@ def test_multi_override_assigns_then_clears(client: TestClient) -> None:
     assert set(cat_ids) <= got
     assert all(p["method"] == "manual_override" for p in after["matched_plans"])
 
-    cleared = client.post(
-        f"/api/v1/match-results/employees/{emp['id']}/override",
+    cleared = system_admin_request(
+        client, "POST", f"/api/v1/match-results/employees/{emp['id']}/override",
         json={"category_ids": []},
     )
     assert cleared.status_code == 200

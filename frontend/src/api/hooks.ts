@@ -39,6 +39,7 @@ import type {
   RosterReadiness,
   InsuranceLine,
   MatchResults,
+  MatchResultItem,
   MatchRunResult,
   MemberCounts,
   ConfirmSetupResult,
@@ -1303,18 +1304,23 @@ export function useSetMatchOverride() {
       employeeId,
       categoryId,
       categoryIds,
+      expectedUpdatedAt,
     }: {
       employeeId: string;
       categoryId?: string | null;
       categoryIds?: string[];
+      expectedUpdatedAt?: string;
     }) =>
-      api.post(`/match-results/employees/${employeeId}/override`, {
+      api.post<MatchResultItem>(`/match-results/employees/${employeeId}/override`, {
+        expected_updated_at: expectedUpdatedAt,
         ...(categoryIds !== undefined
           ? { category_ids: categoryIds }
           : { category_id: categoryId ?? null }),
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["match-results"] });
+      qc.invalidateQueries({ queryKey: ["enrollment-readiness"] });
+      qc.invalidateQueries({ queryKey: ["enrollment-readiness-employees"] });
       qc.invalidateQueries({ queryKey: ["employees"] });
       qc.invalidateQueries({ queryKey: ["employee"] });
       qc.invalidateQueries({ queryKey: ["benefit-statement"] });
@@ -1345,6 +1351,8 @@ export function useUpdateEmployee() {
         expected_updated_at,
       }),
     onSuccess: (employee) => {
+      qc.invalidateQueries({ queryKey: ["enrollment-readiness"] });
+      qc.invalidateQueries({ queryKey: ["enrollment-readiness-employees"] });
       qc.setQueriesData<Employee>({ queryKey: ["employee", employee.id] }, employee);
       qc.invalidateQueries({ queryKey: ["employees"] });
       qc.invalidateQueries({ queryKey: ["employee"] });

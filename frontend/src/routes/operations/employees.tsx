@@ -42,7 +42,6 @@ import {
   Loader2,
   Play,
   RefreshCw,
-  Save,
   Trash2,
 } from "lucide-react";
 import {
@@ -52,7 +51,6 @@ import {
   useFlexMembership,
   useMatchResults,
   useRunMatching,
-  useSetMatchOverride,
 } from "@/api/hooks";
 import { useMemberFacets, useMemberQueryList } from "@/api/memberQuery";
 import {
@@ -78,6 +76,7 @@ import {
   SheetBody,
   SheetContent,
   SheetHeader,
+  SheetFooter,
   SheetTitle,
 } from "@/components/ui/sheet";
 import {
@@ -100,6 +99,7 @@ import { EntityBreakdownCard } from "@/components/configuration/EntityBreakdownC
 import { EntityReconciliationPanel } from "@/components/configuration/EntityReconciliationPanel";
 import { OrphanOverridesPanel } from "@/components/enrollment/OrphanOverridesPanel";
 import { InfoHint } from "@/components/ui/tooltip";
+import { EmployeeMappingEditor } from "@/components/operations/EmployeeMappingEditor";
 import { EmployeeRosterEditor } from "@/components/operations/EmployeeRosterEditor";
 import { ConflictDetailError, formatError } from "@/lib/errors";
 import { FAMILY_STATUS_LABELS } from "@/types";
@@ -138,12 +138,12 @@ export function EmployeesPage() {
   // The open row rides the URL, so a roster record is a shareable link and
   // Member Coverage can link back to the row it came from. `replace` because
   // clicking down a table shouldn't fill the back stack with people.
-  const search = useSearch({ strict: false }) as { employee?: string };
+  const search = useSearch({ strict: false }) as { employee?: string; product?: string; match?: "matched" | "unmatched" };
   const selectedId = search.employee ?? null;
   const setSelectedId = (id: string | null) =>
     void navigate({
       to: "/policy-admin/member-listing",
-      search: { tab: "employees", ...(id ? { employee: id } : {}) },
+      search: { ...search, tab: "employees", employee: id ?? undefined },
       replace: true,
     });
   const previousPolicyYearId = useRef(policyYearId);
@@ -156,9 +156,17 @@ export function EmployeesPage() {
   // One filter state for the whole bar, serialized to the SAME `MemberFilters`
   // the bulk tool sends — so the roster view and a bulk selection can never
   // describe different populations for the same rule.
-  const [filters, setFilters] = useState<MemberFilterState>(EMPTY_MEMBER_FILTERS);
+  const [filters, setFilters] = useState<MemberFilterState>(() => ({
+    ...EMPTY_MEMBER_FILTERS, productCodes: search.product ? [search.product] : [], matchStatus: search.match ?? "any",
+  }));
+  useEffect(() => {
+    setPage(0);
+    setFilters({ ...EMPTY_MEMBER_FILTERS, productCodes: search.product ? [search.product] : [], matchStatus: search.match ?? "any" });
+  }, [policyYearId, search.product, search.match]);
   const debouncedQ = useDebouncedValue(filters.q, 250);
-  const [selectedCats, setSelectedCats] = useState<Set<string>>(new Set());
+  const [mappingDirty, setMappingDirty] = useState(false);
+  const [rosterEditing, setRosterEditing] = useState(false);
+  const [actionContainer, setActionContainer] = useState<HTMLDivElement | null>(null);
   const [showDeleteAll, setShowDeleteAll] = useState(false);
   const [deleteRisk, setDeleteRisk] = useState<{
     enrollments_at_risk: number;
@@ -197,21 +205,10 @@ export function EmployeesPage() {
   const { data: categoryGroups = [] } = useCategoriesGrouped(
     policyYearId ?? undefined,
   );
-  const override = useSetMatchOverride();
-
-  // Seed editable fields when a different employee is opened. Keyed on the id
-  // so a background refetch of the same employee doesn't clobber in-progress edits.
   useEffect(() => {
-    if (!detail) return;
-    setSelectedCats(
-      new Set(
-        detail.matched_plans
-          .map((p) => p.category_id)
-          .filter((x): x is string => Boolean(x)),
-      ),
-    );
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [detail?.id]);
+    setMappingDirty(false);
+    setRosterEditing(false);
+  }, [selectedId]);
 
   if (!policyYearId) return null;
   // `data.total` follows the active filters, so it cannot state what is on
@@ -335,9 +332,8 @@ export function EmployeesPage() {
                       <span className="inline-flex items-center gap-1">
                         Match
                         <InfoHint>
-                          Matched = resolved to a category. Unmatched = no rule
-                          applied — map manually or refine categories, then
-                          re-run matching.
+                          Unmatched includes a missing category for any applicable product.
+                          Review the product's employee categories and roster grades, then re-run matching.
                         </InfoHint>
                       </span>
                     </TableHead>
@@ -381,7 +377,11 @@ export function EmployeesPage() {
                         {(e.attribute_values.entity as string) || "—"}
                       </TableCell>
                       <TableCell>
-                        {e.matched_category_id ? (
+                        {e.unmatched_product_codes?.length ? (
+                          <div className="space-y-1"><Badge variant="warn">Unmatched</Badge>
+                            <p className="max-w-56 text-xs text-muted-foreground">Missing {e.unmatched_product_codes.join(", ")}</p>
+                          </div>
+                        ) : e.matched_plans.length || e.matched_category_id ? (
                           <Badge variant="good">Matched</Badge>
                         ) : (
                           <Badge variant="warn">Unmatched</Badge>
@@ -554,6 +554,7 @@ export function EmployeesPage() {
                   Back to the listing
                 </Button>
               </SheetBody>
+              <SheetFooter className="shrink-0"><div className="w-full" ref={setActionContainer} /></SheetFooter>
             </>
           ) : selectedId && !detail ? (
             /* The loading state carries a TITLE. Without one the open dialog
@@ -566,6 +567,7 @@ export function EmployeesPage() {
               <SheetBody className="flex justify-center pt-10">
                 <Loader2 className="size-5 animate-spin text-muted-foreground" />
               </SheetBody>
+              <SheetFooter className="shrink-0"><div className="w-full" ref={setActionContainer} /></SheetFooter>
             </>
           ) : null}
           {detail && (
@@ -589,13 +591,16 @@ export function EmployeesPage() {
               <SheetHeader className="gap-2.5 pr-12">
                 <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
                   <SheetTitle>{detail.employee_name ?? detail.staff_id}</SheetTitle>
-                  {detail.matched_category_id ? (
+                  {!detail.unmatched_product_codes?.length && detail.matched_plans.length > 0 ? (
                     <Badge variant="good">Matched</Badge>
                   ) : (
                     <Badge variant="warn">Unmatched</Badge>
                   )}
                 </div>
 
+                {!!detail.unmatched_product_codes?.length && <p className="text-sm text-warn">
+                  Missing product mapping: {detail.unmatched_product_codes.join(", ")}
+                </p>}
                 <p className="text-xs text-muted-foreground">
                   <span className="font-mono">{detail.staff_id}</span>
                   {detail.match_method && (
@@ -698,83 +703,13 @@ export function EmployeesPage() {
               </SheetHeader>
 
               <SheetBody className="space-y-4">
-                <div>
-                  <div className="flex items-center gap-1 mb-2">
-                    <div className="text-2xs uppercase tracking-wider text-muted-foreground">
-                      Manual mapping
-                    </div>
-                    <InfoHint>
-                      Select one plan per product. Saved as a manual override —
-                      kept across re-runs until changed.
-                    </InfoHint>
-                  </div>
-                  <div className="max-h-56 overflow-y-auto rounded-md border border-border divide-y divide-border">
-                    {categoryGroups.length === 0 && (
-                      <div className="p-3 text-xs text-muted-foreground">
-                        No categories configured for this policy year.
-                      </div>
-                    )}
-                    {categoryGroups.map((g) => (
-                      <div key={g.product_code} className="p-2">
-                        <div className="text-2xs uppercase tracking-wider text-muted-foreground mb-1">
-                          {g.product_code} — {g.product_display_name}
-                        </div>
-                        {g.categories.map((c) => (
-                          <label
-                            key={c.id}
-                            className="flex items-start gap-2 py-1 text-sm cursor-pointer"
-                          >
-                            <input
-                              type="checkbox"
-                              className="mt-1"
-                              checked={selectedCats.has(c.id)}
-                              onChange={(e) =>
-                                setSelectedCats((prev) => {
-                                  const next = new Set(prev);
-                                  if (e.target.checked) next.add(c.id);
-                                  else next.delete(c.id);
-                                  return next;
-                                })
-                              }
-                            />
-                            <span className="text-foreground">{c.display_name}</span>
-                          </label>
-                        ))}
-                      </div>
-                    ))}
-                  </div>
-                  <div className="mt-2">
-                    <Button
-                      size="sm"
-                      disabled={override.isPending}
-                      onClick={async () => {
-                        try {
-                          await override.mutateAsync({
-                            employeeId: detail.id,
-                            categoryIds: Array.from(selectedCats),
-                          });
-                          toast.success(
-                            selectedCats.size > 0
-                              ? `Mapped ${selectedCats.size} plan${selectedCats.size === 1 ? "" : "s"}`
-                              : "Match cleared",
-                          );
-                        } catch (err) {
-                          toast.error(formatError(err));
-                        }
-                      }}
-                    >
-                      {override.isPending ? (
-                        <Loader2 className="size-4 animate-spin" />
-                      ) : (
-                        <Save className="size-4" />
-                      )}
-                      Save mapping ({selectedCats.size})
-                    </Button>
-                  </div>
-                </div>
-
-                <EmployeeRosterEditor key={detail.id} employee={detail} />
+                <EmployeeMappingEditor key={`mapping-${detail.id}`} employee={detail}
+                  groups={categoryGroups} actionContainer={actionContainer} disabled={rosterEditing}
+                  onDirtyChange={setMappingDirty} />
+                <EmployeeRosterEditor key={detail.id} employee={detail} actionContainer={actionContainer}
+                  disabled={mappingDirty} onEditingChange={setRosterEditing} />
               </SheetBody>
+              <SheetFooter className="shrink-0"><div className="w-full" ref={setActionContainer} /></SheetFooter>
             </>
           )}
         </SheetContent>
@@ -805,22 +740,23 @@ function MatchState({
   if (!data.last_run_at) return <span>Matching not run yet</span>;
 
   const stale = data.pending;
+  const gaps = data.employees_with_product_gaps ?? data.employees_unmatched;
   return (
     <>
-      {data.employees_unmatched > 0 ? (
+      {gaps > 0 ? (
         <>
           <span className="tabular-nums">
-            {data.employees_matched.toLocaleString()}
+            {(data.employees_total - gaps).toLocaleString()}
           </span>{" "}
-          matched ·
+          matched across applicable products ·
           <ListingExceptionLink
-            count={data.employees_unmatched}
+            count={gaps}
             label="unmatched"
             onClick={onShowUnmatched}
           />
         </>
       ) : (
-        <span>All {data.employees_matched.toLocaleString()} matched</span>
+        <span>All {data.employees_matched.toLocaleString()} matched across applicable products</span>
       )}
       {stale && (
         // Amber lives in the glyph, never in 12px text: --color-warn is 3.19:1

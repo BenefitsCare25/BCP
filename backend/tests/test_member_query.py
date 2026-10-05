@@ -369,8 +369,10 @@ def test_listing_pages_without_changing_the_total(client: TestClient) -> None:
 def test_listing_filters_by_match_state(client: TestClient) -> None:
     """The All/Matched/Unmatched chips the roster page has always had, now
     resolved through the shared chain rather than a second SQL predicate."""
-    assert _list(client, {"query": {"match_status": "matched"}})["total"] == 0
-    assert _list(client, {"query": {"match_status": "unmatched"}})["total"] == 3
+    # The per-product matches are authoritative even when the legacy scalar
+    # matched_category_id has not been stamped.
+    assert _list(client, {"query": {"match_status": "matched"}})["total"] == 3
+    assert _list(client, {"query": {"match_status": "unmatched"}})["total"] == 0
 
 
 def test_search_finds_a_member_by_nric(client: TestClient) -> None:

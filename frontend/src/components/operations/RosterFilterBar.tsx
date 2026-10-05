@@ -80,6 +80,10 @@ export function RosterFilterBar({
   // wire model already carries — see `MemberFilterState` — but rendering all of
   // them made the panel longer than the table it filters.
   const entityFacet = facets?.attributes.find((a) => a.key === ENTITY_KEY);
+  const employeeCategoryFacet = facets?.attributes.find((a) => a.key === "category")
+    ?? facets?.attributes.find((a) => a.key === "employee_category");
+  const gradeFacet = facets?.attributes.find((a) => a.key === "job_grade")
+    ?? facets?.attributes.find((a) => a.key === "grade");
 
   return (
     <div className="space-y-3">
@@ -101,6 +105,7 @@ export function RosterFilterBar({
           variant={open ? "default" : "outline"}
           size="sm"
           onClick={() => setOpen((v) => !v)}
+          aria-expanded={open}
         >
           <Filter className="size-3.5" />
           Filters
@@ -128,6 +133,12 @@ export function RosterFilterBar({
         )}
       </div>
 
+      {state.matchStatus !== "any" && <p className="text-xs text-muted-foreground">
+        {state.matchStatus === "unmatched"
+          ? "Includes employees missing a category for an applicable product, even if they match other products. Select a product under Filters to narrow the review."
+          : "Employees have categories for every applicable product in the selected scope. Mappings may still need confirmation before enrolment opens."}
+      </p>}
+
       {chips.length > 0 && (
         <div className="flex flex-wrap items-center gap-1.5">
           {chips.map((chip) => (
@@ -146,8 +157,23 @@ export function RosterFilterBar({
 
       {open && (
         <div className="grid gap-4 rounded-lg border border-border bg-muted/40 p-4 md:grid-cols-3">
+          {[employeeCategoryFacet, gradeFacet].filter((facet) => facet !== undefined).map((facet) => (
+            <MatchSetPicker key={facet.key}
+              label={facet === employeeCategoryFacet ? "Employee category" : "Job grade"}
+              hint="The value recorded on the employee roster."
+              selected={state.attributes[facet.key] ?? []}
+              options={facet.values}
+              onChange={(values) => {
+                const attributes = { ...state.attributes };
+                if (values.length) attributes[facet.key] = values;
+                else delete attributes[facet.key];
+                onChange({ ...state, attributes });
+              }}
+              placeholder={facet === employeeCategoryFacet ? "Any employee category" : "Any job grade"}
+            />
+          ))}
           <MatchSetPicker
-            label="Cohort"
+            label="Assigned benefit category"
             hint="The category roster matching put each member in."
             selected={state.categoryIds}
             options={(facets?.categories ?? []).map((c) => ({
@@ -160,7 +186,9 @@ export function RosterFilterBar({
           />
           <MatchSetPicker
             label="Product"
-            hint="Members covered by ALL of the products you pick."
+            hint={state.matchStatus === "unmatched"
+              ? "Missing a category for any selected product within its insured entities."
+              : "Members with assigned categories for ALL selected products."}
             selected={state.productCodes}
             options={(facets?.products ?? []).map((p) => ({
               value: p.code,

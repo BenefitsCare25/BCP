@@ -5,6 +5,7 @@ access, and (optionally) Flex funding. Opening is the irreversible boundary at
 which those independent drafts become one employee-facing promise, so this
 module reports aggregate, non-PII blockers before any enrollment rows are made.
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -17,6 +18,7 @@ from app.models import (
     Employee,
     FlexScheme,
     MemberAccount,
+    PolicyYear,
     Product,
 )
 from app.models.category import CategoryStatus
@@ -24,6 +26,7 @@ from app.models.employee import EMPLOYEE_STATUS_ACTIVE
 from app.models.enrollment_window import EnrollmentWindow, FlexDrawdownRule
 from app.models.flex_scheme import FlexSchemeStatus
 from app.services.cohort_tiers import list_product_tiers
+from app.services.coverage_gaps import build_coverage_gaps
 from app.services.flex_pricing_resolver import (
     employee_age,
     get_pricing,
@@ -41,24 +44,32 @@ def _issue(
     count: int | None = None,
     products: set[str] | list[str] | None = None,
     severity: str = "blocker",
+    count_unit: str = "employees",
+    employee_count: int | None = None,
 ) -> dict[str, Any]:
     # ``blocker`` stops the period opening; ``warning`` is shown to the broker
     # before they open it but is theirs to accept.
     out: dict[str, Any] = {"code": code, "message": message, "severity": severity}
     if count is not None:
         out["count"] = count
+        out["count_unit"] = count_unit
+    if employee_count is not None:
+        out["employee_count"] = employee_count
     if products:
         out["products"] = sorted(set(products))
     return out
 
 
 def enrollment_readiness_issues(
-    db: Session, window: EnrollmentWindow
+    db: Session,
+    window: EnrollmentWindow,
+    *,
+    affected: dict[str, list[dict[str, Any]]] | None = None,
 ) -> list[dict[str, Any]]:
     """Return aggregate blockers for opening ``window`` (empty means ready).
 
-    Nothing in the result identifies an employee. This object is safe for the
-    broker UI and operational logs while still making each remediation concrete.
+    Aggregate output never identifies employees. The authorized review endpoint
+    can request a separate collector; open/conflict responses never include it.
     """
     issues: list[dict[str, Any]] = []
     all_categories = list(
@@ -115,9 +126,7 @@ def enrollment_readiness_issues(
         product_ids_by_code.setdefault(key, set()).add(product.id)
         display_code.setdefault(key, product.code.strip().upper())
     duplicate_codes = {
-        display_code[key]
-        for key, ids in product_ids_by_code.items()
-        if len(ids) > 1
+        display_code[key] for key, ids in product_ids_by_code.items() if len(ids) > 1
     }
     if duplicate_codes:
         issues.append(
@@ -127,6 +136,7 @@ def enrollment_readiness_issues(
                 "product setup before opening.",
                 count=len(duplicate_codes),
                 products=duplicate_codes,
+                count_unit="products",
             )
         )
 
@@ -149,9 +159,51 @@ def enrollment_readiness_issues(
         return issues
 
     category_product = {category.id: category.product_id for category in categories}
+    py = db.get(PolicyYear, window.policy_year_id)
+    assert py is not None
+    gaps = build_coverage_gaps(db, py)
+
+    def collect(
+        code: str,
+        employee: Employee,
+        *,
+        reason: str,
+        review_categories: list[Category] | None = None,
+        missing_products: set[str] | None = None,
+    ) -> None:
+        if affected is None:
+            return
+        attrs = {**(employee.attribute_values or {}), **(employee.derived_attribute_values or {})}
+        affected.setdefault(code, []).append(
+            {
+                "employee_id": employee.id,
+                "staff_id": employee.staff_id,
+                "employee_name": employee.employee_name,
+                "employee_category": str(
+                    attrs.get("category") or attrs.get("employee_category") or ""
+                ),
+                "grade": str(
+                    attrs.get("job_category") or attrs.get("job_grade") or attrs.get("grade") or ""
+                ),
+                "reason": reason,
+                "products": sorted(missing_products or set()),
+                "mappings": [
+                    {
+                        "category_id": c.id,
+                        "category_name": c.display_name,
+                        "product_code": code_by_product.get(c.product_id or "", "Unknown"),
+                        "status": c.status,
+                    }
+                    for c in (review_categories or [])
+                ],
+            }
+        )
+
     matched_products_by_employee: dict[str, set[str]] = {}
     matched_category_ids: set[str] = set()
     unmatched = 0
+    partial_gaps = 0
+    missing_codes: set[str] = set()
     for employee in employees:
         matched_products = {
             category_product.get(str(match.get("category_id") or ""))
@@ -162,12 +214,25 @@ def enrollment_readiness_issues(
         matched_category_ids.update(
             str(match.get("category_id"))
             for match in (employee.matched_categories or [])
-            if isinstance(match, dict)
-            and str(match.get("category_id") or "") in category_product
+            if isinstance(match, dict) and str(match.get("category_id") or "") in category_product
         )
         matched_products_by_employee[employee.id] = matched
         if not matched:
             unmatched += 1
+            collect(
+                "employees_without_coverage", employee, reason="No assigned product in this period."
+            )
+        else:
+            missing = {gaps.codes[pid] for pid in (gaps.expected(employee) & product_ids) - matched}
+            if missing:
+                partial_gaps += 1
+                missing_codes.update(missing)
+                collect(
+                    "employees_with_coverage_gaps",
+                    employee,
+                    reason="No category assigned for these applicable products.",
+                    missing_products=missing,
+                )
     if unmatched:
         issues.append(
             _issue(
@@ -177,19 +242,49 @@ def enrollment_readiness_issues(
             )
         )
 
+    if partial_gaps:
+        issues.append(
+            _issue(
+                "employees_with_coverage_gaps",
+                "Some active employees have no category for additional products in this "
+                "period. Review whether this is intended; employees may have different benefits.",
+                count=partial_gaps,
+                products=missing_codes,
+                severity="warning",
+            )
+        )
+
     unconfirmed = [
         category
         for category in categories
-        if category.id in matched_category_ids
-        and category.status != CategoryStatus.confirmed.value
+        if category.id in matched_category_ids and category.status != CategoryStatus.confirmed.value
     ]
     if unconfirmed:
+        unconfirmed_ids = {c.id for c in unconfirmed}
+        unconfirmed_employee_count = 0
+        for employee in employees:
+            assigned = {
+                str(m.get("category_id"))
+                for m in employee.matched_categories or []
+                if isinstance(m, dict)
+            }
+            review = [c for c in unconfirmed if c.id in assigned]
+            if assigned & unconfirmed_ids:
+                unconfirmed_employee_count += 1
+                collect(
+                    "unconfirmed_categories",
+                    employee,
+                    reason="Assigned eligibility mappings need broker confirmation.",
+                    review_categories=review,
+                )
         issues.append(
             _issue(
                 "unconfirmed_categories",
                 "Eligibility mappings currently assigned to employees still require "
                 "broker review and confirmation.",
                 count=len(unconfirmed),
+                count_unit="mappings",
+                employee_count=unconfirmed_employee_count,
                 products={
                     code_by_product.get(category.product_id or "", "Unknown")
                     for category in unconfirmed
@@ -215,12 +310,19 @@ def enrollment_readiness_issues(
             usable = member_account is not None and (
                 member_account.status == "active"
                 or (
-                    member_account.status == "invited"
-                    and member_account.invite_sent_at is not None
+                    member_account.status == "invited" and member_account.invite_sent_at is not None
                 )
             )
             if not usable:
                 inaccessible += 1
+                reason = (
+                    "No portal account"
+                    if member_account is None
+                    else "Portal account disabled"
+                    if member_account.status == "disabled"
+                    else "Invitation not delivered"
+                )
+                collect("portal_access_incomplete", employee, reason=reason)
         if inaccessible:
             issues.append(
                 _issue(
@@ -253,9 +355,7 @@ def enrollment_readiness_issues(
     if not bool(window.uses_flex):
         return issues
 
-    scheme = db.scalar(
-        select(FlexScheme).where(FlexScheme.policy_year_id == window.policy_year_id)
-    )
+    scheme = db.scalar(select(FlexScheme).where(FlexScheme.policy_year_id == window.policy_year_id))
     if scheme is None or scheme.status != FlexSchemeStatus.confirmed:
         issues.append(
             _issue(
@@ -270,6 +370,11 @@ def enrollment_readiness_issues(
         if employee.flex_wallet_amount is None or not employee.flex_currency
     )
     if wallets_missing:
+        for employee in employees:
+            if employee.flex_wallet_amount is None or not employee.flex_currency:
+                collect(
+                    "flex_wallets_incomplete", employee, reason="Wallet amount or currency missing."
+                )
         issues.append(
             _issue(
                 "flex_wallets_incomplete",
@@ -325,6 +430,7 @@ def enrollment_readiness_issues(
                 "Some electable tiers have no resolvable per-member price for the "
                 "employees who can receive them.",
                 count=len(missing_tiers),
+                count_unit="tiers",
                 products={code for code, _label in missing_tiers},
             )
         )

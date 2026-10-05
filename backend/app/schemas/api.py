@@ -749,6 +749,7 @@ class EmployeeOut(_Base):
     # "active" | "terminated" — terminated leavers are excluded from coverage.
     status: str = "active"
     matched_plans: list[MatchedPlan] = Field(default_factory=list)
+    unmatched_product_codes: list[str] = Field(default_factory=list)
     updated_at: datetime | None = None
     # Detail/edit responses include mapped columns even when this member has
     # no value. Listing responses omit the catalog to keep pagination light.
@@ -1042,6 +1043,7 @@ class AutoMatchResult(BaseModel):
 
 
 class MatchResultItem(BaseModel):
+    updated_at: datetime | None = None
     employee_id: str
     employee_name: str | None
     staff_id: str
@@ -1057,6 +1059,7 @@ class MatchOverridePayload(BaseModel):
     # precedence and replaces the employee's entire manual match set.
     category_id: str | None = None
     category_ids: list[str] | None = None
+    expected_updated_at: datetime | None = None
 
 
 class MatchRunResult(BaseModel):
@@ -1078,6 +1081,7 @@ class MatchResultsOut(BaseModel):
     employees_total: int
     employees_matched: int
     employees_unmatched: int
+    employees_with_product_gaps: int = 0
     last_run_at: datetime | None = None
     items: list[MatchResultItem] = Field(default_factory=list)
     items_total: int = 0

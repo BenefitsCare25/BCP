@@ -42,6 +42,7 @@ from app.models import (
     EnrollmentWindow,
     LeaveElection,
     MemberAccount,
+    PolicyYear,
 )
 from app.models.employee import EMPLOYEE_STATUS_TERMINATED
 from app.models.enrollment import EnrollmentStatus
@@ -58,6 +59,7 @@ from app.schemas.api import (
 )
 from app.schemas.claims import UtilizationOut
 from app.services.benefit_statement import build_benefit_statement
+from app.services.coverage_gaps import build_coverage_gaps
 from app.services.coverage_resolver import find_orphan_overrides, load_overrides
 from app.services.coverage_summary import build_coverage_items
 from app.services.derivation_engine import derive
@@ -235,6 +237,9 @@ def get_employee(
     plans = _hydrate_plans([e], db, e.policy_year_id)
     out.matched_plans = plans.get(e.id, [])
     out.roster_fields = employee_roster_fields(db, e)
+    py = db.get(PolicyYear, e.policy_year_id)
+    if py:
+        out.unmatched_product_codes = sorted(build_coverage_gaps(db, py).missing(e))
     return out
 
 
@@ -313,6 +318,9 @@ def update_employee(
     out = EmployeeOut.model_validate(e)
     out.matched_plans = _hydrate_plans([e], db, e.policy_year_id).get(e.id, [])
     out.roster_fields = employee_roster_fields(db, e)
+    py = db.get(PolicyYear, e.policy_year_id)
+    if py:
+        out.unmatched_product_codes = sorted(build_coverage_gaps(db, py).missing(e))
     return out
 
 

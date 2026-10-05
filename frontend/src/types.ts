@@ -540,6 +540,7 @@ export interface Employee {
   match_method: string | null;
   match_confidence: number | null;
   matched_plans: MatchedPlan[];
+  unmatched_product_codes?: string[];
   updated_at?: string | null;
   roster_fields?: EmployeeRosterField[];
 }
@@ -752,6 +753,7 @@ export type MatchMethod =
   | "manual_override";
 
 export interface MatchResultItem {
+  updated_at?: string | null;
   employee_id: string;
   employee_name: string | null;
   staff_id: string;
@@ -768,6 +770,7 @@ export interface MatchResults {
   employees_total: number;
   employees_matched: number;
   employees_unmatched: number;
+  employees_with_product_gaps?: number;
   last_run_at: string | null;
   items: MatchResultItem[];
   items_total: number;

@@ -1,4 +1,5 @@
 import type { MemberCounts } from "@/types";
+import { Link } from "@tanstack/react-router";
 
 export function UnmatchedEmployeeNotice({
   productCode,
@@ -21,6 +22,8 @@ export function UnmatchedEmployeeNotice({
         {unmatched} active employee{unmatched === 1 ? "" : "s"} within this product’s insured entities {unmatched === 1 ? "has" : "have"} no {productCode} category. Review the placement slip and roster grades before confirming coverage.
         {gradeSummary && ` Unmatched grades: ${gradeSummary}.`}
       </p>
+      <Link to="/policy-admin/member-listing" search={{ tab: "employees", product: productCode, match: "unmatched" }}
+        className="focus-ring mt-2 inline-block font-medium underline underline-offset-2">Review unmatched {productCode} employees in Member Listing</Link>
       {counts.unmatched_employees.length > 0 && (
         <details className="mt-2">
           <summary className="w-fit cursor-pointer font-medium underline underline-offset-2">

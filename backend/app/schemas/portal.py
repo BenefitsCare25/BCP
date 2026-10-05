@@ -190,6 +190,7 @@ class MemberAccountList(BaseModel):
 class MemberAccountCreateIn(BaseModel):
     # Overrides the roster email when provided (e.g. roster has none/stale).
     email: str | None = Field(default=None, max_length=320)
+    delivery: Literal["email", "individual_link"] = "email"
 
 
 class MemberAccountPatch(BaseModel):

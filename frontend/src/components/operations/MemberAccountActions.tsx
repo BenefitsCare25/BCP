@@ -50,6 +50,7 @@ import {
   type MemberAccount,
 } from "@/api/memberAccounts";
 import { formatError } from "@/lib/errors";
+import { useMe } from "@/api/hooks";
 import { fmtDay, parseServerDate } from "@/lib/format";
 import { tenantSurfaceUrl } from "@/lib/tenant";
 import { cn } from "@/lib/cn";
@@ -438,12 +439,17 @@ function AccountPanel({
   const busy =
     createAccount.isPending || resendInvite.isPending || makeLink.isPending;
 
-  const invite = async () => {
+  const invite = async (delivery: "email" | "individual_link" = "email") => {
     try {
       const created = await createAccount.mutateAsync({
         employeeId,
         email: emailOverride.trim() || undefined,
+        delivery,
       });
+      if (created.set_password_token) {
+        setLink(tenantSurfaceUrl("portal", created.tenant_slug,
+          `/portal/set-password?token=${encodeURIComponent(created.set_password_token)}`));
+      }
       if (!created.email) {
         toast.success(
           "Account created — use “Set-password link” to give them access",
@@ -459,7 +465,7 @@ function AccountPanel({
       setEmailOverride("");
     } catch (err) {
       const message = formatError(err);
-      if (message.toLowerCase().includes("no email")) setNeedsEmail(true);
+      if (message.toLowerCase().includes("no email") || message.toLowerCase().includes("shared")) setNeedsEmail(true);
       toast.error(message);
     }
   };
@@ -568,7 +574,7 @@ function AccountPanel({
 
         <div className="flex flex-wrap gap-2">
           {phase === "none" && (
-            <Button size="sm" disabled={busy} onClick={invite}>
+            <Button size="sm" disabled={busy} onClick={() => void invite()}>
               {createAccount.isPending ? (
                 <Loader2 className="size-4 animate-spin" />
               ) : (
@@ -578,6 +584,10 @@ function AccountPanel({
             </Button>
           )}
           {phase === "not_sent" && resendButton("Send invite", "default")}
+          {phase === "none" && <Button size="sm" variant="outline" disabled={busy}
+            onClick={() => void invite("individual_link")}>
+            <KeyRound className="size-4" aria-hidden /> Create individual activation link
+          </Button>}
           {phase === "expired" && resendButton("Send a new invite", "default")}
           {phase === "invited" && resendButton("Resend invite", "outline")}
           {phase === "no_email" && linkButton("Set-password link", "default")}
@@ -769,6 +779,7 @@ export function MemberAccountActions({
   staffId: string;
 }) {
   const [open, setOpen] = useState(false);
+  const { data: me } = useMe();
   const { data } = useMemberAccounts();
   const account = data?.items.find((a) => a.staff_id === staffId);
   const phase = phaseOf(account);
@@ -801,17 +812,18 @@ export function MemberAccountActions({
           <SheetDescription>
             The member is emailed a one-time password and chooses their own at
             first sign-in — nobody else ever sees it. Employees with no email
-            address are given a single-use set-password link instead.
+            or a shared HR email address can use a single-use activation link.
+            Verify the employee's identity and hand the link to that employee individually.
           </SheetDescription>
         </SheetHeader>
         <SheetBody>
-          <AccountPanel
+          {me && me.role !== "broker_viewer" ? <AccountPanel
             employeeId={employeeId}
             account={account}
             phase={phase}
             minLength={minLength}
             linkTtlHours={linkTtlHours}
-          />
+          /> : <StatusLine account={account} phase={phase} />}
         </SheetBody>
       </SheetContent>
     </Sheet>

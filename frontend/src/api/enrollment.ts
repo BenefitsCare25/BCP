@@ -575,7 +575,31 @@ export interface EnrollmentReadinessIssue {
   /** `blocker` stops the period opening; `warning` is the broker's call. */
   severity: "blocker" | "warning";
   count?: number;
+  count_unit?: "employees" | "mappings" | "products" | "tiers";
+  employee_count?: number;
   products?: string[];
+}
+
+export interface ReadinessEmployee {
+  employee_id: string;
+  staff_id: string;
+  employee_name: string | null;
+  employee_category: string;
+  grade: string;
+  reason: string;
+  products: string[];
+  mappings: { category_id: string; category_name: string; product_code: string; status: string }[];
+}
+
+export function useReadinessEmployees(windowId: string, code: string, q: string, page: number) {
+  const cid = useClientId();
+  return useQuery({
+    queryKey: ["enrollment-readiness-employees", cid, windowId, code, q, page],
+    queryFn: () => api.get<{ total: number; items: ReadinessEmployee[] }>(
+      `/enrollment-windows/${windowId}/readiness/${code}/employees?q=${encodeURIComponent(q)}&offset=${page * 50}&limit=50`,
+    ),
+    refetchInterval: code === "portal_access_incomplete" ? 10000 : false,
+  });
 }
 
 export interface EnrollmentReadiness {
@@ -827,6 +851,7 @@ export function useWindowReadiness(windowId: string | undefined) {
     queryFn: () =>
       api.get<EnrollmentReadiness>(`/enrollment-windows/${windowId}/readiness`),
     enabled: !!windowId,
+    refetchInterval: (query) => query.state.data?.issues.some((i) => i.code === "portal_access_incomplete") ? 10000 : false,
   });
 }
 

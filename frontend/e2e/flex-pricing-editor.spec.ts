@@ -273,7 +273,7 @@ test("a draft period shows its opening blockers before Open is pressed", async (
   await expect(
     page.getByText("Assign a wallet amount and currency to every active employee."),
   ).toBeVisible();
-  await expect(page.getByText("· 4 affected")).toBeVisible();
+  await expect(page.getByText("· 4 employees", { exact: true })).toBeVisible();
   await expect(page.getByText("1 to be aware of")).toBeVisible();
   // A blocker disables Open outright — no failed click, no after-the-fact dialog.
   await expect(page.getByRole("button", { name: "Open period" })).toBeDisabled();

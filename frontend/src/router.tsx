@@ -689,11 +689,13 @@ const paMemberListingRoute = createRoute({
   // person again by hand.
   validateSearch: (
     search: Record<string, unknown>,
-  ): { tab?: string; employee?: string } => ({
+  ): { tab?: string; employee?: string; product?: string; match?: string } => ({
     ...(typeof search.tab === "string" ? { tab: search.tab } : {}),
     ...(typeof search.employee === "string"
       ? { employee: search.employee }
       : {}),
+    ...(typeof search.product === "string" ? { product: search.product } : {}),
+    ...(search.match === "matched" || search.match === "unmatched" ? { match: search.match } : {}),
   }),
   component: RosterPage,
 });

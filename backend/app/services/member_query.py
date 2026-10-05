@@ -57,6 +57,7 @@ from app.schemas.member_query import (
     ResolvedMemberOut,
     UnresolvedRefOut,
 )
+from app.services.coverage_gaps import CoverageGaps, build_coverage_gaps
 from app.services.coverage_resolver import (
     batch_category_defaults,
     load_overrides,
@@ -157,6 +158,15 @@ class RosterIndex:
     _policy_year_id: str
     _defaults: dict[str, dict[str, tuple[str, str | None]]] | None = None
     _overrides: dict[tuple[str, str], EmployeePlanOverride] | None = None
+    _gaps: CoverageGaps | None = None
+
+    @property
+    def gaps(self) -> CoverageGaps:
+        if self._gaps is None:
+            py = self._db.get(PolicyYear, self._policy_year_id)
+            assert py is not None
+            self._gaps = build_coverage_gaps(self._db, py)
+        return self._gaps
 
     @property
     def defaults(self) -> dict[str, dict[str, tuple[str, str | None]]]:
@@ -350,13 +360,20 @@ def _filtered(
     for emp in idx.employees:
         if needle and not _matches_needle(emp, needle, nric_needle):
             continue
-        if query.match_status == "matched" and emp.matched_category_id is None:
-            continue
-        if query.match_status == "unmatched" and emp.matched_category_id is not None:
-            continue
+        if query.match_status != "any":
+            missing = idx.gaps.missing(emp, products or None)
+            has_match = bool(idx.gaps.matched(emp))
+            if query.match_status == "unmatched" and not (
+                missing or (not products and not has_match)
+            ):
+                continue
+            if query.match_status == "matched" and (missing or not has_match):
+                continue
         if categories and not _in_categories(emp, categories):
             continue
-        if products and not products <= {c.casefold() for c in idx.product_codes(emp.id)}:
+        if query.match_status != "unmatched" and products and not products <= {
+            c.casefold() for c in idx.product_codes(emp.id)
+        }:
             continue
         if (plans or query.coverage_state != "any") and product_id:
             if not _coverage_matches(idx, emp, product_id, plans, query.coverage_state):
@@ -590,9 +607,7 @@ def _category_facets(
 
 
 def _product_facets(db: Session, py: PolicyYear, idx: RosterIndex) -> list[ProductFacet]:
-    product_ids = {
-        pid for emp in idx.employees for pid in idx.defaults.get(emp.id, {})
-    }
+    product_ids = set(idx.gaps.codes)
     if not product_ids:
         return []
     products = {

@@ -12,6 +12,7 @@
  * email to hundreds of people who already have theirs.
  */
 import { useState } from "react";
+import { Link } from "@tanstack/react-router";
 import { Loader2, Mail, MailWarning, Send } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -21,6 +22,7 @@ import {
 } from "@/api/memberAccounts";
 import { formatError } from "@/lib/errors";
 import { useSession } from "@/stores/session";
+import { useMe } from "@/api/hooks";
 import { AlertDialog } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import {
@@ -79,7 +81,7 @@ function disabledReason(rollout: PortalRollout): string | null {
   if (rollout.employees_total === 0)
     return "No employees on this benefit year yet — upload the roster first.";
   if (!rollout.mail_deliverable)
-    return "Email delivery is misconfigured, so nothing would actually be sent. Members can still be given access one at a time from Member Coverage.";
+    return "Email delivery is not configured. An administrator must configure delivery before invitations can be sent. Shared email addresses do not block invitations to other employees.";
   if (rollout.invite_pending === 0) {
     return rollout.no_email + rollout.duplicate > 0
       ? "Everyone reachable by email has been invited. The rest are listed below."
@@ -88,9 +90,12 @@ function disabledReason(rollout: PortalRollout): string | null {
   return null;
 }
 
-export function PortalRolloutCard() {
-  const policyYearId = useSession((s) => s.currentPolicyYearId);
-  const { data: rollout, isLoading } = usePortalRollout(policyYearId);
+export function PortalRolloutCard({ policyYearId: suppliedYear, readOnly = false }: { policyYearId?: string; readOnly?: boolean } = {}) {
+  const selectedYear = useSession((s) => s.currentPolicyYearId);
+  const policyYearId = suppliedYear ?? selectedYear;
+  const { data: me } = useMe();
+  const cannotSend = readOnly || !me || me.role === "broker_viewer";
+  const { data: rollout, isLoading, isError, error, refetch } = usePortalRollout(policyYearId);
   const bulkInvite = useBulkInviteMembers();
   const [confirm, setConfirm] = useState(false);
 
@@ -107,6 +112,12 @@ export function PortalRolloutCard() {
     );
   }
 
+  if (isError) {
+    return <Card><CardContent className="space-y-3 py-5" role="alert">
+      <p className="text-sm">Could not load employee portal access. {formatError(error)}</p>
+      <Button variant="outline" size="sm" onClick={() => void refetch()}>Retry portal access</Button>
+    </CardContent></Card>;
+  }
   if (isLoading || !rollout) {
     return (
       <Card>
@@ -136,7 +147,7 @@ export function PortalRolloutCard() {
       const unreachable = res.no_email + res.duplicate;
       if (unreachable > 0) {
         toast.warning(
-          `${unreachable.toLocaleString()} employee${unreachable === 1 ? "" : "s"} couldn't be emailed — see “Couldn't be reached” below.`,
+          `${unreachable.toLocaleString()} employee${unreachable === 1 ? "" : "s"} need individual activation — see the follow-up list below.`,
         );
       }
     } catch (err) {
@@ -147,15 +158,16 @@ export function PortalRolloutCard() {
   return (
     <Card>
       <CardHeader>
-        <div className="flex items-start justify-between gap-4">
+        <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="min-w-0">
             <CardTitle className="text-sm">Employee portal access</CardTitle>
             <CardDescription>
+              Send invitations in bulk to every active employee with an email address who has not received one yet.{" "}
               Each employee is emailed a one-time password and chooses their own
               at first sign-in. Nobody else ever sees it — not HR, not you.
             </CardDescription>
           </div>
-          <div className="shrink-0 basis-80 text-right">
+          {!cannotSend && <div className="shrink-0">
             <Button
               disabled={Boolean(blocked) || bulkInvite.isPending}
               onClick={() => setConfirm(true)}
@@ -171,7 +183,7 @@ export function PortalRolloutCard() {
                   ? `Send ${pending.toLocaleString()} invite${pending === 1 ? "" : "s"}`
                   : "Send invites"}
             </Button>
-          </div>
+          </div>}
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -194,10 +206,10 @@ export function PortalRolloutCard() {
             hint="Has an email address but no invite delivered — exactly who the button above will email."
           />
           <Stat
-            label="Can't be reached"
+            label="Needs individual activation"
             value={rollout.no_email + rollout.duplicate}
             tone={rollout.no_email + rollout.duplicate > 0 ? "warn" : undefined}
-            hint="No email address on file, or an address that already belongs to another employee. Listed below."
+            hint="No email address on file, or an address shared with another employee. These employees are skipped by bulk email; other eligible employees can still be invited."
           />
         </div>
 
@@ -230,11 +242,10 @@ export function PortalRolloutCard() {
         {rollout.needs_attention.length > 0 && (
           <div className="space-y-2">
             <div>
-              <SectionLabel>Couldn't be reached</SectionLabel>
+              <SectionLabel>Needs individual activation</SectionLabel>
               <p className="text-xs text-muted-foreground">
-                Fix the roster row and they're picked up by the next send — or
-                give them a set-password link individually from Member
-                Coverage.
+                Use an employee's own verified email address, or review their individual access in Member Coverage.
+                Shared HR mailboxes should not receive employees' personal login credentials.
               </p>
             </div>
             <div className="max-h-64 overflow-y-auto rounded-md border border-border">
@@ -252,12 +263,13 @@ export function PortalRolloutCard() {
                       <TableCell className="font-mono text-xs">
                         {m.staff_id}
                       </TableCell>
-                      <TableCell>{m.employee_name ?? "—"}</TableCell>
+                      <TableCell><Link className="focus-ring underline underline-offset-2" to="/policy-admin/member-coverage"
+                        search={{ employee: m.employee_id, view: undefined }}>{m.employee_name ?? m.staff_id}</Link></TableCell>
                       <TableCell className="text-xs text-muted-foreground">
                         {m.reason === "duplicate" ? (
                           <>
                             <span className="text-warn">
-                              Email already used by another employee
+                              Shared email — individual activation required
                             </span>
                             {m.email && (
                               <span className="block font-mono text-2xs text-subtle">

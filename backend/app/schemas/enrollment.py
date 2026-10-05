@@ -95,6 +95,31 @@ class EnrollmentReadinessOut(BaseModel):
     issues: list[dict[str, Any]] = Field(default_factory=list)
 
 
+class ReadinessMapping(BaseModel):
+    category_id: str
+    category_name: str
+    product_code: str
+    status: str
+
+
+class ReadinessEmployee(BaseModel):
+    employee_id: str
+    staff_id: str
+    employee_name: str | None = None
+    employee_category: str = ""
+    grade: str = ""
+    reason: str
+    products: list[str] = Field(default_factory=list)
+    mappings: list[ReadinessMapping] = Field(default_factory=list)
+
+
+class ReadinessEmployeesOut(BaseModel):
+    total: int
+    offset: int
+    limit: int
+    items: list[ReadinessEmployee]
+
+
 class EnrollmentWindowPatch(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=255)
     opens_at: datetime | None = None

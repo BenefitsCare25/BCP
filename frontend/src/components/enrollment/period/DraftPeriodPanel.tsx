@@ -77,7 +77,7 @@ function OpenSection({ window: w, readOnly }: { window: EnrollmentWindow; readOn
   const open = useOpenWindow();
   const [confirming, setConfirming] = useState(false);
   const issues = readiness.data?.issues ?? [];
-  const blocked = issues.some((i) => i.severity !== "warning");
+  const blocked = !readiness.data?.ready || readiness.isError;
   const warnings = issues.filter((i) => i.severity === "warning");
   const startsLater = parseServerDate(w.opens_at).getTime() > Date.now();
 
@@ -104,7 +104,14 @@ function OpenSection({ window: w, readOnly }: { window: EnrollmentWindow; readOn
   return (
     <div className="space-y-4 border-t border-border pt-5">
       <h3 className="text-sm font-semibold text-foreground">Ready to open?</h3>
-      <ReadinessChecklist readiness={readiness.data} isLoading={readiness.isLoading} />
+      {readiness.isError ? (
+        <div role="alert" className="text-sm text-error">
+          Could not check whether this period can open. {formatError(readiness.error)}
+          <Button variant="outline" size="sm" onClick={() => void readiness.refetch()}>Retry readiness check</Button>
+        </div>
+      ) : (
+        <ReadinessChecklist windowId={w.id} readiness={readiness.data} isLoading={readiness.isLoading} />
+      )}
       {!readOnly && (
         <div className="flex flex-wrap items-center gap-3">
           <Button

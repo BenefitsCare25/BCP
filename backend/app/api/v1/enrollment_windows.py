@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -33,6 +33,7 @@ from app.schemas.enrollment import (
     EnrollmentWindowCreate,
     EnrollmentWindowOut,
     EnrollmentWindowPatch,
+    ReadinessEmployeesOut,
     WindowCloseIn,
     WindowClosePreview,
     WindowCloseSummary,
@@ -182,6 +183,33 @@ def get_window_readiness(
 ) -> EnrollmentReadinessOut:
     issues = enrollment_readiness_issues(db, window)
     return EnrollmentReadinessOut(ready=not blocking_issues(issues), issues=issues)
+
+
+@router.get(
+    "/enrollment-windows/{window_id}/readiness/{issue_code}/employees",
+    response_model=ReadinessEmployeesOut,
+)
+def get_readiness_employees(
+    window_id: str,
+    issue_code: str,
+    q: str = Query("", max_length=255),
+    offset: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=100),
+    window: EnrollmentWindow = Depends(load_enrollment_window),
+    db: Session = Depends(get_db),
+) -> ReadinessEmployeesOut:
+    affected: dict[str, list[dict[str, object]]] = {}
+    enrollment_readiness_issues(db, window, affected=affected)
+    rows = affected.get(issue_code, [])
+    needle = q.strip().casefold()
+    if needle:
+        rows = [r for r in rows if needle in str(r["staff_id"]).casefold()
+                or needle in str(r.get("employee_name") or "").casefold()]
+    rows.sort(key=lambda r: (str(r["staff_id"]), str(r["employee_id"])))
+    return ReadinessEmployeesOut.model_validate({
+        "total": len(rows), "offset": offset, "limit": limit,
+        "items": rows[offset:offset + limit],
+    })
 
 
 @router.patch(

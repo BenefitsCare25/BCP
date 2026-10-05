@@ -6,6 +6,7 @@ POST /api/v1/match-results/run — re-derive + re-match every employee in a poli
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -15,10 +16,11 @@ from sqlalchemy.orm import Session
 from app.core.audit import write_audit
 from app.core.auth import CurrentUser, get_current_user
 from app.core.deps import assert_policy_year_for_user, load_employee, require_client_id
+from app.core.optimistic_lock import assert_not_stale
 from app.core.pagination import MAX_LIMIT
 from app.core.rate_limit import limiter
 from app.db.session import get_db
-from app.models import AuditLog, Category, Employee
+from app.models import AuditLog, Category, Employee, PolicyYear
 from app.models.employee import EMPLOYEE_STATUS_TERMINATED
 from app.models.product import Product
 from app.schemas.api import (
@@ -27,6 +29,7 @@ from app.schemas.api import (
     MatchResultsOut,
     MatchRunResult,
 )
+from app.services.coverage_gaps import build_coverage_gaps
 from app.services.eligibility_mapping import auto_map_policy_year
 from app.services.matching_engine import match_policy_year
 
@@ -64,6 +67,13 @@ def get_match_results(
         ).where(*live)
     ).one()
     total, matched = counts[0] or 0, counts[1] or 0
+    py = db.get(PolicyYear, policy_year_id)
+    assert py is not None
+    gaps = build_coverage_gaps(db, py)
+    product_gap_count = sum(
+        bool(gaps.missing(emp)) or not gaps.matched(emp)
+        for emp in db.scalars(select(Employee).where(*live))
+    )
 
     last_run_row = db.execute(
         select(AuditLog)
@@ -136,6 +146,7 @@ def get_match_results(
         employees_total=total,
         employees_matched=matched,
         employees_unmatched=total - matched,
+        employees_with_product_gaps=product_gap_count,
         last_run_at=last_run_at,
         items=items,
         items_total=item_total,
@@ -233,7 +244,18 @@ def _bulk_override(
                 "Cannot assign two categories of the same product to one employee.",
             )
         seen_products.add(product_key)
+        if (cat.plan_assignments or {}).get("member_scope") == "dependant":
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT,
+                                "Dependant-only categories cannot be assigned to an employee.")
         categories.append(cat)
+
+    existing_products = {
+        cat.product_id for match in employee.matched_categories or []
+        if (cat := db.get(Category, match.get("category_id"))) is not None
+    }
+    if user.role != "system_admin" and existing_products - {c.product_id for c in categories}:
+        raise HTTPException(status.HTTP_403_FORBIDDEN,
+                            "Removing saved product mappings requires system_admin role.")
 
     entries: list[dict[str, Any]] = []
     for cat in categories:
@@ -253,6 +275,7 @@ def _bulk_override(
     employee.matched_category_id = entries[0]["category_id"] if entries else None
     employee.match_method = "manual_override" if entries else None
     employee.match_confidence = 1.0 if entries else None
+    employee.updated_at = datetime.now(UTC)
     db.flush()
     write_audit(
         db, user,
@@ -272,6 +295,7 @@ def _bulk_override(
         matched_category_display=categories[0].display_name if categories else None,
         match_method=employee.match_method,
         match_confidence=employee.match_confidence,
+        updated_at=employee.updated_at,
     )
 
 
@@ -292,6 +316,10 @@ def override_match(
     When `category_ids` is supplied it takes precedence and REPLACES the whole
     manual match set (one category per product). An empty list clears all.
     """
+    if payload.expected_updated_at is not None:
+        db.refresh(employee, with_for_update=True)
+        assert_not_stale(expected=payload.expected_updated_at, actual=employee.updated_at,
+                         label="Employee record")
     if payload.category_ids is not None:
         return _bulk_override(payload.category_ids, employee, user, db)
 
@@ -304,6 +332,12 @@ def override_match(
             raise HTTPException(
                 status.HTTP_404_NOT_FOUND, "Category not found for this policy year"
             )
+        if (category.plan_assignments or {}).get("member_scope") == "dependant":
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT,
+                                "Dependant-only categories cannot be assigned to an employee.")
+    elif user.role != "system_admin":
+        raise HTTPException(status.HTTP_403_FORBIDDEN,
+                            "Removing saved product mappings requires system_admin role.")
 
     before = {
         "matched_category_id": employee.matched_category_id,
@@ -313,6 +347,7 @@ def override_match(
     employee.matched_category_id = category.id if category else None
     employee.match_method = "manual_override" if category else None
     employee.match_confidence = 1.0 if category else None
+    employee.updated_at = datetime.now(UTC)
     if category:
         prod = db.get(Product, category.product_id) if category.product_id else None
         override_entry = {
@@ -352,4 +387,5 @@ def override_match(
         matched_category_display=category.display_name if category else None,
         match_method=employee.match_method,
         match_confidence=employee.match_confidence,
+        updated_at=employee.updated_at,
     )

@@ -119,14 +119,17 @@ export function useMemberAccounts() {
 export function useCreateMemberAccount() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (input: { employeeId: string; email?: string }) =>
+    mutationFn: (input: { employeeId: string; email?: string; delivery?: "email" | "individual_link" }) =>
       api.post<MemberAccount>(`/employees/${input.employeeId}/member-account`, {
         email: input.email ?? null,
+        delivery: input.delivery ?? "email",
       }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["member-accounts"] });
       // Every one of these moves a member between rollout buckets.
       void qc.invalidateQueries({ queryKey: ["portal-rollout"] });
+      void qc.invalidateQueries({ queryKey: ["enrollment-readiness"] });
+      void qc.invalidateQueries({ queryKey: ["enrollment-readiness-employees"] });
     },
     meta: { localErrorHandling: true },
   });
@@ -237,6 +240,8 @@ export function useBulkInviteMembers() {
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["member-accounts"] });
       void qc.invalidateQueries({ queryKey: ["portal-rollout"] });
+      void qc.invalidateQueries({ queryKey: ["enrollment-readiness"] });
+      void qc.invalidateQueries({ queryKey: ["enrollment-readiness-employees"] });
     },
   });
 }
