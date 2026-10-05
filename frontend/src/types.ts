@@ -514,6 +514,15 @@ export interface MatchedPlan {
   covered_dependant_ids?: string[] | null;
 }
 
+export interface EmployeeRosterField {
+  attribute_id: string;
+  display_name: string;
+  data_type: string;
+  object_keys?: string[];
+  enum_values?: string[];
+  edit_value?: string | null;
+}
+
 export interface Employee {
   id: string;
   staff_id: string;
@@ -524,6 +533,8 @@ export interface Employee {
   match_method: string | null;
   match_confidence: number | null;
   matched_plans: MatchedPlan[];
+  updated_at?: string | null;
+  roster_fields?: EmployeeRosterField[];
 }
 
 export interface EmployeeList {

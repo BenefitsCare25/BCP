@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime
 from io import BytesIO
 from typing import Annotated, Any
 
@@ -28,6 +29,7 @@ from app.core.deps import (
     require_client_id,
     tenant_or_global,
 )
+from app.core.optimistic_lock import assert_not_stale
 from app.core.pagination import MAX_LIMIT
 from app.core.rate_limit import limiter
 from app.core.uploads import WORKBOOK_SUFFIXES, saved_upload
@@ -74,6 +76,7 @@ from app.services.roster_attributes import (
     suspect_nric_warning,
 )
 from app.services.roster_dedup import employee_candidate_keys, employee_nric
+from app.services.roster_mapping import employee_roster_fields
 from app.services.roster_parser import parse_employee_workbook
 from app.services.roster_reports import build_employee_report_workbook
 from app.services.utilization import build_utilization
@@ -231,6 +234,7 @@ def get_employee(
     out = EmployeeOut.model_validate(e)
     plans = _hydrate_plans([e], db, e.policy_year_id)
     out.matched_plans = plans.get(e.id, [])
+    out.roster_fields = employee_roster_fields(db, e)
     return out
 
 
@@ -271,6 +275,13 @@ def update_employee(
     derived attributes are recomputed so downstream views stay consistent. The
     match assignment is left untouched — run matching to re-evaluate.
     """
+    if payload.expected_updated_at is not None:
+        db.refresh(e, with_for_update=True)
+        assert_not_stale(
+            expected=payload.expected_updated_at,
+            actual=e.updated_at,
+            label="This employee's roster data",
+        )
     before = {
         "employee_name": e.employee_name,
         "attribute_values": e.attribute_values,
@@ -291,6 +302,7 @@ def update_employee(
             ).scalars()
         )
         e.derived_attribute_values = derive(e.attribute_values or {}, schemas)
+    e.updated_at = datetime.now(UTC)
     write_audit(
         db, user, action="update", entity_type="employee", entity_id=e.id,
         before=before,
@@ -300,6 +312,7 @@ def update_employee(
     db.refresh(e)
     out = EmployeeOut.model_validate(e)
     out.matched_plans = _hydrate_plans([e], db, e.policy_year_id).get(e.id, [])
+    out.roster_fields = employee_roster_fields(db, e)
     return out
 
 

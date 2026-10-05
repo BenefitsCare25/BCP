@@ -20,7 +20,9 @@ from sqlalchemy.orm import Session
 from app.models import Employee, EmployeeAttributeSchema, RosterMappingProfile
 from app.models.employee import EMPLOYEE_STATUS_ACTIVE
 from app.schemas.adc import RosterAttributeReadiness, RosterReadiness
+from app.schemas.api import EmployeeRosterField
 from app.services.derivation_engine import derive, resolve_attribute_schemas
+from app.services.roster_attributes import iso_date
 from app.services.roster_parser import (
     _DEPENDANT_ONLY_COLUMNS,
     _MEMBER_ID_RE,
@@ -104,6 +106,21 @@ _SYSTEM_LABELS: dict[str, str] = {
 _SYSTEM_PII = frozenset(
     {"employee_name", "id_no", "date_of_birth", "email", "mobile", "bank_account_no"}
 )
+
+# Input semantics for the parser's built-in fields, including columns with no
+# company schema or populated value. Identifiers deliberately remain strings.
+_SYSTEM_FIELD_TYPES = {
+    "date_of_birth": "date", "date_of_hire": "date", "confirmation_date": "date",
+    "effective_date": "date", "last_day_of_service": "date",
+    "email": "email", "mobile": "tel", "remarks": "textarea",
+    "salary": "decimal", "gtlee_last_accepted_sum_assured": "decimal",
+    "prior_year_cover": "boolean", "leave_sell_eligible": "boolean",
+    "gender": "enum", "marital_status": "enum", "insurer_member_ids": "json",
+}
+_SYSTEM_FIELD_CHOICES = {
+    "gender": ["Female", "Male"],
+    "marital_status": ["Single", "Married", "Divorced", "Widowed"],
+}
 
 
 def _normalized(value: object) -> str:
@@ -311,6 +328,63 @@ def save_employee_mapping_profile(
         profile.column_mapping = mapping.persisted_mapping
     profile.sheet_name = mapping.sheet_name
     profile.created_by = created_by
+
+
+def employee_roster_fields(db: Session, employee: Employee) -> list[EmployeeRosterField]:
+    """Raw fields on the member plus columns from this company's saved uploads.
+
+    Empty cells are intentionally absent from raw attributes. The remembered
+    mappings supply their field names without materializing empty values or
+    mixing in another company's fields. Ignored columns stay ignored.
+    """
+    schemas = resolve_attribute_schemas(
+        db.scalars(
+            select(EmployeeAttributeSchema).where(
+                (EmployeeAttributeSchema.client_id == employee.client_id)
+                | EmployeeAttributeSchema.client_id.is_(None)
+            )
+        )
+    )
+    labels = {item.attribute_id: item.display_name for item in _attributes(schemas)}
+    types = {item.attribute_id: item.data_type for item in schemas if not item.derivation_rule}
+    choices = {
+        item.attribute_id: item.enum_values or []
+        for item in schemas if not item.derivation_rule
+    }
+    fields = dict.fromkeys(employee.attribute_values or {})
+    insurer_names: dict[str, None] = {}
+    profiles = db.scalars(
+        select(RosterMappingProfile).where(
+            RosterMappingProfile.client_id == employee.client_id,
+            RosterMappingProfile.member_type == "employee",
+        ).order_by(RosterMappingProfile.updated_at.desc(), RosterMappingProfile.id)
+    )
+    for profile in profiles:
+        for index, attribute_id in (profile.column_mapping or {}).items():
+            if isinstance(attribute_id, str) and attribute_id:
+                fields.setdefault(attribute_id, None)
+            if (
+                attribute_id == "insurer_member_ids" and str(index).isdigit()
+                and int(index) < len(profile.source_headers or [])
+            ):
+                match = _MEMBER_ID_RE.match(profile.source_headers[int(index)].strip())
+                if match:
+                    insurer_names.setdefault(match.group("insurer").strip(), None)
+    # Identity has its own display/control in the drawer, never a second input.
+    fields.pop("staff_id", None)
+    fields.pop("employee_name", None)
+    return [
+        EmployeeRosterField(
+            attribute_id=key,
+            display_name=labels.get(key, key.replace("_", " ").title()),
+            data_type=_SYSTEM_FIELD_TYPES.get(key, types.get(key, "string")),
+            object_keys=list(insurer_names) if key == "insurer_member_ids" else [],
+            enum_values=choices.get(key) or _SYSTEM_FIELD_CHOICES.get(key, []),
+            edit_value=(iso_date((employee.attribute_values or {}).get(key))
+                        if _SYSTEM_FIELD_TYPES.get(key, types.get(key)) == "date" else None),
+        )
+        for key in fields
+    ]
 
 
 def roster_readiness(

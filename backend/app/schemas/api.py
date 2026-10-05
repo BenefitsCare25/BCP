@@ -721,6 +721,15 @@ class MatchedPlan(BaseModel):
     covered_dependant_ids: list[str] | None = None
 
 
+class EmployeeRosterField(BaseModel):
+    attribute_id: str
+    display_name: str
+    data_type: str = "string"
+    object_keys: list[str] = Field(default_factory=list)
+    enum_values: list[str] = Field(default_factory=list)
+    edit_value: str | None = None
+
+
 class EmployeeOut(_Base):
     id: str
     staff_id: str
@@ -733,6 +742,10 @@ class EmployeeOut(_Base):
     # "active" | "terminated" — terminated leavers are excluded from coverage.
     status: str = "active"
     matched_plans: list[MatchedPlan] = Field(default_factory=list)
+    updated_at: datetime | None = None
+    # Detail/edit responses include mapped columns even when this member has
+    # no value. Listing responses omit the catalog to keep pagination light.
+    roster_fields: list[EmployeeRosterField] = Field(default_factory=list)
 
 
 class EmployeeList(BaseModel):
@@ -772,6 +785,7 @@ class CoverageSummary(BaseModel):
 class EmployeePatch(BaseModel):
     employee_name: str | None = None
     attribute_values: dict[str, Any] | None = None
+    expected_updated_at: datetime | None = None
 
 
 class DependantOut(_Base):

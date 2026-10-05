@@ -1327,18 +1327,22 @@ export function useUpdateEmployee() {
       employeeId,
       employee_name,
       attribute_values,
+      expected_updated_at,
     }: {
       employeeId: string;
       // No `| null`: the backend treats an explicit null as a no-op, so
       // allowing it only invites a silently-ignored "clear name" attempt.
       employee_name?: string;
       attribute_values?: Record<string, unknown>;
+      expected_updated_at?: string;
     }) =>
       api.patch<Employee>(`/employees/${employeeId}`, {
         employee_name,
         attribute_values,
+        expected_updated_at,
       }),
-    onSuccess: () => {
+    onSuccess: (employee) => {
+      qc.setQueriesData<Employee>({ queryKey: ["employee", employee.id] }, employee);
       qc.invalidateQueries({ queryKey: ["employees"] });
       qc.invalidateQueries({ queryKey: ["employee"] });
       // Editing attributes re-derives family status → membership counts change.
@@ -1346,6 +1350,7 @@ export function useUpdateEmployee() {
       qc.invalidateQueries({ queryKey: ["flex-coverage"] });
       qc.invalidateQueries({ queryKey: ["benefit-statement"] });
       qc.invalidateQueries({ queryKey: ["audit-log"] });
+      qc.invalidateQueries({ queryKey: ["roster-readiness"] });
     },
   });
 }

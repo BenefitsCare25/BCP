@@ -799,6 +799,11 @@ def remove_product_from_year(
         if used_elsewhere is None:
             db.delete(p)
 
+    # Sessions disable autoflush. Apply the removals before matching so its
+    # category index cannot retain rows that disappear at the first batch flush.
+    # This stays in the same transaction; a matching failure rolls it all back.
+    db.flush()
+
     emp_count = db.execute(
         select(func.count(Employee.id)).where(
             Employee.policy_year_id == policy_year_id

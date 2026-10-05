@@ -53,7 +53,6 @@ import {
   useMatchResults,
   useRunMatching,
   useSetMatchOverride,
-  useUpdateEmployee,
 } from "@/api/hooks";
 import { useMemberFacets, useMemberQueryList } from "@/api/memberQuery";
 import {
@@ -72,7 +71,6 @@ import {
   CardContent,
   CardHeader,
 } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
 import { PaginationControls } from "@/components/ui/pagination-controls";
 import { SkeletonTable } from "@/components/ui/skeleton";
 import {
@@ -102,7 +100,7 @@ import { EntityBreakdownCard } from "@/components/configuration/EntityBreakdownC
 import { EntityReconciliationPanel } from "@/components/configuration/EntityReconciliationPanel";
 import { OrphanOverridesPanel } from "@/components/enrollment/OrphanOverridesPanel";
 import { InfoHint } from "@/components/ui/tooltip";
-import { coerceAttrs } from "@/lib/attrs";
+import { EmployeeRosterEditor } from "@/components/operations/EmployeeRosterEditor";
 import { ConflictDetailError, formatError } from "@/lib/errors";
 import { FAMILY_STATUS_LABELS } from "@/types";
 import type {
@@ -160,8 +158,6 @@ export function EmployeesPage() {
   // describe different populations for the same rule.
   const [filters, setFilters] = useState<MemberFilterState>(EMPTY_MEMBER_FILTERS);
   const debouncedQ = useDebouncedValue(filters.q, 250);
-  const [editName, setEditName] = useState("");
-  const [editAttrs, setEditAttrs] = useState<Record<string, string>>({});
   const [selectedCats, setSelectedCats] = useState<Set<string>>(new Set());
   const [showDeleteAll, setShowDeleteAll] = useState(false);
   const [deleteRisk, setDeleteRisk] = useState<{
@@ -171,7 +167,6 @@ export function EmployeesPage() {
     overrides_at_risk: number;
   } | null>(null);
   const [showRunConfirm, setShowRunConfirm] = useState(false);
-  const updateEmployee = useUpdateEmployee();
   // Only the SEARCH text is debounced; a picker change is a deliberate click
   // and should move the table at once.
   const query = useMemo(
@@ -208,15 +203,6 @@ export function EmployeesPage() {
   // so a background refetch of the same employee doesn't clobber in-progress edits.
   useEffect(() => {
     if (!detail) return;
-    setEditName(detail.employee_name ?? "");
-    setEditAttrs(
-      Object.fromEntries(
-        Object.entries(detail.attribute_values).map(([k, v]) => [
-          k,
-          v == null ? "" : String(v),
-        ]),
-      ),
-    );
     setSelectedCats(
       new Set(
         detail.matched_plans
@@ -787,72 +773,7 @@ export function EmployeesPage() {
                   </div>
                 </div>
 
-                <div>
-                  <div className="flex items-center justify-between gap-2 mb-2">
-                    <div className="flex items-center gap-1">
-                      <div className="text-2xs uppercase tracking-wider text-muted-foreground">
-                        Roster data (editable)
-                      </div>
-                      <InfoHint>
-                        Editing re-derives matching fields. Run matching to
-                        re-evaluate plan assignments.
-                      </InfoHint>
-                    </div>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      disabled={updateEmployee.isPending}
-                      onClick={async () => {
-                        try {
-                          await updateEmployee.mutateAsync({
-                            employeeId: detail.id,
-                            employee_name: editName,
-                            attribute_values: coerceAttrs(editAttrs),
-                          });
-                          toast.success("Employee updated");
-                        } catch (err) {
-                          toast.error(formatError(err));
-                        }
-                      }}
-                    >
-                      {updateEmployee.isPending ? (
-                        <Loader2 className="size-4 animate-spin" />
-                      ) : (
-                        <Save className="size-4" />
-                      )}
-                      Save changes
-                    </Button>
-                  </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    <label className="block rounded-md border border-border p-2.5 bg-card">
-                      <div className="text-2xs uppercase tracking-wider text-muted-foreground">
-                        employee_name
-                      </div>
-                      <Input
-                        value={editName}
-                        onChange={(e) => setEditName(e.target.value)}
-                        className="mt-1 h-8"
-                      />
-                    </label>
-                    {Object.keys(editAttrs).map((k) => (
-                      <label
-                        key={k}
-                        className="block rounded-md border border-border p-2.5 bg-card"
-                      >
-                        <div className="text-2xs uppercase tracking-wider text-muted-foreground">
-                          {k}
-                        </div>
-                        <Input
-                          value={editAttrs[k]}
-                          onChange={(e) =>
-                            setEditAttrs((prev) => ({ ...prev, [k]: e.target.value }))
-                          }
-                          className="mt-1 h-8"
-                        />
-                      </label>
-                    ))}
-                  </div>
-                </div>
+                <EmployeeRosterEditor key={detail.id} employee={detail} />
               </SheetBody>
             </>
           )}
