@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { CircleCheck } from "lucide-react";
 import { toast } from "sonner";
@@ -9,6 +9,7 @@ import { AlertDialog } from "@/components/ui/alert-dialog";
 import { cn } from "@/lib/cn";
 import {
   useConfirmSetup,
+  useSaveSetup,
   useFieldSuggestions,
   useMemberCounts,
   usePlans,
@@ -40,7 +41,7 @@ import { ClaimLimitsPanel } from "./setup/limits/ClaimLimitsPanel";
 import { EndorsementsSection } from "./setup/EndorsementsSection";
 import {
   CoveragePeriodEditor,
-  type CoveragePeriodEditorHandle,
+  validSetupTerms,
 } from "./CoveragePeriodEditor";
 import {
   hasSelectedDependants,
@@ -87,7 +88,7 @@ function setupDirtySections(current: SetupAnswers, savedJson: string): string[] 
   const changed = (left: unknown, right: unknown) =>
     JSON.stringify(left) !== JSON.stringify(right);
   const sections: string[] = [];
-  if (changed(current.header, saved.header)) sections.push("Header & Policy");
+  if (changed(current.header, saved.header) || changed(current.policy_terms, saved.policy_terms)) sections.push("Header & Policy");
   if (changed(current.eligibility, saved.eligibility)) sections.push("Eligibility");
   if (
     changed(current.categories, saved.categories) ||
@@ -224,6 +225,7 @@ function buildAnswers(tpl: ProductTemplate, draft: ProductSetup | null): SetupAn
       : ensureSob(buildSobFromPlans(normalizeLegacyPlans(a.plans)), codes);
     return withNormalizedMemberCover({
       ...a,
+      policy_terms: a.policy_terms ?? {},
       header: a.header ?? fieldDefaults(tpl.header_fields),
       eligibility: a.eligibility ?? fieldDefaults(tpl.eligibility_fields),
       participation: a.participation ?? "",
@@ -283,6 +285,7 @@ function buildAnswers(tpl: ProductTemplate, draft: ProductSetup | null): SetupAn
   );
   const codes = fullPlans.map((p) => p.code);
   return withNormalizedMemberCover({
+    policy_terms: {},
     header: fieldDefaults(tpl.header_fields),
     eligibility: fieldDefaults(tpl.eligibility_fields),
     participation: "",
@@ -305,7 +308,11 @@ function useDebounced<T>(value: T, delayMs: number): T {
   return debounced;
 }
 
-export function ProductSetupForm({
+export interface ProductSetupFormHandle {
+  saveDraft: () => Promise<void>;
+}
+
+export const ProductSetupForm = forwardRef<ProductSetupFormHandle, Props>(function ProductSetupForm({
   policyYearId,
   template,
   draft,
@@ -316,7 +323,7 @@ export function ProductSetupForm({
   initialSection,
   insuranceLine,
   term,
-}: Props) {
+}: Props, ref) {
   const [answers, setAnswers] = useState<SetupAnswers>(() =>
     buildAnswers(template, draft),
   );
@@ -330,18 +337,14 @@ export function ProductSetupForm({
   const [reloading, setReloading] = useState(false);
   const queryClient = useQueryClient();
   const confirm = useConfirmSetup(policyYearId);
+  const save = useSaveSetup(policyYearId);
   const { data: suggestions } = useFieldSuggestions(policyYearId, template.code);
   const confirmInFlight = useRef(false);
-  const termEditorRef = useRef<CoveragePeriodEditorHandle>(null);
-  const [termStatus, setTermStatus] = useState({
-    dirty: false,
-    valid: true,
-    busy: false,
-  });
+  const saveInFlight = useRef(false);
+  const expectedUpdatedAt = useRef(draft?.updated_at);
+  const busy = save.isPending || confirm.isPending;
 
-  // Serialized snapshot of what's saved on the server, so we only auto-save on
-  // tab-switch when the form is actually dirty (avoids materializing a draft for
-  // a product the user merely clicked through, and redundant concurrent saves).
+  // Saving is explicit. Section navigation keeps this product-wide edit state.
   const savedSnapshot = useRef<string>(JSON.stringify(answers));
   const answersRef = useRef(answers);
   useEffect(() => {
@@ -359,11 +362,17 @@ export function ProductSetupForm({
     const formIsDirty = JSON.stringify(answersRef.current) !== savedSnapshot.current;
     const idChanged = currentId && builtFromId.current && currentId !== builtFromId.current;
     const serverChanged = currentId && nextSnapshot !== savedSnapshot.current;
+    if (saveInFlight.current || confirmInFlight.current) return;
+    if (serverChanged && formIsDirty) {
+      setConflictMessage("This setup changed while you were editing. Your edits are preserved. Reload the latest setup to continue.");
+      return;
+    }
     if (serverChanged || (idChanged && !formIsDirty)) {
       setAnswers(rebuilt);
       savedSnapshot.current = nextSnapshot;
       setConflictMessage(null);
     }
+    expectedUpdatedAt.current = draft?.updated_at;
     builtFromId.current = currentId;
   }, [draft, template]);
   // Canonical plan names. `Plan.display_name` is the source of truth for a plan's
@@ -493,34 +502,53 @@ export function ProductSetupForm({
     [answers],
   );
 
-  const formDirty = isDirty || termStatus.dirty;
-  const formDirtySections = useMemo(
-    () => {
-      const sections = isDirty ? dirtySections : [];
-      return termStatus.dirty && !sections.includes("Header & Policy")
-        ? ["Header & Policy", ...sections]
-        : sections;
-    },
-    [dirtySections, isDirty, termStatus.dirty],
-  );
-
   useEffect(() => {
-    onDirtyChange?.(formDirty, formDirtySections);
-  }, [formDirty, formDirtySections, onDirtyChange]);
+    onDirtyChange?.(isDirty || busy, isDirty ? dirtySections : busy ? ["Saving setup"] : []);
+  }, [isDirty, busy, dirtySections, onDirtyChange]);
+
+  const saveDraft = async () => {
+    if (saveInFlight.current || confirmInFlight.current) {
+      throw new Error("Wait for the current save to finish.");
+    }
+    if (JSON.stringify(answersRef.current) === savedSnapshot.current) return;
+    saveInFlight.current = true;
+    try {
+      const result = await save.mutateAsync({
+        code: template.code,
+        answers: answersRef.current,
+        templateVersion: template.version,
+        expectedUpdatedAt: expectedUpdatedAt.current,
+      });
+      const saved = buildAnswers(template, result);
+      savedSnapshot.current = JSON.stringify(saved);
+      expectedUpdatedAt.current = result.updated_at;
+      setAnswers(saved);
+      setConflictMessage(null);
+      onDirtyChange?.(false, []);
+      toast.success(`${template.code} draft saved. Confirm setup to apply changes.`);
+    } catch (error) {
+      const message = formatError(error);
+      if (isStaleConfigurationError(error)) setConflictMessage(message);
+      toast.error(message);
+      throw error;
+    } finally {
+      saveInFlight.current = false;
+    }
+  };
+  useImperativeHandle(ref, () => ({ saveDraft }));
 
   const isConfirmed =
     draft?.status === "confirmed" || Boolean(draft?.materialized_product_id);
   const confirmLabel = isConfirmed ? "Update setup" : "Confirm setup";
   const onConfirm = async () => {
-    if (confirmInFlight.current) return;
+    if (confirmInFlight.current || saveInFlight.current) return;
     confirmInFlight.current = true;
     try {
-      await termEditorRef.current?.save();
       const r = await confirm.mutateAsync({
         code: template.code,
         answers,
         templateVersion: template.version,
-        expectedUpdatedAt: draft?.updated_at,
+        expectedUpdatedAt: expectedUpdatedAt.current,
       });
       setConfirmOpen(false);
       savedSnapshot.current = JSON.stringify(answers);
@@ -587,12 +615,10 @@ export function ProductSetupForm({
       <div className="flex flex-col gap-4">
         {term ? (
           <CoveragePeriodEditor
-            ref={termEditorRef}
-            // Remount on server values so confirmation/reset discards local edits.
-            key={`${term.product_id}:${term.coverage_start}:${term.coverage_end}:${term.is_default}:${term.gst_included}:${term.gst_rate ?? ""}:${term.free_cover_limit ?? ""}:${term.nel_age_limit ?? ""}:${term.underwriting_required}`}
-            policyYearId={policyYearId}
             term={term}
-            onStatusChange={setTermStatus}
+            value={answers.policy_terms ?? {}}
+            onChange={(policy_terms) => setAnswers((a) => ({ ...a, policy_terms }))}
+            disabled={busy}
           />
         ) : null}
         {/* Two columns, not three: these are slip fields whose values are long
@@ -748,6 +774,15 @@ export function ProductSetupForm({
         { queryKey: ["product-setups", policyYearId] },
         { throwOnError: true },
       );
+      const latest = queryClient.getQueriesData<ProductSetup[]>({
+        queryKey: ["product-setups", policyYearId],
+      }).flatMap(([, values]) => values ?? [])
+        .find((value) => value.product_code.toUpperCase() === template.code.toUpperCase()) ?? null;
+      const rebuilt = buildAnswers(template, latest);
+      savedSnapshot.current = JSON.stringify(rebuilt);
+      expectedUpdatedAt.current = latest?.updated_at;
+      builtFromId.current = latest?.id ?? null;
+      setAnswers(rebuilt);
       setConflictMessage(null);
       toast.success("Latest product setup loaded");
     } catch (error) {
@@ -759,6 +794,7 @@ export function ProductSetupForm({
 
   return (
     <div className="flex flex-col gap-4">
+      <fieldset disabled={busy} className="min-w-0 space-y-4">
       <SourceMappingNotes answers={answers} onReview={source_reviewed => setAnswers(a => ({ ...a, source_reviewed }))} />
       {conflictMessage && (
         <SetupConflictAlert
@@ -808,29 +844,37 @@ export function ProductSetupForm({
       </div>
 
       <div className="flex flex-col gap-4">{sectionInner[activeId] ?? null}</div>
+      </fieldset>
 
-      <div className="flex items-center justify-between border-t border-border pt-3">
-        <span className="text-xs text-muted-foreground">
-          {draft?.status === "confirmed" ? (
+      <div className="sticky bottom-0 z-20 flex flex-wrap items-center justify-between gap-3 border-t border-border bg-card py-3">
+        <span role="status" aria-live="polite" className="text-xs text-muted-foreground">
+          {busy ? "Saving…" : isDirty ? "Unsaved changes" : draft?.status === "confirmed" ? (
             <span className="inline-flex items-center gap-1 text-good">
-              <CircleCheck className="size-3.5" /> Previously confirmed
+              <CircleCheck className="size-3.5" /> Setup confirmed
             </span>
-          ) : null}
+          ) : draft ? "Draft saved · pending confirmation" : "Confirm setup to apply changes"}
         </span>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <Button variant="outline" disabled={!isDirty || busy || Boolean(conflictMessage)} loading={save.isPending}
+            onClick={() => { void saveDraft().catch(() => {}); }}>
+            Save draft
+          </Button>
           <Button
             onClick={() => setConfirmOpen(true)}
             disabled={
               selectedPlans.length === 0 ||
-              confirm.isPending ||
-              termStatus.busy ||
-              !termStatus.valid
+              busy ||
+              Boolean(conflictMessage) ||
+              !validSetupTerms(term, answers.policy_terms ?? {})
               || (Boolean(answers.source_issues?.length) && !answers.source_reviewed)
             }
           >
             {confirmLabel}
           </Button>
         </div>
+        {!validSetupTerms(term, answers.policy_terms ?? {}) && (
+          <p className="w-full text-xs text-error">Review the policy term fields in Header &amp; Policy before confirming. You can still save a draft.</p>
+        )}
       </div>
 
       <AlertDialog
@@ -840,7 +884,7 @@ export function ProductSetupForm({
         confirmLabel={confirmLabel}
         confirmVariant="default"
         tone="info"
-        loading={confirm.isPending || termStatus.busy}
+        loading={busy}
         onConfirm={onConfirm}
         description={
           <span>
@@ -857,4 +901,4 @@ export function ProductSetupForm({
       />
     </div>
   );
-}
+});

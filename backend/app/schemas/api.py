@@ -400,7 +400,7 @@ class ProductTermUpdate(BaseModel):
     coverage_end: date | None = None
     gst_included: bool | None = None
     gst_rate: float | None = Field(default=None, ge=0, le=100)
-    free_cover_limit: float | None = Field(default=None, ge=0)
+    free_cover_limit: float | None = Field(default=None, ge=0, allow_inf_nan=False)
     nel_age_limit: int | None = Field(default=None, ge=1, le=120)
     underwriting_required: bool = False
     policy_number: str | None = Field(default=None, max_length=64)

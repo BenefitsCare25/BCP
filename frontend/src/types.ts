@@ -1311,7 +1311,21 @@ export interface MemberCounts {
   has_dependants: boolean;
 }
 
+/** Raw staged inputs; incomplete values can be saved without applying them. */
+export interface SetupPolicyTerms {
+  coverage_start?: string;
+  coverage_end?: string;
+  gst_included?: boolean;
+  gst_rate?: string;
+  free_cover_limit?: string;
+  nel_age_limit?: string;
+  underwriting_required?: boolean;
+  pre_hosp_days?: string;
+  post_hosp_days?: string;
+}
+
 export interface SetupAnswers {
+  policy_terms?: SetupPolicyTerms;
   // Mostly free-text slip fields, plus `entities` — a token list of the legal
   // entities this product covers, which IS the employee-matching gate (the
   // free-text `insured` beside it is slip wording only).

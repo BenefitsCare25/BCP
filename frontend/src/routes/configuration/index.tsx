@@ -42,6 +42,7 @@ import {
 import { defaultPolicyYear } from "@/lib/policy-year";
 import type { SetupSearch } from "@/lib/setupLink";
 import { useSession } from "@/stores/session";
+import { requestSetupContextChange, useSetupNavigation } from "@/stores/setupNavigation";
 import type { Category, InsuranceLine } from "@/types";
 import {
   INSURANCE_LINES,
@@ -115,9 +116,12 @@ export function ConfigurationPage() {
     name: string;
     sections: string[];
     discard: () => void;
+    save: () => Promise<void>;
   } | null>(null);
   const [linePromptOpen, setLinePromptOpen] = useState(false);
   const [pendingLine, setPendingLine] = useState<InsuranceLine | null>(null);
+  const [pendingContext, setPendingContext] = useState<(() => void) | null>(null);
+  const [savingBeforeLeave, setSavingBeforeLeave] = useState(false);
   // Switching the viewed year closes any open category editor — the panel edits
   // a category from the previously-viewed year and must not linger over another
   // year (or over a read-only past year, where the page is otherwise disabled).
@@ -185,16 +189,21 @@ export function ConfigurationPage() {
         name: string;
         sections: string[];
         discard: () => void;
+        save: () => Promise<void>;
       } | null,
     ) => {
       setBlockingEdit((prev) => {
         if (edit) {
+          if (prev?.line === editLine && prev.code === edit.code && prev.name === edit.name
+            && JSON.stringify(prev.sections) === JSON.stringify(edit.sections)
+            && prev.save === edit.save) return prev;
           return {
             line: editLine,
             code: edit.code,
             name: edit.name,
             sections: edit.sections,
             discard: edit.discard,
+            save: edit.save,
           };
         }
         return prev?.line === editLine ? null : prev;
@@ -202,6 +211,18 @@ export function ConfigurationPage() {
     },
     [],
   );
+
+  useEffect(() => {
+    if (!blockingEdit) return;
+    const guard = (action: () => void) => {
+      setPendingContext(() => action);
+      setLinePromptOpen(true);
+    };
+    useSetupNavigation.getState().setGuard(guard);
+    return () => {
+      if (useSetupNavigation.getState().guard === guard) useSetupNavigation.getState().setGuard(null);
+    };
+  }, [blockingEdit]);
 
   const switchLine = (next: InsuranceLine) => {
     if (next === tab) return;
@@ -215,11 +236,11 @@ export function ConfigurationPage() {
 
   const navigationBlocker = useBlocker({
     shouldBlockFn: ({ current, next }) =>
-      Boolean(blockingEdit) &&
+      Boolean(blockingEdit || savingBeforeLeave) &&
       (current.pathname !== next.pathname ||
         JSON.stringify(current.search) !== JSON.stringify(next.search)),
-    enableBeforeUnload: () => Boolean(blockingEdit),
-    disabled: !blockingEdit,
+    enableBeforeUnload: () => Boolean(blockingEdit || savingBeforeLeave),
+    disabled: !blockingEdit && !savingBeforeLeave,
     withResolver: true,
   });
 
@@ -234,6 +255,7 @@ export function ConfigurationPage() {
       navigationBlocker.reset();
     }
     setPendingLine(null);
+    setPendingContext(null);
     setLinePromptOpen(false);
   }, [navigationBlocker]);
 
@@ -243,11 +265,28 @@ export function ConfigurationPage() {
       navigationBlocker.proceed();
     } else if (pendingLine) {
       setTab(pendingLine);
+    } else if (pendingContext) {
+      pendingContext();
     }
     setBlockingEdit(null);
     setPendingLine(null);
+    setPendingContext(null);
     setLinePromptOpen(false);
-  }, [blockingEdit, navigationBlocker, pendingLine, setTab]);
+  }, [blockingEdit, navigationBlocker, pendingLine, pendingContext, setTab]);
+
+  const saveAndLeave = async () => {
+    const edit = blockingEdit;
+    if (!edit) return;
+    setSavingBeforeLeave(true);
+    try {
+      await edit.save();
+      discardAndLeave();
+    } catch {
+      // Saving failed: stay in the editor with its inputs and prompt intact.
+    } finally {
+      setSavingBeforeLeave(false);
+    }
+  };
 
   const draftCodes = useMemo(
     () => new Set(setups.map((s) => s.product_code)),
@@ -298,7 +337,7 @@ export function ConfigurationPage() {
         <BenefitYearPanel
           years={policyYears}
           viewingId={policyYearId}
-          onViewYear={setPolicyYear}
+          onViewYear={(id) => requestSetupContextChange(() => setPolicyYear(id))}
           readOnly={readOnly}
         />
       </div>
@@ -356,11 +395,13 @@ export function ConfigurationPage() {
               <TabsContent key={line} value={line}>
                 {line === "flex" ? (
                   <FlexPanel
+                    key={`${policyYearId}:${line}`}
                     policyYearId={policyYearId}
                     readOnly={readOnly}
                   />
                 ) : (
                   <LineTab
+                    key={`${policyYearId}:${line}`}
                     policyYearId={policyYearId}
                     line={line}
                     groups={groupsByLine[line]}
@@ -383,7 +424,7 @@ export function ConfigurationPage() {
         <BenefitYearPanel
           years={policyYears}
           viewingId={policyYearId}
-          onViewYear={setPolicyYear}
+          onViewYear={(id) => requestSetupContextChange(() => setPolicyYear(id))}
           readOnly={readOnly}
         />
       )}
@@ -436,13 +477,14 @@ export function ConfigurationPage() {
       <AlertDialog
         open={linePromptOpen}
         onOpenChange={(open) => {
+          if (savingBeforeLeave) return;
           if (open) {
             setLinePromptOpen(true);
             return;
           }
           closeSavePrompt();
         }}
-        title="Discard unsaved setup changes?"
+        title="Save setup changes before leaving?"
         description={
           <div className="space-y-2">
             <p>
@@ -454,14 +496,18 @@ export function ConfigurationPage() {
                 <li key={section}>{section}</li>
               ))}
             </ul>
-            <p>Discarding restores the last saved setup and lets you leave.</p>
+            <p>Save a draft to keep your progress. Confirmation is still required to apply the setup changes.</p>
           </div>
         }
-        confirmLabel="Discard changes & leave"
+        confirmLabel="Save draft & leave"
         cancelLabel="Continue editing"
-        confirmVariant="destructive"
-        tone="danger"
-        onConfirm={discardAndLeave}
+        confirmVariant="default"
+        tone="info"
+        loading={savingBeforeLeave}
+        onConfirm={saveAndLeave}
+        secondaryLabel="Discard changes"
+        secondaryVariant="destructive"
+        onSecondary={discardAndLeave}
       />
     </div>
   );

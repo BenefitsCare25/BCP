@@ -13,6 +13,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useProductSetups, useRemoveProduct, useSetupProducts } from "@/api/hooks";
 import { useRegistry } from "@/api/registry";
 import { ProductConfigurator } from "./ProductConfigurator";
+import type { ProductSetupFormHandle } from "./ProductSetupForm";
 import { ProductSetupStatus } from "./ProductSetupSummary";
 import { AddProductDialog } from "./AddProductDialog";
 import { LINE_LABELS, isProductAdded, lineForCode } from "@/lib/insuranceLines";
@@ -38,6 +39,7 @@ interface Props {
       name: string;
       sections: string[];
       discard: () => void;
+      save: () => Promise<void>;
     } | null,
   ) => void;
   readOnly?: boolean;
@@ -71,6 +73,12 @@ export function LineTab({
   const [dirtyByCode, setDirtyByCode] = useState<Record<string, string[]>>({});
   const [unsavedPromptOpen, setUnsavedPromptOpen] = useState(false);
   const [pendingAction, setPendingAction] = useState<PendingProductAction>(null);
+  const setupRef = useRef<ProductSetupFormHandle>(null);
+  const [savingBeforeLeave, setSavingBeforeLeave] = useState(false);
+  const saveCurrentDraft = useCallback(async () => {
+    if (!setupRef.current) throw new Error("The setup editor is unavailable.");
+    await setupRef.current.saveDraft();
+  }, []);
 
   const { data: allSetupProducts = [] } = useSetupProducts(policyYearId);
   const { data: setups = [] } = useProductSetups(policyYearId);
@@ -131,6 +139,7 @@ export function LineTab({
             name: editingProduct.display_name,
             sections: dirtySections,
             discard: () => closeEdit(editingProduct.code),
+            save: saveCurrentDraft,
           }
         : null,
     );
@@ -143,6 +152,7 @@ export function LineTab({
     line,
     closeEdit,
     onBlockingEditChange,
+    saveCurrentDraft,
   ]);
 
   // Keep the active sub-tab valid as the product set changes. Depends on
@@ -212,6 +222,18 @@ export function LineTab({
     if (pendingAction?.kind === "switch") setActiveCode(pendingAction.code);
     setPendingAction(null);
     setUnsavedPromptOpen(false);
+  };
+
+  const saveAndContinue = async () => {
+    setSavingBeforeLeave(true);
+    try {
+      await saveCurrentDraft();
+      discardAndContinue();
+    } catch {
+      // The editor reports the error and retains all pending input.
+    } finally {
+      setSavingBeforeLeave(false);
+    }
   };
 
   const doRemove = async (p: SetupProductSummary) => {
@@ -314,11 +336,13 @@ export function LineTab({
                         focusProduct === p.code.toUpperCase() ? focusSection : undefined
                       }
                       onDone={() => closeEdit(p.code)}
+                      setupRef={isEditing ? setupRef : undefined}
                       onDirtyChange={(dirty, sections) =>
-                        setDirtyByCode((prev) => ({
-                          ...prev,
-                          [p.code]: dirty ? sections : [],
-                        }))
+                        setDirtyByCode((prev) => {
+                          const next = dirty ? sections : [];
+                          if (JSON.stringify(prev[p.code] ?? []) === JSON.stringify(next)) return prev;
+                          return { ...prev, [p.code]: next };
+                        })
                       }
                     />
                   </CardContent>
@@ -377,10 +401,11 @@ export function LineTab({
       <AlertDialog
         open={unsavedPromptOpen}
         onOpenChange={(open) => {
+          if (savingBeforeLeave) return;
           setUnsavedPromptOpen(open);
           if (!open) setPendingAction(null);
         }}
-        title="Discard unsaved setup changes?"
+        title="Save setup changes before leaving?"
         description={
           <div className="space-y-2">
             <strong>{editingProduct?.display_name ?? "This product"}</strong>{" "}
@@ -391,16 +416,20 @@ export function LineTab({
               ))}
             </ul>
             <p>
-              Discarding restores the last saved setup and lets you leave this
-              product.
+              Save a draft to keep your progress. Confirmation is still required
+              to apply the setup changes.
             </p>
           </div>
         }
-        confirmLabel="Discard changes & leave"
+        confirmLabel="Save draft & leave"
         cancelLabel="Continue editing"
-        confirmVariant="destructive"
-        tone="danger"
-        onConfirm={discardAndContinue}
+        confirmVariant="default"
+        tone="info"
+        loading={savingBeforeLeave}
+        onConfirm={saveAndContinue}
+        secondaryLabel="Discard changes"
+        secondaryVariant="destructive"
+        onSecondary={discardAndContinue}
       />
     </div>
   );

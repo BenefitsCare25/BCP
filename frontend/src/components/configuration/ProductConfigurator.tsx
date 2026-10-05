@@ -1,11 +1,11 @@
-import { useMemo } from "react";
+import { useMemo, type Ref } from "react";
 import { Loader2 } from "lucide-react";
 import {
   useProductSetups,
   useProductTerms,
   useSetupTemplate,
 } from "@/api/hooks";
-import { ProductSetupForm } from "./ProductSetupForm";
+import { ProductSetupForm, type ProductSetupFormHandle } from "./ProductSetupForm";
 import { ProductSetupSummary } from "./ProductSetupSummary";
 import type { Category, CategoryGroup } from "@/types";
 
@@ -21,6 +21,7 @@ interface Props {
   onDirtyChange?: (dirty: boolean, sections: string[]) => void;
   /** Setup step to open first (deep link from Member Coverage). */
   initialSection?: string;
+  setupRef?: Ref<ProductSetupFormHandle>;
 }
 
 export function ProductConfigurator({
@@ -32,6 +33,7 @@ export function ProductConfigurator({
   onDone,
   onDirtyChange,
   initialSection,
+  setupRef,
 }: Props) {
   const { data: template, isLoading: loadingTpl } = useSetupTemplate(
     policyYearId,
@@ -83,6 +85,7 @@ export function ProductConfigurator({
         // remounted the form the moment the first save created a draft, which
         // discarded edits typed while that save was in flight.
         key={code}
+        ref={setupRef}
         policyYearId={policyYearId}
         template={template}
         draft={draft}

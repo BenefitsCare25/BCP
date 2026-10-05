@@ -12,6 +12,7 @@ import {
 import { useMe, usePolicyYears } from "@/api/hooks";
 import { defaultPolicyYear, formatPolicyRange } from "@/lib/policy-year";
 import { useSession } from "@/stores/session";
+import { requestSetupContextChange } from "@/stores/setupNavigation";
 import { isAISharedTab, isCompanyPath, isPlatformPath } from "./nav";
 
 /**
@@ -62,6 +63,7 @@ function CompanyContext({ companyOnly = false }: { companyOnly?: boolean }) {
 
   const onChange = (id: string) => {
     if (id === selected) return;
+    requestSetupContextChange(() => {
     setActiveClient(id);
     // Cached data is scoped to the previous company — EVICT it (don't
     // invalidate). invalidateQueries() would synchronously refetch the
@@ -71,6 +73,7 @@ function CompanyContext({ companyOnly = false }: { companyOnly?: boolean }) {
     // removeQueries drops the entries with no in-place refetch; the new render
     // re-keys every query to the new client and fetches fresh.
     qc.removeQueries();
+    });
   };
 
   const activeName =
@@ -132,7 +135,9 @@ function CompanyContext({ companyOnly = false }: { companyOnly?: boolean }) {
           {years.length > 0 ? (
             <Select
               value={selectedYearId ?? undefined}
-              onValueChange={setPolicyYear}
+              onValueChange={(id) => {
+                if (id !== selectedYearId) requestSetupContextChange(() => setPolicyYear(id));
+              }}
             >
               <SelectTrigger
                 aria-label="Select benefit year"

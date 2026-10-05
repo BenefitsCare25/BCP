@@ -88,6 +88,7 @@ from app.services.product_templates import (
     get_template,
     list_templates,
 )
+from app.services.product_term_updates import apply_product_term_update, parse_setup_policy_terms
 from app.services.sob_columns import resolve_plan_schedule
 
 logger = logging.getLogger(__name__)
@@ -666,6 +667,7 @@ def save_setup(
             f"No template or slip data for product {product_code!r}",
         )
     setup = _upsert_draft(db, policy_year_id, tpl.code, body, lock=True)
+    setup.status = ProductSetupStatus.draft
     write_audit(
         db, user, action="save_setup_draft", entity_type="product_setup",
         entity_id=setup.id, after={"product_code": tpl.code, "policy_year_id": policy_year_id},
@@ -903,6 +905,8 @@ def confirm_setup(
     # observing the first-materialization state.
     setup = _upsert_draft(db, policy_year_id, tpl.code, body, lock=True)
 
+    staged_terms = parse_setup_policy_terms(setup.answers.get("policy_terms", {}))
+
     selected = _selected_plans(setup.answers)
     if setup.answers.get("source_issues") and setup.answers.get("source_reviewed") is not True:
         raise HTTPException(
@@ -978,6 +982,8 @@ def confirm_setup(
         if setup.origin == ProductSetupOrigin.placement_slip:
             _adopt_slip_artifacts(db, user, product, policy_year_id)
         _sync_term_policy_number(db, product, policy_year_id, setup.answers)
+        if staged_terms.model_fields_set:
+            apply_product_term_update(db, py, product, staged_terms, user)
         created, updated, removed = _materialize_plans(
             db, user, product, policy_year_id, setup.answers, selected,
             cover_description, schedules,
@@ -1009,6 +1015,8 @@ def confirm_setup(
         setup.confirmed_at = datetime.now(UTC)
         setup.confirmed_by = user.user_id
         setup.materialized_product_id = product.id
+        # Applied patches must not be replayed over later operational term edits.
+        setup.answers = {**setup.answers, "policy_terms": {}}
         write_audit(
             db, user, action="confirm_setup", entity_type="product_setup",
             entity_id=setup.id,
@@ -1220,6 +1228,7 @@ def _upsert_draft(
             template_version=body.template_version,
             answers=dict(body.answers),
             status=ProductSetupStatus.draft,
+            updated_at=datetime.now(UTC),
         )
         db.add(setup)
         db.flush()
@@ -1251,6 +1260,9 @@ def _upsert_draft(
         }
         setup.answers = {**(setup.answers or {}), **body.answers, **source}
         setup.template_version = body.template_version
+        # SQLite CURRENT_TIMESTAMP has second precision; consecutive saves must
+        # still receive distinct versions for optimistic concurrency checks.
+        setup.updated_at = datetime.now(UTC)
     return setup
 
 
@@ -1270,7 +1282,7 @@ def seed_draft_from_slip(
     """
     setup = _find_setup(db, policy_year_id, product_code)
     if setup is not None:
-        if setup.status != ProductSetupStatus.draft:
+        if setup.status != ProductSetupStatus.draft or setup.materialized_product_id is not None:
             return False
         setup.answers = answers
         setup.template_version = template_version

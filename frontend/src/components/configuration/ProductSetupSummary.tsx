@@ -58,7 +58,7 @@ export function ProductSetupStatus({
   return (
     <div className="flex flex-wrap items-center gap-2">
       <Badge variant={draft?.status === "confirmed" ? "good" : "outline"}>
-        {draft?.status === "confirmed" ? "Confirmed" : "Draft"}
+        {draft?.status === "confirmed" ? "Confirmed" : draft?.materialized_product_id ? "Draft changes · pending confirmation" : "Draft"}
       </Badge>
       <span className="text-sm text-muted-foreground">
         {plans.length} plan{plans.length === 1 ? "" : "s"} · {categoryCount}{" "}

@@ -1682,7 +1682,9 @@ export function useSaveSetup(policyYearId: string) {
       ),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["product-setups", policyYearId] });
+      qc.invalidateQueries({ queryKey: ["audit-log"] });
     },
+    meta: { localErrorHandling: true },
   });
 }
 
@@ -1715,6 +1717,9 @@ export function useConfirmSetup(policyYearId: string) {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["product-setups", policyYearId] });
       qc.invalidateQueries({ queryKey: ["plans"] });
+      qc.invalidateQueries({ queryKey: ["product-terms", policyYearId] });
+      qc.invalidateQueries({ queryKey: ["policy-years"] });
+      qc.invalidateQueries({ queryKey: ["underwriting"] });
       // Confirm materializes Category rows and re-runs matching, so refresh the
       // category list / coverage, employee matches, and match results too.
       qc.invalidateQueries({ queryKey: ["categories"] });
