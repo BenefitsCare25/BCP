@@ -596,6 +596,7 @@ export interface InsuredClaimOption {
   submission_deadline?: string | null;
   product_name: string | null;
   plan_code: string | null;
+  plan_display_name?: string | null;
   annual_policy_limit: string | null;
   covers_dependants: boolean;
   covered_dependant_ids: string[];

@@ -124,6 +124,28 @@ test("care routes show the right facts and hide GTL", async ({ page }, testInfo)
   expect(overflowing).toBe(false);
 });
 
+test("coverage uses the report label and falls back to the plan name", async ({ page }, testInfo) => {
+  await mockMember(page);
+  let label: string | null = "4 Bed Restr Hosp / Inpatient Expenses - S$10,000";
+  await page.route(/\/api\/v1\/portal\/benefit-statement$/, route => route.fulfill({ json: {
+    employee: { id: "employee-1", staff_id: "EMP-001", employee_name: "Alex Tan" },
+    policy_year_id: "year-1", is_matched: true, attributes: [], dependants: [], flex: null,
+    coverage: [{ ...line("GHS", "Group Hospital & Surgical", [item("Daily Room & Board", "250")]),
+      plan_code: "1", plan_display_name: label }],
+  } }));
+  await page.goto("/portal/demo/coverage?tab=benefits&p=hospital");
+  await expect(page.getByText(label, { exact: true })).toBeVisible();
+  await expect(page.getByText("Plan 1", { exact: true })).toHaveCount(0);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth)).toBe(false);
+  await page.screenshot({ path: testInfo.outputPath("report-label.png"), fullPage: true });
+  label = "Plan 1";
+  await page.reload();
+  await expect(page.getByText("Plan 1", { exact: true })).toBeVisible();
+  label = null;
+  await page.reload();
+  await expect(page.getByText("Plan 1", { exact: true })).toBeVisible();
+});
+
 test("coverage card rows align when titles and descriptions wrap", async ({ page }, testInfo) => {
   await mockMember(page, true);
   await page.goto("/portal/demo/coverage?tab=benefits");

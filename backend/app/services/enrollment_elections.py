@@ -23,6 +23,7 @@ from app.models import (
     EnrollmentWindow,
     LeaveElection,
     LeavePolicy,
+    Plan,
     PolicyYear,
 )
 from app.models.enrollment import ElectionAction, EnrollmentStatus
@@ -112,6 +113,7 @@ from app.services.leave_pricing_resolver import (
 )
 from app.services.member_premium import member_premium
 from app.services.plan_hydration import apply_gst_to_financials
+from app.services.plan_labels import member_plan_label
 
 
 def _require_window(db: Session, enrollment: Enrollment) -> EnrollmentWindow:
@@ -283,6 +285,37 @@ def _member_safe_options(options: EnrollmentOptionsOut) -> EnrollmentOptionsOut:
     )
 
 
+def member_labelled_options(
+    db: Session, options: EnrollmentOptionsOut, policy_year_id: str,
+) -> EnrollmentOptionsOut:
+    """Use configured presentation names without changing any election keys.
+
+    Multiple option tiers can share one plan code. Keep their distinguishing
+    option label beside the plan name so the choices remain distinguishable.
+    """
+    product_ids = {product.product_id for product in options.products}
+    labels = {
+        (plan.product_id, plan.code): member_plan_label(plan)
+        for plan in db.scalars(select(Plan).where(
+            Plan.policy_year_id == policy_year_id, Plan.product_id.in_(product_ids),
+        ))
+    } if product_ids else {}
+
+    def label_for(product: ProductTierSetOut, tier: CohortTierOut) -> str:
+        label = labels.get((product.product_id, tier.plan_code or ""))
+        if not label:
+            return tier.label
+        same_plan = sum(other.plan_code == tier.plan_code for other in product.tiers)
+        return f"{label} · {tier.label}" if same_plan > 1 and tier.label != label else label
+
+    return options.model_copy(update={"products": [
+        product.model_copy(update={"tiers": [
+            tier.model_copy(update={"label": label_for(product, tier)})
+            for tier in product.tiers
+        ]}) for product in options.products
+    ]})
+
+
 def build_portal_enrollment(
     db: Session,
     employee: Employee | None,
@@ -306,9 +339,11 @@ def build_portal_enrollment(
         window=EnrollmentWindowOut.model_validate(window),
         enrollment=enrollment_detail(db, enr) if enr is not None else None,
         options=_member_safe_options(
-            build_enrollment_options(
-                db, employee, window, employee.policy_year_id,
-                enrollment_id=enr.id if enr is not None else None,
+            member_labelled_options(
+                db, build_enrollment_options(
+                    db, employee, window, employee.policy_year_id,
+                    enrollment_id=enr.id if enr is not None else None,
+                ), employee.policy_year_id,
             )
         ),
     )

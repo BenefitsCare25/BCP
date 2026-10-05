@@ -703,6 +703,7 @@ class MatchedPlan(BaseModel):
     product_name: str | None = None
     category_id: str | None = None
     plan_code: str | None = None
+    plan_display_name: str | None = None
     category_display: str | None = None
     method: str | None = None
     confidence: float | None = None
@@ -847,6 +848,7 @@ class CoverageLine(BaseModel):
     match_confidence: float | None = None
     rule_human_readable: str | None = None
     plan_code: str | None = None
+    plan_display_name: str | None = None
     cover_description: str | None = None
     annual_policy_limit: str | None = None
     benefit_schedule: dict[str, Any] | None = None

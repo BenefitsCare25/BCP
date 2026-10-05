@@ -499,6 +499,7 @@ export interface MatchedPlan {
   product_name: string | null;
   category_id: string | null;
   plan_code: string | null;
+  plan_display_name?: string | null;
   category_display: string | null;
   method: string | null;
   confidence: number | null;
@@ -631,6 +632,7 @@ export interface CoverageLine {
   match_confidence: number | null;
   rule_human_readable: string | null;
   plan_code: string | null;
+  plan_display_name?: string | null;
   cover_description: string | null;
   annual_policy_limit: string | null;
   benefit_schedule: BenefitSchedule | null;

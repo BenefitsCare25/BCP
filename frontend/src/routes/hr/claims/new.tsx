@@ -52,7 +52,7 @@ function choicesFrom(options: CoverageOptions): ClaimChoice[] {
   const insured = options.insured.flatMap((product) =>
     product.claim_types.map((claimType) => ({
       id: `insured:${product.product_code}:${claimType.scope_key}`,
-      label: `${claimType.label} · ${product.product_name ?? product.product_code}`,
+      label: `${claimType.label} · ${product.product_name ?? product.product_code}${product.plan_display_name ? ` · ${product.plan_display_name}` : ""}`,
       kind: "insured" as const,
       productCode: product.product_code,
       flexCategory: null,
@@ -141,6 +141,9 @@ export function HrNewClaimPage() {
     [options.data],
   );
   const choice = choices.find((item) => item.id === choiceId) ?? null;
+  const planLabel = choice?.kind === "insured"
+    ? options.data?.insured.find(product => product.product_code === choice.productCode)?.plan_display_name
+    : null;
   const policyCurrency = options.data?.policy_currency ?? "SGD";
   const effectiveCurrency =
     choice?.kind === "flex"
@@ -388,6 +391,7 @@ export function HrNewClaimPage() {
                   ))}
                 </NativeSelect>
               </Field>
+              {planLabel && <p className="break-words text-sm text-muted-foreground">Plan: {planLabel}</p>}
 
               {choice && (
                 <>

@@ -29,6 +29,7 @@ from app.services.roster_parser import (
     DEPENDANT_COLUMN_MAP,
     EMPLOYEE_COLUMN_MAP,
     _build_column_map,
+    _member_id_columns,
     _read_sheet,
 )
 
@@ -360,6 +361,7 @@ def employee_roster_fields(db: Session, employee: Employee) -> list[EmployeeRost
         ).order_by(RosterMappingProfile.updated_at.desc(), RosterMappingProfile.id)
     )
     for profile in profiles:
+        member_columns = _member_id_columns(list(profile.source_headers or []))
         for index, attribute_id in (profile.column_mapping or {}).items():
             if isinstance(attribute_id, str) and attribute_id:
                 fields.setdefault(attribute_id, None)
@@ -367,9 +369,9 @@ def employee_roster_fields(db: Session, employee: Employee) -> list[EmployeeRost
                 attribute_id == "insurer_member_ids" and str(index).isdigit()
                 and int(index) < len(profile.source_headers or [])
             ):
-                match = _MEMBER_ID_RE.match(profile.source_headers[int(index)].strip())
-                if match:
-                    insurer_names.setdefault(match.group("insurer").strip(), None)
+                insurer = member_columns.get(int(index))
+                if insurer:
+                    insurer_names.setdefault(insurer, None)
     # Identity has its own display/control in the drawer, never a second input.
     fields.pop("staff_id", None)
     fields.pop("employee_name", None)

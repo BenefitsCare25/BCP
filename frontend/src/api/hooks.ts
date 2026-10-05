@@ -401,6 +401,9 @@ export function useUpdatePlan() {
       // SOB is hydrated onto each matched employee's plan — refresh live.
       qc.invalidateQueries({ queryKey: ["employees"] });
       qc.invalidateQueries({ queryKey: ["employee"] });
+      qc.invalidateQueries({ queryKey: ["benefit-statement"] });
+      qc.invalidateQueries({ queryKey: ["portal-preview"] });
+      qc.invalidateQueries({ queryKey: ["enrollment-options"] });
       qc.invalidateQueries({ queryKey: ["audit-log"] });
     },
   });

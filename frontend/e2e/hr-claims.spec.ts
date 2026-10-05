@@ -264,6 +264,34 @@ test("HR submits and tracks one employee claim with evidence", async ({ page }, 
   expect(runtimeErrors).toEqual([]);
 });
 
+test("HR claim options show the configured plan label", async ({ page }, testInfo) => {
+  const planLabel = "4 Bed Restr Hosp / Inpatient Expenses - S$10,000";
+  await page.route("**/api/v1/hr/**", async route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith("/auth/refresh")) return route.fallback();
+    if (path.endsWith("/auth/me")) return fulfilJson(route, HR_SESSION.state.me);
+    if (path === "/api/v1/hr/claims/employees") return fulfilJson(route, { items: [employee], total: 1 });
+    if (path.endsWith(`/employees/${employee.id}/options`)) return fulfilJson(route, {
+      policy_year_start: "2026-01-01", policy_year_end: "2026-12-31",
+      claimable_from: "2026-01-01", claimable_to: "2026-12-31", flex: null,
+      insured: [{ product_code: "GHS", product_name: "Hospital & surgical", plan_code: "1",
+        plan_display_name: planLabel, covered_dependant_ids: [], requires_referral: false,
+        diagnosis_required: false, claim_types: [{ label: "Hospital expenses", scope_key: "hospital",
+          sub_type: null, requires_doctor_name: false, supports_stay_dates: false }] }],
+    });
+    return fulfilJson(route, { items: [], total: 0 });
+  });
+  await page.goto("/hr/claims/new");
+  await page.getByRole("button", { name: /Avery Tan/ }).click();
+  const choice = page.getByLabel("Claim type");
+  await choice.selectOption({ label: `Hospital expenses · Hospital & surgical · ${planLabel}` });
+  await expect(choice).toHaveValue("insured:GHS:hospital");
+  await expect(page.getByText(`Plan: ${planLabel}`, { exact: true })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth)).toBe(false);
+  await assertAccessible(page);
+  await page.screenshot({ path: testInfo.outputPath("hr-plan-label.png"), fullPage: true });
+});
+
 test("an unauthenticated HR visitor is returned to sign in", async ({ page }) => {
   await page.addInitScript(() => localStorage.removeItem("inspro-hr-session"));
   await page.route("**/api/v1/hr/auth/refresh", (route) =>

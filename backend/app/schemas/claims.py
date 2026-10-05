@@ -1094,6 +1094,7 @@ class InsuredClaimOption(BaseModel):
     submission_deadline: str | None = None
     product_name: str | None = None
     plan_code: str | None = None
+    plan_display_name: str | None = None
     annual_policy_limit: str | None = None
     covers_dependants: bool = False
     covered_dependant_ids: list[str] = Field(default_factory=list)

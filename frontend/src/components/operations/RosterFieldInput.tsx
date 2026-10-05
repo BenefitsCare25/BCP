@@ -60,7 +60,7 @@ export function RosterFieldInput({ field, original, value, disabled, onChange }:
         <select {...shared} value={value} onChange={(event) => onChange(event.target.value)}
           className="focus-ring mt-1.5 h-9 w-full rounded-md border border-input bg-card px-3 text-base text-foreground sm:text-sm">
           <option value="">Not provided</option>
-          {value !== "" && !options.includes(value) && <option value={value}>{value} (as uploaded)</option>}
+          {uploaded !== "" && !options.includes(uploaded) && <option value={uploaded}>{uploaded} (as uploaded)</option>}
           {options.map((option) => <option key={option} value={option}>
             {type === "boolean" ? (option === "true" ? "Yes" : "No") : option}
           </option>)}
@@ -68,7 +68,6 @@ export function RosterFieldInput({ field, original, value, disabled, onChange }:
       ) : (
         <Input {...shared} type={nativeType} value={displayed} placeholder="Not provided"
           step={numeric ? (type === "integer" ? 1 : "any") : undefined}
-          inputMode={nativeType === "text" && /(?:bank|branch|account).*?(?:code|no)|member_?id/.test(field.attribute_id) ? "numeric" : undefined}
           // Native input events also report incomplete numbers whose DOM value
           // stays empty, so React's value-based change event may not fire.
           onInput={(event) => onChange(event.currentTarget.value, event.currentTarget.validity.badInput)}

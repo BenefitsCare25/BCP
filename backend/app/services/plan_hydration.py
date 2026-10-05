@@ -20,6 +20,7 @@ from app.models.category import Category
 from app.models.product import Product
 from app.schemas.api import MatchedPlan, PlanFinancials, VoluntaryRateBand
 from app.services.coverage_resolver import load_overrides, resolve_plan
+from app.services.plan_labels import member_plan_label
 from app.services.product_terms import product_gst_multipliers
 from app.services.roster_attributes import age_from_attrs, band_for_age, first_value
 
@@ -191,6 +192,7 @@ def hydrate_plans(
             cover_description = None
             annual_policy_limit = None
             plan_status = None
+            plan_display_name = None
             if prod_id:
                 if plan_code:
                     # Names a specific plan: resolve it exactly. If it's missing
@@ -201,6 +203,7 @@ def hydrate_plans(
                     # Names no plan: a single-plan product is its de-facto schedule.
                     plan_rec = sole_plan_by_product.get(prod_id)
                 if plan_rec:
+                    plan_display_name = member_plan_label(plan_rec)
                     benefit_schedule = plan_rec.benefit_schedule
                     cover_description = plan_rec.cover_description
                     annual_policy_limit = plan_rec.annual_policy_limit
@@ -211,6 +214,7 @@ def hydrate_plans(
                 product_name=pname,
                 category_id=cid,
                 plan_code=plan_code,
+                plan_display_name=plan_display_name,
                 category_display=cat_disp,
                 method=m.get("method"),
                 confidence=m.get("confidence"),

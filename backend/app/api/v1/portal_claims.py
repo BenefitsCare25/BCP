@@ -404,6 +404,7 @@ def build_coverage_options(
                 submission_deadline=deadline.isoformat() if deadline else None,
                 product_name=line.product_name,
                 plan_code=line.plan_code,
+                plan_display_name=line.plan_display_name,
                 annual_policy_limit=line.annual_policy_limit,
                 covers_dependants=line.covers_dependants,
                 covered_dependant_ids=[d.id for d in line.covered_dependants],

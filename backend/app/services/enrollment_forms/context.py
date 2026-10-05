@@ -41,7 +41,11 @@ from app.schemas.enrollment_forms import (
     MemberFormContextOut,
     ParticularsOut,
 )
-from app.services.enrollment_elections import build_enrollment_options, enrollment_detail
+from app.services.enrollment_elections import (
+    build_enrollment_options,
+    enrollment_detail,
+    member_labelled_options,
+)
 from app.services.enrollment_forms.config import resolve_settings, scheme_age_limits
 from app.services.enrollment_forms.pricing import plan_facts, product_contributions
 from app.services.flex_membership import classify_relationship
@@ -299,8 +303,10 @@ def build_form_parts(
     year = db.get(PolicyYear, window.policy_year_id)
     client = db.get(Client, window.client_id)
     assert year is not None and client is not None
-    options = build_enrollment_options(
-        db, employee, window, window.policy_year_id, enrollment_id=enrollment.id
+    options = member_labelled_options(
+        db, build_enrollment_options(
+            db, employee, window, window.policy_year_id, enrollment_id=enrollment.id,
+        ), window.policy_year_id,
     )
     products = scoped_products(options, window)
     compulsory_codes = set(enrollment_detail(db, enrollment).compulsory_product_codes)

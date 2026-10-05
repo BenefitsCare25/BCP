@@ -414,6 +414,7 @@ def build_benefit_statement(db: Session, employee: Employee) -> BenefitStatement
             match_confidence=mp.confidence,
             rule_human_readable=facts.rule,
             plan_code=mp.plan_code,
+            plan_display_name=mp.plan_display_name,
             cover_description=mp.cover_description,
             annual_policy_limit=mp.annual_policy_limit,
             benefit_schedule=mp.benefit_schedule,
