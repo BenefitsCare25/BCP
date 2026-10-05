@@ -116,6 +116,22 @@ test("an incomplete policy assignment saves, reloads, and remains editable", asy
   expect(c.errors).toEqual([]);
 });
 
+test("a legacy draft without header answers opens its summary and editor", async ({ page, request }, info) => {
+  const c = await setup(page, request, info, 5);
+  const current = await json(await request.get(c.path, { headers: c.headers }));
+  await json(await request.put(c.path, { headers: c.headers, data: {
+    template_version: current.template_version, expected_updated_at: current.updated_at, answers: {},
+  } }));
+  await page.goto(`${BASE}?product=${c.product.code}`);
+  await page.reload();
+  await expect(page.getByRole("button", { name: "Edit", exact: true })).toBeVisible();
+  await expect(page.getByText("Something went wrong", { exact: true })).toHaveCount(0);
+  await page.getByRole("button", { name: "Edit", exact: true }).click();
+  await section(page, "Header & Policy");
+  await expect(page.getByRole("region", { name: `${c.product.code} policy-number assignments` })).toBeVisible();
+  expect(c.errors).toEqual([]);
+});
+
 test("draft persists every section, reloads, and applies terms only on confirmation", async ({ page, request }, info) => {
   const c = await setup(page, request, info, 0);
   const end = page.getByLabel(`${c.product.code} coverage end`);

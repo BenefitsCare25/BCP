@@ -386,7 +386,7 @@ export function ProductSetupSummary({ policyYearId, template, draft, group, term
     return true;
   });
 
-  const sourcePolicyNumbers = String(answers?.header.policy_no ?? "");
+  const sourcePolicyNumbers = String(answers?.header?.policy_no ?? "");
   const policyMappings = setupPolicyMappings(sourcePolicyNumbers, answers?.policy_number_mappings, term);
   const policyDetails = policyMappings.map((item) => ({
     label: `Policy number · ${item.entity ?? "All covered entities"}`,
