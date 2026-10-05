@@ -78,7 +78,7 @@ export function PortalSignInPage() {
       return;
     }
     void navigate({
-      to: "/portal/$company/coverage",
+      to: "/portal/$company",
       params: { company: routeCompany || company.trim().toLowerCase() },
     });
   };

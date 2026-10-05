@@ -75,10 +75,7 @@ export function HrDashboardPage() {
         </div>
       </SkyStage>
 
-      <section className="hr-overview-modules mx-auto flex w-full max-w-6xl flex-col gap-5 px-4 pb-8 pt-5" aria-labelledby="hr-workspace-title">
-        <div className="clay-section-head">
-          <h2 id="hr-workspace-title">Your workspace</h2>
-        </div>
+      <section className="hr-overview-modules mx-auto flex w-full max-w-6xl flex-col gap-5 px-4 pb-8 pt-5" aria-label="HR services">
         {mfaSuggested && (
           <Card className="rounded-3xl border-warn/40 bg-[#fff8e8]">
             <CardHeader className="flex-row items-start gap-3 space-y-0">

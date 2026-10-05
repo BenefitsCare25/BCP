@@ -174,6 +174,10 @@ Current fixtures: backend/scripts/seed_portal_ui_review.py adds 12 sample claims
 
 ## Page review register
 
+5 October 2026 login follow-up: ordinary employee sign-in, MFA completion, password setup/reset and restored-session sign-in default to Home. Claim notification destinations and mandatory MFA setup retain priority. HR defaults to Overview for the same flows. Remove the visible "Your workspace" heading from HR Overview; retain the welcome and module cards, with an accessible HR services region label.
+
+Local verification: 42 desktop/phone login and security checks plus both claim-link checks passed. Production TypeScript/Vite build and scoped layout scan passed. Desktop/phone HR screenshots confirm the welcome and two-column/stacked module layouts without the removed heading or horizontal overflow; final screenshot checks passed after completing the welcome animation. Fixtures use intercepted browser responses and disposable automated-test databases, with no working-database or credential changes. Evidence: `frontend/e2e/portal-landing.spec.ts` and its screenshots under `frontend/test-results/`.
+
 Each completed row must cover font/cards, density, headings/copy, colour, hover/focus, responsive layout and available interactions/data. Record genuine gaps rather than marking untested functions complete.
 
 | Page/flow | Status | Evidence / remaining work |

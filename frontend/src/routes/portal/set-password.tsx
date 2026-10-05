@@ -57,7 +57,7 @@ export function PortalSetPasswordPage() {
       activateNotificationClaimContext();
       void navigate({ to: "/portal/$company/claims/$claimId", params: { company, claimId } });
     } else {
-      void navigate({ to: "/portal/$company/coverage", params: { company } });
+      void navigate({ to: "/portal/$company", params: { company } });
     }
   };
 

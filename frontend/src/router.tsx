@@ -244,7 +244,7 @@ const portalSignInRoute = createRoute({
         throw redirect({ to: "/portal/$company/claims/$claimId", params: { company: params.company, claimId } });
       }
       throw redirect({
-        to: "/portal/$company/coverage",
+        to: "/portal/$company",
         params: { company: params.company },
       });
     }
