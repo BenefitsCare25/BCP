@@ -115,7 +115,7 @@ export function HrDashboardPage() {
                           aria-hidden
                         />
                       </div>
-                      <h3 className="mt-2 text-xl font-bold">{m.title}</h3>
+                      <h2 className="mt-2 text-xl font-bold">{m.title}</h2>
                       <CardDescription>{m.description}</CardDescription>
                     </CardHeader>
                   </Card>
@@ -128,7 +128,7 @@ export function HrDashboardPage() {
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-3">
                       <Icon className="size-5 text-primary" aria-hidden />
-                      <h3 className="text-base font-semibold">{m.title}</h3>
+                      <h2 className="text-base font-semibold">{m.title}</h2>
                     </div>
                     <Badge variant="outline">Coming soon</Badge>
                   </div>

@@ -55,8 +55,8 @@ for (const role of ["portal", "hr"] as const) {
       if (role === "hr") {
         await expect(page.getByText("Your workspace", { exact: true })).toHaveCount(0);
         await expect(page.getByRole("region", { name: "HR services" })).toBeVisible();
-        await expect(page.getByRole("heading", { name: "Claims", exact: true })).toBeVisible();
-        await expect(page.getByRole("heading", { name: "Enrolment forms", exact: true })).toBeVisible();
+        await expect(page.getByRole("heading", { name: "Claims", level: 2, exact: true })).toBeVisible();
+        await expect(page.getByRole("heading", { name: "Enrolment forms", level: 2, exact: true })).toBeVisible();
       }
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
       expect(errors).toEqual([]);
