@@ -8,6 +8,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
 
+from app.schemas.policy_numbers import PolicyNumberAssignment
+
 ParticipationModelStr = Literal["standard", "extended", "eo_only"]
 InsuranceLineStr = Literal["medical", "general", "life", "flex"]
 LayoutFamilyStr = Literal["si_based", "plan_tier", "travel", "named_person", "earnings"]
@@ -379,6 +381,7 @@ class ProductTermOut(BaseModel):
     underwriting_required: bool = False
     # Insurer-issued policy number for this product's placement.
     policy_number: str | None = None
+    policy_number_mappings: list[PolicyNumberAssignment] | None = None
     # Whether this product's claims draw on an inpatient benefit. SERVED from
     # `claim_intake.is_inpatient_product` (which reads the product registry —
     # the ONE place product-type knowledge lives) so the terms form can hide the
@@ -404,6 +407,9 @@ class ProductTermUpdate(BaseModel):
     nel_age_limit: int | None = Field(default=None, ge=1, le=120)
     underwriting_required: bool = False
     policy_number: str | None = Field(default=None, max_length=64)
+    policy_number_mappings: list[PolicyNumberAssignment] | None = Field(
+        default=None, max_length=100
+    )
     # Bounded at a year: these are transcribed from policy wording, where the
     # figures are 30 to 180 days. An unbounded field invites a typo that silently
     # turns the window off (999 days passes everything) rather than erroring.

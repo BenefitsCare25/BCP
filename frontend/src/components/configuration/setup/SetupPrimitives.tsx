@@ -208,6 +208,7 @@ export function FieldControl({
         <div className="flex items-center gap-2">
           <Input
             value={textValue}
+            aria-label={field.label}
             type={field.type === "number" ? "number" : "text"}
             onChange={(e) => onChange(e.target.value)}
             className="flex-1"

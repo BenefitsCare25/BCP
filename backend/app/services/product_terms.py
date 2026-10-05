@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -41,6 +42,7 @@ class ResolvedTerm:
     underwriting_required: bool = False
     # Insurer-issued policy number — None until the placement is issued.
     policy_number: str | None = None
+    policy_number_mappings: list[dict[str, Any]] | None = None
     # Pre-/post-hospitalisation claim window in days. None = no rule.
     pre_hosp_days: int | None = None
     post_hosp_days: int | None = None
@@ -198,6 +200,7 @@ def resolve_terms(db: Session, py: PolicyYear) -> list[ResolvedTerm]:
                     else False
                 ),
                 policy_number=term.policy_number if term else None,
+                policy_number_mappings=term.policy_number_mappings if term else None,
                 pre_hosp_days=term.pre_hosp_days if term else None,
                 post_hosp_days=term.post_hosp_days if term else None,
             )

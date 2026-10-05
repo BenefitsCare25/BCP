@@ -666,6 +666,16 @@ def save_setup(
             status.HTTP_404_NOT_FOUND,
             f"No template or slip data for product {product_code!r}",
         )
+    from app.services.policy_numbers import require_assignment_removal_permission
+    old_setup = _find_setup(db, policy_year_id, tpl.code)
+    if old_setup is not None and "policy_number_mappings" not in body.answers:
+        if "policy_number_mappings" in old_setup.answers:
+            body.answers["policy_number_mappings"] = old_setup.answers["policy_number_mappings"]
+    if old_setup is not None and "policy_number_mappings" in body.answers:
+        require_assignment_removal_permission(
+            old_setup.answers.get("policy_number_mappings"),
+            body.answers["policy_number_mappings"], user.role,
+        )
     setup = _upsert_draft(db, policy_year_id, tpl.code, body, lock=True)
     setup.status = ProductSetupStatus.draft
     write_audit(
@@ -833,40 +843,50 @@ def remove_product_from_year(
 
 
 def _sync_term_policy_number(
-    db: Session, product: Product, policy_year_id: str, answers: dict[str, Any]
+    db: Session, product: Product, policy_year_id: str, answers: dict[str, Any], user: CurrentUser
 ) -> None:
-    """Route the Header & Policy "Policy No." into this product's term.
+    """Apply reviewed assignments atomically with this product's setup."""
+    from app.services.policy_numbers import (
+        require_assignment_removal_permission,
+        scalar_number,
+        source_numbers,
+        validate_assignments,
+    )
+    from app.services.product_terms import _term_for_update
 
-    The policy number is entered once, under Header & Policy (``header.policy_no``);
-    the placement-slip export reads it from ``ProductTerm.policy_number``. Mirror a
-    NON-EMPTY header value into the (sparse) term row on confirm — creating the row
-    when needed. A blank header is a no-op: it must never clear a number set
-    out-of-band (e.g. before this field became the single input), so an unrelated
-    re-confirm can't silently wipe the exported policy number. The value is capped
-    to the column width (String(64)) so an over-long paste can't fail the confirm
-    on Postgres.
-    """
-    header = answers.get("header") or {}
-    raw = header.get("policy_no")
-    policy_no = str(raw).strip()[:64] if raw is not None else ""
-    if not policy_no:
+    source = str((answers.get("header") or {}).get("policy_no") or "").strip()
+    if "policy_number_mappings" in answers:
+        try:
+            mappings = validate_assignments(answers["policy_number_mappings"])
+            if not mappings and len(source_numbers(source)) > 1:
+                raise ValueError(
+                    "Assign the policy number for this product and its covered entities "
+                    "before confirming."
+                )
+        except ValueError as exc:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
+        term = _term_for_update(db, policy_year_id, product.id)
+        existing_mappings = term.policy_number_mappings
+        if existing_mappings is None and source_numbers(term.policy_number):
+            existing_mappings = [{"entity": None, "policy_number": term.policy_number}]
+        require_assignment_removal_permission(existing_mappings, mappings, user.role)
+        term.policy_number_mappings = mappings
+        term.policy_number = scalar_number(mappings)
+        answers["policy_number_mappings"] = mappings
         return
-    term = db.execute(
-        select(ProductTerm).where(
-            ProductTerm.policy_year_id == policy_year_id,
-            ProductTerm.product_id == product.id,
+    if not source:
+        return
+    if len(source_numbers(source)) > 1 or len(source) > 64:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "Review the source policy numbers and assign one number per product/entity "
+            "before confirming.",
         )
-    ).scalar_one_or_none()
-    if term is not None:
-        term.policy_number = policy_no
-    else:
-        db.add(
-            ProductTerm(
-                policy_year_id=policy_year_id,
-                product_id=product.id,
-                policy_number=policy_no,
-            )
-        )
+    term = _term_for_update(db, policy_year_id, product.id)
+    if term.policy_number_mappings is None:
+        if source_numbers(term.policy_number) and not source_numbers(source):
+            require_assignment_removal_permission([term.policy_number], [], user.role)
+        term.policy_number = source
 
 
 @router.post(
@@ -903,6 +923,16 @@ def confirm_setup(
     # Confirm has materializing side effects (plans, category seeds, matching).
     # Lock the one setup row so two fast confirms serialize instead of both
     # observing the first-materialization state.
+    from app.services.policy_numbers import require_assignment_removal_permission
+    old_setup = _find_setup(db, policy_year_id, tpl.code)
+    if old_setup is not None and "policy_number_mappings" not in body.answers:
+        if "policy_number_mappings" in old_setup.answers:
+            body.answers["policy_number_mappings"] = old_setup.answers["policy_number_mappings"]
+    if old_setup is not None and "policy_number_mappings" in body.answers:
+        require_assignment_removal_permission(
+            old_setup.answers.get("policy_number_mappings"),
+            body.answers["policy_number_mappings"], user.role,
+        )
     setup = _upsert_draft(db, policy_year_id, tpl.code, body, lock=True)
 
     staged_terms = parse_setup_policy_terms(setup.answers.get("policy_terms", {}))
@@ -981,7 +1011,7 @@ def confirm_setup(
         product = _upsert_product(db, user, client_id, tpl, setup.answers)
         if setup.origin == ProductSetupOrigin.placement_slip:
             _adopt_slip_artifacts(db, user, product, policy_year_id)
-        _sync_term_policy_number(db, product, policy_year_id, setup.answers)
+        _sync_term_policy_number(db, product, policy_year_id, setup.answers, user)
         if staged_terms.model_fields_set:
             apply_product_term_update(db, py, product, staged_terms, user)
         created, updated, removed = _materialize_plans(
@@ -1020,7 +1050,9 @@ def confirm_setup(
         write_audit(
             db, user, action="confirm_setup", entity_type="product_setup",
             entity_id=setup.id,
-            after={"product_id": product.id, "plans_created": created,
+            after={"product_id": product.id,
+                   "policy_number_mappings": setup.answers.get("policy_number_mappings"),
+                   "plans_created": created,
                    "plans_updated": updated, "plans_removed": removed,
                    "categories_created": cats_created, "categories_removed": cats_removed},
         )
@@ -1491,6 +1523,7 @@ _TERM_FIELDS = (
     "nel_age_limit",
     "underwriting_required",
     "policy_number",
+    "policy_number_mappings",
     "pre_hosp_days",
     "post_hosp_days",
 )

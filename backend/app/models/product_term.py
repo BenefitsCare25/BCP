@@ -23,8 +23,10 @@ period does not assert a GST opinion.
 from __future__ import annotations
 
 from datetime import date
+from typing import Any
 
 from sqlalchemy import (
+    JSON,
     Boolean,
     Date,
     Float,
@@ -80,6 +82,8 @@ class ProductTerm(Base, TimestampMixin):
     # Insurer-issued policy number for this product's placement. Operational
     # metadata (issued after activation) — editable on active years, like FCL.
     policy_number: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # None retains a legacy scalar; [] explicitly records no assigned number.
+    policy_number_mappings: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True)
     # How long before an admission, and after a discharge, a consultation is
     # still claimable against it ("within 90 days prior / 100 days after" in the
     # policy wording). Drives the pre-/post-hospitalisation window check in

@@ -176,6 +176,11 @@ export interface PolicyYear {
   activated_at: string | null;
 }
 
+export interface PolicyNumberAssignment {
+  entity: string | null;
+  policy_number: string;
+}
+
 export interface ProductTerm {
   product_id: string;
   code: string;
@@ -199,6 +204,7 @@ export interface ProductTerm {
   underwriting_required: boolean;
   // Insurer-issued policy number for this product's placement.
   policy_number: string | null;
+  policy_number_mappings?: PolicyNumberAssignment[] | null;
   // Whether this product's claims draw on an inpatient benefit. SERVED from the
   // product registry — never re-derive it from the code or the line here.
   is_inpatient: boolean;
@@ -1325,6 +1331,7 @@ export interface SetupPolicyTerms {
 }
 
 export interface SetupAnswers {
+  policy_number_mappings?: PolicyNumberAssignment[];
   policy_terms?: SetupPolicyTerms;
   // Mostly free-text slip fields, plus `entities` — a token list of the legal
   // entities this product covers, which IS the employee-matching gate (the

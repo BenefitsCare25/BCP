@@ -25,6 +25,7 @@ from app.core.deps import assert_policy_year_editable, load_policy_year
 from app.db.session import get_db
 from app.models import PolicyYear, Product, ProductTerm
 from app.schemas.api import ProductTermOut, ProductTermUpdate
+from app.schemas.policy_numbers import assignment_models
 from app.services.claim_intake import is_inpatient_product
 from app.services.product_term_updates import apply_product_term_update
 from app.services.product_terms import (
@@ -72,6 +73,7 @@ def list_product_terms(
             nel_age_limit=r.nel_age_limit,
             underwriting_required=r.underwriting_required,
             policy_number=r.policy_number,
+            policy_number_mappings=assignment_models(r.policy_number_mappings),
             is_inpatient=is_inpatient_product(r.code),
             pre_hosp_days=r.pre_hosp_days,
             post_hosp_days=r.post_hosp_days,
@@ -127,6 +129,9 @@ def list_product_terms(
                         else False
                     ),
                     policy_number=t.policy_number if t else None,
+                    policy_number_mappings=(
+                        assignment_models(t.policy_number_mappings) if t else None
+                    ),
                     is_inpatient=is_inpatient_product(cp.code),
                     pre_hosp_days=t.pre_hosp_days if t else None,
                     post_hosp_days=t.post_hosp_days if t else None,

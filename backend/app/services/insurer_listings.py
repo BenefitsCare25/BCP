@@ -56,7 +56,9 @@ from app.services.plan_hydration import (
     hydrate_plans,
     resolve_basis_amount,
 )
+from app.services.policy_numbers import member_entity, resolve_policy_number
 from app.services.product_insurer import insurer_map
+from app.services.product_terms import ResolvedTerm, resolve_terms
 from app.services.roster_attributes import (
     DEPENDANT_ID_KEYS,
     EMPLOYEE_ID_KEYS,
@@ -94,6 +96,7 @@ class ProductBlock:
     # product_insurer.py) — "" when none is configured. Resolved once here so
     # every consumer of a block groups on the same name.
     insurer: str = ""
+    term: ResolvedTerm | None = None
     plans: dict[str, Plan] = field(default_factory=dict)  # by plan code
     role_options: dict[str, list[DepOption]] = field(default_factory=dict)
 
@@ -164,6 +167,7 @@ def product_blocks(db: Session, py: PolicyYear) -> list[ProductBlock]:
     )
 
     insurers = insurer_map(db, py.id, products.values())
+    terms = {term.product_id: term for term in resolve_terms(db, py)}
     blocks: dict[str, ProductBlock] = {}
     for pid, product in products.items():
         blocks[pid] = ProductBlock(
@@ -171,6 +175,7 @@ def product_blocks(db: Session, py: PolicyYear) -> list[ProductBlock]:
             report_code=_report_code(product),
             lump_sum=False,
             insurer=insurers.get(pid, ""),
+            term=terms.get(pid),
         )
     for plan in plans:
         if plan.product_id in blocks:
@@ -496,6 +501,8 @@ def build_employee_listing(
                 f"{b.report_code} Family Grouping",
             ]
 
+    for b in blocks:
+        header += [f"{b.report_code} Policy Number", f"{b.report_code} Policy Number Status"]
     wb = Workbook()
     ws = wb.active
     ws.title = "Employees"
@@ -560,6 +567,12 @@ def build_employee_listing(
                     row += ["No Coverage", "EO"]
                 else:
                     row += [cov.plan_label or "", cov.grouping]
+        for b in blocks:
+            if b.product.id in per_product:
+                policy = resolve_policy_number(b.term, member_entity(attrs))
+                row += [policy.number, policy.status]
+            else:
+                row += [None, "No Coverage"]
         append_safe(ws, row)
 
     _autosize(ws)
@@ -606,6 +619,8 @@ def build_dependant_listing(
             f"{b.report_code} Family Grouping",
         ]
 
+    for b in blocks:
+        header += [f"{b.report_code} Policy Number", f"{b.report_code} Policy Number Status"]
     wb = Workbook()
     ws = wb.active
     ws.title = "Dependants"
@@ -652,8 +667,17 @@ def build_dependant_listing(
                     cells += ["", ""]
             if not covered_any:
                 continue
+            policy_cells: list[object] = []
+            entity = member_entity(emp.attribute_values)
+            for b in blocks:
+                cov = per_product.get(b.product.id)
+                if cov is not None and dep.id in cov.covered_dependant_ids:
+                    policy = resolve_policy_number(b.term, entity)
+                    policy_cells += [policy.number, policy.status]
+                else:
+                    policy_cells += [None, "No Coverage"]
             append_safe(ws, [
-                first_value(dattrs, ("entity",)) or "",
+                entity or "",
                 emp.staff_id,
                 emp.employee_name or "",
                 _ident(emp.attribute_values or {}, EMPLOYEE_ID_KEYS, masked),
@@ -670,6 +694,7 @@ def build_dependant_listing(
                 dep.terminated_effective,
                 period,
                 *cells,
+                *policy_cells,
             ])
 
     _autosize(ws)
@@ -692,16 +717,23 @@ def membership_manifest(db: Session, py: PolicyYear, insurer: str) -> dict[str, 
     employees = report_employees(db, py)
     coverage, deps_by_emp = _employee_coverage(db, py, employees, blocks)
     code_by_pid = {b.product.id: b.report_code for b in blocks}
+    term_by_pid = {b.product.id: b.term for b in blocks}
 
     members: list[dict[str, Any]] = []
     for emp in employees:
         cov = coverage.get(emp.id, {})
         if not cov:
             continue  # not covered by this insurer's products → off this listing
+        policies = {
+            pid: resolve_policy_number(term_by_pid.get(pid), member_entity(emp.attribute_values))
+            for pid in cov
+        }
         cov_sig = {
             code_by_pid[pid]: {
                 "plan": c.plan_label or c.basis_display or "covered",
                 "grouping": c.grouping,
+                "policy_number": policies[pid].number,
+                "policy_number_status": policies[pid].status,
             }
             for pid, c in cov.items()
         }
@@ -739,7 +771,13 @@ def membership_manifest(db: Session, py: PolicyYear, insurer: str) -> dict[str, 
                     dep.terminated_effective.isoformat()
                     if dep.terminated_effective else None
                 ),
-                "coverage": {"sponsor_staff_id": emp.staff_id},
+                "coverage": {
+                    "sponsor_staff_id": emp.staff_id,
+                    "products": {
+                        code_by_pid[pid]: cov_sig[code_by_pid[pid]] for pid, c in cov.items()
+                        if dep.id in c.covered_dependant_ids
+                    },
+                },
             })
     return {"insurer": insurer.strip().lower(), "members": members}
 

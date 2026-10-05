@@ -98,7 +98,9 @@ def test_filing_snapshot_survives_policy_number_edit_and_preserves_other_metadat
     claim_placement.capture_claim_placement(None, claim)
     current["policy_number"] = "NEW"
     claim_placement.capture_claim_placement(None, claim)
-    assert claim_placement.placement_cells(None, claim) == ["OLD", "A", "Hospital", "At filing"]
+    assert claim_placement.placement_cells(None, claim) == [
+        "OLD", "A", "Hospital", "At filing", "Legacy filing snapshot"
+    ]
     assert claim.intake_meta["received_via"] == "email"
     legacy = Claim(claim_kind="insured", product_code="GHS")
     assert claim_placement.placement_cells(None, legacy)[0] == "NEW"
@@ -127,7 +129,7 @@ def test_legacy_resubmission_does_not_invent_filing_snapshot(monkeypatch):
     claim_placement.capture_claim_placement(None, claim)
     assert claim.intake_meta is None
     assert (
-        claim_placement.placement_cells(None, claim)[-1]
+        claim_placement.placement_cells(None, claim)[3]
         == "Current configuration; no filing snapshot"
     )
 
@@ -300,6 +302,7 @@ def test_premium_breakdown_gst_unknown_prices_and_formula_safety(monkeypatch):
         code="GHS",
         product_id="product",
         policy_number="P123",
+        policy_number_mappings=None,
         gst_included=True,
         gst_rate=9,
         coverage_start=year.start_date,

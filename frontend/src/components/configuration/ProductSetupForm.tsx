@@ -31,6 +31,8 @@ import type {
 import { formatError, isStaleConfigurationError } from "@/lib/errors";
 import { insuredNames } from "@/lib/insured";
 import { InsuredPicker } from "./InsuredPicker";
+import { PolicyNumberMappingsEditor } from "./PolicyNumberMappingsEditor";
+import { policyMappingIssue, setupPolicyMappings } from "@/lib/policyNumbers";
 import { SetupConflictAlert } from "./SetupConflictAlert";
 import { buildSobFromPlans, reconcileColumns } from "@/lib/sob";
 import { FieldControl } from "./setup/SetupPrimitives";
@@ -88,7 +90,7 @@ function setupDirtySections(current: SetupAnswers, savedJson: string): string[] 
   const changed = (left: unknown, right: unknown) =>
     JSON.stringify(left) !== JSON.stringify(right);
   const sections: string[] = [];
-  if (changed(current.header, saved.header) || changed(current.policy_terms, saved.policy_terms)) sections.push("Header & Policy");
+  if (changed(current.header, saved.header) || changed(current.policy_terms, saved.policy_terms) || changed(current.policy_number_mappings, saved.policy_number_mappings)) sections.push("Header & Policy");
   if (changed(current.eligibility, saved.eligibility)) sections.push("Eligibility");
   if (
     changed(current.categories, saved.categories) ||
@@ -479,6 +481,10 @@ export const ProductSetupForm = forwardRef<ProductSetupFormHandle, Props>(functi
     setAnswers((a) => ({ ...a, header: { ...a.header, [id]: v } }));
   // `entities` is the one header value that is a token list, not free text.
   const headerEntities = insuredNames(answers.header.entities);
+  const policySource = String(answers.header.policy_no ?? "");
+  const policyMappings = setupPolicyMappings(policySource, answers.policy_number_mappings, term);
+  const mappingIssue = policyMappingIssue(policySource, policyMappings);
+  const persistedMappingCount = draft?.answers.policy_number_mappings?.length ?? term?.policy_number_mappings?.length ?? (term?.policy_number ? 1 : 0);
   const setElig = (id: string, v: string) =>
     setAnswers((a) => ({
       ...a,
@@ -546,7 +552,7 @@ export const ProductSetupForm = forwardRef<ProductSetupFormHandle, Props>(functi
     try {
       const r = await confirm.mutateAsync({
         code: template.code,
-        answers,
+        answers: { ...answers, policy_number_mappings: policyMappings },
         templateVersion: template.version,
         expectedUpdatedAt: expectedUpdatedAt.current,
       });
@@ -629,15 +635,24 @@ export const ProductSetupForm = forwardRef<ProductSetupFormHandle, Props>(functi
             stay fully readable. */}
         <div className="grid grid-cols-1 items-start gap-x-4 gap-y-3 md:grid-cols-2">
           {template.header_fields.map((f) => (
-            <FieldControl
-              key={f.id}
-              field={f}
-              value={answers.header[f.id] ?? ""}
-              onChange={(v) => setHeader(f.id, v)}
-              suggestions={suggestions?.header[f.id] ?? []}
-            />
+            <div key={f.id}>
+              <FieldControl
+                field={f.id === "policy_no" ? { ...f, label: "Source policy number(s)" } : f}
+                value={answers.header[f.id] ?? ""}
+                onChange={(v) => setHeader(f.id, v)}
+                suggestions={suggestions?.header[f.id] ?? []}
+              />
+              {f.id === "policy_no" && <p className="mt-1 text-xs text-muted-foreground">
+                Keep the slip’s wording here. The assignments below control policy numbers in reports.
+              </p>}
+            </div>
           ))}
         </div>
+        <PolicyNumberMappingsEditor
+          policyYearId={policyYearId} productCode={template.code} source={policySource}
+          value={policyMappings} entities={headerEntities} persistedCount={persistedMappingCount}
+          onChange={(policy_number_mappings) => setAnswers((a) => ({ ...a, policy_number_mappings }))}
+        />
         {/* Set apart from the slip fields above because it behaves differently:
             everything above is transcribed wording, this one changes which
             employees match. Insured records the legal names (and is what the
@@ -865,6 +880,7 @@ export const ProductSetupForm = forwardRef<ProductSetupFormHandle, Props>(functi
               selectedPlans.length === 0 ||
               busy ||
               Boolean(conflictMessage) ||
+              Boolean(mappingIssue) ||
               !validSetupTerms(term, answers.policy_terms ?? {})
               || (Boolean(answers.source_issues?.length) && !answers.source_reviewed)
             }
@@ -872,6 +888,7 @@ export const ProductSetupForm = forwardRef<ProductSetupFormHandle, Props>(functi
             {confirmLabel}
           </Button>
         </div>
+        {mappingIssue && <p className="w-full text-xs text-warn">{mappingIssue}</p>}
         {!validSetupTerms(term, answers.policy_terms ?? {}) && (
           <p className="w-full text-xs text-error">Review the policy term fields in Header &amp; Policy before confirming. You can still save a draft.</p>
         )}

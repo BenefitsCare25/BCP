@@ -37,6 +37,7 @@ from app.schemas.panel_card import (
     CardServiceOut,
     MemberCardOut,
 )
+from app.services.policy_numbers import member_entity, resolve_policy_number
 from app.services.product_insurer import insurer_map
 from app.services.roster_attributes import EMAIL_KEYS, first_value
 from app.services.roster_parser import INSURER_MEMBER_ID_KEY
@@ -176,6 +177,7 @@ def _shared_values(
     year: PolicyYear | None,
     client: Client | None,
     remarks: dict[str, str],
+    entity: str | None = None,
 ) -> dict[str, str]:
     """Values identical on every card for this assignment (employee + all
     dependants) — the policy, product and card-level text."""
@@ -188,7 +190,7 @@ def _shared_values(
     )
     return {
         "company_name": client.name if client is not None else "",
-        "policy_number": (term.policy_number if term is not None else "") or "",
+        "policy_number": resolve_policy_number(term, entity).number or "",
         "product_name": coverage.product_name or product.display_name,
         "plan_name": coverage.plan_code or coverage.cover_description or "",
         "effective_date": start.isoformat() if start else "",
@@ -223,7 +225,8 @@ def _cards_for_assignment(
     insurer = product_insurer or card.insurer
 
     shared = _shared_values(
-        assignment, card, product, coverage, term, year, client, remarks
+        assignment, card, product, coverage, term, year, client, remarks,
+        member_entity(employee.attribute_values),
     )
 
     def make_card(

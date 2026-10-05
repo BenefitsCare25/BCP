@@ -1,6 +1,7 @@
 """Apply product terms within the caller's transaction."""
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import HTTPException, status
@@ -11,9 +12,16 @@ from sqlalchemy.orm import Session
 from app.core.audit import write_audit
 from app.core.auth import CurrentUser
 from app.core.deps import assert_policy_year_editable
-from app.models import PolicyYear, Product, ProductTerm
+from app.models import PolicyYear, Product, ProductSetup, ProductTerm
 from app.schemas.api import ProductTermOut, ProductTermUpdate
+from app.schemas.policy_numbers import assignment_models
 from app.services.claim_intake import is_inpatient_product
+from app.services.policy_numbers import (
+    require_assignment_removal_permission,
+    scalar_number,
+    source_numbers,
+    validate_assignments,
+)
 from app.services.product_terms import term_window, uses_life_thresholds
 from app.services.underwriting import refresh_underwriting_cases
 
@@ -57,7 +65,7 @@ def apply_product_term_update(
     # keep the lock.
     if not body.model_fields_set <= {
         "free_cover_limit", "nel_age_limit", "underwriting_required",
-        "policy_number",
+        "policy_number", "policy_number_mappings",
     }:
         assert_policy_year_editable(py)
     product_id = product.id
@@ -68,6 +76,12 @@ def apply_product_term_update(
             ProductTerm.product_id == product_id,
         )
     ).scalar_one_or_none()
+    if term is None:
+        term = next((
+            item for item in db.new
+            if isinstance(item, ProductTerm)
+            and item.policy_year_id == py.id and item.product_id == product_id
+        ), None)
     has_life_thresholds = uses_life_thresholds(product)
     if not has_life_thresholds and {"free_cover_limit", "nel_age_limit"} & sent:
         raise HTTPException(
@@ -108,9 +122,56 @@ def apply_product_term_update(
     for field in ("pre_hosp_days", "post_hosp_days"):
         if field in sent:
             setattr(term, field, getattr(body, field))
-    if "policy_number" in sent:
+    if "policy_number_mappings" in sent:
+        try:
+            mappings = validate_assignments(
+                [item.model_dump() for item in body.policy_number_mappings]
+                if body.policy_number_mappings is not None else None
+            )
+        except ValueError as exc:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
+        existing_mappings = term.policy_number_mappings
+        if existing_mappings is None and source_numbers(term.policy_number):
+            existing_mappings = [{"entity": None, "policy_number": term.policy_number}]
+        require_assignment_removal_permission(existing_mappings, mappings, user.role)
+        number = scalar_number(mappings)
+        if "policy_number" in sent and (body.policy_number or None) != number:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
+                "Policy number must agree with the entity assignments.",
+            )
+        term.policy_number_mappings = mappings
+        term.policy_number = number
+    elif "policy_number" in sent:
+        if term.policy_number_mappings is not None:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "Update the policy-number assignments instead of the legacy policy number.",
+            )
         cleaned = (body.policy_number or "").strip()
+        if len(source_numbers(cleaned)) > 1:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
+                "Assign one policy number per entity instead of a list.",
+            )
+        if source_numbers(term.policy_number) and not source_numbers(cleaned):
+            require_assignment_removal_permission([term.policy_number], [], user.role)
         term.policy_number = cleaned or None
+    if {"policy_number", "policy_number_mappings"} & sent:
+        setup = db.scalar(select(ProductSetup).where(
+            ProductSetup.policy_year_id == py.id,
+            ProductSetup.product_code == product.code,
+        ))
+        # Keep a confirmed setup's applied snapshot current. Preserve pending draft work.
+        if setup is not None and setup.status == "confirmed":
+            applied_mappings = term.policy_number_mappings
+            if applied_mappings is None:
+                numbers = source_numbers(term.policy_number)
+                applied_mappings = (
+                    [{"entity": None, "policy_number": numbers[0]}] if numbers else []
+                )
+            setup.answers = {**setup.answers, "policy_number_mappings": applied_mappings}
+            setup.updated_at = datetime.now(UTC)
     db.flush()
 
     # A changed Non-Evidence Limit (dollar FCL or age gate) moves the
@@ -136,6 +197,7 @@ def apply_product_term_update(
             "pre_hosp_days": term.pre_hosp_days,
             "post_hosp_days": term.post_hosp_days,
             "policy_number": term.policy_number,
+            "policy_number_mappings": term.policy_number_mappings,
         },
     )
     return ProductTermOut(
@@ -156,6 +218,7 @@ def apply_product_term_update(
             else False
         ),
         policy_number=term.policy_number,
+        policy_number_mappings=assignment_models(term.policy_number_mappings),
         is_inpatient=is_inpatient_product(product.code),
         pre_hosp_days=term.pre_hosp_days,
         post_hosp_days=term.post_hosp_days,

@@ -237,6 +237,83 @@ def _sheet_rows(content: bytes, sheet: int = 0) -> list[dict]:
     return [dict(zip(header, r, strict=False)) for r in data[1:]]
 
 
+def test_reports_and_filing_use_product_entity_assignments_and_parent_entity():
+    from app.models import Claim
+    from app.services.claim_placement import capture_claim_placement, placement_cells
+    from app.services.insurer_listings import build_dependant_listing, build_employee_listing
+    from app.services.premium_breakdown import build_premium_breakdown
+    from app.services.underwriting_report import build_underwriting_report
+
+    def rows(book, name):
+        values = list(book[name].values)
+        return [dict(zip(values[0], row, strict=True)) for row in values[1:]]
+
+    with SessionLocal() as db:
+        year = db.get(PolicyYear, PY_ID)
+        family = db.get(Employee, EMP_FAMILY)
+        solo = db.get(Employee, EMP_SOLO)
+        dependant = db.get(Dependant, DEP_SPOUSE)
+        family.attribute_values = {**family.attribute_values, "entity": "Entity A"}
+        solo.attribute_values = {**solo.attribute_values, "entity": "Entity B"}
+        dependant.attribute_values = {
+            **dependant.attribute_values, "entity": "Wrong dependant entity"
+        }
+        medical = db.get(Product, MED_PROD)
+        medical.product_metadata = {**medical.product_metadata, "report_code": "TMED"}
+        life_term = db.scalar(select(ProductTerm).where(
+            ProductTerm.policy_year_id == PY_ID, ProductTerm.product_id == LIF_PROD,
+        ))
+        life_term.policy_number = None
+        life_term.policy_number_mappings = [
+            {"entity": "Entity A", "policy_number": "LIFE-A"},
+            {"entity": "Entity B", "policy_number": "LIFE-B"},
+        ]
+        medical_term = db.scalar(select(ProductTerm).where(
+            ProductTerm.policy_year_id == PY_ID, ProductTerm.product_id == MED_PROD,
+        ))
+        if medical_term is None:
+            medical_term = ProductTerm(policy_year_id=PY_ID, product_id=MED_PROD)
+            db.add(medical_term)
+        medical_term.policy_number_mappings = [
+            {"entity": "Entity A", "policy_number": "MED-A"},
+            {"entity": "Entity B", "policy_number": "MED-B"},
+        ]
+        db.add(UnderwritingCase(
+            client_id=CLIENT_ID, policy_year_id=PY_ID, product_id=LIF_PROD,
+            employee_id=EMP_FAMILY, eligible_si=100000, guaranteed_si=50000,
+            accepted_si=50000, status="pending",
+        ))
+        db.flush()
+        employees = {r["Staff ID"]: r for r in rows(
+            build_employee_listing(db, year, "TestSure"), "Employees",
+        )}
+        assert employees["IL-1"]["TLIF Policy Number"] == "LIFE-A"
+        assert employees["IL-2"]["TLIF Policy Number"] == "LIFE-B"
+        assert employees["IL-1"]["TMED Policy Number"] == "MED-A"
+        assert employees["IL-2"]["TMED Policy Number"] == "MED-B"
+        dependants = rows(build_dependant_listing(db, year, "TestSure"), "Dependants")
+        spouse = next(r for r in dependants if r["Dependant Name"] == "Spo Use")
+        assert spouse["Entity"] == "Entity A"
+        assert spouse["TLIF Policy Number"] == "LIFE-A"
+        assert spouse["TMED Policy Number"] == "MED-A"
+        uw = rows(build_underwriting_report(db, year), "Underwriting")
+        assert next(r for r in uw if r["Staff ID"] == "IL-1")["Policy Number"] == "LIFE-A"
+        premiums = rows(build_premium_breakdown(db, year), "Member Premiums")
+        premium = next(
+            r for r in premiums if r["Staff ID"] == "IL-1" and r["Product"] == "Test Medical"
+        )
+        assert premium["Policy Number"] == "MED-A"
+        claim = Claim(client_id=CLIENT_ID, policy_year_id=PY_ID, employee_id=EMP_FAMILY,
+                      claim_kind="insured", product_code="TLIF", status="submitted")
+        capture_claim_placement(db, claim)
+        assert claim.intake_meta["placement_snapshot"]["policy_entity"] == "Entity A"
+        assert placement_cells(db, claim)[0] == "LIFE-A"
+        life_term.policy_number_mappings = [{"entity": "Entity A", "policy_number": "LIFE-NEW"}]
+        db.flush()
+        assert placement_cells(db, claim)[0] == "LIFE-A"
+        db.rollback()
+
+
 # ── Employee listing ─────────────────────────────────────────────────────────
 
 

@@ -3,6 +3,7 @@ import { SourceMappingNotes } from "./SourceMappingNotes";
 import { useCategoryOverlaps, useMemberCounts } from "@/api/hooks";
 import { UnmatchedEmployeeNotice } from "./UnmatchedEmployeeNotice";
 import { fmtDay, fmtMoney } from "@/lib/format";
+import { policyMappingIssue, setupPolicyMappings } from "@/lib/policyNumbers";
 import { insuredNames } from "@/lib/insured";
 import type {
   CategoryGroup,
@@ -385,6 +386,15 @@ export function ProductSetupSummary({ policyYearId, template, draft, group, term
     return true;
   });
 
+  const sourcePolicyNumbers = String(answers?.header.policy_no ?? "");
+  const policyMappings = setupPolicyMappings(sourcePolicyNumbers, answers?.policy_number_mappings, term);
+  const policyDetails = policyMappings.map((item) => ({
+    label: `Policy number · ${item.entity ?? "All covered entities"}`,
+    value: item.policy_number || "Not assigned",
+  }));
+  if (policyMappingIssue(sourcePolicyNumbers, policyMappings)) {
+    policyDetails.push({ label: "Policy-number status", value: "Needs review" });
+  }
   return (
     <div className="space-y-5">
       <SourceMappingNotes answers={answers} />
@@ -397,9 +407,9 @@ export function ProductSetupSummary({ policyYearId, template, draft, group, term
 
       <FieldList
         title="Header & Policy"
-        fields={template.header_fields}
+        fields={template.header_fields.map((f) => f.id === "policy_no" ? { ...f, label: "Source policy number(s)" } : f)}
         values={answers?.header ?? {}}
-        detailRows={termRows(term)}
+        detailRows={[...termRows(term), ...policyDetails]}
       />
       <FieldList
         title="Eligibility"

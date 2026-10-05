@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from app.models import Employee, PolicyYear, Product
 from app.services.benefit_statement import build_benefit_statement
 from app.services.insurer_reports import append_safe, autosize, bold_header
+from app.services.policy_numbers import member_entity, resolve_policy_number
 from app.services.product_insurer import insurer_map
 from app.services.product_terms import gst_multiplier, resolve_terms
 
@@ -52,6 +53,7 @@ def build_premium_breakdown(db: Session, py: PolicyYear) -> Workbook:
             "Annual Premium Incl GST",
             "Rate Basis",
             "Data Status",
+            "Policy Number Status",
         ],
     )
     funding = workbook.create_sheet("Flex Funding")
@@ -92,6 +94,7 @@ def build_premium_breakdown(db: Session, py: PolicyYear) -> Workbook:
             if line.enrolment == "eligible":
                 continue
             term = terms.get(line.product_code)
+            policy = resolve_policy_number(term, member_entity(attrs))
             financials = line.financials
             gross = financials.annual_premium if financials else None
             multiplier = gst_multiplier(term.gst_included, term.gst_rate) if term else 1.0
@@ -108,7 +111,7 @@ def build_premium_breakdown(db: Session, py: PolicyYear) -> Workbook:
                     cost_centre,
                     line.product_name or line.product_code,
                     insurer,
-                    term.policy_number if term else None,
+                    policy.number,
                     line.plan_code,
                     "; ".join(dep.name or "Unnamed dependant" for dep in line.covered_dependants),
                     term.coverage_start if term else py.start_date,
@@ -121,6 +124,7 @@ def build_premium_breakdown(db: Session, py: PolicyYear) -> Workbook:
                     "Resolved annual premium"
                     if gross is not None
                     else "Per-member premium unavailable",
+                    policy.status,
                 ],
             )
             bucket = totals[(cost_centre, insurer, line.product_name or line.product_code)]

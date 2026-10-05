@@ -149,6 +149,7 @@ def clone_policy_year_config(
                 nel_age_limit=t.nel_age_limit,
                 underwriting_required=t.underwriting_required,
                 policy_number=None,
+                policy_number_mappings=[],
             )
         )
     counts["product_terms"] = len(terms)
@@ -160,13 +161,19 @@ def clone_policy_year_config(
         .all()
     )
     for s in setups:
+        answers = copy.deepcopy(s.answers)
+        # Issued identifiers belong to the source year, never to its renewal draft.
+        answers["policy_number_mappings"] = []
+        if isinstance(answers.get("header"), dict):
+            answers["header"]["policy_no"] = ""
+        answers["policy_terms"] = {}
         db.add(
             ProductSetup(
                 id=new_uuid(),
                 policy_year_id=target_id,
                 product_code=s.product_code,
                 template_version=s.template_version,
-                answers=copy.deepcopy(s.answers),
+                answers=answers,
                 status=ProductSetupStatus.draft,
                 origin=s.origin,
                 origin_ref=s.origin_ref,

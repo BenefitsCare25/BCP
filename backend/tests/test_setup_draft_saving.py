@@ -17,6 +17,7 @@ from app.db.base import Base
 from app.db.session import get_db
 from app.main import app
 from app.models import BrokerFirm, Client, Plan, PolicyYear, Product, ProductTerm
+from app.services.policy_numbers import resolve_policy_number
 from app.services.product_templates import get_template
 
 PATH = "/api/v1/policy-years/year/product-setups/GHS"
@@ -76,7 +77,172 @@ def payload(**sections):
 
 
 def term(db):
-    return db.execute(select(ProductTerm).where(ProductTerm.product_id == "product")).scalar_one()
+    return db.execute(select(ProductTerm).where(
+        ProductTerm.product_id == "product", ProductTerm.policy_year_id == "year",
+    )).scalar_one()
+
+
+def test_policy_assignments_remain_draft_until_atomic_confirmation(context):
+    client, db, _ = context
+    mappings = [
+        {"entity": "Entity A", "policy_number": "POL-A"},
+        {"entity": "Entity B", "policy_number": "POL-B"},
+    ]
+    body = payload(
+        header={"policy_no": "POL-A, POL-B"}, policy_number_mappings=mappings,
+        policy_terms={"pre_hosp_days": "42"},
+    )
+    saved = client.put(PATH, json=body)
+    assert saved.status_code == 200, saved.text
+    assert term(db).policy_number_mappings is None
+    body["expected_updated_at"] = saved.json()["updated_at"]
+    applied = client.post(f"{PATH}/confirm", json=body)
+    assert applied.status_code == 200, applied.text
+    assert term(db).policy_number_mappings == mappings
+    assert term(db).policy_number is None  # a scalar would lose the entity association
+    assert term(db).pre_hosp_days == 42
+    assert resolve_policy_number(term(db), " entity a ").number == "POL-A"
+    assert resolve_policy_number(term(db), "Entity B").number == "POL-B"
+    assert resolve_policy_number(term(db), "Other entity").number is None
+    assert client.get(PATH).json()["answers"]["header"]["policy_no"] == "POL-A, POL-B"
+
+
+@pytest.mark.parametrize("mappings", [
+    [{"entity": "A", "policy_number": "ONE, TWO"}],
+    [{"entity": "A", "policy_number": "TBA"}],
+    [{"entity": "A", "policy_number": ""}],
+    [{"entity": "A", "policy_number": "X" * 65}],
+    [{"entity": "A", "policy_number": "ONE"}, {"entity": " a ", "policy_number": "TWO"}],
+    [{"entity": "", "policy_number": "ONE"}],
+    [{"entity": None, "policy_number": "ONE", "product_id": "another-client"}],
+    None,
+])
+def test_incomplete_policy_mapping_can_save_but_cannot_apply(context, mappings):
+    client, db, _ = context
+    body = payload(policy_number_mappings=mappings, policy_terms={"pre_hosp_days": "42"})
+    saved = client.put(PATH, json=body)
+    assert saved.status_code == 200, saved.text
+    body["expected_updated_at"] = saved.json()["updated_at"]
+    applied = client.post(f"{PATH}/confirm", json=body)
+    assert applied.status_code == 422, applied.text
+    assert term(db).policy_number_mappings is None
+    assert term(db).pre_hosp_days == 30
+    assert not db.scalars(select(Plan)).all()
+
+
+def test_composite_legacy_numbers_require_review_before_confirmation(context):
+    client, db, _ = context
+    body = payload(header={"policy_no": "G0005086, G0005088, G0005089"})
+    saved = client.put(PATH, json=body)
+    assert saved.status_code == 200
+    body["expected_updated_at"] = saved.json()["updated_at"]
+    applied = client.post(f"{PATH}/confirm", json=body)
+    assert applied.status_code == 422
+    assert term(db).policy_number is None
+    assert not db.scalars(select(Plan)).all()
+
+
+def test_new_term_with_mapping_and_staged_terms_is_created_once(context):
+    client, db, _ = context
+    db.delete(term(db))
+    db.commit()
+    body = payload(
+        policy_number_mappings=[{"entity": None, "policy_number": "PRODUCT-WIDE"}],
+        policy_terms={"pre_hosp_days": "42"},
+    )
+    applied = client.post(f"{PATH}/confirm", json=body)
+    assert applied.status_code == 200, applied.text
+    assert term(db).policy_number == "PRODUCT-WIDE"
+    assert term(db).pre_hosp_days == 42
+
+
+def test_only_system_admin_can_remove_saved_policy_assignments(context):
+    client, db, user = context
+    body = payload(policy_number_mappings=[{"entity": "A", "policy_number": "ONE"}])
+    assert client.post(f"{PATH}/confirm", json=body).status_code == 200
+    cleared = payload(policy_number_mappings=[])
+    assert client.put(PATH, json=cleared).status_code == 403
+    assert client.post(f"{PATH}/confirm", json=cleared).status_code == 403
+    assert client.put(PATH, json=payload(policy_number_mappings=None)).status_code == 403
+    endpoint = "/api/v1/policy-years/year/product-terms/product"
+    assert client.put(endpoint, json={"policy_number_mappings": []}).status_code == 403
+    assert term(db).policy_number_mappings == body["answers"]["policy_number_mappings"]
+    app.dependency_overrides[get_current_user] = lambda: replace(user, role="system_admin")
+    cleared["expected_updated_at"] = client.get(PATH).json()["updated_at"]
+    assert client.post(f"{PATH}/confirm", json=cleared).status_code == 200
+    assert term(db).policy_number_mappings == []
+
+
+def test_operational_mapping_update_rejects_legacy_overwrite(context):
+    client, db, _ = context
+    endpoint = "/api/v1/policy-years/year/product-terms/product"
+    result = client.put(endpoint, json={"policy_number_mappings": [
+        {"entity": "A", "policy_number": "POL-A"},
+    ]})
+    assert result.status_code == 200, result.text
+    assert result.json()["policy_number_mappings"][0]["entity"] == "A"
+    assert client.put(endpoint, json={"policy_number": "OVERWRITE"}).status_code == 409
+    assert resolve_policy_number(term(db), "A").number == "POL-A"
+
+
+def test_renewal_does_not_reuse_issued_policy_numbers(context):
+    from app.models import ProductSetup
+    from app.services.policy_year_clone import clone_policy_year_config
+    from app.services.product_terms import resolve_terms
+
+    client, db, _ = context
+    body = payload(
+        header={"policy_no": "POL-2030"},
+        policy_number_mappings=[{"entity": None, "policy_number": "POL-2030"}],
+    )
+    assert client.post(f"{PATH}/confirm", json=body).status_code == 200
+    renewal = PolicyYear(
+        id="renewal", client_id="client", year=2031,
+        start_date=date(2031, 1, 1), end_date=date(2031, 12, 31), status="draft",
+    )
+    db.add(renewal)
+    db.flush()
+    clone_policy_year_config(db, source_id="year", target_id="renewal", client_id="client")
+    target = db.scalar(select(ProductTerm).where(ProductTerm.policy_year_id == "renewal"))
+    assert target.policy_number is None
+    assert target.policy_number_mappings == []
+    target_setup = db.scalar(select(ProductSetup).where(
+        ProductSetup.policy_year_id == "renewal",
+    ))
+    assert target_setup.answers["header"]["policy_no"] == ""
+    assert target_setup.answers["policy_number_mappings"] == []
+    assert resolve_policy_number(resolve_terms(db, renewal)[0], "A").number is None
+    assert term(db).policy_number == "POL-2030"
+
+
+def test_older_client_omitting_mapping_field_preserves_saved_assignments(context):
+    client, _, _ = context
+    body = payload(policy_number_mappings=[{"entity": "A", "policy_number": "POL-A"}])
+    saved = client.put(PATH, json=body).json()
+    old_client_body = payload()
+    old_client_body["expected_updated_at"] = saved["updated_at"]
+    result = client.put(PATH, json=old_client_body)
+    assert result.status_code == 200, result.text
+    assert (
+        result.json()["answers"]["policy_number_mappings"]
+        == body["answers"]["policy_number_mappings"]
+    )
+
+
+def test_operational_mapping_edit_refreshes_confirmed_setup_and_rejects_stale_confirm(context):
+    client, _, _ = context
+    body = payload(policy_number_mappings=[{"entity": "A", "policy_number": "OLD"}])
+    assert client.post(f"{PATH}/confirm", json=body).status_code == 200
+    before = client.get(PATH).json()
+    endpoint = "/api/v1/policy-years/year/product-terms/product"
+    applied = [{"entity": "A", "policy_number": "NEW"}]
+    response = client.put(endpoint, json={"policy_number_mappings": applied})
+    assert response.status_code == 200, response.text
+    after = client.get(PATH).json()
+    assert after["answers"]["policy_number_mappings"] == applied
+    assert after["updated_at"] != before["updated_at"]
+    body["expected_updated_at"] = before["updated_at"]
+    assert client.post(f"{PATH}/confirm", json=body).status_code == 409
 
 
 def test_draft_round_trip_keeps_live_terms_and_plans_unchanged(context):
