@@ -30,9 +30,12 @@ async function mappingDrawer(page: Page, request: APIRequestContext) {
     id, display_name: label, plan_assignments: { plan_code: code, member_scope: scope },
   });
   await page.route(`**${API}/categories/grouped?*`, (route) => route.fulfill({ json: [
-    { product_code: "GD", product_display_name: "Dental", categories: [category("dental", "All employees", "1")] },
+    { product_code: "GD", product_display_name: "Dental", categories: [
+      category("dental-duplicate", "All employees", "1"), category("dental", "All employees", "1"),
+    ] },
     { product_code: "GCGP", product_display_name: "General practitioner", categories: [
-      category("gp-1", "Executives", "1"), category("gp-2", "Executives", "2"),
+      category("gp-1", "Executives", "1"), category("gp-1-duplicate", "Executives", "1"),
+      { ...category("gp-2", "Executives", "2"), participation_detail: { employee: "voluntary", direction: "upgrade" } },
       category("spouse-1", "Spouse", "1", "dependant"), category("spouse-2", "Spouse", "2", "dependant"),
     ] },
   ] }));
@@ -59,10 +62,21 @@ test("employee mapping has a persistent save, excludes dependant options, and pr
   const drawer = page.getByRole("dialog", { name: "Mapping Review Member" });
   await expect(drawer.getByText("Missing product mapping: GCGP")).toBeVisible();
   await expect(drawer.getByRole("checkbox", { name: /Spouse/ })).toHaveCount(0);
+  await expect(drawer.getByRole("tab", { name: "GCGP", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect(drawer.getByRole("checkbox", { name: "Executives · Plan 1", exact: true })).toHaveCount(1);
+  await expect(drawer.getByText("Plan 2 · Upgrade option", { exact: true })).toBeVisible();
+  await drawer.getByRole("tab", { name: "GD", exact: true }).click();
+  await expect(drawer.getByRole("checkbox", { name: "All employees · Plan 1", exact: true })).toBeChecked();
+  await expect(drawer.getByRole("checkbox", { name: "All employees · Plan 1", exact: true })).toHaveCount(1);
+  await expect(drawer.getByRole("checkbox", { name: /Executives/ })).toHaveCount(0);
+  await drawer.getByRole("tab", { name: "GCGP", exact: true }).click();
   const save = drawer.getByRole("button", { name: "Save employee mapping", exact: true });
   await expect(save).toBeDisabled();
   await drawer.getByRole("checkbox", { name: "Executives · Plan 1", exact: true }).check();
   await drawer.getByRole("checkbox", { name: "Executives · Plan 2", exact: true }).check();
+  await drawer.getByRole("tab", { name: "GD", exact: true }).click();
+  await drawer.getByRole("tab", { name: "GCGP", exact: true }).click();
+  await expect(drawer.getByRole("checkbox", { name: "Executives · Plan 2", exact: true })).toBeChecked();
   await expect(drawer.getByRole("checkbox", { name: "Executives · Plan 1", exact: true })).not.toBeChecked();
   await drawer.getByRole("button", { name: "Close", exact: true }).click();
   await expect(page.getByRole("dialog", { name: "Unsaved employee mapping" })).toBeVisible();
@@ -77,6 +91,7 @@ test("employee mapping has a persistent save, excludes dependant options, and pr
   await expect(drawer.getByText("Missing product mapping: GCGP")).toHaveCount(0);
   expect(review.calls()).toBe(2);
   await page.reload();
+  await page.getByRole("tab", { name: "GCGP", exact: true }).click();
   await expect(page.getByRole("checkbox", { name: "Executives · Plan 2", exact: true })).toBeChecked();
   await page.screenshot({ path: info.outputPath("employee-mapping-save.png"), fullPage: true });
 });

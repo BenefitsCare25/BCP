@@ -982,6 +982,8 @@ export function useSaveEnrollmentPricingConfig(
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["flex-pricing"] });
       qc.invalidateQueries({ queryKey: ["enrollment-windows"] });
+      qc.invalidateQueries({ queryKey: ["enrollment-readiness"] });
+      qc.invalidateQueries({ queryKey: ["enrollment-readiness-employees"] });
       qc.invalidateQueries({ queryKey: ["enrollment-options"] });
       qc.invalidateQueries({ queryKey: ["benefit-statement"] });
     },

@@ -829,6 +829,40 @@ def test_send_all_requires_explicit_reenable_and_targets_only_eligible_accounts(
                 assert db.get(MemberAccount, account_id).status == MEMBER_STATUS_DISABLED
 
 
+@pytest.mark.parametrize("account_status", ["disabled", "invited"])
+@pytest.mark.parametrize("other_year", [False, True])
+def test_retained_account_email_owned_by_other_staff_is_never_queued(
+    broker_client, disabled_invite_roster, account_status, other_year,
+):
+    from app.models.member_account import MEMBER_STATUS_DISABLED
+
+    accounts, queued = disabled_invite_roster
+    with SessionLocal() as db:
+        account = db.get(MemberAccount, accounts["shared"])
+        account.status = account_status
+        employee = db.query(Employee).filter_by(staff_id="REACTIVATE-shared").one()
+        employee.attribute_values = {"email": "new-owner-address@reactivation.test"}
+        peer = db.query(Employee).filter_by(staff_id="REACTIVATE-shared-peer").one()
+        if other_year:
+            peer.policy_year_id = db.query(PolicyYear).filter(
+                PolicyYear.client_id == DEMO_CLIENT_ID, PolicyYear.id != PY_ACTIVE,
+            ).first().id
+        peer.attribute_values = {"email": " SHARED@reactivation.test "}
+        db.commit()
+
+    rollout = broker_client.get("/api/v1/member-accounts/rollout",
+        params={"policy_year_id": PY_ACTIVE}).json()
+    assert rollout["disabled_invite_pending"] == 1  # only the valid fixture
+    response = broker_client.post("/api/v1/member-accounts/bulk-invite",
+        json={"policy_year_id": PY_ACTIVE, "reenable_disabled": True})
+    assert response.status_code == 200, response.text
+    assert accounts["shared"] not in queued
+    with SessionLocal() as db:
+        assert db.get(MemberAccount, accounts["shared"]).status == (
+            MEMBER_STATUS_DISABLED if account_status == "disabled" else account_status
+        )
+
+
 def test_unconfigured_mail_never_reenables_accounts(
     broker_client, disabled_invite_roster, monkeypatch,
 ):
@@ -858,3 +892,44 @@ def test_viewers_cannot_reenable_and_bulk_invite(disabled_invite_roster):
         assert queued == []
     finally:
         app.dependency_overrides.pop(get_current_user, None)
+
+
+def test_background_delivery_rechecks_ownership_in_the_clients_firm(monkeypatch):
+    from unittest.mock import Mock
+
+    from app.api.v1 import member_accounts
+
+    with SessionLocal() as db:
+        account = MemberAccount(client_id=DEMO_CLIENT_ID, staff_id="DELIVERY-OWNER",
+            email="delivery-shared@reactivation.test", status=MEMBER_STATUS_INVITED,
+            password_hash="unchanged-test-hash")
+        db.add(account)
+        db.add(Employee(client_id=DEMO_CLIENT_ID, policy_year_id=PY_ACTIVE,
+            staff_id="DELIVERY-PEER", employee_name="Delivery ownership fixture",
+            attribute_values={"email": "delivery-shared@reactivation.test"},
+            derived_attribute_values={}, source="csv_import", status="active"))
+        db.commit()
+        account_id = account.id
+
+    issued = Mock()
+    sent = Mock()
+    scoped = []
+    original_check = member_accounts._shared_roster_email
+
+    def check_ownership(db, client_id, email, staff_id):
+        assert scoped == [DEMO_BROKER_FIRM_ID]
+        return original_check(db, client_id, email, staff_id)
+
+    monkeypatch.setattr(member_accounts, "set_search_path",
+                        lambda db, firm_id: scoped.append(firm_id))
+    monkeypatch.setattr(member_accounts, "_shared_roster_email", check_ownership)
+    monkeypatch.setattr(member_accounts, "issue_invite_credential", issued)
+    monkeypatch.setattr(member_accounts, "send_member_invite", sent)
+    member_accounts._deliver_invites([account_id], DEMO_CLIENT_ID)
+    issued.assert_not_called()
+    sent.assert_not_called()
+    assert scoped == [DEMO_BROKER_FIRM_ID]
+    with SessionLocal() as db:
+        account = db.get(MemberAccount, account_id)
+        assert account.password_hash == "unchanged-test-hash"
+        assert account.invite_sent_at is None

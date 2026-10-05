@@ -2,9 +2,8 @@
  * place — what each plan draws from a flex wallet, and what buying or selling
  * leave is worth. Periods come and go; these belong to the year.
  *
- * Editable whenever no period is open (it used to demand a DRAFT period first,
- * so brokers created a period just to reach the price book). An open period
- * freezes them, because members are choosing against these numbers. */
+ * Price corrections remain available during an open period. Leave rules,
+ * dependant participation and eligibility stay locked. */
 import { useEffect, useRef, useState } from "react";
 import { Loader2, Lock } from "lucide-react";
 import { toast } from "sonner";
@@ -17,7 +16,6 @@ import { useFlexPricingEditor } from "@/components/enrollment/FlexPricingCard";
 import { FlexProductList } from "@/components/enrollment/FlexProductList";
 import { LeavePolicyCard } from "@/components/enrollment/LeavePolicyCard";
 import { voluntaryRateIssues } from "@/components/enrollment/LifeVoluntaryPanel";
-import { PHASE_META, phaseOf, useNow } from "@/components/enrollment/period/periodMeta";
 import { Button } from "@/components/ui/button";
 import { formatError } from "@/lib/errors";
 import { useSession } from "@/stores/session";
@@ -31,7 +29,6 @@ export function EnrollmentRulesPage({
 }) {
   const policyYearId = useSession((s) => s.currentPolicyYearId) ?? undefined;
   const { data: windows } = useEnrollmentWindows(policyYearId);
-  const now = useNow();
   const leaveRef = useRef<HTMLElement>(null);
   const openWindow = (windows ?? []).find((w) => w.status === "open");
 
@@ -49,11 +46,10 @@ export function EnrollmentRulesPage({
         <p className="flex items-start gap-2 rounded-lg bg-warn-soft/60 px-4 py-2.5 text-sm text-foreground">
           <Lock className="mt-0.5 size-4 shrink-0 text-warn" aria-hidden />
           <span>
-            Locked while <strong>{openWindow.name}</strong> is{" "}
-            {phaseOf(openWindow, now) === "overdue"
-              ? "still open past its deadline — close it on the Overview tab to edit these again"
-              : `${PHASE_META[phaseOf(openWindow, now)].label.toLowerCase()}: members are choosing against these prices`}
-            .
+            <strong>{openWindow.name}</strong> is open. You can supply missing
+            prices or correct rates. Leave rules, dependant participation and
+            eligibility stay locked. Previously priced submissions keep their
+            saved amounts.
           </span>
         </p>
       )}
@@ -67,7 +63,8 @@ export function EnrollmentRulesPage({
       </nav>
       <PriceTags
         policyYearId={policyYearId}
-        editable={!openWindow && !readOnly}
+        editable={!readOnly && Boolean(windows)}
+        rulesEditable={!openWindow && !readOnly && Boolean(windows)}
       />
       <section id="leave-rules" ref={leaveRef} className="scroll-mt-4">
         <LeavePolicyCard
@@ -83,9 +80,11 @@ export function EnrollmentRulesPage({
 function PriceTags({
   policyYearId,
   editable,
+  rulesEditable,
 }: {
   policyYearId: string;
   editable: boolean;
+  rulesEditable: boolean;
 }) {
   const { data: flexPricing, isLoading } = useFlexPricing(policyYearId);
   const editor = useFlexPricingEditor(policyYearId);
@@ -146,6 +145,7 @@ function PriceTags({
             pricing={editor.pricing}
             editor={editor}
             editable={editable}
+            rulesEditable={rulesEditable}
             openEditor={openEditor}
             onToggleEditor={(pid) => setOpenEditor((s) => ({ ...s, [pid]: !s[pid] }))}
             emptyHint={

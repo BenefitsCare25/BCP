@@ -1062,10 +1062,12 @@ def revalidate_enrollment(db: Session, enr: Enrollment) -> None:
             ],
             prepare_edit=False,
         )
-        # Price tags are submission snapshots. Structural revalidation must not
-        # rewrite an already-reviewed wallet debit during confirmation/close.
+        # Preserve reviewed amounts, but allow missing snapshots to pick up
+        # prices supplied after an advisory opening. The finalization guards
+        # below still enforce pricing and wallet limits on the repaired amount.
         for election in elections:
-            election.flex_price_tag = saved_tags[election.id]
+            if saved_tags[election.id] is not None:
+                election.flex_price_tag = saved_tags[election.id]
     leave = db.execute(
         select(LeaveElection).where(LeaveElection.enrollment_id == enr.id)
     ).scalar_one_or_none()
@@ -1087,6 +1089,7 @@ def perform_submit(
         raise HTTPException(status.HTTP_409_CONFLICT, "Enrollment is already finalized.")
     window = _require_window(db, enr)
     assert_window_accepts_edits(window)
+    revalidate_enrollment(db, enr)
     # Flex guards: an overdrawn wallet blocks (unless the window allows
     # overdrafts); changed-but-unpriced elections need explicit acknowledgment.
     assert_within_wallet(db, enr, window)

@@ -30,7 +30,6 @@ from app.models import Category, EnrollmentWindow, FlexPricing, PolicyYear, Prod
 from app.models.enrollment_window import WindowStatus
 from app.schemas.api import PlanFinancials
 from app.services.cohort_tiers import cohort_key, list_product_tiers, tier_key
-from app.services.enrollment_validation import assert_enrollment_config_editable
 from app.services.flex_pricing_resolver import (
     DependantMode,
     _per_member_slip_premium,
@@ -432,6 +431,18 @@ def _upsert_pricing_row(
     row = db.execute(
         select(FlexPricing).where(FlexPricing.policy_year_id == py.id)
     ).scalar_one_or_none()
+    if db.scalar(select(EnrollmentWindow.id).where(
+        EnrollmentWindow.policy_year_id == py.id,
+        EnrollmentWindow.status == WindowStatus.open,
+    )):
+        # Monetary corrections remain available after advisory opening. They
+        # must not become a back door for changing who is eligible/covered.
+        if _coverage_rules(pricing) != _coverage_rules((row.pricing if row else {}) or {}):
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "Dependant eligibility and participation cannot change while an "
+                "enrolment period is open. Price tags and rates can still be corrected.",
+            )
     action = "update_flex_pricing"
     if row is None:
         row = FlexPricing(policy_year_id=py.id, client_id=py.client_id)
@@ -441,6 +452,22 @@ def _upsert_pricing_row(
     flag_modified(row, "pricing")
     db.flush()
     return row, action
+
+
+def _coverage_rules(pricing: dict[str, Any]) -> dict[str, Any]:
+    products: dict[str, Any] = {}
+    for product_id, block in pricing.get("products", {}).items():
+        dependant = block.get("dependant") or {}
+        protected = {
+            key: dependant[key] for key in ("participation", "age_limits")
+            if dependant.get(key)
+        }
+        if protected:
+            products[product_id] = protected
+    return {
+        "settings": {key: value for key, value in pricing.items() if key != "products"},
+        "products": products,
+    }
 
 
 @router.put(
@@ -454,7 +481,6 @@ def upsert_flex_pricing(
     db: Session = Depends(get_db),
 ) -> FlexPricingOut:
     assert_policy_year_editable(py)
-    assert_enrollment_config_editable(db, py.id, "Flex pricing")
     row, action = _upsert_pricing_row(db, py, body.pricing)
     write_audit(
         db, user, action=action, entity_type="flex_pricing",
@@ -483,7 +509,6 @@ def upsert_enrollment_pricing_config(
 ) -> FlexPricingOut:
     """Save the year's recommendations/overrides (and any drafts) as one transaction."""
     assert_policy_year_editable(py)
-    assert_enrollment_config_editable(db, py.id, "Flex pricing")
     windows = db.execute(
         select(EnrollmentWindow).where(
             EnrollmentWindow.policy_year_id == py.id,

@@ -287,6 +287,39 @@ test("a draft period shows advisory validation and allows opening", async ({
   ).toBeVisible();
 });
 
+test("open periods allow price repair while dependant rules stay locked", async ({ page, request }) => {
+  const policyYearId = await installCurrentSession(page, request);
+  let savedPricing: Record<string, unknown> | null = null;
+  await page.route(
+    new RegExp(`/api/v1/policy-years/${policyYearId}/enrollment-windows`),
+    (route) => route.fulfill({ json: [{ ...draftWindow, status: "open", policy_year_id: policyYearId }] }),
+  );
+  await page.route(
+    new RegExp(`/api/v1/policy-years/${policyYearId}/flex-pricing`),
+    (route) => route.fulfill({ json: { ...pricingResponse, policy_year_id: policyYearId } }),
+  );
+  await page.route(
+    new RegExp(`/api/v1/policy-years/${policyYearId}/enrollment-pricing-config`),
+    async (route) => {
+      savedPricing = (await route.request().postDataJSON()).pricing;
+      await route.fulfill({ json: { ...pricingResponse, policy_year_id: policyYearId, pricing: savedPricing } });
+    },
+  );
+  await page.goto("/client-relations/enrollment?tab=rules");
+  await expect(page.getByText(/You can supply missing prices or correct rates/)).toBeVisible();
+  await page.getByRole("button", { name: /GPA/ }).click();
+  const price = page.getByLabel("GPA Executives Option 1 price tag");
+  await expect(price).toBeEnabled();
+  await expect(page.getByLabel("GPA Executives Option 1 dependant enrolment")).toBeDisabled();
+  await expect(page.getByLabel("Remove dependant cover from GPA Staff Option 3")).toHaveCount(0);
+  await price.fill("77");
+  await page.getByRole("button", { name: "Save price tags" }).click();
+  await expect.poll(() => savedPricing).not.toBeNull();
+  expect(savedPricing).toMatchObject({ products: {
+    "p-gpa": { price_tags: { "gpa-exec-o1::SHARED": { "All ages": 77 } } },
+  } });
+});
+
 test("price book unifies employee and dependant setup per plan", async ({
   page,
   request,

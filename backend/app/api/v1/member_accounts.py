@@ -10,7 +10,6 @@ from __future__ import annotations
 import logging
 import re
 import threading
-from collections import Counter
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -51,6 +50,7 @@ from app.core.request_context import client_ip, user_agent
 from app.core.sessions import revoke_all_for_subject
 from app.core.settings import get_settings
 from app.db.session import SessionLocal, get_db
+from app.db.tenancy import set_search_path
 from app.models import Client, Employee, MemberAccount
 from app.models.auth import SUBJECT_MEMBER
 from app.models.member_account import (
@@ -615,7 +615,12 @@ def _roster_entries(
     # shared classifier, so the count and the send agree. Every employee using
     # a shared mailbox needs individual activation; arbitrarily choosing the
     # first staff id still sends that person's credentials to an HR mailbox.
-    email_counts = Counter(email for employee in employees if (email := _roster_email(employee)))
+    email_owners: dict[str, set[str]] = {}
+    for roster_owner in db.scalars(select(Employee).where(
+        Employee.client_id == client_id, Employee.status == "active",
+    )):
+        if owner_email := _roster_email(roster_owner):
+            email_owners.setdefault(owner_email, set()).add(roster_owner.staff_id)
     seen_staff: set[str] = set()
 
     entries: list[_RosterEntry] = []
@@ -628,7 +633,10 @@ def _roster_entries(
             email = _roster_email(employee)
         elif email and not _valid_invite_email(email):
             email = None
-        duplicate = bool(email and email_counts[email] > 1)
+        # An account may retain an old address after its owner's roster email
+        # changes. Even ONE other staff member on that address makes delivery
+        # unsafe; occurrence counts cannot establish ownership.
+        duplicate = bool(email and email_owners.get(email, set()) - {employee.staff_id})
         if account is None:
             # An account already on this address belongs to a DIFFERENT staff id
             # — it is a colleague's, not this employee's. Adopting it here would
@@ -694,24 +702,30 @@ def _deliver_invites(account_ids: list[str], client_id: str) -> None:
     credential back to what it was, so nobody is left holding a password that
     was never delivered.
 
-    Touches only control tables (`member_accounts`, `clients`), which live in
-    `public` on every dialect — so unlike the claim-review pipeline this needs
-    no firm `search_path`.
+    Resolves the client's firm before rechecking roster ownership. The session
+    retains this tenant search path across the per-account commits.
     """
     db = SessionLocal()
     try:
         client = db.get(Client, client_id)
-
-        slug = client.slug if client else None
+        if client is None:
+            return
+        set_search_path(db, client.broker_firm_id)
+        slug = client.slug
         policy = get_auth_policy(db, client_id)
         source = policy.portal_login_source
         sent = failed = 0
         for account_id in account_ids:
             account = db.get(MemberAccount, account_id)
-            if account is None or account.status == MEMBER_STATUS_DISABLED:
+            if (account is None or account.client_id != client_id
+                    or account.status == MEMBER_STATUS_DISABLED):
                 continue
             if account.invite_sent_at is not None:
                 continue  # delivered by a concurrent run — never send twice
+            if not account.email or _shared_roster_email(
+                db, client_id, account.email, account.staff_id,
+            ):
+                continue  # ownership may have changed since the run was queued
             prior = snapshot_credential(account)
             password = issue_invite_credential(account, policy.password_min_entropy)
             revoke_all_for_subject(db, SUBJECT_MEMBER, account.id)

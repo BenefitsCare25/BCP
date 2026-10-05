@@ -6,7 +6,9 @@ import { toast } from "sonner";
 import { useMe, useSetMatchOverride } from "@/api/hooks";
 import { AlertDialog } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { formatError } from "@/lib/errors";
+import { employeeMappingChoices, mappingPlanDescription } from "@/lib/employeeMappingChoices";
 import type { CategoryGroup, Employee } from "@/types";
 
 export function EmployeeMappingEditor({ employee, groups, actionContainer, disabled, onDirtyChange }: {
@@ -21,6 +23,13 @@ export function EmployeeMappingEditor({ employee, groups, actionContainer, disab
   const [version, setVersion] = useState(employee.updated_at);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  const [activeProduct, setActiveProduct] = useState<string | undefined>();
+  const productKey = (group: CategoryGroup) => group.product_id ?? group.product_code;
+  const initialGroup = groups.find((group) => employee.unmatched_product_codes?.includes(group.product_code))
+    ?? groups[0];
+  const activeKey = groups.some((group) => productKey(group) === activeProduct)
+    ? activeProduct
+    : initialGroup ? productKey(initialGroup) : undefined;
   const dirty = selected.size !== baseline.size || [...selected].some((id) => !baseline.has(id));
   const editable = Boolean(me && me.role !== "broker_viewer");
   useEffect(() => {
@@ -69,24 +78,33 @@ export function EmployeeMappingEditor({ employee, groups, actionContainer, disab
   return <section aria-labelledby="employee-mapping-heading" className="space-y-2">
     <h3 id="employee-mapping-heading" className="text-2xs uppercase tracking-wider text-muted-foreground">Manual mapping</h3>
     <p className="text-xs text-muted-foreground">Choose one employee category per product, then save. Dependant-only options are managed with dependant coverage.</p>
-    <div className="max-h-56 overflow-y-auto rounded-md border border-border divide-y divide-border">
+    <Tabs value={activeKey} onValueChange={setActiveProduct} className="min-w-0">
       {groups.length === 0 && <p className="p-3 text-xs text-muted-foreground">No categories configured for this policy year.</p>}
+      {groups.length > 0 && <TabsList aria-label="Product mapping" className="flex w-full flex-wrap gap-x-4 gap-y-0">
+        {groups.map((group) => <TabsTrigger key={productKey(group)} value={productKey(group)}
+          title={group.product_display_name}>{group.product_code}</TabsTrigger>)}
+      </TabsList>}
       {groups.map((group) => {
-        const categories = group.categories.filter((c) => c.plan_assignments?.member_scope !== "dependant");
-        return <fieldset key={group.product_code} className="p-2">
-          <legend className="float-left w-full mb-1 text-2xs uppercase tracking-wider text-muted-foreground">
-            {group.product_code} · {group.product_display_name}
-          </legend>
+        const categories = employeeMappingChoices(group.categories, selected);
+        return <TabsContent key={productKey(group)} value={productKey(group)}
+          className="mt-2 max-h-64 overflow-y-auto rounded-md border border-border p-3">
+          <fieldset className="min-w-0">
+          <legend className="mb-2 text-sm font-medium text-foreground">{group.product_display_name}</legend>
           {categories.length === 0 && <p className="clear-both text-xs text-muted-foreground">Dependant-only product; no employee category to assign.</p>}
           {categories.map((category) => {
             const plan = category.plan_assignments?.plan_code;
             const insured = category.plan_assignments?.insured;
+            const planDescription = mappingPlanDescription(category);
+            const choiceLabel = `${category.display_name}${plan != null && plan !== "" ? ` · Plan ${String(plan)}` : ""}`;
             // A broker may replace a category. Removing saved product coverage requires an administrator.
             const canUncheck = me?.role === "system_admin" || !baseline.has(category.id);
             return <label key={category.id} className="flex clear-both items-start gap-2 py-1 text-sm">
-              <input type="checkbox" className="mt-1" checked={selected.has(category.id)}
+              <input type="checkbox" className="mt-1 accent-primary" checked={selected.has(category.id)}
+                aria-label={choiceLabel}
+                aria-describedby={`mapping-choice-${category.id}`}
                 disabled={!editable || disabled || override.isPending || (selected.has(category.id) && !canUncheck)}
                 onChange={(event) => {
+                  setActiveProduct(productKey(group));
                   const next = new Set(selected);
                   if (event.target.checked) {
                     group.categories.forEach((c) => next.delete(c.id));
@@ -95,15 +113,19 @@ export function EmployeeMappingEditor({ employee, groups, actionContainer, disab
                   setSelected(next); setError(null); setSaved(false);
                   onDirtyChange(next.size !== baseline.size || [...next].some((id) => !baseline.has(id)));
                 }} />
-              <span className="min-w-0">
-                <span>{category.display_name}{plan != null && plan !== "" ? ` · Plan ${String(plan)}` : ""}</span>
+              <span className="min-w-0" id={`mapping-choice-${category.id}`}>
+                <span>{category.display_name}</span>
+                <span className="block text-xs font-medium text-foreground">
+                  {plan != null && plan !== "" ? `Plan ${String(plan)}` : "Plan not specified"}
+                  {planDescription && ` · ${planDescription}`}
+                </span>
                 {Boolean(insured) && <span className="block text-xs text-muted-foreground">{String(insured)}</span>}
               </span>
             </label>;
           })}
-        </fieldset>;
+        </fieldset></TabsContent>;
       })}
-    </div>
+    </Tabs>
     {editable && !disabled && (actionContainer ? createPortal(actions, actionContainer) : actions)}
     <AlertDialog open={blocker.status === "blocked"}
       onOpenChange={(open) => { if (!open && !override.isPending && blocker.status === "blocked") blocker.reset(); }}

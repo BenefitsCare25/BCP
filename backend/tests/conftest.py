@@ -40,6 +40,10 @@ os.environ.setdefault("INSPRO_RATE_LIMIT_ENABLED", "0")
 # cookies. Pin this independently of a developer's .env; mode-specific tests
 # explicitly override it to exercise subdomain deployments.
 os.environ["INSPRO_TENANT_MODE"] = "header"
+# Broker fixtures expect the ordinary broker role. A local system-admin review
+# setting must not silently elevate them; role-specific tests override auth or
+# explicitly monkeypatch this value themselves.
+os.environ["INSPRO_MOCK_ROLE"] = "broker_admin"
 
 # No live currency lookups from the suite. `services/fx.py` reaches out to
 # Frankfurter, and a test that quietly does so is a test whose result depends on

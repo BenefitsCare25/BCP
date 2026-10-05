@@ -411,11 +411,13 @@ function UnifiedCategoryPriceTable({
   pricing,
   editor,
   editable,
+  rulesEditable,
 }: {
   product: FlexPricingProduct;
   pricing: FlexPricingBag | undefined;
   editor: FlexPricingEditor;
   editable: boolean;
+  rulesEditable: boolean;
 }) {
   const cohorts = cohortsFor(product);
   return (
@@ -559,7 +561,7 @@ function UnifiedCategoryPriceTable({
                       product={product}
                       tier={tier}
                       editor={editor}
-                      editable={editable}
+                      editable={rulesEditable}
                     />
                   </td>
                   <td className="px-3 py-2">
@@ -585,6 +587,7 @@ export function FlexProductList({
   pricing,
   editor,
   editable,
+  rulesEditable = editable,
   openEditor,
   onToggleEditor,
   emptyHint,
@@ -593,6 +596,7 @@ export function FlexProductList({
   pricing: FlexPricingBag | undefined;
   editor: FlexPricingEditor;
   editable: boolean;
+  rulesEditable?: boolean;
   openEditor: Record<string, boolean>;
   onToggleEditor: (productId: string) => void;
   emptyHint?: ReactNode;
@@ -684,6 +688,7 @@ export function FlexProductList({
                       pricing={pricing}
                       editor={editor}
                       editable={editable}
+                      rulesEditable={rulesEditable}
                     />
                     {ageTiers.length > 0 && (
                       <div id={`${product.product_id}-age-rates`}>
@@ -697,7 +702,7 @@ export function FlexProductList({
                     <UnifiedDependantSettings
                       product={product}
                       editor={editor}
-                      editable={editable}
+                      editable={rulesEditable}
                     />
                   </div>
                 )}

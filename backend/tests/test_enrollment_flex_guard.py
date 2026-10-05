@@ -32,6 +32,7 @@ from app.models import (  # noqa: E402
     Enrollment,
     EnrollmentElection,
     EnrollmentWindow,
+    FlexPricing,
     LeaveElection,
     Plan,
     PolicyYear,
@@ -112,7 +113,7 @@ def _setup_db():
 def _reset_enrollment_state():
     yield
     with SessionLocal() as s:
-        for model in (LeaveElection, EnrollmentElection, Enrollment,
+        for model in (FlexPricing, LeaveElection, EnrollmentElection, Enrollment,
                       EmployeePlanOverride, EnrollmentWindow):
             s.query(model).delete()
         s.commit()
@@ -249,4 +250,67 @@ def test_keep_and_decline_elections_are_not_flagged_unpriced(
     )
     assert res.status_code == 200, res.text
     assert client.post(f"/api/v1/enrollments/{eid}/submit").status_code == 200
+
+
+@pytest.mark.parametrize("endpoint", ["flex-pricing", "enrollment-pricing-config"])
+@pytest.mark.parametrize("stage", ["submit", "confirm"])
+def test_missing_prices_are_repairable_in_open_period(client, endpoint, stage):
+    with SessionLocal() as db:
+        for employee in db.query(Employee).filter(Employee.policy_year_id == PY_ID):
+            employee.attribute_values = {"date_of_birth": "1990-01-01"}
+            employee.flex_currency = "SGD"
+        db.commit()
+    wid = _make_window(client)
+    eid = _enrollment_id(client, wid, "F-1")
+    _elect_gold(client, eid)
+    readiness = client.get(f"/api/v1/enrollment-windows/{wid}/readiness").json()
+    assert "flex_prices_incomplete" in {i["code"] for i in readiness["issues"]}
+    if stage == "confirm":
+        assert client.post(f"/api/v1/enrollments/{eid}/submit",
+            json={"acknowledge_unpriced": True}).status_code == 200
+    else:
+        blocked = client.post(f"/api/v1/enrollments/{eid}/submit")
+        assert blocked.json()["detail"]["code"] == "unpriced_elections"
+
+    def pricing(amount):
+        return {"products": {PROD_ID: {
+            "age_bands": [{"label": "All ages", "min": None, "max": None}],
+            "price_tags": {
+                f"{CAT_ID}::SILVER": {"All ages": 0},
+                f"{CAT_ID}::GOLD": {"All ages": amount},
+            },
+        }}}
+
+    path = f"/api/v1/policy-years/{PY_ID}/{endpoint}"
+    # Remediation must still enforce the wallet guard; an expensive new price
+    # cannot silently become a zero debit or finalize an overdrawn election.
+    saved = client.put(path, json={"pricing": pricing(150)})
+    assert saved.status_code == 200, saved.text
+    blocked = client.post(f"/api/v1/enrollments/{eid}/{stage}")
+    assert blocked.status_code == 409, blocked.text
+    assert blocked.json()["detail"]["code"] == "flex_overdrawn"
+    saved = client.put(path, json={"pricing": pricing(60)})
+    assert saved.status_code == 200, saved.text
+    readiness = client.get(f"/api/v1/enrollment-windows/{wid}/readiness").json()
+    assert "flex_prices_incomplete" not in {i["code"] for i in readiness["issues"]}
+    repaired = client.post(f"/api/v1/enrollments/{eid}/{stage}")
+    assert repaired.status_code == 200, repaired.text
+    with SessionLocal() as db:
+        assert db.query(EnrollmentElection).filter_by(enrollment_id=eid).one().flex_price_tag == 60
+
+    if stage == "submit":
+        # Later price corrections must retain the reviewed submission snapshot.
+        assert client.put(path, json={"pricing": pricing(90)}).status_code == 200
+        assert client.post(f"/api/v1/enrollments/{eid}/confirm").status_code == 200
+        with SessionLocal() as db:
+            election = db.query(EnrollmentElection).filter_by(enrollment_id=eid).one()
+            assert election.flex_price_tag == 60
+
+    protected = pricing(60)
+    protected["products"][PROD_ID]["dependant"] = {"participation": {f"{CAT_ID}::GOLD": "none"}}
+    assert client.put(path, json={"pricing": protected}).status_code == 409
+    assert client.put(f"/api/v1/policy-years/{PY_ID}/leave-policy",
+        json={"allow_buy": True}).status_code == 409
+    assert client.patch(f"/api/v1/enrollment-windows/{wid}",
+        json={"default_behavior": "deemed_decline"}).status_code == 409
 
