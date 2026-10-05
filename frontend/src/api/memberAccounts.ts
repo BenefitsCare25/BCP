@@ -70,6 +70,7 @@ export interface BulkInviteResult {
   duplicate: number;
   already_invited: number;
   skipped_disabled: number;
+  accounts_reenabled?: number;
   /** A run was already in flight; this request did nothing. */
   already_sending: boolean;
 }
@@ -96,11 +97,11 @@ export interface PortalRollout {
    *  provisioned, because one mailbox must not receive two members' logins. */
   duplicate: number;
   disabled: number;
+  disabled_invite_pending?: number;
   /** False when the configured mailer can't even be built (e.g. SMTP mode with
    *  no host) — pressing send would queue hundreds and deliver none. */
   mail_deliverable: boolean;
-  /** "log" writes invites to the application log rather than emailing them —
-   *  the dev/staging default. Warned about, not blocked. */
+  /** Delivery mode for operational diagnostics; log mode is development-only. */
   mail_mode: string;
   /** A delivery run is working through the roster right now. */
   sending: boolean;
@@ -233,9 +234,10 @@ export function usePortalRollout(policyYearId: string | null) {
 export function useBulkInviteMembers() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (policyYearId: string) =>
+    mutationFn: ({ policyYearId, reenableDisabled = false }: { policyYearId: string; reenableDisabled?: boolean }) =>
       api.post<BulkInviteResult>("/member-accounts/bulk-invite", {
         policy_year_id: policyYearId,
+        ...(reenableDisabled ? { reenable_disabled: true } : {}),
       }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["member-accounts"] });

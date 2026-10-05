@@ -199,6 +199,7 @@ class MemberAccountPatch(BaseModel):
 
 class BulkInviteIn(BaseModel):
     policy_year_id: str
+    reenable_disabled: bool = False
 
 
 class BulkInviteResult(BaseModel):
@@ -226,6 +227,7 @@ class BulkInviteResult(BaseModel):
     # what makes the button safe to press twice.
     already_invited: int = 0
     skipped_disabled: int = 0
+    accounts_reenabled: int = 0
     # True when a run was already in flight and this request did nothing. The
     # counts do not move for a minute or two while delivery works through the
     # roster, which reads like nothing happened — so a second press is refused
@@ -252,8 +254,9 @@ class PortalRolloutMember(BaseModel):
 class PortalRolloutOut(BaseModel):
     """Portal-access state of the whole roster, for the rollout card.
 
-    `invite_pending` is what the send button targets and what its label counts,
-    so the number on the button is the number the endpoint will act on.
+    `invite_pending` counts enabled accounts awaiting an invitation.
+    `disabled_invite_pending` is the subset of disabled accounts eligible for
+    invitation only after explicit approval to re-enable them.
     """
 
     employees_total: int
@@ -266,16 +269,15 @@ class PortalRolloutOut(BaseModel):
     # sharing one would put a member's benefits in a colleague's inbox.
     duplicate: int = 0
     disabled: int
+    disabled_invite_pending: int = 0
     # False when the configured mailer cannot even be CONSTRUCTED — which is the
     # real production failure: `INSPRO_MAIL_MODE=smtp` with no `INSPRO_SMTP_HOST`
     # raises, every send fails, and a rollout reports hundreds queued and
     # delivers none. Checked BEFORE the button is offered rather than discovered
     # after pressing it.
     mail_deliverable: bool
-    # The delivery mode, so `log` (dev/staging default — invites are written to
-    # the application log, not emailed) can be WARNED about without disabling
-    # the button: it is how the flow is rehearsed before a real rollout, and
-    # prod is fail-closed against it at boot anyway.
+    # Delivery mode for operational diagnostics. Log mode is development-only;
+    # production fails closed against it at boot.
     mail_mode: str
     # True while a delivery run is working through the roster. Delivery is slow
     # (Argon2id per member), so without this the card looks idle mid-send and

@@ -13,12 +13,11 @@
  */
 import { useState } from "react";
 import { Link } from "@tanstack/react-router";
-import { Loader2, Mail, MailWarning, Send } from "lucide-react";
+import { Loader2, Send } from "lucide-react";
 import { toast } from "sonner";
 import {
   useBulkInviteMembers,
   usePortalRollout,
-  type PortalRollout,
 } from "@/api/memberAccounts";
 import { formatError } from "@/lib/errors";
 import { useSession } from "@/stores/session";
@@ -28,7 +27,6 @@ import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
-  CardDescription,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
@@ -71,25 +69,6 @@ function Stat({
   );
 }
 
-/** Why the send button is off, in the user's terms. Returning null means it is
- *  enabled — the caller renders no explanation, because there is nothing to
- *  explain. A disabled control with no stated reason is the failure mode here:
- *  "nothing to send" and "we can't send" look identical otherwise. */
-function disabledReason(rollout: PortalRollout): string | null {
-  if (rollout.sending)
-    return "Sending — invites are going out now. This page updates as they land.";
-  if (rollout.employees_total === 0)
-    return "No employees on this benefit year yet — upload the roster first.";
-  if (!rollout.mail_deliverable)
-    return "Email delivery is not configured. An administrator must configure delivery before invitations can be sent. Shared email addresses do not block invitations to other employees.";
-  if (rollout.invite_pending === 0) {
-    return rollout.no_email + rollout.duplicate > 0
-      ? "Everyone reachable by email has been invited. The rest are listed below."
-      : "Everyone on the roster has been invited.";
-  }
-  return null;
-}
-
 export function PortalRolloutCard({ policyYearId: suppliedYear, readOnly = false }: { policyYearId?: string; readOnly?: boolean } = {}) {
   const selectedYear = useSession((s) => s.currentPolicyYearId);
   const policyYearId = suppliedYear ?? selectedYear;
@@ -98,15 +77,14 @@ export function PortalRolloutCard({ policyYearId: suppliedYear, readOnly = false
   const { data: rollout, isLoading, isError, error, refetch } = usePortalRollout(policyYearId);
   const bulkInvite = useBulkInviteMembers();
   const [confirm, setConfirm] = useState(false);
+  const [reenableDisabled, setReenableDisabled] = useState(false);
 
   if (!policyYearId) {
     return (
       <Card>
         <CardHeader>
           <CardTitle className="text-sm">Employee portal access</CardTitle>
-          <CardDescription>
-            Add a benefit year covering today to invite employees to the portal.
-          </CardDescription>
+          <p className="text-sm text-muted-foreground">Select a benefit year to invite employees.</p>
         </CardHeader>
       </Card>
     );
@@ -128,28 +106,21 @@ export function PortalRolloutCard({ policyYearId: suppliedYear, readOnly = false
     );
   }
 
-  const blocked = disabledReason(rollout);
   const pending = rollout.invite_pending;
+  const disabledPending = rollout.disabled_invite_pending ?? 0;
+  const sendable = pending + disabledPending;
+  const selectedCount = pending + (reenableDisabled ? disabledPending : 0);
+  const blocked = rollout.sending || !rollout.mail_deliverable || sendable === 0;
 
   const send = async () => {
     try {
-      const res = await bulkInvite.mutateAsync(policyYearId);
+      const res = await bulkInvite.mutateAsync({ policyYearId, reenableDisabled });
       setConfirm(false);
       if (res.already_sending) {
         toast.info("A send is already running — nothing was queued twice.");
         return;
       }
-      toast.success(
-        res.queued === 1
-          ? "Sending 1 invite — it'll arrive shortly."
-          : `Sending ${res.queued.toLocaleString()} invites — they'll arrive over the next few minutes.`,
-      );
-      const unreachable = res.no_email + res.duplicate;
-      if (unreachable > 0) {
-        toast.warning(
-          `${unreachable.toLocaleString()} employee${unreachable === 1 ? "" : "s"} need individual activation — see the follow-up list below.`,
-        );
-      }
+      toast.success(`Queued ${res.queued.toLocaleString()} invitation${res.queued === 1 ? "" : "s"}.`);
     } catch (err) {
       toast.error(formatError(err));
     }
@@ -159,18 +130,11 @@ export function PortalRolloutCard({ policyYearId: suppliedYear, readOnly = false
     <Card>
       <CardHeader>
         <div className="flex flex-wrap items-start justify-between gap-4">
-          <div className="min-w-0">
-            <CardTitle className="text-sm">Employee portal access</CardTitle>
-            <CardDescription>
-              Send invitations in bulk to every active employee with an email address who has not received one yet.{" "}
-              Each employee is emailed a one-time password and chooses their own
-              at first sign-in. Nobody else ever sees it — not HR, not you.
-            </CardDescription>
-          </div>
+          <CardTitle className="text-sm">Employee portal access</CardTitle>
           {!cannotSend && <div className="shrink-0">
             <Button
               disabled={Boolean(blocked) || bulkInvite.isPending}
-              onClick={() => setConfirm(true)}
+              onClick={() => { setReenableDisabled(false); setConfirm(true); }}
             >
               {bulkInvite.isPending || rollout.sending ? (
                 <Loader2 className="size-4 animate-spin" />
@@ -179,15 +143,15 @@ export function PortalRolloutCard({ policyYearId: suppliedYear, readOnly = false
               )}
               {rollout.sending
                 ? "Sending…"
-                : pending > 0
-                  ? `Send ${pending.toLocaleString()} invite${pending === 1 ? "" : "s"}`
-                  : "Send invites"}
+                : sendable > 0
+                  ? `Send all ${sendable.toLocaleString()} invitations`
+                  : "Send all invitations"}
             </Button>
           </div>}
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
           <Stat
             label="Using the portal"
             value={rollout.signed_in}
@@ -203,7 +167,7 @@ export function PortalRolloutCard({ policyYearId: suppliedYear, readOnly = false
             label="Not invited yet"
             value={rollout.invite_pending}
             tone={rollout.invite_pending > 0 ? "warn" : undefined}
-            hint="Has an email address but no invite delivered — exactly who the button above will email."
+            hint="Enabled accounts with a valid email address awaiting their first invitation."
           />
           <Stat
             label="Needs individual activation"
@@ -211,43 +175,12 @@ export function PortalRolloutCard({ policyYearId: suppliedYear, readOnly = false
             tone={rollout.no_email + rollout.duplicate > 0 ? "warn" : undefined}
             hint="No email address on file, or an address shared with another employee. These employees are skipped by bulk email; other eligible employees can still be invited."
           />
+          <Stat label="Disabled access" value={rollout.disabled}
+            hint="Disabled accounts are excluded unless you approve re-enabling them in the send confirmation." />
         </div>
-
-        {blocked && (
-          <p className="flex items-start gap-2 text-sm text-muted-foreground">
-            {rollout.mail_deliverable ? (
-              <Mail className="mt-0.5 size-4 shrink-0" />
-            ) : (
-              <MailWarning className="mt-0.5 size-4 shrink-0 text-warn" />
-            )}
-            <span>{blocked}</span>
-          </p>
-        )}
-
-        {/* Log mode still "delivers" — to the application log — which is how a
-         * rollout is rehearsed before it is run for real. Blocking it would
-         * make the flow untestable anywhere, since prod refuses to boot in log
-         * mode in the first place. So: warn, don't disable. */}
-        {rollout.mail_deliverable && rollout.mail_mode === "log" && (
-          <p className="flex items-start gap-2 text-sm text-warn">
-            <MailWarning className="mt-0.5 size-4 shrink-0" />
-            <span>
-              This environment writes invites to the application log instead of
-              emailing them. Safe to use for a rehearsal; no employee will
-              receive anything.
-            </span>
-          </p>
-        )}
 
         {rollout.needs_attention.length > 0 && (
           <div className="space-y-2">
-            <div>
-              <SectionLabel>Needs individual activation</SectionLabel>
-              <p className="text-xs text-muted-foreground">
-                Use an employee's own verified email address, or review their individual access in Member Coverage.
-                Shared HR mailboxes should not receive employees' personal login credentials.
-              </p>
-            </div>
             <div className="max-h-64 overflow-y-auto rounded-md border border-border">
               <Table>
                 <TableHeader>
@@ -278,7 +211,7 @@ export function PortalRolloutCard({ policyYearId: suppliedYear, readOnly = false
                             )}
                           </>
                         ) : (
-                          "No email address"
+                          "No valid email address"
                         )}
                       </TableCell>
                     </TableRow>
@@ -299,25 +232,19 @@ export function PortalRolloutCard({ policyYearId: suppliedYear, readOnly = false
       <AlertDialog
         open={confirm}
         onOpenChange={setConfirm}
-        title={`Send ${pending.toLocaleString()} portal invite${pending === 1 ? "" : "s"}?`}
+        title="Send all invitations?"
         description={
-          <>
-            Each of these {pending.toLocaleString()} employee
-            {pending === 1 ? "" : "s"} gets an email with a one-time password and
-            a link to your portal.
-            {rollout.invited + rollout.signed_in > 0 && (
-              <>
-                {" "}
-                The{" "}
-                <strong>
-                  {(rollout.invited + rollout.signed_in).toLocaleString()}
-                </strong>{" "}
-                who already have an invite will not be emailed again.
-              </>
-            )}
-          </>
+          <div className="space-y-3">
+            <p>{selectedCount.toLocaleString()} employee{selectedCount === 1 ? "" : "s"} selected.</p>
+            {disabledPending > 0 && <label className="flex items-start gap-2 text-sm">
+              <input type="checkbox" className="mt-1" checked={reenableDisabled}
+                disabled={bulkInvite.isPending} onChange={(event) => setReenableDisabled(event.target.checked)} />
+              <span>Re-enable {disabledPending.toLocaleString()} disabled accounts and invite them.</span>
+            </label>}
+          </div>
         }
-        confirmLabel="Send invites"
+        confirmLabel={reenableDisabled ? "Re-enable and send" : "Send invitations"}
+        confirmDisabled={selectedCount === 0 || !rollout.mail_deliverable || rollout.sending}
         confirmVariant="default"
         tone="info"
         loading={bulkInvite.isPending}

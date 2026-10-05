@@ -724,3 +724,137 @@ def test_token_survives_reissue_and_encodes_client(anon_client: TestClient):
     )
     assert res.status_code == 200
     assert res.json()["member"]["id"] == account_id
+
+
+@pytest.mark.parametrize("email", ["member+benefits@example.com", "first.last@acme.com.sg"])
+def test_bulk_email_validation_accepts_plain_mailboxes(email):
+    from app.api.v1.member_accounts import _valid_invite_email
+
+    assert _valid_invite_email(email)
+
+
+@pytest.mark.parametrize("email", [
+    "missing-at.example.com", "member@@example.com", "member@-example.com",
+    "member@example..com", "first..last@example.com", ".member@example.com",
+    "Member <member@example.com>", "member@example.com\r\nBcc:other@example.com",
+    "member @example.com", "member@localhost", "a" * 65 + "@example.com",
+])
+def test_bulk_email_validation_rejects_invalid_addresses(email):
+    from app.api.v1.member_accounts import _valid_invite_email
+
+    assert not _valid_invite_email(email)
+
+
+@pytest.fixture
+def disabled_invite_roster(monkeypatch):
+    from app.api.v1 import member_accounts
+    from app.models.member_account import MEMBER_STATUS_DISABLED
+
+    specs = [
+        ("valid", "VALID@reactivation.test", True, "active", None),
+        ("invalid", "invalid@@reactivation.test", True, "active", None),
+        ("no-email", None, True, "active", None),
+        ("used", "used@reactivation.test", True, "active", datetime.now(UTC)),
+        ("shared", "shared@reactivation.test", True, "active", None),
+        ("shared-peer", "shared@reactivation.test", False, "active", None),
+        ("leaver", "leaver@reactivation.test", True, "terminated", None),
+        ("pending", "pending@reactivation.test", False, "active", None),
+    ]
+    accounts = {}
+    queued = []
+    staff_ids = [f"REACTIVATE-{name}" for name, *_ in specs]
+    with SessionLocal() as db:
+        for name, email, existing, employee_status, signed_in in specs:
+            account = None
+            if existing:
+                account = MemberAccount(client_id=DEMO_CLIENT_ID, staff_id=f"REACTIVATE-{name}",
+                    email=email, status=MEMBER_STATUS_DISABLED, last_sign_in_at=signed_in)
+                db.add(account)
+                db.flush()
+                accounts[name] = account.id
+            db.add(Employee(client_id=DEMO_CLIENT_ID, policy_year_id=PY_ACTIVE,
+                staff_id=f"REACTIVATE-{name}", employee_name=f"Reactivation test {name}",
+                attribute_values={"email": email} if email else {}, derived_attribute_values={},
+                source="csv_import", status=employee_status,
+                member_account_id=account.id if account else None))
+        db.commit()
+
+    def capture_delivery(ids, client_id):
+        queued.extend(ids)
+        with member_accounts._SENDING_LOCK:
+            member_accounts._SENDING.discard(client_id)
+
+    monkeypatch.setattr(member_accounts, "_deliver_invites", capture_delivery)
+    monkeypatch.setattr(member_accounts, "mail_deliverable", lambda: True)
+    try:
+        yield accounts, queued
+    finally:
+        with SessionLocal() as db:
+            db.query(Employee).filter(Employee.staff_id.in_(staff_ids)).delete(synchronize_session=False)
+            db.query(MemberAccount).filter(MemberAccount.staff_id.in_(staff_ids)).delete(synchronize_session=False)
+            db.commit()
+
+
+def test_send_all_requires_explicit_reenable_and_targets_only_eligible_accounts(
+    broker_client, disabled_invite_roster,
+):
+    from app.models.member_account import MEMBER_STATUS_DISABLED
+
+    accounts, queued = disabled_invite_roster
+    rollout = broker_client.get("/api/v1/member-accounts/rollout",
+        params={"policy_year_id": PY_ACTIVE}).json()
+    assert rollout["disabled_invite_pending"] == 1
+    ordinary = broker_client.post("/api/v1/member-accounts/bulk-invite",
+        json={"policy_year_id": PY_ACTIVE})
+    assert ordinary.status_code == 200, ordinary.text
+    assert ordinary.json()["accounts_reenabled"] == 0
+    assert ordinary.json()["queued"] == rollout["invite_pending"]
+    assert not set(accounts.values()).intersection(queued)
+    with SessionLocal() as db:
+        assert all(db.get(MemberAccount, account_id).status == MEMBER_STATUS_DISABLED
+                   for account_id in accounts.values())
+
+    queued.clear()
+    response = broker_client.post("/api/v1/member-accounts/bulk-invite",
+        json={"policy_year_id": PY_ACTIVE, "reenable_disabled": True})
+    assert response.status_code == 200, response.text
+    assert response.json()["accounts_reenabled"] == 1
+    assert accounts["valid"] in queued
+    excluded = {account_id for name, account_id in accounts.items() if name != "valid"}
+    assert not excluded.intersection(queued)
+    with SessionLocal() as db:
+        assert db.get(MemberAccount, accounts["valid"]).status == MEMBER_STATUS_INVITED
+        for name, account_id in accounts.items():
+            if name != "valid":
+                assert db.get(MemberAccount, account_id).status == MEMBER_STATUS_DISABLED
+
+
+def test_unconfigured_mail_never_reenables_accounts(
+    broker_client, disabled_invite_roster, monkeypatch,
+):
+    from app.api.v1 import member_accounts
+    from app.models.member_account import MEMBER_STATUS_DISABLED
+
+    accounts, queued = disabled_invite_roster
+    monkeypatch.setattr(member_accounts, "mail_deliverable", lambda: False)
+    response = broker_client.post("/api/v1/member-accounts/bulk-invite",
+        json={"policy_year_id": PY_ACTIVE, "reenable_disabled": True})
+    assert response.status_code == 503
+    assert queued == []
+    with SessionLocal() as db:
+        assert all(db.get(MemberAccount, account_id).status == MEMBER_STATUS_DISABLED
+                   for account_id in accounts.values())
+
+
+def test_viewers_cannot_reenable_and_bulk_invite(disabled_invite_roster):
+    _, queued = disabled_invite_roster
+    user = CurrentUser(user_id=_broker().user_id, broker_firm_id=DEMO_BROKER_FIRM_ID,
+                       client_id=DEMO_CLIENT_ID, role="broker_viewer")
+    app.dependency_overrides[get_current_user] = lambda: user
+    try:
+        response = TestClient(app).post("/api/v1/member-accounts/bulk-invite",
+            json={"policy_year_id": PY_ACTIVE, "reenable_disabled": True})
+        assert response.status_code == 403
+        assert queued == []
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)

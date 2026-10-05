@@ -199,18 +199,58 @@ test("bulk invitations target unique addresses and shared mailboxes have an indi
       already_invited: 0, skipped_disabled: 0, already_sending: false } });
   });
   await page.goto("/client-relations/enrollment");
-  await expect(page.getByRole("button", { name: "Send 2 invites", exact: true })).toBeDisabled();
-  await expect(page.getByText(/Shared email addresses do not block invitations/)).toBeVisible();
+  await expect(page.getByRole("button", { name: "Send all 2 invitations", exact: true })).toBeDisabled();
   await expect(page.getByRole("link", { name: "Shared Member", exact: true })).toHaveAttribute("href", /employee=shared-1/);
   mailReady = true;
   await page.reload();
-  await page.getByRole("button", { name: "Send 2 invites", exact: true }).click();
-  await expect(page.getByRole("dialog")).toContainText("Each of these 2 employees");
-  await page.getByRole("dialog").getByRole("button", { name: "Send invites", exact: true }).click();
+  await page.getByRole("button", { name: "Send all 2 invitations", exact: true }).click();
+  await expect(page.getByRole("dialog")).toContainText("2 employees selected.");
+  await page.getByRole("dialog").getByRole("button", { name: "Send invitations", exact: true }).click();
   await expect(page.getByRole("dialog")).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "Send invites", exact: true })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Send all invitations", exact: true })).toBeDisabled();
   expect(calls).toBe(1);
   await page.screenshot({ path: info.outputPath("bulk-invitation-follow-up.png"), fullPage: true });
+});
+
+test("send all offers valid disabled accounts with explicit confirmation and concise content", async ({ page, request }, info) => {
+  const { year } = await session(page, request);
+  await overview(page, year.id);
+  let sent = false;
+  let calls = 0;
+  await page.route(`**${API}/member-accounts/rollout?*`, (route) => route.fulfill({ json: {
+    ...rollout, invite_pending: 0, disabled: sent ? 0 : 466,
+    disabled_invite_pending: sent ? 0 : 466, invited: sent ? 466 : 0,
+    mail_deliverable: true, mail_mode: "log",
+  } }));
+  await page.route(`**${API}/member-accounts/bulk-invite`, (route) => {
+    calls++;
+    expect(route.request().postDataJSON()).toEqual({ policy_year_id: year.id, reenable_disabled: true });
+    sent = true;
+    return route.fulfill({ json: { queued: 466, accounts_created: 0, accounts_reenabled: 466,
+      duplicate: 2, no_email: 1, already_invited: 0, skipped_disabled: 0, already_sending: false } });
+  });
+  await page.goto("/client-relations/enrollment");
+  const send = page.getByRole("button", { name: "Send all 466 invitations", exact: true });
+  await expect(send).toBeEnabled();
+  for (const text of ["Everyone reachable by email", "This environment writes invites",
+    "Use an employee's own verified email", "Send invitations in bulk", "Nobody else ever sees it"]) {
+    await expect(page.getByText(text, { exact: false })).toHaveCount(0);
+  }
+  await page.screenshot({ path: info.outputPath("send-all-concise-panel.png"), fullPage: true });
+  await send.click();
+  const dialog = page.getByRole("dialog", { name: "Send all invitations?" });
+  await expect(dialog.getByRole("button", { name: "Send invitations", exact: true })).toBeDisabled();
+  expect(calls).toBe(0);
+  await dialog.getByRole("checkbox", { name: "Re-enable 466 disabled accounts and invite them." }).check();
+  await expect(dialog).toContainText("466 employees selected.");
+  const violations = (await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21aa"]).analyze()).violations;
+  expect(violations).toEqual([]);
+  await page.screenshot({ path: info.outputPath("send-all-disabled-confirmation.png"), fullPage: true });
+  await dialog.getByRole("button", { name: "Re-enable and send", exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Send all invitations", exact: true })).toBeDisabled();
+  expect(calls).toBe(1);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 });
 
 test("unmatched product links and employee category filters select the same roster rows", async ({ page, request }, info) => {

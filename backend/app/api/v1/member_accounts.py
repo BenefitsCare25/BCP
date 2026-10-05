@@ -8,6 +8,7 @@ employee's `member_account_id`, and sends the OTP invite.
 from __future__ import annotations
 
 import logging
+import re
 import threading
 from collections import Counter
 from dataclasses import dataclass
@@ -157,11 +158,25 @@ def _load_account(
 
 def _validated_email(raw: str) -> str:
     email = raw.strip().lower()
-    if "@" not in email or "." not in email.split("@")[-1]:
+    if not _valid_invite_email(email):
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid email address."
         )
     return email
+
+
+def _valid_invite_email(email: str) -> bool:
+    """Accept a single plain mailbox, never a malformed address or header value."""
+    if len(email) > 254 or email.count("@") != 1:
+        return False
+    local, domain = email.split("@")
+    return bool(
+        local and len(local) <= 64 and not local.startswith(".")
+        and not local.endswith(".") and ".." not in local
+        and re.fullmatch(r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+", local)
+        and re.fullmatch(r"(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+"
+                         r"[A-Za-z]{2,63}", domain)
+    )
 
 
 def _unique_member_login_id(db: Session, client_id: str) -> str:
@@ -552,7 +567,7 @@ def _roster_email(employee: Employee) -> str | None:
     if not raw:
         return None
     email = raw.strip().lower()
-    if "@" not in email or "." not in email.split("@")[-1]:
+    if not _valid_invite_email(email):
         return None
     return email
 
@@ -583,7 +598,7 @@ def _roster_entries(
     ).scalars().all()
     by_id = {a.id: a for a in accounts}
     by_staff = {a.staff_id: a for a in accounts}
-    by_email = {a.email: a for a in accounts if a.email}
+    by_email = {a.email.strip().casefold(): a for a in accounts if a.email}
 
     employees = db.execute(
         select(Employee)
@@ -608,7 +623,11 @@ def _roster_entries(
         account = by_id.get(employee.member_account_id or "") or by_staff.get(
             employee.staff_id
         )
-        email = account.email if account is not None else _roster_email(employee)
+        email = account.email.strip().casefold() if account is not None and account.email else None
+        if account is None:
+            email = _roster_email(employee)
+        elif email and not _valid_invite_email(email):
+            email = None
         duplicate = bool(email and email_counts[email] > 1)
         if account is None:
             # An account already on this address belongs to a DIFFERENT staff id
@@ -652,6 +671,13 @@ def _bucket(entry: _RosterEntry) -> str:
     if not entry.email:
         return _BUCKET_NO_EMAIL
     return _BUCKET_PENDING
+
+
+def _disabled_invite_eligible(entry: _RosterEntry) -> bool:
+    account = entry.account
+    return bool(account is not None and account.status == MEMBER_STATUS_DISABLED
+                and not account.last_sign_in_at and entry.email
+                and _valid_invite_email(entry.email) and not entry.duplicate)
 
 
 def _deliver_invites(account_ids: list[str], client_id: str) -> None:
@@ -760,6 +786,7 @@ def portal_rollout(
         no_email=counts[_BUCKET_NO_EMAIL],
         duplicate=counts[_BUCKET_DUPLICATE],
         disabled=counts[_BUCKET_DISABLED],
+        disabled_invite_pending=sum(_disabled_invite_eligible(entry) for entry in entries),
         mail_deliverable=mail_deliverable(),
         mail_mode=get_settings().mail_mode,
         sending=client_id in _SENDING,
@@ -784,9 +811,8 @@ def bulk_invite(
     follow-up list and can be handed a set-password link individually.
 
     Members who already received an invite, or who are already onboarded, are
-    left untouched: the target set is the `pending` bucket alone. That is what
-    makes this safe to press repeatedly — it never becomes a second email to
-    someone who already has one, only a first email to whoever is left.
+    left untouched. Disabled accounts that have never signed in and have a
+    valid unique email are included only with explicit re-enable approval.
     """
     client_id = require_client_id(user)
     assert_policy_year_for_user(body.policy_year_id, user, db)
@@ -803,14 +829,24 @@ def bulk_invite(
             return BulkInviteResult(already_sending=True)
 
     entries = _roster_entries(db, client_id, body.policy_year_id)
-    created = no_email = already = disabled = duplicate = 0
+    created = no_email = already = disabled = duplicate = reenabled = 0
     targets: list[str] = []
 
     for entry in entries:
         bucket = _bucket(entry)
         if bucket == _BUCKET_DISABLED:
-            disabled += 1
-            continue
+            if not body.reenable_disabled or not _disabled_invite_eligible(entry):
+                disabled += 1
+                continue
+            account = entry.account
+            assert account is not None
+            before = {"status": account.status}
+            account.status = MEMBER_STATUS_INVITED
+            account.invite_sent_at = None
+            write_audit(db, user, "member_account.reenabled_for_invite", "member_account",
+                        account.id, before=before, after={"status": account.status})
+            reenabled += 1
+            bucket = _BUCKET_PENDING
         if bucket in (_BUCKET_INVITED, _BUCKET_SIGNED_IN):
             already += 1
             continue
@@ -837,6 +873,7 @@ def bulk_invite(
             "policy_year_id": body.policy_year_id,
             "queued": len(targets),
             "accounts_created": created,
+            "accounts_reenabled": reenabled,
             "no_email": no_email,
             "duplicate": duplicate,
         },
@@ -859,4 +896,5 @@ def bulk_invite(
         duplicate=duplicate,
         already_invited=already,
         skipped_disabled=disabled,
+        accounts_reenabled=reenabled,
     )
