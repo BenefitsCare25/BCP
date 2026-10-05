@@ -1,9 +1,7 @@
-"""Fail-closed checks for the draft -> open enrollment transition.
+"""Advisory validation for enrolment setup, without preventing opening.
 
-The member experience combines coverage matching, product identity, portal
-access, and (optionally) Flex funding. Opening is the irreversible boundary at
-which those independent drafts become one employee-facing promise, so this
-module reports aggregate, non-PII blockers before any enrollment rows are made.
+Aggregate issues do not identify employees. Authorized review endpoints provide
+affected employees separately, so brokers can review and resolve setup gaps.
 """
 
 from __future__ import annotations
@@ -43,12 +41,11 @@ def _issue(
     *,
     count: int | None = None,
     products: set[str] | list[str] | None = None,
-    severity: str = "blocker",
+    severity: str = "warning",
     count_unit: str = "employees",
     employee_count: int | None = None,
 ) -> dict[str, Any]:
-    # ``blocker`` stops the period opening; ``warning`` is shown to the broker
-    # before they open it but is theirs to accept.
+    # Setup validation is advisory; opening remains the broker's decision.
     out: dict[str, Any] = {"code": code, "message": message, "severity": severity}
     if count is not None:
         out["count"] = count
@@ -66,7 +63,7 @@ def enrollment_readiness_issues(
     *,
     affected: dict[str, list[dict[str, Any]]] | None = None,
 ) -> list[dict[str, Any]]:
-    """Return aggregate blockers for opening ``window`` (empty means ready).
+    """Return aggregate validation warnings for ``window``.
 
     Aggregate output never identifies employees. The authorized review endpoint
     can request a separate collector; open/conflict responses never include it.
@@ -133,7 +130,7 @@ def enrollment_readiness_issues(
             _issue(
                 "duplicate_product_codes",
                 "One benefit code resolves to multiple product records. Reconcile the "
-                "product setup before opening.",
+                "product setup.",
                 count=len(duplicate_codes),
                 products=duplicate_codes,
                 count_unit="products",
@@ -329,9 +326,7 @@ def enrollment_readiness_issues(
                     "portal_access_incomplete",
                     "Some active employees have no usable portal account or delivered invite.",
                     count=inaccessible,
-                    # A Flex member MUST choose (their wallet is otherwise unspent);
-                    # without Flex an unreached member simply keeps their plan.
-                    severity="blocker" if window.uses_flex else "warning",
+                    severity="warning",
                 )
             )
 
@@ -360,7 +355,7 @@ def enrollment_readiness_issues(
         issues.append(
             _issue(
                 "flex_scheme_not_confirmed",
-                "Confirm the Flex scheme before opening a Flex-funded period.",
+                "The Flex scheme still requires confirmation.",
             )
         )
 
@@ -435,8 +430,3 @@ def enrollment_readiness_issues(
             )
         )
     return issues
-
-
-def blocking_issues(issues: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """The issues that stop a period opening (warnings are the broker's call)."""
-    return [i for i in issues if i.get("severity", "blocker") == "blocker"]

@@ -2,8 +2,7 @@ import { SystemAdminOnly } from "@/components/auth/SystemAdminOnly";
 /** A drafted period: its rules, whether it can open, and the Open action.
  *
  * Readiness is shown up front (it used to appear only after Open failed), and
- * Open is disabled while anything blocks it. Warnings don't block, but opening
- * with warnings asks once, naming them — opening is irreversible. */
+ * Validation alerts are advisory and never disable the Open action. */
 import { useState } from "react";
 import { Loader2, Pencil, Play, Trash2 } from "lucide-react";
 import { toast } from "sonner";
@@ -11,16 +10,15 @@ import {
   type EnrollmentWindow,
   useDeleteWindow,
   useOpenWindow,
-  useWindowReadiness,
 } from "@/api/enrollment";
 import { AlertDialog } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { ConflictDetailError, formatError } from "@/lib/errors";
+import { formatError } from "@/lib/errors";
 import { parseServerDate } from "@/lib/format";
 import { PeriodForm } from "./PeriodForm";
 import { PeriodSummary } from "./PeriodSummary";
-import { ReadinessChecklist } from "./ReadinessChecklist";
+import { ReadinessReview } from "./ReadinessReview";
 import { PHASE_META, deadlineSentence } from "./periodMeta";
 
 export function DraftPeriodPanel({
@@ -73,29 +71,17 @@ export function DraftPeriodPanel({
 }
 
 function OpenSection({ window: w, readOnly }: { window: EnrollmentWindow; readOnly: boolean }) {
-  const readiness = useWindowReadiness(w.id);
   const open = useOpenWindow();
-  const [confirming, setConfirming] = useState(false);
-  const issues = readiness.data?.issues ?? [];
-  const blocked = !readiness.data?.ready || readiness.isError;
-  const warnings = issues.filter((i) => i.severity === "warning");
   const startsLater = parseServerDate(w.opens_at).getTime() > Date.now();
 
   function doOpen() {
     open.mutate(w.id, {
       onSuccess: (r) => {
-        setConfirming(false);
         toast.success(
           `${w.name} is open — ${r.enrollments_created.toLocaleString()} members added with their current plans.`,
         );
       },
       onError: (e) => {
-        setConfirming(false);
-        if (e instanceof ConflictDetailError && e.detail.code === "enrollment_not_ready") {
-          void readiness.refetch();
-          toast.error("Something changed — this period is no longer ready. See the checklist.");
-          return;
-        }
         toast.error(formatError(e));
       },
     });
@@ -103,20 +89,12 @@ function OpenSection({ window: w, readOnly }: { window: EnrollmentWindow; readOn
 
   return (
     <div className="space-y-4 border-t border-border pt-5">
-      <h3 className="text-sm font-semibold text-foreground">Ready to open?</h3>
-      {readiness.isError ? (
-        <div role="alert" className="text-sm text-error">
-          Could not check whether this period can open. {formatError(readiness.error)}
-          <Button variant="outline" size="sm" onClick={() => void readiness.refetch()}>Retry readiness check</Button>
-        </div>
-      ) : (
-        <ReadinessChecklist windowId={w.id} readiness={readiness.data} isLoading={readiness.isLoading} />
-      )}
+      <ReadinessReview windowId={w.id} />
       {!readOnly && (
         <div className="flex flex-wrap items-center gap-3">
           <Button
-            disabled={blocked || readiness.isLoading || open.isPending}
-            onClick={() => (warnings.length ? setConfirming(true) : doOpen())}
+            disabled={open.isPending}
+            onClick={doOpen}
           >
             {open.isPending ? (
               <Loader2 className="size-4 animate-spin" aria-hidden />
@@ -132,23 +110,6 @@ function OpenSection({ window: w, readOnly }: { window: EnrollmentWindow; readOn
           </span>
         </div>
       )}
-      <AlertDialog
-        open={confirming}
-        onOpenChange={setConfirming}
-        tone="info"
-        title={`Open ${w.name} with ${warnings.length === 1 ? "a warning" : `${warnings.length} warnings`}?`}
-        description={
-          <ul className="list-disc space-y-1 pl-5">
-            {warnings.map((i) => (
-              <li key={i.code}>{i.message}</li>
-            ))}
-          </ul>
-        }
-        confirmLabel="Open anyway"
-        confirmVariant="default"
-        loading={open.isPending}
-        onConfirm={doOpen}
-      />
     </div>
   );
 }

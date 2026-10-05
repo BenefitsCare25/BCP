@@ -128,7 +128,7 @@ def test_window_flex_config_defaults_and_roundtrip(client: TestClient) -> None:
     assert patched.json()["flex_price_source"] == {"prod-gtl": "manual"}
 
 
-def test_flex_window_fails_closed_when_configuration_is_empty(
+def test_flex_window_can_open_with_configuration_warnings(
     client: TestClient,
 ) -> None:
     window = client.post(
@@ -140,18 +140,16 @@ def test_flex_window_fails_closed_when_configuration_is_empty(
         f"/api/v1/enrollment-windows/{window['id']}/readiness"
     )
     assert readiness.status_code == 200
-    assert readiness.json()["ready"] is False
+    assert readiness.json()["ready"] is True
     assert {issue["code"] for issue in readiness.json()["issues"]} == {
         "no_products_in_scope"
     }
 
     opened = client.post(f"/api/v1/enrollment-windows/{window['id']}/open")
-    assert opened.status_code == 409
-    detail = opened.json()["detail"]
-    assert detail["code"] == "enrollment_not_ready"
-    assert {issue["code"] for issue in detail["issues"]} == {
-        "no_products_in_scope"
-    }
+    assert opened.status_code == 200, opened.text
+    assert opened.json()["window"]["status"] == "open"
+    assert opened.json()["enrollments_created"] == 0
+    assert client.post(f"/api/v1/enrollment-windows/{window['id']}/close").status_code == 200
 
 
 def test_window_flex_config_rejects_bad_values(client: TestClient) -> None:

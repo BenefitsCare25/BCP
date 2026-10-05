@@ -166,7 +166,7 @@ test("readiness names employees, distinguishes mappings, and supports search and
   await page.goto("/client-relations/enrollment");
   await expect(page.getByText("· 2 mappings", { exact: true })).toBeVisible();
   await expect(page.getByText("· 51 employees affected", { exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Open period", exact: true })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Open period", exact: true })).toBeEnabled();
   await page.getByRole("button", { name: "Show affected employees", exact: true }).click();
   await expect(page.getByRole("link", { name: "Review Employee 0", exact: true })).toBeVisible();
   await expect(page.getByRole("link", { name: "Review GCGP · Executives" }).first()).toHaveAttribute("href", /category=review-category/);
@@ -211,6 +211,54 @@ test("bulk invitations target unique addresses and shared mailboxes have an indi
   expect(calls).toBe(1);
   await page.screenshot({ path: info.outputPath("bulk-invitation-follow-up.png"), fullPage: true });
 });
+
+for (const checksFail of [false, true]) {
+  test(`enrolment opens without mail delivery when validation ${checksFail ? "cannot load" : "has warnings"}`,
+    async ({ page, request }, info) => {
+      const { year } = await session(page, request);
+      await overview(page, year.id);
+      let opened = false;
+      let opens = 0;
+      let invitations = 0;
+      await page.route(`**${API}/policy-years/${year.id}/enrollment-windows`, (route) =>
+        route.fulfill({ json: [{ ...period, policy_year_id: year.id, status: opened ? "open" : "draft" }] }));
+      await page.route(`**${API}/member-accounts/rollout?*`, (route) =>
+        route.fulfill({ json: { ...rollout, mail_deliverable: false } }));
+      await page.route(`**${API}/member-accounts/bulk-invite`, (route) => {
+        invitations++;
+        return route.fulfill({ status: 503, json: { detail: "Email delivery is not configured." } });
+      });
+      await page.route(`**${API}/enrollment-windows/review-period/readiness`, (route) =>
+        checksFail ? route.fulfill({ status: 503, json: { detail: "Validation unavailable" } }) :
+          route.fulfill({ json: { ready: false, issues: [issue, { code: "portal_access_incomplete",
+            severity: "warning", message: "Some employees do not have portal access.", count: 5 }] } }));
+      await page.route(`**${API}/enrollment-windows/review-period/progress`, (route) =>
+        route.fulfill({ json: { total: 5, not_started: 5, in_progress: 0, submitted: 0,
+          confirmed: 0, deemed: 0, declined: 0, not_in_period: 0 } }));
+      await page.route(`**${API}/enrollment-windows/review-period/open`, (route) => {
+        opens++;
+        opened = true;
+        return route.fulfill({ json: { window: { ...period, policy_year_id: year.id, status: "open" },
+          enrollments_created: 5 } });
+      });
+      await page.goto("/client-relations/enrollment");
+      const open = page.getByRole("button", { name: "Open period", exact: true });
+      await expect(open).toBeEnabled();
+      if (checksFail) await expect(page.getByRole("alert").filter({ hasText: "Could not load validation checks" })).toBeVisible({ timeout: 20000 });
+      else await expect(page.getByText("2 validation warnings", { exact: true })).toBeVisible();
+      await expect(page.getByRole("button", { name: "Send all 2 invitations", exact: true })).toBeDisabled();
+      await page.screenshot({ path: info.outputPath("open-with-advisory-validation.png"), fullPage: true });
+      await open.click();
+      await expect(page.getByRole("button", { name: "Close period", exact: true })).toBeVisible();
+      if (!checksFail) {
+        await expect(page.getByText("2 validation warnings", { exact: true })).toBeVisible();
+        await expect(page.getByRole("button", { name: "Show affected employees", exact: true })).toHaveCount(2);
+      }
+      expect(opens).toBe(1);
+      expect(invitations).toBe(0);
+      await page.screenshot({ path: info.outputPath("opened-with-validation-retained.png"), fullPage: true });
+    });
+}
 
 test("send all offers valid disabled accounts with explicit confirmation and concise content", async ({ page, request }, info) => {
   const { year } = await session(page, request);

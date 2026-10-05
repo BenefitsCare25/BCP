@@ -233,7 +233,7 @@ const pricingResponse = {
   ],
 };
 
-test("a draft period shows its opening blockers before Open is pressed", async ({
+test("a draft period shows advisory validation and allows opening", async ({
   page,
   request,
 }) => {
@@ -269,14 +269,13 @@ test("a draft period shows its opening blockers before Open is pressed", async (
 
   // The retired `windows` tab key still lands on the period overview.
   await page.goto("/client-relations/enrollment?tab=windows");
-  await expect(page.getByText("1 thing blocks opening")).toBeVisible();
+  await expect(page.getByText("2 validation warnings")).toBeVisible();
   await expect(
     page.getByText("Assign a wallet amount and currency to every active employee."),
   ).toBeVisible();
   await expect(page.getByText("· 4 employees", { exact: true })).toBeVisible();
-  await expect(page.getByText("1 to be aware of")).toBeVisible();
-  // A blocker disables Open outright — no failed click, no after-the-fact dialog.
-  await expect(page.getByRole("button", { name: "Open period" })).toBeDisabled();
+  await expect(page.getByText("These alerts do not prevent opening this period.")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Open period" })).toBeEnabled();
 
   // Flex funding choices appear only once the period uses Flex.
   await page.getByRole("button", { name: "Edit" }).click();

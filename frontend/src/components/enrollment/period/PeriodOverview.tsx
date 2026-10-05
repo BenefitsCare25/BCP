@@ -166,7 +166,7 @@ function EmptyState({ readOnly, onPlan }: { readOnly: boolean; onPlan: () => voi
         <ol className="mx-auto mt-5 max-w-md space-y-1.5 text-left text-sm text-foreground">
           <li>1. Plan the period: dates, what can change, what happens if members do nothing.</li>
           <li>2. Check prices and leave rules on Pricing &amp; rules.</li>
-          <li>3. Open it once the readiness checks pass.</li>
+          <li>3. Review the validation alerts and open the period when you choose.</li>
         </ol>
         {!readOnly && (
           <Button className="mt-6" onClick={onPlan}>

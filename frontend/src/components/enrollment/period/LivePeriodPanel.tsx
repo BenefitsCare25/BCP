@@ -31,6 +31,7 @@ import { cn } from "@/lib/cn";
 import { ClosePeriodDialog } from "./ClosePeriodDialog";
 import { PeriodForm } from "./PeriodForm";
 import { PeriodSummary } from "./PeriodSummary";
+import { ReadinessReview } from "./ReadinessReview";
 import {
   PHASE_META,
   STATUS_META,
@@ -93,6 +94,7 @@ export function LivePeriodPanel({
         ) : (
           <>
             <Progress progress={progress.data} loading={progress.isLoading} />
+            <ReadinessReview windowId={w.id} />
             {progress.data && (
               <Queue window={w} p={progress.data} readOnly={readOnly} overdue={overdue} />
             )}

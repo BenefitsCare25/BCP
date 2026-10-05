@@ -63,8 +63,7 @@ class EnrollmentWindowCreate(BaseModel):
     # Off runs the period broker-managed: open for brokers, dark in the portal.
     member_self_service: bool = True
     # On means insured-cover price tags draw down from assigned Flex wallets.
-    # The period cannot open until the scheme, wallets, mappings, and prices pass
-    # the server-side readiness gate.
+    # Scheme, wallet, mapping and pricing checks are advisory when opening.
     uses_flex: bool = False
     product_scope: list[str] | None = None
     # {product_id: "slip" | "manual"} — products omitted fall back to "manual".

@@ -572,7 +572,7 @@ export interface ElectionIn {
 export interface EnrollmentReadinessIssue {
   code: string;
   message: string;
-  /** `blocker` stops the period opening; `warning` is the broker's call. */
+  /** Setup issues are advisory. Legacy blocker values are also shown as warnings. */
   severity: "blocker" | "warning";
   count?: number;
   count_unit?: "employees" | "mappings" | "products" | "tiers";
@@ -843,7 +843,7 @@ export function useOpenWindow() {
   });
 }
 
-/** Readiness to open a draft period — blockers and warnings, before the click. */
+/** Advisory setup validation and affected employee counts, before opening. */
 export function useWindowReadiness(windowId: string | undefined) {
   const cid = useClientId();
   return useQuery({

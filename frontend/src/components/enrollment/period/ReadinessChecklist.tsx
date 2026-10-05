@@ -1,9 +1,6 @@
-/** Can this draft open? Shown BEFORE the broker presses Open — the same checks
- * the server runs at the open boundary, so the answer here is the answer there.
- * Blockers stop the period opening; warnings are the broker's call. */
-import { AlertTriangle, CheckCircle2, CircleSlash, Loader2 } from "lucide-react";
+/** Advisory setup checks and affected employees; opening is the broker's choice. */
+import { AlertTriangle, CheckCircle2, Loader2 } from "lucide-react";
 import type { EnrollmentReadiness, EnrollmentReadinessIssue } from "@/api/enrollment";
-import { cn } from "@/lib/cn";
 import { useState } from "react";
 import { ReadinessEmployees } from "./ReadinessEmployees";
 import { Button } from "@/components/ui/button";
@@ -24,59 +21,39 @@ export function ReadinessChecklist({
       </p>
     );
   }
-  const blockers = readiness.issues.filter((i) => i.severity !== "warning");
-  const warnings = readiness.issues.filter((i) => i.severity === "warning");
   if (!readiness.issues.length) {
     return (
       <p className="flex items-center gap-2 text-sm text-good">
         <CheckCircle2 className="size-4" aria-hidden />
-        Ready to open — every check passes.
+        No validation issues found.
       </p>
     );
   }
   return (
     <div className="space-y-3">
-      {blockers.length > 0 && (
-        <IssueList
-          title={`${blockers.length} ${blockers.length === 1 ? "thing blocks" : "things block"} opening`}
-          tone="error"
-          issues={blockers}
-          windowId={windowId}
-        />
-      )}
-      {warnings.length > 0 && (
-        <IssueList
-          title={`${warnings.length} to be aware of`}
-          tone="warn"
-          issues={warnings}
-          windowId={windowId}
-        />
-      )}
+      <IssueList
+        title={`${readiness.issues.length} validation warning${readiness.issues.length === 1 ? "" : "s"}`}
+        issues={readiness.issues}
+        windowId={windowId}
+      />
+      <p className="text-xs text-muted-foreground">These alerts do not prevent opening this period.</p>
     </div>
   );
 }
 
 function IssueList({
   title,
-  tone,
   issues,
   windowId,
 }: {
   title: string;
-  tone: "error" | "warn";
   issues: EnrollmentReadinessIssue[];
   windowId: string;
 }) {
-  const Icon = tone === "error" ? CircleSlash : AlertTriangle;
   return (
     <div>
-      <p
-        className={cn(
-          "mb-1.5 flex items-center gap-1.5 text-sm font-medium",
-          tone === "error" ? "text-error" : "text-warn",
-        )}
-      >
-        <Icon className="size-4" aria-hidden />
+      <p className="mb-1.5 flex items-center gap-1.5 text-sm font-medium text-warn">
+        <AlertTriangle className="size-4" aria-hidden />
         {title}
       </p>
       <ul className="space-y-1.5 pl-5.5">

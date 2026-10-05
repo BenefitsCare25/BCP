@@ -1,4 +1,4 @@
-"""Enrollment periods expose aggregate blockers and open only from safe state."""
+"""Enrollment validation identifies setup gaps without restricting opening."""
 
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ from app.models import (
 )
 from app.models.category import CategoryStatus, SourceKind
 from app.models.flex_scheme import FlexSchemeStatus
-from app.services.enrollment_readiness import blocking_issues, enrollment_readiness_issues
+from app.services.enrollment_readiness import enrollment_readiness_issues
 
 
 def _session() -> tuple[Session, object]:
@@ -166,7 +166,7 @@ def test_partial_product_gaps_are_review_warnings_and_respect_scope():
         gap = next(i for i in issues if i["code"] == "employees_with_coverage_gaps")
         assert gap["count"] == 1 and gap["products"] == ["DENTAL"]
         assert gap["severity"] == "warning"
-        assert blocking_issues(issues) == []
+        assert all(issue["severity"] == "warning" for issue in issues)
         assert details[gap["code"]][0]["employee_id"] == employee.id
         window.product_scope = ["MED"]
         assert enrollment_readiness_issues(db, window) == []
@@ -223,11 +223,12 @@ def test_flex_readiness_tracks_scheme_wallet_and_portal_access() -> None:
         _product, _category, employee = _seed_benefit(db)
         window = _window(db)
         issues = enrollment_readiness_issues(db, window)
-        assert {issue["code"] for issue in blocking_issues(issues)} == {
+        assert {issue["code"] for issue in issues} >= {
             "portal_access_incomplete",
             "flex_scheme_not_confirmed",
             "flex_wallets_incomplete",
         }
+        assert all(issue["severity"] == "warning" for issue in issues)
 
         account = MemberAccount(
             id="account",
@@ -259,7 +260,7 @@ def test_flex_readiness_tracks_scheme_wallet_and_portal_access() -> None:
         engine.dispose()
 
 
-def test_duplicate_same_code_products_block_opening() -> None:
+def test_duplicate_same_code_products_are_reported_as_advisory() -> None:
     db, engine = _session()
     try:
         _seed_benefit(db)
@@ -290,6 +291,63 @@ def test_duplicate_same_code_products_block_opening() -> None:
         )
         assert duplicate_issue["count"] == 1
         assert duplicate_issue["products"] == ["MED"]
+        assert duplicate_issue["severity"] == "warning"
     finally:
+        db.close()
+        engine.dispose()
+
+
+def test_opening_with_unmatched_employees_and_missing_email_setup_succeeds(monkeypatch):
+    from fastapi.testclient import TestClient
+    from sqlalchemy import select
+
+    from app.core.auth import CurrentUser, get_current_user
+    from app.db.session import get_db
+    from app.main import app
+    from app.models import AuditLog, Enrollment
+    from app.services import member_invite
+
+    db, engine = _session()
+    try:
+        _, category, employee = _seed_benefit(db)
+        category.status = "needs_review"
+        employee.employee_name = "Advisory Review Member"
+        unmatched = Employee(id="unmatched", client_id="client", policy_year_id="year",
+                             staff_id="S-2", attribute_values={}, derived_attribute_values={},
+                             source="csv_import", status="active", matched_categories=[])
+        db.add(unmatched)
+        _window(db)
+        db.commit()
+        actor = CurrentUser(user_id="user", broker_firm_id="firm",
+                            client_id="client", role="broker_admin")
+        app.dependency_overrides[get_current_user] = lambda: actor
+        app.dependency_overrides[get_db] = lambda: db
+        monkeypatch.setattr(member_invite, "mail_deliverable", lambda: False)
+        with TestClient(app) as client:
+            readiness = client.get("/api/v1/enrollment-windows/window/readiness")
+            assert readiness.status_code == 200
+            assert readiness.json()["ready"] is True
+            expected = {"unconfirmed_categories", "employees_without_coverage",
+                        "portal_access_incomplete", "flex_scheme_not_confirmed",
+                        "flex_wallets_incomplete"}
+            assert expected <= {issue["code"] for issue in readiness.json()["issues"]}
+            assert all(issue["severity"] == "warning" for issue in readiness.json()["issues"])
+            response = client.post("/api/v1/enrollment-windows/window/open")
+            assert response.status_code == 200, response.text
+            assert response.json()["window"]["status"] == "open"
+            assert response.json()["enrollments_created"] == 2
+            assert {row.employee_id for row in db.scalars(select(Enrollment))} == {
+                employee.id, unmatched.id,
+            }
+            audit = db.scalar(select(AuditLog).where(
+                AuditLog.action == "enrollment_window.opened_with_warnings"))
+            assert expected <= {issue["code"] for issue in audit.after["issues"]}
+            assert employee.employee_name not in str(audit.after)
+            # Repeating Open only syncs new employees; it never duplicates enrollments.
+            assert client.post("/api/v1/enrollment-windows/window/open").json()[
+                "enrollments_created"] == 0
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+        app.dependency_overrides.pop(get_db, None)
         db.close()
         engine.dispose()

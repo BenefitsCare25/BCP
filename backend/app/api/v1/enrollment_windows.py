@@ -48,7 +48,6 @@ from app.services.enrollment_lifecycle import (
     window_progress,
 )
 from app.services.enrollment_readiness import (
-    blocking_issues,
     enrollment_readiness_issues,
 )
 from app.services.enrollment_validation import assert_window_accepts_review
@@ -182,7 +181,7 @@ def get_window_readiness(
     db: Session = Depends(get_db),
 ) -> EnrollmentReadinessOut:
     issues = enrollment_readiness_issues(db, window)
-    return EnrollmentReadinessOut(ready=not blocking_issues(issues), issues=issues)
+    return EnrollmentReadinessOut(ready=True, issues=issues)
 
 
 @router.get(
@@ -291,18 +290,11 @@ def open_enrollment_window(
         )
     _assert_no_open_overlap(db, window)
     if window.status == WindowStatus.draft:
-        issues = blocking_issues(enrollment_readiness_issues(db, window))
+        issues = enrollment_readiness_issues(db, window)
         if issues:
-            raise HTTPException(
-                status.HTTP_409_CONFLICT,
-                {
-                    "code": "enrollment_not_ready",
-                    "message": (
-                        "This enrolment period is not ready to open. Resolve every "
-                        "listed blocker first."
-                    ),
-                    "issues": issues,
-                },
+            write_audit(
+                db, user, "enrollment_window.opened_with_warnings", "enrollment_window",
+                window.id, after={"issues": issues},
             )
     created = open_window(db, window, user)
     db.commit()
