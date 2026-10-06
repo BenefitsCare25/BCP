@@ -22,7 +22,7 @@
 import type { FlexSummary } from "@/components/enrollment/electionCore";
 import { flexShort } from "@/components/enrollment/electionCore";
 import { Money } from "@/components/portal/leaf/Figure";
-import { formatDay } from "@/components/portal/leaf/date";
+import { parseServerDate } from "@/lib/format";
 import { cn } from "@/lib/cn";
 
 /** A printed term with its figure, on one baseline. The rail is 236px wide at
@@ -63,7 +63,9 @@ function BalanceFigure({ flex }: { flex: FlexSummary }) {
 export function RailHeader({
   closesAt,
   flex,
+  closed = false,
 }: {
+  closed?: boolean;
   /** Null once the enrollment is finalized — there is no longer a deadline to
    *  act by, and the status note above the deck says so. */
   closesAt: string | null;
@@ -74,7 +76,11 @@ export function RailHeader({
   if (!closesAt && !flex) return null;
   return (
     <div className="flex flex-col gap-1">
-      {closesAt && <MeterRow term="Open till">{formatDay(closesAt)}</MeterRow>}
+      {closesAt && <MeterRow term={closed ? "Changes closed" : "Deadline"}>
+        <span className="flex flex-col items-end"><span>{parseServerDate(closesAt).toLocaleDateString("en-SG", { timeZone: "Asia/Singapore", day: "numeric", month: "short", year: "numeric" })}</span>
+          <span className="text-xs">{parseServerDate(closesAt).toLocaleTimeString("en-SG", { timeZone: "Asia/Singapore", hour: "numeric", minute: "2-digit" })} SGT</span>
+        </span>
+      </MeterRow>}
       {flex && (
         <MeterRow term={balanceTerm(flex)}>
           <BalanceFigure flex={flex} />

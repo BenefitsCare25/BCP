@@ -356,7 +356,9 @@ def test_reopen_confirmed_enrollment_allows_replan(client: TestClient) -> None:
 
     # Reopen flips the confirmed enrollment back to editable; the confirmed
     # override stays until re-confirm.
-    re = client.post(f"/api/v1/enrollments/{eid}/reopen")
+    re = client.post(
+        f"/api/v1/enrollments/{eid}/reopen", json={"reason": "Correct the selected plan"}
+    )
     assert re.status_code == 200 and re.json()["status"] == "in_progress"
     with SessionLocal() as s:
         assert load_overrides(s, PY_ID, [EMP1])[(EMP1, PROD_ID)].plan_code == "GOLD"
@@ -374,8 +376,12 @@ def test_reopen_confirmed_enrollment_allows_replan(client: TestClient) -> None:
 
     # Reopen applies only to a confirmed enrollment; a second reopen on the now
     # in_progress enrollment is rejected.
-    assert client.post(f"/api/v1/enrollments/{eid}/reopen").status_code == 200
-    assert client.post(f"/api/v1/enrollments/{eid}/reopen").status_code == 409
+    assert client.post(
+        f"/api/v1/enrollments/{eid}/reopen", json={"reason": "Correct the selected plan"}
+    ).status_code == 200
+    assert client.post(
+        f"/api/v1/enrollments/{eid}/reopen", json={"reason": "Correct the selected plan"}
+    ).status_code == 409
 
 
 def test_decline_projects_declined_override(client: TestClient) -> None:

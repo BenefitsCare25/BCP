@@ -25,7 +25,9 @@ export function ElectionActionBar({
   overdrawn: boolean;
   actions: ElectionActions;
 }) {
-  const [confirmReset, setConfirmReset] = useState(false);
+  const [reviewAction, setReviewAction] = useState<"discard" | "reopen" | "returnForCorrection" | null>(null);
+  const [reason, setReason] = useState("");
+  const openReview = (action: typeof reviewAction) => { setReason(""); setReviewAction(action); };
   const submitted = status === "submitted";
   return (
     <div className="flex flex-wrap items-center gap-2 border-t border-border pt-4">
@@ -39,7 +41,7 @@ export function ElectionActionBar({
           Confirm
         </Button>
       )}
-      {editable && !submitted && (
+      {editable && !submitted && status !== "returned" && (
         <Button
           onClick={() => a.submitAndConfirm(false)}
           disabled={a.busy || overdrawn}
@@ -53,18 +55,21 @@ export function ElectionActionBar({
           Submit &amp; confirm
         </Button>
       )}
-      {editable && (
+      {editable && !submitted && (
         <Button variant="outline" onClick={() => void a.saveDraft()} disabled={a.busy}>
           {submitted ? "Save changes" : "Save as draft"}
         </Button>
       )}
+      {submitted && phase === "open" && (
+        <Button variant="outline" disabled={a.busy} onClick={() => openReview("returnForCorrection")}>Return for correction</Button>
+      )}
       {editable && status !== "not_started" && (
-        <SystemAdminOnly><Button variant="ghost" onClick={() => setConfirmReset(true)} disabled={a.pending.reset}>
-          <RotateCcw className="size-4" aria-hidden /> Discard changes
+        <SystemAdminOnly><Button variant="ghost" onClick={() => openReview("discard")} disabled={a.busy}>
+          <RotateCcw className="size-4" aria-hidden /> Cancel and clear choices
         </Button></SystemAdminOnly>
       )}
       {status === "confirmed" && phase === "open" && (
-        <Button variant="outline" disabled={a.pending.reopen} onClick={a.reopen}>
+        <Button variant="outline" disabled={a.busy} onClick={() => openReview("reopen")}>
           {a.pending.reopen ? (
             <Loader2 className="size-4 animate-spin" aria-hidden />
           ) : (
@@ -73,17 +78,31 @@ export function ElectionActionBar({
           Reopen for changes
         </Button>
       )}
-      <StateNote status={status} phase={phase} opensAt={opensAt} editable={editable} />
-      <SystemAdminOnly><AlertDialog
-        open={confirmReset}
-        onOpenChange={setConfirmReset}
-        title="Discard this member's changes?"
-        description="Their saved plan and leave choices for this period are cleared, and they go back to the plans they had when it opened. Confirmed coverage is not affected."
-        confirmLabel="Discard"
-        confirmVariant="default"
-        loading={a.pending.reset}
-        onConfirm={() => a.discard(() => setConfirmReset(false))}
-      /></SystemAdminOnly>
+      <StateNote status={status} phase={phase} opensAt={opensAt} />
+      <AlertDialog
+        open={reviewAction !== null}
+        onOpenChange={(open) => { if (!open && !a.busy) setReviewAction(null); }}
+        title={reviewAction === "discard" ? "Cancel and clear this enrolment?" : reviewAction === "reopen" ? "Reopen this enrolment?" : "Return for correction?"}
+        description={<div className="space-y-3">
+          <p>{reviewAction === "discard"
+            ? "Saved plan and leave choices will be cleared. The signed form remains on record as cancelled. Existing confirmed coverage stays in place."
+            : reviewAction === "reopen"
+              ? "Saved choices are retained. Existing confirmed coverage stays in place until replacement choices are confirmed."
+              : "Choices are retained. The employee must review your reason, correct their choices and sign again before the deadline."}</p>
+          <label className="block space-y-1.5">
+            <span className="font-medium text-foreground">Reason for the employee</span>
+            <textarea value={reason} onChange={(e) => setReason(e.target.value)} maxLength={2000} required rows={4} disabled={a.busy}
+              className="w-full rounded-md border border-input bg-background p-2 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" />
+          </label>
+          <p>A portal notification is recorded immediately. Email delivery is tracked in enrolment activity.</p>
+        </div>}
+        confirmLabel={reviewAction === "discard" ? "Cancel and notify" : reviewAction === "reopen" ? "Reopen and notify" : "Return and notify"}
+        confirmVariant={reviewAction === "discard" ? "destructive" : "default"}
+        tone={reviewAction === "discard" ? "danger" : "info"}
+        loading={a.busy}
+        confirmDisabled={!reason.trim()}
+        onConfirm={() => { if (reviewAction && reason.trim()) a[reviewAction](reason.trim(), () => setReviewAction(null)); }}
+      />
     </div>
   );
 }
@@ -94,12 +113,10 @@ function StateNote({
   status,
   phase,
   opensAt,
-  editable,
 }: {
   status: EnrollmentStatus;
   phase: WindowPhase;
   opensAt: string;
-  editable: boolean;
 }) {
   let text: string | null = null;
   if (status === "deemed") {
@@ -110,8 +127,10 @@ function StateNote({
     text = `This period starts ${fmtWhen(opensAt)} — changes open then.`;
   } else if (phase === "overdue" && status !== "submitted" && status !== "confirmed") {
     text = "Locked: the deadline has passed. Extend it on the Overview tab to change this.";
-  } else if (status === "submitted" && editable) {
-    text = "Submitted by the member. Changing it moves it back to a draft.";
+  } else if (status === "submitted") {
+    text = phase === "open" ? "Review the submitted choices, then confirm or return them for correction." : "Review is still available. Extend the deadline before returning this submission for correction.";
+  } else if (status === "returned") {
+    text = "Awaiting correction and a new signed submission. Resolve this before closing the period.";
   }
   if (!text) return null;
   return <p className="basis-full text-xs text-muted-foreground">{text}</p>;

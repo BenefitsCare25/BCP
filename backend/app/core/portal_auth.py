@@ -303,6 +303,9 @@ def get_current_member(
         db, str(claims.get("sid", "")), subject_type=SUBJECT_MEMBER,
         subject_id=account.id, client_id=account.client_id,
         idle_minutes=policy.session_idle_minutes,
+        touch_activity=request.headers.get("X-Inspro-Session-Activity") != "passive"
+        and request.url.path != "/api/v1/portal/enrollment/notices"
+        and not request.url.path.startswith("/api/v1/portal/enrollment/state/"),
     )
     if policy.mfa_portal_required and not session.mfa_verified:
         from app.core import mfa as MFA

@@ -361,11 +361,22 @@ def test_revert_clears_leave_trade(client: TestClient, system_admin_request) -> 
 
 
 def test_set_leave_resets_status_to_draft(client: TestClient) -> None:
-    # Even after a prior confirm, editing leave returns it to draft (must re-confirm).
+    # A confirmed election requires an explicit reopen before editing.
     client.put(f"/api/v1/enrollments/{ENROLL_ID}/leave", json={"action": "buy", "days": 2})
     client.post(f"/api/v1/enrollments/{ENROLL_ID}/submit")
     client.post(f"/api/v1/enrollments/{ENROLL_ID}/confirm")
-    client.put(f"/api/v1/enrollments/{ENROLL_ID}/leave", json={"action": "sell", "days": 1})
+    rejected = client.put(
+        f"/api/v1/enrollments/{ENROLL_ID}/leave", json={"action": "sell", "days": 1}
+    )
+    assert rejected.status_code == 409, rejected.text
+    reopened = client.post(
+        f"/api/v1/enrollments/{ENROLL_ID}/reopen", json={"reason": "Correct leave choice"}
+    )
+    assert reopened.status_code == 200, reopened.text
+    updated = client.put(
+        f"/api/v1/enrollments/{ENROLL_ID}/leave", json={"action": "sell", "days": 1}
+    )
+    assert updated.status_code == 200, updated.text
     with SessionLocal() as s:
         el = s.query(LeaveElection).filter_by(enrollment_id=ENROLL_ID).one()
         assert el.status == LeaveElectionStatus.draft

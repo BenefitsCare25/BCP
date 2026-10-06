@@ -335,6 +335,40 @@ def test_cookie_auth_rejects_malformed_origin(api, surface):
     assert response.status_code == 403
 
 
+def test_passive_poll_and_refresh_preserve_idle_deadline(api):
+    result = member(api, "passive-enrolment")
+    claims = jwt.decode(result["token"], options={"verify_signature": False})
+    past = datetime.now(UTC) - timedelta(minutes=10)
+    headers = {**TENANT, "Authorization": f"Bearer {result['token']}"}
+    with SessionLocal() as db:
+        db.get(AuthSession, claims["sid"]).last_seen_at = past
+        db.commit()
+    # Even older bundles without the passive header must not keep a session alive.
+    for _ in range(3):
+        assert api.get("/api/v1/portal/enrollment/notices", headers=headers).status_code != 401
+    with SessionLocal() as db:
+        assert db.get(AuthSession, claims["sid"]).last_seen_at.replace(tzinfo=UTC) == past
+    refreshed = api.post("/api/v1/portal/auth/refresh", headers={
+        **TENANT, "X-Inspro-Session-Activity": "passive",
+    })
+    assert refreshed.status_code == 200, refreshed.text
+    child = jwt.decode(refreshed.json()["token"], options={"verify_signature": False})
+    with SessionLocal() as db:
+        assert db.get(AuthSession, child["sid"]).last_seen_at.replace(tzinfo=UTC) == past
+    # A deliberate action still advances activity.
+    active = {**TENANT, "Authorization": f"Bearer {refreshed.json()['token']}"}
+    assert api.get("/api/v1/portal/auth/security-status", headers=active).status_code == 200
+    with SessionLocal() as db:
+        session = db.get(AuthSession, child["sid"])
+        assert session.last_seen_at.replace(tzinfo=UTC) > past
+        session.last_seen_at = datetime.now(UTC) - timedelta(minutes=31)
+        db.commit()
+    assert api.get("/api/v1/portal/enrollment/notices", headers=active).status_code == 401
+    assert api.post("/api/v1/portal/auth/refresh", headers={
+        **TENANT, "X-Inspro-Session-Activity": "passive",
+    }).status_code == 401
+
+
 def test_employee_idle_expiry_applies_to_access_tokens(api):
     out = member(api, "member-idle")
     sid = jwt.decode(out["token"], get_settings().portal_jwt_secret, algorithms=["HS256"])["sid"]

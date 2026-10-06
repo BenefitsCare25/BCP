@@ -28,6 +28,7 @@ class EnrollmentStatus:
     not_started = "not_started"  # created at window-open, untouched
     in_progress = "in_progress"  # member has started editing
     submitted = "submitted"  # member submitted, awaiting confirm
+    returned = "returned"  # choices preserved, member must correct and sign again
     confirmed = "confirmed"  # projected to overrides (explicit action)
     deemed = "deemed"  # finalized by default_behavior at window close
     declined = "declined"  # member declined all coverage

@@ -11,7 +11,7 @@ from app.schemas.enrollment import EnrollmentElectionIn, LeaveElectionIn
 
 ClauseScope = Literal["all", "dependants"]
 FormSource = Literal["portal", "paper"]
-FormStatus = Literal["submitted", "acknowledged", "superseded"]
+FormStatus = Literal["submitted", "acknowledged", "superseded", "returned", "cancelled"]
 
 _ID_PATTERN = r"^[a-z0-9_-]{1,40}$"
 
@@ -300,6 +300,8 @@ class PendingDependantRequest(BaseModel):
 
 
 class FormSignIn(BaseModel):
+    request_id: str | None = Field(default=None, min_length=16, max_length=64)
+    expected_event_id: str | None = None
     elections: list[EnrollmentElectionIn] | None = Field(default=None, min_length=1)
     leave: LeaveElectionIn | None = None
     particulars: ParticularsIn = Field(default_factory=ParticularsIn)

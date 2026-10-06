@@ -130,12 +130,14 @@ export const STATUS_ORDER: EnrollmentStatus[] = [
   "confirmed",
   "deemed",
   "submitted",
+  "returned",
   "in_progress",
   "declined",
   "not_started",
 ];
 
 export const STATUS_META: Record<EnrollmentStatus, StatusMeta> = {
+  returned: { label: "Needs correction", gloss: "Returned to the employee to correct and sign again", text: "text-warn", fill: "bg-warn" },
   confirmed: {
     label: "Confirmed",
     gloss: "Choices are live coverage.",

@@ -368,7 +368,7 @@ export function ReviewMount({
                 {saving && (
                   <Loader2 className="size-4 animate-spin" aria-hidden />
                 )}
-                Save and finish later
+                Save choices
               </Action>
             )}
             {/* The page's one brand-coloured fill. */}

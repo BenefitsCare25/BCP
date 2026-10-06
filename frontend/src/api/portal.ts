@@ -8,6 +8,7 @@ import {
 } from "@tanstack/react-query";
 import type {
   ElectionIn,
+  EnrollmentDraftInput,
   EnrollmentDetail,
   EnrollmentOptions,
   EnrollmentSubmitInput,
@@ -319,8 +320,20 @@ export function usePortalEnrollment() {
   return useQuery({
     queryKey: ["portal", "enrollment"],
     queryFn: () => portalApi.get<PortalEnrollmentData>("/portal/enrollment"),
+    // Passive state polling handles closure without replacing unsaved entries.
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
     meta: { localErrorHandling: true },
     retry: false,
+  });
+}
+
+export function useSaveMyEnrollmentDraft() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: EnrollmentDraftInput) => portalApi.put<EnrollmentDetail>("/portal/enrollment/draft", body),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["portal"] }),
+    meta: { localErrorHandling: true },
   });
 }
 

@@ -717,6 +717,7 @@ def member_refresh(
     result = SESS.rotate_session(
         db, token, absolute_hours=policy.session_absolute_hours,
         idle_minutes=policy.session_idle_minutes, ip=_client_ip(request),
+        touch_activity=request.headers.get("X-Inspro-Session-Activity") != "passive",
     )
     if result.session is None:
         db.commit()

@@ -430,6 +430,24 @@ def sign_and_submit(
 ) -> EnrollmentFormSubmission:
     """Apply the member's choices, validate the form, submit the enrolment,
     and record the signed submission + PDF. Flushes, does not commit."""
+    if body.request_id:
+        previous = db.scalars(select(EnrollmentFormSubmission).where(
+            EnrollmentFormSubmission.enrollment_id == enrollment.id,
+        )).all()
+        for prior in previous:
+            if prior.snapshot.get("request_id") == body.request_id:
+                if prior.snapshot.get("request_hash") != content_hash(body.model_dump(mode="json")):
+                    raise HTTPException(status.HTTP_409_CONFLICT, "Submission request has changed.")
+                if prior.status not in ("submitted", "acknowledged"):
+                    raise HTTPException(status.HTTP_409_CONFLICT,
+                        "This submission is no longer current. Refresh and review your enrolment.")
+                return prior
+    if "expected_event_id" in body.model_fields_set:
+        from app.services.enrollment_elections import enrollment_detail
+        if enrollment_detail(db, enrollment).latest_event_id != body.expected_event_id:
+            raise HTTPException(status.HTTP_409_CONFLICT,
+                "Your enrolment changed while this page was open. "
+                "Refresh and review it before signing.")
     if body.elections is not None:
         apply_elections(db, enrollment, body.elections)
     else:
@@ -473,6 +491,9 @@ def sign_and_submit(
         version=sub.version, signed_at=signed_at,
     )
     sub.snapshot = snapshot
+    if body.request_id:
+        snapshot["request_id"] = body.request_id
+        snapshot["request_hash"] = content_hash(body.model_dump(mode="json"))
     sub.content_sha256 = content_hash(snapshot)
     store_pdf(
         db, client=client, sub=sub,

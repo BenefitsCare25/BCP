@@ -40,11 +40,13 @@ from app.models.enrollment import EnrollmentStatus
 from app.models.stored_document import DOC_ENTITY_FORM_RESOURCE, STORAGE_AVAILABLE
 from app.schemas.enrollment import (
     ElectionsUpdate,
+    EnrollmentDraftIn,
     EnrollmentOut,
     EnrollmentSubmitIn,
     LeaveElectionIn,
     PortalEnrollmentOut,
 )
+from app.schemas.enrollment_events import EnrollmentNoticesOut
 from app.schemas.enrollment_forms import (
     FormSignIn,
     FormSubmissionSummary,
@@ -70,6 +72,71 @@ router = APIRouter(
     tags=["portal-enrollment"],
     dependencies=[Depends(get_current_member)],
 )
+
+
+@router.get("/state/{enrollment_id}")
+def enrollment_state(
+    enrollment_id: str,
+    member: CurrentMember = Depends(get_current_member),
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    """Passive, scoped status check; never replaces an employee's local draft."""
+    from sqlalchemy import select
+
+    from app.models import EnrollmentEvent
+
+    employee = resolve_member_employee(db, member, requires=Capability.RECORD)
+    enrollment = db.get(Enrollment, enrollment_id)
+    if (not enrollment or enrollment.employee_id != employee.id
+            or enrollment.client_id != member.client_id):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Enrolment not found.")
+    window = db.get(EnrollmentWindow, enrollment.window_id)
+    assert window is not None
+    latest = db.scalar(select(EnrollmentEvent.id)
+        .where(EnrollmentEvent.enrollment_id == enrollment.id)
+        .order_by(EnrollmentEvent.created_at.desc(), EnrollmentEvent.id.desc()).limit(1))
+    return {"window_status": window.status, "opens_at": window.opens_at,
+            "closes_at": window.closes_at, "member_self_service": window.member_self_service,
+            "latest_event_id": latest}
+
+
+@router.get("/notices")
+def enrollment_notices(
+    member: CurrentMember = Depends(get_current_member),
+    db: Session = Depends(get_db),
+) -> EnrollmentNoticesOut:
+    from sqlalchemy import func, select
+
+    from app.models import EnrollmentEvent
+    from app.schemas.enrollment_events import EnrollmentNoticesOut
+    from app.services.enrollment_events import event_out
+    employee = resolve_member_employee(db, member, requires=Capability.RECORD)
+    scope = (EnrollmentEvent.client_id == member.client_id,
+             EnrollmentEvent.employee_id == employee.id)
+    rows = db.scalars(select(EnrollmentEvent).where(*scope)
+        .order_by(EnrollmentEvent.created_at.desc(), EnrollmentEvent.id.desc()).limit(50))
+    unread = db.scalar(select(func.count()).select_from(EnrollmentEvent)
+        .where(*scope, EnrollmentEvent.read_at.is_(None))) or 0
+    return EnrollmentNoticesOut(items=[event_out(db, row) for row in rows], unread=unread)
+
+
+@router.post("/notices/{notice_id}/read")
+def read_enrollment_notice(
+    notice_id: str,
+    member: CurrentMember = Depends(get_current_member),
+    db: Session = Depends(get_db),
+) -> dict[str, bool]:
+    from datetime import UTC, datetime
+
+    from app.models import EnrollmentEvent
+    employee = resolve_member_employee(db, member, requires=Capability.RECORD)
+    event = db.get(EnrollmentEvent, notice_id)
+    if not event or event.client_id != member.client_id or event.employee_id != employee.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Notification not found.")
+    if event.read_at is None:
+        event.read_at = datetime.now(UTC)
+    db.commit()
+    return {"read": True}
 
 _FINAL_STATUSES = (EnrollmentStatus.confirmed, EnrollmentStatus.deemed)
 
@@ -164,6 +231,32 @@ def set_my_elections(
     )
     db.commit()
     db.refresh(enr)
+    return enrollment_detail(db, enr)
+
+
+@router.put("/draft", response_model=EnrollmentOut)
+@limiter.limit("30/minute")
+def save_my_enrollment_draft(
+    request: Request,
+    body: EnrollmentDraftIn,
+    member: CurrentMember = Depends(get_current_member),
+    db: Session = Depends(get_db),
+) -> EnrollmentOut:
+    employee, _window, enr = _require_open_enrollment(db, member)
+    enr = lock_enrollment(db, enr)
+    _assert_member_editable(enr)
+    if "expected_event_id" in body.model_fields_set:
+        if enrollment_detail(db, enr).latest_event_id != body.expected_event_id:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT, "Enrolment changed. Refresh before saving."
+            )
+    if body.elections is not None:
+        apply_elections(db, enr, body.elections)
+    if body.leave is not None:
+        apply_leave(db, enr, body.leave)
+    write_member_audit(db, member, "save_enrollment_draft", "enrollment", enr.id,
+                       employee_id=employee.id)
+    db.commit()
     return enrollment_detail(db, enr)
 
 

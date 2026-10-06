@@ -1,6 +1,7 @@
 /** The member's side of the enrolment e-form: the form context around the
  * election deck, sign-and-send, and their own signed forms. */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useRef } from "react";
 import { portalApi } from "@/api/portalClient";
 import type { ElectionIn } from "@/api/enrollment";
 import type {
@@ -10,6 +11,8 @@ import type {
 import { triggerDownload } from "@/lib/download";
 
 export interface FormSignInput {
+  request_id?: string;
+  expected_event_id?: string | null;
   elections?: ElectionIn[];
   leave?: { action: "none" | "buy" | "sell"; days: number };
   particulars: { contact_no: string | null; email: string | null };
@@ -31,9 +34,13 @@ export function usePortalEnrollmentForm(enabled: boolean) {
 
 export function useSignEnrollmentForm() {
   const qc = useQueryClient();
+  const attempt = useRef<{ payload: string; id: string } | null>(null);
   return useMutation({
-    mutationFn: (input: FormSignInput) =>
-      portalApi.post<FormSubmissionSummary>("/portal/enrollment/sign", input),
+    mutationFn: (input: FormSignInput) => {
+      const payload = JSON.stringify(input);
+      if (attempt.current?.payload !== payload) attempt.current = { payload, id: crypto.randomUUID() };
+      return portalApi.post<FormSubmissionSummary>("/portal/enrollment/sign", { ...input, request_id: attempt.current.id });
+    },
     // Signing submits the enrolment too, so everything portal-side that reads
     // enrolment state (the deck, the nav marker, Home) is refetched.
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["portal"] }),

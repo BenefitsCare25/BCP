@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { AlertCircle, Bell, Info, TriangleAlert, X } from "lucide-react";
 import {
   useNotifications,
@@ -38,7 +38,7 @@ function ago(at: number): string {
  * on the existing row) and stays until dismissed, so nothing is missed and
  * nothing blocks a click.
  */
-export function NotificationBell({ largeTarget = false }: { largeTarget?: boolean }) {
+export function NotificationBell({ largeTarget = false, persistent, persistentUnread = 0 }: { largeTarget?: boolean; persistent?: ReactNode; persistentUnread?: number }) {
   // Mounted in all three shells. On the member portal it is a TOUCH target and
   // its rows must be dismissable without a pointer — see the two uses below.
   const inLeaf = useInLeaf();
@@ -52,7 +52,7 @@ export function NotificationBell({ largeTarget = false }: { largeTarget?: boolea
   const [pulse, setPulse] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
-  const unread = items.filter((n) => !n.read).length;
+  const unread = items.filter((n) => !n.read).length + persistentUnread;
 
   // Draw the eye once per NEW message (repeats don't re-fire) — the bell is
   // quieter than a toast, so a silent badge alone would be too easy to miss.
@@ -141,14 +141,15 @@ export function NotificationBell({ largeTarget = false }: { largeTarget?: boolea
                 onClick={clear}
                 className="text-xs text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 rounded"
               >
-                Clear all
+                {persistent ? "Clear alerts" : "Clear all"}
               </button>
             )}
           </div>
 
+          {persistent && <div className="max-h-[22rem] overflow-y-auto">{persistent}</div>}
           {items.length === 0 ? (
             <p className="px-3 py-6 text-center text-sm text-muted-foreground">
-              No notifications
+              {persistent ? "No browser alerts" : "No notifications"}
             </p>
           ) : (
             <ul className="max-h-[22rem] overflow-y-auto">

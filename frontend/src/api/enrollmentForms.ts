@@ -141,7 +141,7 @@ export interface FormRuleView {
 }
 
 export type FormSource = "portal" | "paper";
-export type FormStatus = "submitted" | "acknowledged" | "superseded";
+export type FormStatus = "submitted" | "acknowledged" | "superseded" | "returned" | "cancelled";
 
 export interface FormSubmissionSummary {
   id: string;

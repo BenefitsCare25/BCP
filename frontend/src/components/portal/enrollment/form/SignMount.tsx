@@ -61,7 +61,9 @@ export function SignMount({
       as="article"
       rise={false}
       label="Sign and send"
-      gloss="Your signed form is sent to your broker and saved here for you to download."
+      gloss={disabled
+        ? "Signing is currently unavailable. This page does not submit a form automatically."
+        : "Sign below to send your form to your broker and save a copy for download."}
     >
       {shares.length > 0 && (
         <>

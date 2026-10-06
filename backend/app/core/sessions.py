@@ -141,6 +141,7 @@ def rotate_session(
     ip: str | None = None,
     user_agent: str | None = None,
     subdomain: str | None = None,
+    touch_activity: bool = True,
 ) -> RotationResult:
     """Validate a refresh token and issue its successor.
 
@@ -217,6 +218,10 @@ def rotate_session(
         subdomain=subdomain,
         mfa_verified=row.mfa_verified,
     )
+    if not touch_activity:
+        successor = db.get(AuthSession, child.session_id)
+        assert successor is not None
+        successor.last_seen_at = row.last_seen_at or row.issued_at
     return RotationResult(child, False)
 
 
@@ -241,7 +246,7 @@ def revoke_token(db: Session, token: str) -> AuthSession | None:
 
 def validate_access_session(
     db: Session, session_id: str, *, subject_type: str, subject_id: str,
-    client_id: str | None, idle_minutes: int,
+    client_id: str | None, idle_minutes: int, touch_activity: bool = True,
 ) -> AuthSession:
     """Reject revoked families and enforce inactivity on access-token requests."""
     from app.models import AuthSession
@@ -277,7 +282,7 @@ def validate_access_session(
         revoke_family(db, live.family_id)
         db.commit()
         raise invalid
-    if seen + timedelta(seconds=30) <= now:
+    if touch_activity and seen + timedelta(seconds=30) <= now:
         live.last_seen_at = now
         db.commit()
     return live

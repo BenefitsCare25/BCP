@@ -5,6 +5,7 @@ can download a single PDF, all PDFs as a ZIP, or the Excel summary. Reviewing
 and acknowledging stays with the broker (user decision). Every download is
 written to the access trail.
 """
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -53,7 +54,9 @@ def _filter(
     )
 
 
-_STATUS_Q = Query(default=None, alias="status", pattern="^(submitted|acknowledged)$")
+_STATUS_Q = Query(
+    default=None, alias="status", pattern="^(submitted|acknowledged|returned|cancelled)$"
+)
 _TEXT_Q = Query(default=None, max_length=100)
 _WINDOW_Q = Query(default=None, max_length=36)
 
@@ -74,8 +77,12 @@ def list_windows(
     ).all()
     return [
         HrFormWindow(
-            id=w.id, name=w.name, policy_year=year, opens_at=w.opens_at,
-            closes_at=w.closes_at, status=w.status,
+            id=w.id,
+            name=w.name,
+            policy_year=year,
+            opens_at=w.opens_at,
+            closes_at=w.closes_at,
+            status=w.status,
         )
         for w, year in rows
     ]
@@ -148,7 +155,12 @@ def download_pdf(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Enrolment form not found")
     content, doc = found
     write_access_audit(
-        db, user, request, "enrollment_form.download", "enrollment_form", sub.id,
+        db,
+        user,
+        request,
+        "enrollment_form.download",
+        "enrollment_form",
+        sub.id,
         employee_id=sub.employee_id,
     )
     db.commit()

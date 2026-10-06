@@ -348,8 +348,9 @@ def test_multi_override_assigns_then_clears(client: TestClient, system_admin_req
         ).json()["items"]
         if it["staff_id"] == "TEST-003"
     )
-    res = client.post(
-        f"/api/v1/match-results/employees/{emp['id']}/override",
+    # Replacing this employee's existing mappings can remove other products.
+    res = system_admin_request(
+        client, "POST", f"/api/v1/match-results/employees/{emp['id']}/override",
         json={"category_ids": cat_ids},
     )
     assert res.status_code == 200, res.text

@@ -14,6 +14,11 @@ function standing(form: FormSubmissionSummary): {
   tone: "approved" | "review" | "pending";
 } {
   if (form.status === "superseded") return { label: "Replaced", tone: "pending" };
+  if (form.status === "cancelled") return { label: "Cancelled", tone: "pending" };
+  if (form.status === "returned") return { label: "Needs correction", tone: "review" };
+  if (form.source === "portal" && ["not_started", "in_progress", "returned"].includes(form.enrollment_status ?? "")) {
+    return { label: "No longer current", tone: "pending" };
+  }
   if (form.enrollment_status === "confirmed" || form.enrollment_status === "deemed") {
     return { label: "Confirmed", tone: "approved" };
   }

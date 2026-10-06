@@ -34,6 +34,23 @@ def process_one_workflow_notification(broker_firm_id: str | None) -> bool:
         row = db.scalar(query)
         if row is None:
             return False
+        if row.kind == "enrollment_update":
+            from app.models import Enrollment, EnrollmentEvent
+            from app.services.enrollment_events import recipient_for
+
+            event = db.get(EnrollmentEvent, row.subject_id)
+            enrollment = db.get(Enrollment, event.enrollment_id) if event else None
+            if (
+                not enrollment
+                or enrollment.client_id != row.client_id
+                or recipient_for(db, enrollment) != row.recipient_email
+            ):
+                row.status = "cancelled"
+                row.last_error = "Recipient is no longer eligible for delivery."
+                row.lease_token = None
+                row.lease_expires_at = None
+                db.commit()
+                return True
         if row.kind == "underwriting_reminder":
             review = db.get(UnderwritingReview, row.subject_id)
             if (
@@ -51,6 +68,7 @@ def process_one_workflow_notification(broker_firm_id: str | None) -> bool:
         row.lease_token = token = str(uuid4())
         row.lease_expires_at = now + timedelta(minutes=5)
         ident, kind, recipient, subject_id = row.id, row.kind, row.recipient_email, row.subject_id
+        payload = dict(row.payload)
         db.commit()
     error = None
     try:
@@ -62,6 +80,19 @@ def process_one_workflow_notification(broker_firm_id: str | None) -> bool:
                 "Please contact your benefits team for the requirements and next steps.\n\n"
                 f"Review reference: {subject_id}\n\n"
                 "Medical details are not included in email.",
+            )
+        elif kind == "enrollment_update":
+            from app.core.settings import get_settings
+
+            if get_settings().mail_mode != "smtp":
+                raise ValueError("Email delivery is not configured")
+            get_mailer().send_workflow_notice(
+                recipient,
+                "An enrolment update is available in your benefits portal",
+                "Your benefits enrolment has an update. Sign in to read the details "
+                "and check whether you need to take action.\n\n"
+                f"Sign in: {payload['portal_url']}\n\n"
+                "Personal details and review reasons are not included in email.",
             )
         else:
             raise ValueError("Unknown workflow notification kind")

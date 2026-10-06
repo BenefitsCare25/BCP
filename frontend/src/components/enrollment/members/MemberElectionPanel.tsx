@@ -19,6 +19,7 @@ import { STATUS_META, phaseOf, useNow } from "@/components/enrollment/period/per
 import { AlertDialog } from "@/components/ui/alert-dialog";
 import { cn } from "@/lib/cn";
 import { ElectionActionBar } from "./ElectionActionBar";
+import { EnrollmentActivity } from "./EnrollmentActivity";
 import { type ElectionActions, useElectionActions } from "./useElectionActions";
 import { type MemberElection, useMemberElection } from "./useMemberElection";
 
@@ -63,7 +64,7 @@ export function MemberElectionPanel({
       </header>
 
       <div className="space-y-4 px-5 py-5">
-        <ElectionChoices m={m} a={a} window={window} editable={editable} />
+        <ElectionChoices m={m} a={a} window={window} editable={editable && status !== "submitted" && !a.busy} />
         {!readOnly && (
           <ElectionActionBar
             status={status}
@@ -75,6 +76,7 @@ export function MemberElectionPanel({
           />
         )}
         <div className="space-y-3 border-t border-border pt-4">
+          <EnrollmentActivity id={enrollmentId} readOnly={readOnly} />
           {finalized && m.empId && !readOnly && (
             <CoverageRevertControls
               employeeId={m.empId}

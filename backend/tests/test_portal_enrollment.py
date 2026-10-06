@@ -37,6 +37,8 @@ from app.models import (  # noqa: E402
     EmployeePlanOverride,
     Enrollment,
     EnrollmentElection,
+    EnrollmentEvent,
+    EnrollmentFormSubmission,
     EnrollmentWindow,
     LeaveElection,
     LeavePolicy,
@@ -44,6 +46,7 @@ from app.models import (  # noqa: E402
     Plan,
     PolicyYear,
     Product,
+    WorkflowNotification,
 )
 from app.models.category import CategoryStatus, SourceKind  # noqa: E402
 from app.models.member_account import MEMBER_STATUS_ACTIVE  # noqa: E402
@@ -136,7 +139,8 @@ def _setup_db():
 def _reset_enrollment_state():
     yield
     with SessionLocal() as s:
-        for model in (LeaveElection, EnrollmentElection, Enrollment,
+        for model in (WorkflowNotification, EnrollmentEvent, EnrollmentFormSubmission,
+                      LeaveElection, EnrollmentElection, Enrollment,
                       EmployeePlanOverride, EnrollmentWindow):
             s.query(model).delete()
         s.query(AuditLog).delete()
@@ -560,3 +564,476 @@ def test_employee_view_preview_mirrors_a_hidden_period(broker: TestClient) -> No
     assert res.json() == {"window": None, "enrollment": None, "options": None}
     me = broker.get(f"/api/v1/employees/{EMP1}/portal-preview").json()
     assert me["enrollment_open"] is False
+
+
+def _signed_enrollment(broker: TestClient) -> tuple[str, str, dict]:
+    window_id = _make_window(broker)
+    detail = broker.get("/api/v1/portal/enrollment", headers=_member_auth()).json()
+    form = broker.get("/api/v1/portal/enrollment/form", headers=_member_auth()).json()
+    payload = {
+        "request_id": "regression-sign-request-001",
+        "expected_event_id": detail["enrollment"]["latest_event_id"],
+        "elections": [{"product_code": "MED", "plan_code": "GOLD"}],
+        "accepted_clause_ids": [c["id"] for c in form["clauses"]],
+        "signature_name": "Portal Member",
+        "confirm": True,
+    }
+    response = broker.post("/api/v1/portal/enrollment/sign", json=payload, headers=_member_auth())
+    assert response.status_code == 200, response.text
+    return window_id, detail["enrollment"]["id"], payload
+
+
+def test_return_retains_choices_invalidates_signature_and_records_notice(
+    broker: TestClient,
+) -> None:
+    window_id, eid, payload = _signed_enrollment(broker)
+    with SessionLocal() as db:
+        original = db.scalar(select(EnrollmentFormSubmission))
+        original_hash, original_snapshot = original.content_sha256, dict(original.snapshot)
+    for reason in ("", "   "):
+        assert (
+            broker.post(f"/api/v1/enrollments/{eid}/return", json={"reason": reason}).status_code
+            == 422
+        )
+    assert (
+        broker.post(
+            f"/api/v1/enrollments/{eid}/return", json={"reason": "Check family cover"}
+        ).status_code
+        == 200
+    )
+    detail = broker.get(f"/api/v1/enrollments/{eid}").json()
+    assert detail["status"] == "returned"
+    assert detail["elections"][0]["elected_plan_code"] == "GOLD"
+    assert broker.post(f"/api/v1/enrollments/{eid}/confirm").status_code == 409
+    assert (
+        broker.post(
+            f"/api/v1/enrollment-windows/{window_id}/close", json={"submit_saved": True}
+        ).status_code
+        == 409
+    )
+    notices = broker.get("/api/v1/portal/enrollment/notices", headers=_member_auth()).json()
+    assert notices["unread"] == 2
+    returned = notices["items"][0]
+    assert returned["kind"] == "returned" and returned["reason"] == "Check family cover"
+    assert returned["email_status"] == "unavailable"
+    assert (
+        broker.post(
+            f"/api/v1/portal/enrollment/notices/{returned['id']}/read", headers=_member_auth()
+        ).status_code
+        == 200
+    )
+    assert (
+        broker.get("/api/v1/portal/enrollment/notices", headers=_member_auth()).json()["unread"]
+        == 1
+    )
+    with SessionLocal() as db:
+        original = db.scalar(select(EnrollmentFormSubmission))
+        assert original.status == "returned"
+        assert original.content_sha256 == original_hash and original.snapshot == original_snapshot
+    # Neither an old retry nor a fresh request from a stale page can undo the return.
+    assert (
+        broker.post(
+            "/api/v1/portal/enrollment/sign", json=payload, headers=_member_auth()
+        ).status_code
+        == 409
+    )
+    payload["request_id"] = "regression-sign-request-002"
+    assert (
+        broker.post(
+            "/api/v1/portal/enrollment/sign", json=payload, headers=_member_auth()
+        ).status_code
+        == 409
+    )
+    payload["expected_event_id"] = detail["latest_event_id"]
+    result = broker.post("/api/v1/portal/enrollment/sign", json=payload, headers=_member_auth())
+    assert result.status_code == 200, result.text
+    assert result.json()["version"] == 2
+    assert broker.post(f"/api/v1/enrollments/{eid}/confirm").status_code == 200
+    assert broker.post(f"/api/v1/enrollments/{eid}/confirm").status_code == 200
+    with SessionLocal() as db:
+        assert (
+            len(
+                list(db.scalars(select(EnrollmentEvent).where(EnrollmentEvent.kind == "confirmed")))
+            )
+            == 1
+        )
+
+
+def test_cancel_notifies_and_preserves_signed_pdf(broker: TestClient) -> None:
+    from dataclasses import replace
+
+    _, eid, _ = _signed_enrollment(broker)
+    assert (
+        broker.post(f"/api/v1/enrollments/{eid}/reset", json={"reason": "Wrong period"}).status_code
+        == 403
+    )
+    app.dependency_overrides[get_current_user] = lambda: replace(_broker(), role="system_admin")
+    try:
+        response = broker.post(f"/api/v1/enrollments/{eid}/reset", json={"reason": "Wrong period"})
+        assert response.status_code == 200, response.text
+        assert response.json()["elections"] == []
+        assert (
+            broker.post(f"/api/v1/enrollments/{eid}/reset", json={"reason": "Retry"}).status_code
+            == 409
+        )
+    finally:
+        app.dependency_overrides[get_current_user] = _broker
+    forms = broker.get("/api/v1/portal/enrollment-forms", headers=_member_auth()).json()
+    assert forms[0]["status"] == "cancelled" and forms[0]["has_pdf"]
+    assert (
+        broker.get(
+            f"/api/v1/portal/enrollment-forms/{forms[0]['id']}/pdf", headers=_member_auth()
+        ).status_code
+        == 200
+    )
+    notices = broker.get("/api/v1/portal/enrollment/notices", headers=_member_auth()).json()
+    assert notices["items"][0]["kind"] == "cancelled"
+    assert notices["items"][0]["reason"] == "Wrong period"
+
+
+def test_sign_retry_is_idempotent_and_broker_edits_require_return(broker: TestClient) -> None:
+    _, eid, payload = _signed_enrollment(broker)
+    retry = broker.post("/api/v1/portal/enrollment/sign", json=payload, headers=_member_auth())
+    assert retry.status_code == 200 and retry.json()["version"] == 1
+    with SessionLocal() as db:
+        assert len(list(db.scalars(select(EnrollmentFormSubmission)))) == 1
+        assert len(list(db.scalars(select(EnrollmentEvent)))) == 1
+    assert (
+        broker.put(
+            f"/api/v1/enrollments/{eid}/elections", json={"elections": payload["elections"]}
+        ).status_code
+        == 409
+    )
+    assert (
+        broker.put(
+            f"/api/v1/enrollments/{eid}/leave", json={"action": "none", "days": 0}
+        ).status_code
+        == 409
+    )
+
+
+def test_enrollment_email_retries_without_exposing_reason(broker: TestClient, monkeypatch) -> None:
+    from dataclasses import replace
+
+    from app.core import settings
+    from app.services import enrollment_events, workflow_delivery
+
+    configured = replace(settings.get_settings(), mail_mode="smtp")
+    monkeypatch.setattr(settings, "get_settings", lambda: configured)
+    monkeypatch.setattr(enrollment_events, "get_settings", lambda: configured)
+    monkeypatch.setattr(enrollment_events, "mail_deliverable", lambda: True)
+    _, eid, _ = _signed_enrollment(broker)
+    assert (
+        broker.post(
+            f"/api/v1/enrollments/{eid}/return", json={"reason": "Private correction detail"}
+        ).status_code
+        == 200
+    )
+    sent = []
+
+    class Mailer:
+        def send_workflow_notice(self, *args):
+            sent.append(args)
+
+    monkeypatch.setattr(workflow_delivery, "get_mailer", lambda: Mailer())
+    assert workflow_delivery.process_one_workflow_notification(None)
+    assert workflow_delivery.process_one_workflow_notification(None)
+    assert not workflow_delivery.process_one_workflow_notification(None)
+    assert len(sent) == 2
+    assert all("Private correction detail" not in str(message) for message in sent)
+    with SessionLocal() as db:
+        assert {n.status for n in db.scalars(select(WorkflowNotification))} == {"sent"}
+
+
+def test_notice_scope_rejects_another_employee(broker: TestClient) -> None:
+    from app.core.portal_auth import CurrentMember, get_current_member
+
+    _, _, _ = _signed_enrollment(broker)
+    notice = broker.get("/api/v1/portal/enrollment/notices", headers=_member_auth()).json()[
+        "items"
+    ][0]
+    # A forged client scope cannot acknowledge the first employee's notice.
+    app.dependency_overrides[get_current_member] = lambda: CurrentMember(
+        member_account_id="unrelated",
+        client_id="unrelated",
+        broker_firm_id=None,
+        email=None,
+        staff_id="unrelated",
+    )
+    try:
+        response = broker.post(f"/api/v1/portal/enrollment/notices/{notice['id']}/read")
+        assert response.status_code in (403, 404)
+    finally:
+        app.dependency_overrides.pop(get_current_member, None)
+
+
+def test_return_after_deadline_and_viewer_are_rejected(broker: TestClient) -> None:
+    from dataclasses import replace
+    from datetime import UTC, datetime
+
+    wid, eid, _ = _signed_enrollment(broker)
+    app.dependency_overrides[get_current_user] = lambda: replace(_broker(), role="broker_viewer")
+    try:
+        assert (
+            broker.post(f"/api/v1/enrollments/{eid}/return", json={"reason": "Review"}).status_code
+            == 403
+        )
+    finally:
+        app.dependency_overrides[get_current_user] = _broker
+    with SessionLocal() as db:
+        db.get(EnrollmentWindow, wid).closes_at = datetime(2021, 1, 1, tzinfo=UTC)
+        db.commit()
+    assert (
+        broker.post(f"/api/v1/enrollments/{eid}/return", json={"reason": "Review"}).status_code
+        == 409
+    )
+    assert broker.post(f"/api/v1/enrollments/{eid}/confirm").status_code == 200
+
+
+def test_submission_failure_rolls_back_notices_and_elections(
+    broker: TestClient, monkeypatch
+) -> None:
+    from app.services.enrollment_forms import submission
+
+    _make_window(broker)
+    form = broker.get("/api/v1/portal/enrollment/form", headers=_member_auth()).json()
+
+    def fail(*args, **kwargs):
+        from fastapi import HTTPException
+
+        raise HTTPException(503, "Storage unavailable")
+
+    monkeypatch.setattr(submission, "store_pdf", fail)
+    response = broker.post(
+        "/api/v1/portal/enrollment/sign",
+        headers=_member_auth(),
+        json={
+            "elections": [{"product_code": "MED", "plan_code": "GOLD"}],
+            "signature_name": "Portal Member",
+            "confirm": True,
+            "accepted_clause_ids": [c["id"] for c in form["clauses"]],
+        },
+    )
+    assert response.status_code == 503
+    with SessionLocal() as db:
+        assert not list(db.scalars(select(EnrollmentEvent)))
+        assert not list(db.scalars(select(EnrollmentFormSubmission)))
+        assert not list(db.scalars(select(EnrollmentElection)))
+
+
+def test_email_failure_retry_and_recipient_change(broker: TestClient, monkeypatch) -> None:
+    from dataclasses import replace
+    from datetime import UTC, datetime
+
+    from app.core import settings
+    from app.services import enrollment_events, workflow_delivery
+
+    _, eid, _ = _signed_enrollment(broker)
+    notice = broker.get(f"/api/v1/enrollments/{eid}/events").json()[0]
+    configured = replace(settings.get_settings(), mail_mode="smtp")
+    monkeypatch.setattr(settings, "get_settings", lambda: configured)
+    monkeypatch.setattr(enrollment_events, "get_settings", lambda: configured)
+    monkeypatch.setattr(enrollment_events, "mail_deliverable", lambda: True)
+    url = f"/api/v1/enrollments/{eid}/events/{notice['id']}/retry-email"
+    assert broker.post(url).json()["email_status"] == "queued"
+    assert broker.post(url).json()["email_status"] == "queued"
+
+    class FailingMailer:
+        def send_workflow_notice(self, *args):
+            raise RuntimeError("private provider response")
+
+    monkeypatch.setattr(workflow_delivery, "get_mailer", lambda: FailingMailer())
+    assert workflow_delivery.process_one_workflow_notification(None)
+    with SessionLocal() as db:
+        outbox = db.scalar(select(WorkflowNotification))
+        assert outbox.status == "queued" and outbox.attempts == 1
+        assert "private" not in outbox.last_error
+        outbox.available_at = datetime(2020, 1, 1, tzinfo=UTC)
+        db.get(MemberAccount, ACC1).status = "disabled"
+        db.commit()
+    try:
+        assert workflow_delivery.process_one_workflow_notification(None)
+        with SessionLocal() as db:
+            assert db.scalar(select(WorkflowNotification)).status == "cancelled"
+    finally:
+        with SessionLocal() as db:
+            db.get(MemberAccount, ACC1).status = MEMBER_STATUS_ACTIVE
+            db.commit()
+
+
+def test_draft_save_is_atomic_and_cannot_overwrite_a_return(broker: TestClient) -> None:
+    _, eid, _ = _signed_enrollment(broker)
+    response = broker.put(
+        "/api/v1/portal/enrollment/draft",
+        headers=_member_auth(),
+        json={
+            "elections": [{"product_code": "MED", "plan_code": "SILVER"}],
+            "leave": {"action": "buy", "days": 999},
+        },
+    )
+    assert response.status_code == 422, response.text
+    detail = broker.get(f"/api/v1/enrollments/{eid}").json()
+    assert detail["status"] == "submitted"
+    assert detail["elections"][0]["elected_plan_code"] == "GOLD"
+    assert (
+        broker.post(
+            f"/api/v1/enrollments/{eid}/return", json={"reason": "Correct this"}
+        ).status_code
+        == 200
+    )
+    response = broker.put(
+        "/api/v1/portal/enrollment/draft",
+        headers=_member_auth(),
+        json={
+            "expected_event_id": detail["latest_event_id"],
+            "elections": [{"product_code": "MED", "plan_code": "SILVER"}],
+        },
+    )
+    assert response.status_code == 409
+    assert broker.post(f"/api/v1/enrollments/{eid}/submit").status_code == 409
+
+
+def test_signed_reopen_requires_self_service_and_fresh_signature(broker: TestClient) -> None:
+    wid, eid, _ = _signed_enrollment(broker)
+    assert broker.post(f"/api/v1/enrollments/{eid}/confirm").status_code == 200
+    with SessionLocal() as db:
+        db.get(EnrollmentWindow, wid).member_self_service = False
+        db.commit()
+    response = broker.post(f"/api/v1/enrollments/{eid}/reopen", json={"reason": "Correction"})
+    assert response.status_code == 409, response.text
+    with SessionLocal() as db:
+        assert db.get(Enrollment, eid).status == "confirmed"
+        assert db.scalar(select(EnrollmentFormSubmission)).status == "submitted"
+        db.get(EnrollmentWindow, wid).member_self_service = True
+        db.commit()
+    response = broker.post(f"/api/v1/enrollments/{eid}/reopen", json={"reason": "Correction"})
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "returned"
+    assert broker.post(f"/api/v1/enrollments/{eid}/submit").status_code == 409
+    with SessionLocal() as db:
+        assert db.scalar(select(EnrollmentFormSubmission)).status == "returned"
+        events = list(db.scalars(select(EnrollmentEvent).where(EnrollmentEvent.kind == "reopened")))
+        assert len(events) == 1 and events[0].reason == "Correction"
+
+
+@pytest.mark.parametrize("enrollment_status", ["not_started", "in_progress"])
+def test_current_paper_receipt_does_not_require_election_submission(broker, enrollment_status):
+    from io import BytesIO
+
+    from pypdf import PdfWriter
+
+    wid = _make_window(broker)
+    detail = broker.get("/api/v1/portal/enrollment", headers=_member_auth()).json()
+    with SessionLocal() as db:
+        db.get(Enrollment, detail["enrollment"]["id"]).status = enrollment_status
+        db.commit()
+    writer = PdfWriter()
+    writer.add_blank_page(width=200, height=200)
+    content = BytesIO()
+    writer.write(content)
+    filed = broker.post(f"/api/v1/policy-years/{PY_ID}/enrollment-forms/paper",
+        data={"employee_id": EMP1, "window_id": wid},
+        files={"file": ("synthetic-form.pdf", content.getvalue(), "application/pdf")})
+    assert filed.status_code == 201, filed.text
+    url = f"/api/v1/enrollment-forms/{filed.json()['id']}/acknowledge"
+    acknowledged = broker.post(url, json={})
+    assert acknowledged.status_code == 200, acknowledged.text
+    with SessionLocal() as db:
+        assert db.get(Enrollment, detail["enrollment"]["id"]).status == enrollment_status
+        form = db.get(EnrollmentFormSubmission, filed.json()["id"])
+        form.status = "cancelled"
+        db.commit()
+    assert broker.post(url, json={}).status_code == 409
+
+
+def test_mailbox_ownership_is_batched_and_refreshed_between_transactions(broker):
+    from sqlalchemy import event
+
+    from app.services.enrollment_events import recipient_for
+
+    _, eid, _ = _signed_enrollment(broker)
+    scans = []
+    def capture(conn, cursor, statement, parameters, context, many):
+        if "SELECT employees.staff_id, employees.attribute_values" in statement:
+            scans.append(statement)
+    event.listen(engine, "before_cursor_execute", capture)
+    try:
+        with SessionLocal() as db:
+            enrollment = db.get(Enrollment, eid)
+            for _ in range(100):
+                assert recipient_for(db, enrollment) == "pe1@a.test"
+            assert len(scans) == 1
+            db.add(Employee(client_id=CLIENT_ID, policy_year_id=PY_ID, staff_id="SHARED-MAIL",
+                employee_name="Synthetic shared mailbox", status="active", source="csv_import",
+                attribute_values={"email": " PE1@A.TEST "}))
+            db.commit()
+            assert recipient_for(db, enrollment) is None
+            assert len(scans) == 2
+            db.query(Employee).filter_by(staff_id="SHARED-MAIL").delete()
+            db.commit()
+    finally:
+        event.remove(engine, "before_cursor_execute", capture)
+
+
+def test_disabled_mail_never_resolves_roster_recipients(broker, monkeypatch):
+    from dataclasses import replace
+
+    from app.services import enrollment_events
+    configured = replace(enrollment_events.get_settings(), mail_mode="disabled")
+    monkeypatch.setattr(enrollment_events, "get_settings", lambda: configured)
+    def unexpected(*args, **kwargs):
+        raise AssertionError("Disabled delivery must not inspect the roster")
+    monkeypatch.setattr(enrollment_events, "recipient_for", unexpected)
+    _signed_enrollment(broker)
+
+
+def test_live_state_locks_closed_period_and_rejects_late_drafts(broker):
+    from datetime import UTC, datetime
+    wid = _make_window(broker)
+    detail = broker.get("/api/v1/portal/enrollment", headers=_member_auth()).json()
+    eid = detail["enrollment"]["id"]
+    url = f"/api/v1/portal/enrollment/state/{eid}"
+    assert broker.get(url, headers=_member_auth()).json()["window_status"] == "open"
+    foreign = broker.get("/api/v1/portal/enrollment/state/foreign", headers=_member_auth())
+    assert foreign.status_code == 404
+    with SessionLocal() as db:
+        db.get(EnrollmentWindow, wid).closes_at = datetime(2020, 1, 2, tzinfo=UTC)
+        db.commit()
+    payload = {"elections": [{"product_code": "MED", "plan_code": "GOLD"}]}
+    assert broker.put("/api/v1/portal/enrollment/draft", headers=_member_auth(),
+        json=payload).status_code in (404, 409)
+    with SessionLocal() as db:
+        db.get(EnrollmentWindow, wid).status = "closed"
+        db.commit()
+    assert broker.get(url, headers=_member_auth()).json()["window_status"] == "closed"
+    with SessionLocal() as db:
+        assert not list(db.scalars(select(EnrollmentElection)))
+
+
+def test_migration_recovers_only_audited_cancellations(broker: TestClient) -> None:
+    import importlib.util
+    from datetime import UTC, datetime, timedelta
+
+    _, eid, _ = _signed_enrollment(broker)
+    path = Path(__file__).parents[1] / "alembic/versions/c7e9a1b3d5f7_enrollment_events.py"
+    spec = importlib.util.spec_from_file_location("enrollment_event_migration", path)
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    with SessionLocal() as db:
+        original = db.scalar(select(EnrollmentFormSubmission))
+        original_hash = original.content_sha256
+        db.get(Enrollment, eid).status = "not_started"
+        db.query(EnrollmentEvent).delete()
+        db.add(AuditLog(client_id=CLIENT_ID, employee_id=EMP1,
+            action="reset_enrollment", entity_type="enrollment", entity_id=eid,
+            created_at=datetime.now(UTC) + timedelta(seconds=1)))
+        db.flush()
+        migration._backfill_cancelled(db.connection(), None, EnrollmentEvent.__table__)
+        migration._backfill_cancelled(db.connection(), None, EnrollmentEvent.__table__)
+        db.expire_all()
+        assert db.get(EnrollmentFormSubmission, original.id).status == "cancelled"
+        assert db.get(EnrollmentFormSubmission, original.id).content_sha256 == original_hash
+        events = list(db.scalars(select(EnrollmentEvent)))
+        assert len(events) == 1 and events[0].kind == "cancelled"
+        assert events[0].notification_id is None
+        assert "before employee reasons" in events[0].reason

@@ -30,7 +30,7 @@ import { UnreadBadge, messagesLabel } from "./leaf/MessageMount";
 import { usePortalSession } from "@/stores/portalSession";
 import { LeafScopeContext } from "@/lib/leaf-scope";
 import { cn } from "@/lib/cn";
-import { NotificationBell } from "@/components/shell/NotificationBell";
+import { PortalNotificationBell } from "@/components/portal/EnrollmentNotices";
 import { BenefitYearControl } from "./BenefitYearControl";
 import { glassHover, glassSurface } from "./leaf/Mount";
 import { HeadRailProvider, useHeadRailWidth } from "./leaf/HeadRail";
@@ -267,7 +267,7 @@ function PortalMainShell() {
         <MessageSquare className="size-5" aria-hidden />
         <UnreadBadge count={unread} />
       </Link>
-      <NotificationBell />
+      <PortalNotificationBell />
       <Link
         to="/portal/$company/security"
         params={{ company }}

@@ -113,6 +113,7 @@ function ClosePreviewBody({
     <div className="space-y-3 text-sm">
       <dl className="divide-y divide-border rounded-md border border-border">
         <Row n={p.submitted} label="submitted" outcome="become live coverage" />
+        {!!p.returned && <Row n={p.returned} label="returned for correction" outcome="must be resolved before closing" />}
         {p.saved_not_sent > 0 && (
           <Row
             n={p.saved_not_sent}
@@ -138,7 +139,7 @@ function ClosePreviewBody({
       {blocked && (
         <MemberNotes
           tone="error"
-          title={`${p.invalid_submitted_count} submitted ${p.invalid_submitted_count === 1 ? "selection no longer passes" : "selections no longer pass"} its checks. Fix or reopen them before closing:`}
+          title={`${p.invalid_submitted_count} enrolment ${p.invalid_submitted_count === 1 ? "needs" : "need"} attention before closing:`}
           notes={p.invalid_submitted}
           extra={p.invalid_submitted_count - p.invalid_submitted.length}
         />

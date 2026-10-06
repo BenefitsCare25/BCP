@@ -316,7 +316,10 @@ def test_reset_enrollment_clears_elections(client: TestClient, system_admin_requ
             action="upgrade",
         ))
         s.commit()
-    res = system_admin_request(client, "POST", f"/api/v1/enrollments/{ENROLL_ID}/reset")
+    res = system_admin_request(
+        client, "POST", f"/api/v1/enrollments/{ENROLL_ID}/reset",
+        json={"reason": "Incorrect selection"},
+    )
     assert res.status_code == 200, res.text
     assert res.json()["status"] == EnrollmentStatus.not_started
     with SessionLocal() as s:
@@ -328,7 +331,10 @@ def test_reset_finalized_enrollment_409(client: TestClient, system_admin_request
     with SessionLocal() as s:
         s.get(Enrollment, ENROLL_ID).status = EnrollmentStatus.confirmed
         s.commit()
-    res = system_admin_request(client, "POST", f"/api/v1/enrollments/{ENROLL_ID}/reset")
+    res = system_admin_request(
+        client, "POST", f"/api/v1/enrollments/{ENROLL_ID}/reset",
+        json={"reason": "Incorrect selection"},
+    )
     assert res.status_code == 409
 
 

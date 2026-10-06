@@ -42,6 +42,7 @@ from app.services.coverage_resolver import (
     is_sparse_default,
     load_overrides,
 )
+from app.services.enrollment_events import record_event
 from app.services.override_writer import upsert_override
 
 logger = logging.getLogger(__name__)
@@ -380,6 +381,7 @@ def project_enrollment(
     enrollment.status = EnrollmentStatus.confirmed
     enrollment.confirmed_at = datetime.now(UTC)
     enrollment.confirmed_by = user.user_id
+    record_event(db, enrollment, "confirmed", actor_id=user.user_id)
     db.flush()
     write_audit(
         db, user, action="confirm_enrollment", entity_type="enrollment",
@@ -464,6 +466,7 @@ def _apply_default(
     if declines:
         _decline_in_scope(db, enr, user)
     enr.status = EnrollmentStatus.deemed
+    record_event(db, enr, "deemed_declined" if declines else "deemed_kept", actor_id=user.user_id)
     summary["deemed_declined" if declines else "deemed_kept"] += 1
 
 
@@ -487,9 +490,14 @@ def close_window(
     name before the broker confirms, so the fallback is never silent.
     """
     enrollments = db.execute(
-        select(Enrollment).where(Enrollment.window_id == window.id)
+        select(Enrollment).where(Enrollment.window_id == window.id).with_for_update()
     ).scalars().all()
     invalid = _invalid_submissions(db, window, enrollments)
+    returned = [enr for enr in enrollments if enr.status == EnrollmentStatus.returned]
+    if returned:
+        raise HTTPException(status.HTTP_409_CONFLICT,
+            "Resolve returned enrolments before closing: employees must resubmit, "
+            "or a system administrator must cancel their choices with a reason.")
     if invalid:
         raise HTTPException(
             status.HTTP_409_CONFLICT,
@@ -557,7 +565,7 @@ def close_preview(db: Session, window: EnrollmentWindow) -> dict[str, Any]:
     ).all()
     counts = {
         "total": len(rows), "confirmed": 0, "submitted": 0, "saved_not_sent": 0,
-        "not_started": 0, "declined": 0,
+        "not_started": 0, "declined": 0, "returned": 0,
     }
     invalid: list[dict[str, Any]] = []
     saved_blocked: list[dict[str, Any]] = []
@@ -571,6 +579,9 @@ def close_preview(db: Session, window: EnrollmentWindow) -> dict[str, Any]:
             problem = _submission_problem(db, window, enr, require_priced=False)
             if problem is not None:
                 invalid.append({**who, "reason": problem})
+        elif enr.status == EnrollmentStatus.returned:
+            counts["returned"] += 1
+            invalid.append({**who, "reason": "Awaiting correction and a new signed submission."})
         elif enr.status == EnrollmentStatus.in_progress:
             counts["saved_not_sent"] += 1
             problem = _submission_problem(db, window, enr, require_priced=True)
@@ -601,6 +612,7 @@ def window_progress(db: Session, window: EnrollmentWindow) -> dict[str, int]:
             EnrollmentStatus.not_started, EnrollmentStatus.in_progress,
             EnrollmentStatus.submitted, EnrollmentStatus.confirmed,
             EnrollmentStatus.deemed, EnrollmentStatus.declined,
+            EnrollmentStatus.returned,
         ),
         0,
     )

@@ -100,6 +100,17 @@ import { isHiddenUnlessChosen } from "@/components/portal/memberVisibility";
 import { ConflictDetailError, formatError } from "@/lib/errors";
 import { fmtAmount } from "@/lib/format";
 import { cn } from "@/lib/cn";
+import { useBlocker } from "@tanstack/react-router";
+import { phaseOf, useNow } from "@/components/enrollment/period/periodMeta";
+
+function UnsavedEnrollmentGuard({ dirty }: { dirty: boolean }) {
+  useBlocker({
+    shouldBlockFn: ({ current, next }) => dirty && current.pathname !== next.pathname
+      && !window.confirm("Leave this enrolment? Unsaved entries will be lost. Save choices only saves benefit and leave selections; other form entries require Sign and send."),
+    enableBeforeUnload: dirty,
+  });
+  return null;
+}
 
 /** Slide keys that are not a product code. Namespaced so they can never collide
  * with one — a deck has one key space and it is what the URL carries.
@@ -187,6 +198,7 @@ export function MemberEnrollmentPanel({
   onSlideKeyChange,
   onSaveElections,
   onSaveLeave,
+  onSaveDraft,
   onSubmit,
   saving = false,
   savingLeave = false,
@@ -202,6 +214,7 @@ export function MemberEnrollmentPanel({
   onSlideKeyChange?: (key: string) => void;
   onSaveElections?: (elections: ElectionIn[]) => Promise<unknown>;
   onSaveLeave?: (input: { action: string; days: number }) => Promise<unknown>;
+  onSaveDraft?: (input: { elections?: ElectionIn[]; leave?: { action: string; days: number } }) => Promise<unknown>;
   onSubmit?: (input: EnrollmentSubmitInput) => Promise<unknown>;
   saving?: boolean;
   savingLeave?: boolean;
@@ -216,6 +229,7 @@ export function MemberEnrollmentPanel({
   };
 }) {
   const { window: win, enrollment, options } = data;
+  const now = useNow(1000);
   // Where the running balance goes. `lg` and up the shell offers the middle of
   // the heading row; below it that row does not exist and the balance rides the
   // deck's sticky rail instead. The broker's preview never uses the heading row
@@ -231,7 +245,7 @@ export function MemberEnrollmentPanel({
 
   const productScopeSet = useMemo(
     () => (win?.product_scope?.length ? new Set(win.product_scope) : null),
-    [win],
+    [win?.product_scope],
   );
   const tierSets = useMemo<ProductTierSet[]>(() => {
     const all = options?.products ?? [];
@@ -293,7 +307,8 @@ export function MemberEnrollmentPanel({
   const status = enrollment?.status ?? "not_started";
   const finalized = status === "confirmed" || status === "deemed";
   const submitted = status === "submitted";
-  const disabled = readOnly || finalized;
+  const periodLocked = phaseOf(win, now) !== "open" || win.member_self_service === false;
+  const disabled = readOnly || finalized || periodLocked || saving || savingLeave || submitting || !!form?.signing;
   const allowDeps = win.allow_dependant_changes;
 
   // ── Leave: ONE normalisation, read by the wallet, the mark, the review and
@@ -358,7 +373,19 @@ export function MemberEnrollmentPanel({
       : null;
 
   async function saveAll(): Promise<boolean> {
+    if (disabled || phaseOf(win!, Date.now()) !== "open") return false;
+    if (leaveError) {
+      toast.error("Correct your leave choice before saving. Nothing has been saved.");
+      return false;
+    }
     try {
+      if (onSaveDraft) {
+        await onSaveDraft({
+          elections: electionsDirty ? buildElectionsPayload(current, tierSets, dependants, allowDeps) : undefined,
+          leave: leaveDirty ? chosenLeave : undefined,
+        });
+        return true;
+      }
       if (electionsDirty && onSaveElections) {
         await onSaveElections(
           buildElectionsPayload(current, tierSets, dependants, allowDeps),
@@ -373,11 +400,11 @@ export function MemberEnrollmentPanel({
   }
 
   async function saveOnly() {
-    if (await saveAll()) toast.success("Your choices are saved.");
+    if (await saveAll()) toast.success("Benefit and leave choices saved. Your form has not been submitted.");
   }
 
   async function doSubmit() {
-    if (!onSubmit) return;
+    if (!onSubmit || disabled || phaseOf(win!, Date.now()) !== "open") return;
     // Send carries the exact reviewed choices in one atomic request.
     try {
       await onSubmit({
@@ -394,7 +421,7 @@ export function MemberEnrollmentPanel({
   }
 
   async function doSign() {
-    if (!form) return;
+    if (!form || disabled || phaseOf(win!, Date.now()) !== "open") return;
     try {
       await form.onSign(
         signPayload(draft, form.context, { tierSets, state: current, allowDeps }, {
@@ -480,7 +507,7 @@ export function MemberEnrollmentPanel({
   const railClosesAt = finalized ? null : win.closes_at;
   const railHeader =
     railClosesAt || railFlex ? (
-      <RailHeader closesAt={railClosesAt} flex={railFlex} />
+      <RailHeader closesAt={railClosesAt} flex={railFlex} closed={periodLocked} />
     ) : undefined;
 
   // ONE computation behind the rail's marks, the rail's count and the review's
@@ -596,7 +623,7 @@ export function MemberEnrollmentPanel({
   const changeCount = changes.length + (leaveChange ? 1 : 0);
   slides.push({
     key: REVIEW_KEY,
-    label: disabled ? "What's on record" : "Review and send",
+    label: finalized ? "What's on record" : disabled ? "Review choices" : "Review and send",
     mark: changeCount ? `${changeCount} change${changeCount === 1 ? "" : "s"}` : undefined,
     render: () => (
       <ReviewMount
@@ -609,7 +636,7 @@ export function MemberEnrollmentPanel({
         allowOverdraft={win.allow_overdraft}
         currency={currency}
         disabled={disabled}
-        brokerNote={readOnly && !finalized}
+        brokerNote={readOnly && !finalized && !onSaveDraft && !onSaveElections}
         dirty={dirty}
         saving={saving || savingLeave}
         submitting={submitting}
@@ -626,6 +653,12 @@ export function MemberEnrollmentPanel({
 
   return (
     <div className="space-y-4">
+      <UnsavedEnrollmentGuard dirty={!!(onSaveDraft || onSaveElections) && (dirty || !!leaveError || draft.dirty)} />
+      {!finalized && (onSaveDraft || onSaveElections) && <div role="status" className="rounded-control border border-hairline bg-glass p-3 text-row text-record">
+        {periodLocked ? <p>This period is not accepting changes. You cannot save or sign. Entries still on this page have not been submitted. Contact HR if you need a correction or more time.</p>
+          : <p>No autosave. Save choices on the Review step saves benefit and leave selections only. Your details, family requests, declarations and signature are submitted only when you Sign and send.</p>}
+        <p className="mt-1 text-label">At closure, unsent choices normally follow the period's default: {win.default_behavior === "deemed_decline" ? "decline voluntary cover and retain required cover" : "keep existing cover"}. Your benefits team may explicitly submit saved choices on your behalf; this does not create your signature.</p>
+      </div>}
       {/* The deadline is furniture on the deck's rail, not a sentence at the
           top of the page: it governs every slide, and as a line in the flow it
           scrolled away with the first product. `win.name` — the broker's
@@ -643,8 +676,9 @@ export function MemberEnrollmentPanel({
           {enrollment?.submitted_at
             ? ` on ${formatDay(enrollment.submitted_at)}`
             : ""}{" "}
-          and are being checked. You can still change them until{" "}
-          {formatDay(win.closes_at)}.
+          and are being checked. {periodLocked
+            ? "This period no longer accepts changes. Contact HR if a correction is needed."
+            : `You can still change them until ${formatDay(win.closes_at)}.`}
         </StatusNote>
       )}
       {finalized && (

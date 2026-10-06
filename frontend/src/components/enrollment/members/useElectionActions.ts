@@ -8,7 +8,8 @@ import {
   useConfirmEnrollment,
   useReopenEnrollment,
   useResetEnrollment,
-  useSetElections,
+  useReturnEnrollment,
+  useSaveEnrollmentDraft,
   useSetLeave,
   useSubmitEnrollment,
 } from "@/api/enrollment";
@@ -17,22 +18,20 @@ import { fmtCurrency } from "@/lib/format";
 import type { MemberElection } from "./useMemberElection";
 
 export function useElectionActions(enrollmentId: string, m: MemberElection) {
-  const setElections = useSetElections();
+  const setElections = useSaveEnrollmentDraft();
   const setLeave = useSetLeave();
   const submit = useSubmitEnrollment();
   const confirm = useConfirmEnrollment();
   const reset = useResetEnrollment();
   const reopen = useReopenEnrollment();
+  const returnForCorrection = useReturnEnrollment();
   // Products the server flagged as changed-but-unpriced at submit.
   const [unpriced, setUnpriced] = useState<string[] | null>(null);
 
   async function saveDraft() {
     const body = m.payload();
     try {
-      if (body.elections) {
-        await setElections.mutateAsync({ id: enrollmentId, elections: body.elections });
-      }
-      if (body.leave) await setLeave.mutateAsync({ id: enrollmentId, ...body.leave });
+      await setElections.mutateAsync({ id: enrollmentId, ...body, expected_event_id: m.enr?.latest_event_id ?? null });
       toast.success("Saved as draft.");
     } catch {
       // Already toasted by the global mutation handler.
@@ -91,26 +90,31 @@ export function useElectionActions(enrollmentId: string, m: MemberElection) {
         { id: enrollmentId, action: m.leaveAction, days: Number(m.leaveDays) },
         { onSuccess: () => toast.success("Leave saved.") },
       ),
-    discard: (done: () => void) =>
-      reset.mutate(enrollmentId, {
+    discard: (reason: string, done: () => void) =>
+      reset.mutate({ id: enrollmentId, reason }, {
         onSuccess: () => {
-          toast.success("Changes discarded.");
+          toast.success("Choices cancelled. An employee portal notice has been recorded.");
           done();
         },
       }),
-    reopen: () =>
-      reopen.mutate(enrollmentId, {
-        onSuccess: () => toast.success("Reopened — you can change this selection again."),
+    reopen: (reason: string, done: () => void) =>
+      reopen.mutate({ id: enrollmentId, reason }, {
+        onSuccess: () => { toast.success("Reopened. An employee portal notice has been recorded."); done(); },
+      }),
+    returnForCorrection: (reason: string, done: () => void) =>
+      returnForCorrection.mutate({ id: enrollmentId, reason }, {
+        onSuccess: () => { toast.success("Returned for correction. Choices retained and employee notified in the portal."); done(); },
       }),
     unpriced,
     clearUnpriced: () => setUnpriced(null),
-    busy: setElections.isPending || setLeave.isPending || submit.isPending || confirm.isPending,
+    busy: setElections.isPending || setLeave.isPending || submit.isPending || confirm.isPending || reset.isPending || reopen.isPending || returnForCorrection.isPending,
     pending: {
       confirm: confirm.isPending,
       submit: submit.isPending || confirm.isPending,
       leave: setLeave.isPending,
       reset: reset.isPending,
       reopen: reopen.isPending,
+      returnForCorrection: returnForCorrection.isPending,
     },
   };
 }

@@ -173,7 +173,9 @@ def _filter(
     )
 
 
-_STATUS_Q = Query(default=None, alias="status", pattern="^(submitted|acknowledged|superseded)$")
+_STATUS_Q = Query(
+    default=None, alias="status", pattern="^(submitted|acknowledged|superseded|returned|cancelled)$"
+)
 _SOURCE_Q = Query(default=None, pattern="^(portal|paper)$")
 _TEXT_Q = Query(default=None, max_length=100)
 
@@ -315,6 +317,15 @@ def acknowledge_form(
     """Mark a form received and checked. Confirming the ELECTIONS into live
     coverage stays on the enrolment Members tab (its existing confirm)."""
     sub = _load_submission(db, user, submission_id)
+    if sub.enrollment_id:
+        from app.models import Enrollment
+        from app.services.enrollment_elections import lock_enrollment
+        enrollment = db.get(Enrollment, sub.enrollment_id)
+        if enrollment:
+            enrollment = lock_enrollment(db, enrollment)
+            db.refresh(sub)
+            if sub.source == "portal" and enrollment.status not in ("submitted", "confirmed"):
+                raise HTTPException(status.HTTP_409_CONFLICT, "This form is no longer current.")
     if sub.status != FORM_STATUS_SUBMITTED:
         raise HTTPException(
             status.HTTP_409_CONFLICT,

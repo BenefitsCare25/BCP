@@ -24,8 +24,11 @@ import { fmtDateTime } from "@/lib/format";
 
 export const REGISTER_PAGE_SIZE = 25;
 
-export function FormStatusBadge({ item }: { item: Pick<FormRegisterItem, "status" | "enrollment_status"> }) {
+export function FormStatusBadge({ item }: { item: Pick<FormRegisterItem, "status" | "enrollment_status" | "source"> }) {
   if (item.status === "superseded") return <Badge variant="outline">Replaced</Badge>;
+  if (item.status === "cancelled") return <Badge variant="outline">Cancelled</Badge>;
+  if (item.status === "returned") return <Badge variant="outline">Needs correction</Badge>;
+  if (item.source === "portal" && ["not_started", "in_progress", "returned"].includes(item.enrollment_status ?? "")) return <Badge variant="outline">No longer current</Badge>;
   if (item.enrollment_status === "confirmed" || item.enrollment_status === "deemed") {
     return <Badge variant="good">Confirmed</Badge>;
   }
@@ -144,6 +147,8 @@ export function FormRegisterView({
           <option value="">Latest versions</option>
           <option value="submitted">Awaiting review</option>
           <option value="acknowledged">Acknowledged</option>
+          <option value="returned">Needs correction</option>
+          <option value="cancelled">Cancelled</option>
         </NativeSelect>
         {showSource && (
           <NativeSelect

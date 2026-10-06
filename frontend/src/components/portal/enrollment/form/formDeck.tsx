@@ -35,6 +35,7 @@ export const AGREE_KEY = "agree";
 export const SIGN_KEY = "sign";
 
 export interface FormDraft {
+  dirty: boolean;
   contact: ContactDraft;
   setContact: (next: ContactDraft) => void;
   pending: PendingRequests;
@@ -59,6 +60,7 @@ export function useFormDraft(ctx: MemberFormContext | null): FormDraft {
   const [opened, setOpened] = useState<Set<string>>(new Set());
   const [signature, setSignature] = useState("");
   const [confirmed, setConfirmed] = useState(false);
+  const [sentDraft, setSentDraft] = useState<string | null>(null);
   const seed = ctx?.particulars;
 
   // Seed the contact fields once the record arrives; never overwrite typing.
@@ -72,6 +74,8 @@ export function useFormDraft(ctx: MemberFormContext | null): FormDraft {
   }, [seed]);
 
   return {
+    dirty: JSON.stringify([contact, pending, [...accepted], signature, confirmed]) !== (sentDraft ??
+      JSON.stringify([{ contactNo: seed?.contact_no ?? "", email: seed?.email ?? "" }, {}, [], "", false])),
     contact,
     setContact,
     pending,
@@ -85,6 +89,7 @@ export function useFormDraft(ctx: MemberFormContext | null): FormDraft {
     confirmed,
     setConfirmed,
     resetSignature: () => {
+      setSentDraft(JSON.stringify([contact, pending, [...accepted], "", false]));
       setSignature("");
       setConfirmed(false);
     },

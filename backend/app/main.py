@@ -193,6 +193,8 @@ def create_app() -> FastAPI:
             "Content-Type",
             "X-Request-ID",
             "X-Inspro-Client",
+            "X-Inspro-Session-Activity",
+            "X-Inspro-Tenant-Slug",
             "Accept",
         ],
         expose_headers=["X-Request-ID", "Content-Disposition", "X-FactFind-Notes"],

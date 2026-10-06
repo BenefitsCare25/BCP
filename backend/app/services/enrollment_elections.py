@@ -372,6 +372,10 @@ def enrollment_detail(db: Session, enr: Enrollment) -> EnrollmentOut:
                 ).scalars().all()
             )
 
+    from app.models import EnrollmentEvent
+    latest_event_id = db.scalar(select(EnrollmentEvent.id).where(
+        EnrollmentEvent.enrollment_id == enr.id,
+    ).order_by(EnrollmentEvent.created_at.desc(), EnrollmentEvent.id.desc()).limit(1))
     return EnrollmentOut(
         id=enr.id,
         window_id=enr.window_id,
@@ -380,6 +384,7 @@ def enrollment_detail(db: Session, enr: Enrollment) -> EnrollmentOut:
         staff_id=emp.staff_id if emp else "?",
         employee_name=emp.employee_name if emp else None,
         status=enr.status,
+        latest_event_id=latest_event_id,
         baseline_snapshot=enr.baseline_snapshot,
         submitted_at=enr.submitted_at,
         confirmed_at=enr.confirmed_at,
@@ -714,7 +719,7 @@ def _option_choices_out(
     return out
 
 
-def _prepare_enrollment_edit(enr: Enrollment) -> None:
+def _prepare_enrollment_edit(db: Session, enr: Enrollment) -> None:
     """Move broker-editable records back to draft and reject deemed records."""
     if enr.status == EnrollmentStatus.deemed:
         raise HTTPException(
@@ -722,6 +727,9 @@ def _prepare_enrollment_edit(enr: Enrollment) -> None:
             "A deemed enrollment is finalized and cannot be edited.",
         )
     if enr.status in (EnrollmentStatus.submitted, EnrollmentStatus.confirmed):
+        from app.services.enrollment_events import invalidate_forms, record_event
+        invalidate_forms(db, enr, "returned")
+        record_event(db, enr, "revised")
         enr.status = EnrollmentStatus.in_progress
         enr.submitted_at = None
         enr.submitted_by = None
@@ -762,7 +770,7 @@ def apply_elections(
     window = _require_window(db, enr)
     _assert_window_for(window, prepare_edit)
     if prepare_edit:
-        _prepare_enrollment_edit(enr)
+        _prepare_enrollment_edit(db, enr)
     if not window.allow_plan_change:
         raise HTTPException(status.HTTP_409_CONFLICT, "Plan changes are disabled for this window.")
     py = _require_policy_year(db, enr)
@@ -982,7 +990,7 @@ def apply_leave(
     window = _require_window(db, enr)
     _assert_window_for(window, prepare_edit)
     if prepare_edit:
-        _prepare_enrollment_edit(enr)
+        _prepare_enrollment_edit(db, enr)
     if not window.allow_leave:
         raise HTTPException(status.HTTP_409_CONFLICT, "Leave trading is disabled for this window.")
     policy = db.execute(
@@ -1094,6 +1102,9 @@ def perform_submit(
     # overdrafts); changed-but-unpriced elections need explicit acknowledgment.
     assert_within_wallet(db, enr, window)
     assert_elections_priced(db, enr, window, acknowledge=acknowledge)
+    if enr.status != EnrollmentStatus.submitted:
+        from app.services.enrollment_events import record_event
+        record_event(db, enr, "submitted", actor_id=actor_id)
     enr.status = EnrollmentStatus.submitted
     enr.submitted_at = datetime.now(UTC)
     enr.submitted_by = actor_id

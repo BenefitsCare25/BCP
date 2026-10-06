@@ -155,13 +155,13 @@ function handleUnauthorized(): never {
 
 let refreshInFlight: Promise<boolean> | null = null;
 
-export async function refreshPortalSession(): Promise<boolean> {
+export async function refreshPortalSession(passive = false): Promise<boolean> {
   if (!refreshInFlight) {
     const expectedMember = usePortalSession.getState().member?.id ?? null;
     refreshInFlight = withSessionRefreshLock("portal", currentPortalTenantSlug(), async () => {
       try {
         const res = await fetch(`${API_BASE}/portal/auth/refresh`, {
-          method: "POST", credentials: "include", headers: tenantHeader(),
+          method: "POST", credentials: "include", headers: { ...tenantHeader(), ...(passive ? { "X-Inspro-Session-Activity": "passive" } : {}) },
         });
         if (!res.ok) {
           if (res.status === 403) {
@@ -193,7 +193,7 @@ async function authenticatedFetch(path: string, init: RequestInit = {}, credenti
   });
   let res = await send();
   if (res.status === 401 && !credential) {
-    if (await refreshPortalSession()) res = await send();
+    if (await refreshPortalSession(new Headers(init.headers).get("X-Inspro-Session-Activity") === "passive")) res = await send();
   }
   return res;
 }
@@ -226,6 +226,7 @@ async function request<T>(
 }
 
 export const portalApi = {
+  passiveGet: <T>(path: string) => request<T>(path, { headers: { "X-Inspro-Session-Activity": "passive" } }),
   get: <T>(path: string) => request<T>(path),
   getWithTimeout: <T>(path: string, milliseconds: number) =>
     request<T>(path, { signal: AbortSignal.timeout(milliseconds) }),

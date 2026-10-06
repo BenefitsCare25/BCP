@@ -39,13 +39,16 @@ from app.models import (
 from app.models.enrollment import EnrollmentStatus
 from app.schemas.enrollment import (
     ElectionsUpdate,
+    EnrollmentDraftIn,
     EnrollmentOptionsOut,
     EnrollmentOut,
+    EnrollmentReviewIn,
     EnrollmentRoster,
     EnrollmentRosterItem,
     EnrollmentSubmitIn,
     LeaveElectionIn,
 )
+from app.schemas.enrollment_events import EnrollmentEventOut
 from app.services.enrollment_elections import (
     apply_elections,
     apply_leave,
@@ -55,6 +58,7 @@ from app.services.enrollment_elections import (
     perform_submit,
     revalidate_enrollment,
 )
+from app.services.enrollment_events import invalidate_forms, record_event
 from app.services.enrollment_flex_guard import assert_within_wallet
 from app.services.enrollment_lifecycle import project_enrollment
 from app.services.enrollment_validation import (
@@ -64,6 +68,49 @@ from app.services.enrollment_validation import (
 from app.services.underwriting import refresh_underwriting_cases
 
 router = APIRouter(tags=["enrollments"])
+
+
+def _assert_draft(enr: Enrollment) -> None:
+    if enr.status in (EnrollmentStatus.submitted, EnrollmentStatus.confirmed):
+        raise HTTPException(status.HTTP_409_CONFLICT,
+            "Return the submission for correction or reopen confirmed enrolment "
+            "with a reason before changing choices.")
+
+
+@router.get("/enrollments/{enrollment_id}/events")
+def enrollment_events(
+    enrollment_id: str,
+    enr: Enrollment = Depends(load_enrollment),
+    db: Session = Depends(get_db),
+) -> list[EnrollmentEventOut]:
+    from app.models import EnrollmentEvent
+    from app.services.enrollment_events import event_out
+    rows = db.scalars(select(EnrollmentEvent).where(
+        EnrollmentEvent.enrollment_id == enr.id,
+        EnrollmentEvent.client_id == enr.client_id,
+    ).order_by(EnrollmentEvent.created_at.desc(), EnrollmentEvent.id.desc()).limit(50))
+    return [event_out(db, row) for row in rows]
+
+
+@router.post("/enrollments/{enrollment_id}/events/{event_id}/retry-email")
+def retry_enrollment_email(
+    enrollment_id: str,
+    event_id: str,
+    enr: Enrollment = Depends(load_enrollment),
+    user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> EnrollmentEventOut:
+    from app.models import EnrollmentEvent
+    from app.services.enrollment_events import enqueue_email, event_out
+    enr = lock_enrollment(db, enr)
+    event = db.get(EnrollmentEvent, event_id)
+    if not event or event.enrollment_id != enr.id or event.client_id != enr.client_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Notification not found.")
+    enqueue_email(db, enr, event)
+    write_audit(db, user, "retry_enrollment_email", "enrollment", enr.id,
+                after={"event_id": event.id}, employee_id=enr.employee_id)
+    db.commit()
+    return event_out(db, event)
 
 
 @router.get(
@@ -142,6 +189,7 @@ def set_elections(
     db: Session = Depends(get_db),
 ) -> EnrollmentOut:
     enr = lock_enrollment(db, enr)
+    _assert_draft(enr)
     apply_elections(db, enr, body.elections)
     write_audit(
         db, user, action="update_enrollment_elections", entity_type="enrollment",
@@ -150,6 +198,31 @@ def set_elections(
     )
     db.commit()
     db.refresh(enr)
+    return enrollment_detail(db, enr)
+
+
+@router.put("/enrollments/{enrollment_id}/draft", response_model=EnrollmentOut)
+def save_enrollment_draft(
+    enrollment_id: str,
+    body: EnrollmentDraftIn,
+    enr: Enrollment = Depends(load_enrollment),
+    user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> EnrollmentOut:
+    enr = lock_enrollment(db, enr)
+    _assert_draft(enr)
+    if "expected_event_id" in body.model_fields_set:
+        if enrollment_detail(db, enr).latest_event_id != body.expected_event_id:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT, "Enrolment changed. Refresh before saving."
+            )
+    if body.elections is not None:
+        apply_elections(db, enr, body.elections)
+    if body.leave is not None:
+        apply_leave(db, enr, body.leave)
+    write_audit(db, user, "save_enrollment_draft", "enrollment", enr.id,
+                employee_id=enr.employee_id)
+    db.commit()
     return enrollment_detail(db, enr)
 
 
@@ -162,6 +235,7 @@ def set_leave(
     db: Session = Depends(get_db),
 ) -> EnrollmentOut:
     enr = lock_enrollment(db, enr)
+    _assert_draft(enr)
     leave = apply_leave(db, enr, body)
     write_audit(
         db, user, action="update_enrollment_leave", entity_type="enrollment",
@@ -183,6 +257,9 @@ def submit_enrollment(
     db: Session = Depends(get_db),
 ) -> EnrollmentOut:
     enr = lock_enrollment(db, enr)
+    if enr.status == EnrollmentStatus.returned:
+        raise HTTPException(status.HTTP_409_CONFLICT,
+            "The employee must correct and sign the returned enrolment before it can be confirmed.")
     if (
         body
         and body.acknowledge_unpriced
@@ -193,8 +270,10 @@ def submit_enrollment(
             "Only an administrator can accept unpriced elections.",
         )
     if body and body.elections is not None:
+        _assert_draft(enr)
         apply_elections(db, enr, body.elections)
     if body and body.leave is not None:
+        _assert_draft(enr)
         apply_leave(db, enr, body.leave)
     perform_submit(
         db, enr,
@@ -257,6 +336,7 @@ def confirm_enrollment(
 @router.post("/enrollments/{enrollment_id}/reopen", response_model=EnrollmentOut)
 def reopen_enrollment(
     enrollment_id: str,
+    body: EnrollmentReviewIn,
     enr: Enrollment = Depends(load_enrollment),
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -264,8 +344,8 @@ def reopen_enrollment(
     """Reopen a confirmed enrollment for further plan changes, while the window
     is still open.
 
-    Flips status ``confirmed`` → ``in_progress`` so the normal edit → submit →
-    confirm flow re-enables. The already-projected overrides stay as the
+    Signed portal submissions return to the employee for a fresh signature;
+    broker-managed submissions become drafts. The already-projected overrides stay as the
     committed coverage until the broker re-submits and re-confirms (which
     re-projects). Gated to an open, in-period window — once the window closes,
     finalized coverage is changed via the coverage-revert endpoints instead.
@@ -280,7 +360,17 @@ def reopen_enrollment(
     if window is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Enrolment period not found.")
     assert_window_accepts_edits(window)
-    enr.status = EnrollmentStatus.in_progress
+    from app.models.enrollment_form import EnrollmentFormSubmission
+    signed = db.scalar(select(EnrollmentFormSubmission.id).where(
+        EnrollmentFormSubmission.enrollment_id == enr.id,
+        EnrollmentFormSubmission.source == "portal",
+    ).limit(1))
+    if signed and not window.member_self_service:
+        raise HTTPException(status.HTTP_409_CONFLICT,
+                            "Enable member self-service before reopening a signed enrolment.")
+    invalidate_forms(db, enr, "returned")
+    record_event(db, enr, "reopened", reason=body.reason, actor_id=user.user_id)
+    enr.status = EnrollmentStatus.returned if signed else EnrollmentStatus.in_progress
     enr.submitted_at = None
     enr.submitted_by = None
     enr.confirmed_at = None
@@ -289,6 +379,7 @@ def reopen_enrollment(
     write_audit(
         db, user, action="reopen_enrollment", entity_type="enrollment",
         entity_id=enr.id, employee_id=enr.employee_id,
+        after={"reason": body.reason},
     )
     db.commit()
     db.refresh(enr)
@@ -302,6 +393,7 @@ def reopen_enrollment(
 )
 def reset_enrollment(
     enrollment_id: str,
+    body: EnrollmentReviewIn,
     enr: Enrollment = Depends(load_enrollment),
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -326,6 +418,10 @@ def reset_enrollment(
             "This enrollment no longer belongs to an enrollment period.",
         )
     assert_window_accepts_edits(window)
+    if enr.status == EnrollmentStatus.not_started:
+        raise HTTPException(status.HTTP_409_CONFLICT, "There are no saved choices to cancel.")
+    invalidate_forms(db, enr, "cancelled")
+    record_event(db, enr, "cancelled", reason=body.reason, actor_id=user.user_id)
     elections = db.execute(
         select(EnrollmentElection).where(EnrollmentElection.enrollment_id == enr.id)
     ).scalars().all()
@@ -343,8 +439,37 @@ def reset_enrollment(
     db.flush()
     write_audit(
         db, user, action="reset_enrollment", entity_type="enrollment", entity_id=enr.id,
-        after={"cleared_elections": cleared}, employee_id=enr.employee_id,
+        after={"cleared_elections": cleared, "reason": body.reason}, employee_id=enr.employee_id,
     )
     db.commit()
     db.refresh(enr)
+    return enrollment_detail(db, enr)
+
+
+@router.post("/enrollments/{enrollment_id}/return", response_model=EnrollmentOut)
+def return_enrollment(
+    enrollment_id: str,
+    body: EnrollmentReviewIn,
+    enr: Enrollment = Depends(load_enrollment),
+    user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> EnrollmentOut:
+    enr = lock_enrollment(db, enr)
+    if enr.status != EnrollmentStatus.submitted:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Only a submitted enrolment can be returned.")
+    window = db.get(EnrollmentWindow, enr.window_id)
+    if window is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Enrolment period not found.")
+    assert_window_accepts_edits(window)
+    if not window.member_self_service:
+        raise HTTPException(status.HTTP_409_CONFLICT,
+            "Enable member self-service before returning an enrolment for employee correction.")
+    invalidate_forms(db, enr, "returned")
+    enr.status = EnrollmentStatus.returned
+    enr.submitted_at = None
+    enr.submitted_by = None
+    record_event(db, enr, "returned", reason=body.reason, actor_id=user.user_id)
+    write_audit(db, user, "return_enrollment", "enrollment", enr.id,
+                after={"reason": body.reason}, employee_id=enr.employee_id)
+    db.commit()
     return enrollment_detail(db, enr)

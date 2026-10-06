@@ -248,6 +248,23 @@ class EnrollmentSubmitIn(BaseModel):
     leave: LeaveElectionIn | None = None
 
 
+class EnrollmentDraftIn(BaseModel):
+    elections: list[EnrollmentElectionIn] | None = Field(default=None, min_length=1)
+    leave: LeaveElectionIn | None = None
+    expected_event_id: str | None = None
+
+
+class EnrollmentReviewIn(BaseModel):
+    reason: str = Field(min_length=1, max_length=2000)
+
+    @model_validator(mode="after")
+    def _reason(self) -> Self:
+        self.reason = self.reason.strip()
+        if not self.reason:
+            raise ValueError("Explain the reason to the employee.")
+        return self
+
+
 class EnrollmentElectionOut(_Base):
     product_id: str
     product_code: str
@@ -493,6 +510,7 @@ class EnrollmentOut(BaseModel):
     staff_id: str
     employee_name: str | None
     status: str
+    latest_event_id: str | None = None
     baseline_snapshot: dict[str, Any] | None
     submitted_at: datetime | None
     confirmed_at: datetime | None
@@ -533,6 +551,7 @@ class WindowProgress(BaseModel):
 
     not_started: int
     in_progress: int
+    returned: int = 0
     submitted: int
     confirmed: int
     deemed: int
@@ -548,6 +567,7 @@ class BulkConfirmResult(BaseModel):
 
 
 class WindowClosePreview(BaseModel):
+    returned: int = 0
     """What closing would do, per member group — computed by running close's
     own checks without committing them."""
 

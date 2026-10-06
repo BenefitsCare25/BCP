@@ -2,12 +2,14 @@
  * chooses to upgrade/downgrade, decline voluntary cover, include dependants,
  * and trade leave. Submissions await broker confirmation. */
 import { useMemo } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { FileWarning } from "lucide-react";
 import {
   usePortalDependants,
   usePortalEnrollment,
   useSaveMyElections,
+  useSaveMyEnrollmentDraft,
   useSetMyLeave,
   useSubmitMyEnrollment,
 } from "@/api/portal";
@@ -27,6 +29,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { isNotFoundError } from "@/lib/errors";
 import { useDocumentTitle } from "@/lib/useDocumentTitle";
 import { useCompany } from "@/components/portal/useCompany";
+import { EnrollmentUpdates, EnrollmentStatusNotice } from "@/components/portal/EnrollmentNotices";
+import { useEnrollmentNotices, useEnrollmentState } from "@/api/enrollmentEvents";
 
 export function PortalEnrollmentPage() {
   useDocumentTitle("My enrollment");
@@ -36,11 +40,22 @@ export function PortalEnrollmentPage() {
   const enrollment = usePortalEnrollment();
   const dependants = usePortalDependants();
   const saveElections = useSaveMyElections();
+  const saveDraft = useSaveMyEnrollmentDraft();
   const setLeave = useSetMyLeave();
   const submit = useSubmitMyEnrollment();
   // The e-form wraps the deck whenever a period is open for this member.
   const formContext = usePortalEnrollmentForm(!!enrollment.data?.window);
   const sign = useSignEnrollmentForm();
+  const notices = useEnrollmentNotices();
+  const live = useEnrollmentState(enrollment.data?.enrollment?.id);
+  const qc = useQueryClient();
+  const latestNotice = notices.data?.items.find((item) => item.enrollment_id === enrollment.data?.enrollment?.id);
+  const changed = (!!latestNotice && latestNotice.id !== enrollment.data?.enrollment?.latest_event_id)
+    || (!!live.data && live.data.latest_event_id !== (enrollment.data?.enrollment?.latest_event_id ?? null));
+  const effectiveData = useMemo(() => enrollment.data && live.data && enrollment.data.window
+    ? { ...enrollment.data, window: { ...enrollment.data.window, status: live.data.window_status,
+        opens_at: live.data.opens_at, closes_at: live.data.closes_at, member_self_service: live.data.member_self_service } }
+    : enrollment.data, [enrollment.data, live.data]);
 
   // Only active (approved) dependants are electable for coverage — pending
   // self-added dependants join once the broker approves them.
@@ -112,8 +127,18 @@ export function PortalEnrollmentPage() {
 
   return (
     <div className="space-y-4">
+      <EnrollmentStatusNotice enrollmentId={enrollment.data?.enrollment?.id} />
+      {live.isError && <div role="alert" className="rounded-control border border-hairline bg-glass p-4 text-row text-record">
+        <p>We couldn't check whether this period still accepts changes. Your entries remain on this page. Retry before saving or signing.</p>
+        <button className="leaf-focus min-h-11 text-action-ink" onClick={() => void live.refetch()}>Check enrolment status</button>
+      </div>}
+      {changed && <div role="status" className="rounded-control border border-hairline bg-glass p-4 text-row text-record">
+        <p>Your enrolment changed while this page was open. Refresh to load the latest saved choices before continuing.</p>
+        <button className="leaf-focus min-h-11 font-semibold text-action-ink" onClick={() => void qc.invalidateQueries({ queryKey: ["portal"] })}>Refresh enrolment</button>
+      </div>}
       <MemberEnrollmentPanel
-        data={enrollment.data ?? { window: null, enrollment: null, options: null }}
+        readOnly={changed || live.isError}
+        data={effectiveData ?? { window: null, enrollment: null, options: null }}
         dependants={dependantRefs}
         // Which step is open lives in the URL, so it survives a refresh and the
         // back button — the same contract the coverage deck has. `replace`
@@ -131,20 +156,28 @@ export function PortalEnrollmentPage() {
         }
         onSaveElections={(elections) => saveElections.mutateAsync(elections)}
         onSaveLeave={(input) => setLeave.mutateAsync(input)}
+        onSaveDraft={async (input) => {
+          try { return await saveDraft.mutateAsync({ ...input, expected_event_id: enrollment.data?.enrollment?.latest_event_id ?? null }); }
+          catch (error) { void live.refetch(); throw error; }
+        }}
         onSubmit={(input) => submit.mutateAsync(input)}
-        saving={saveElections.isPending}
+        saving={saveElections.isPending || saveDraft.isPending}
         savingLeave={setLeave.isPending}
         submitting={submit.isPending}
         form={
           formContext.data
             ? {
                 context: formContext.data,
-                onSign: (input) => sign.mutateAsync(input),
+                onSign: async (input) => {
+                  try { return await sign.mutateAsync({ ...input, expected_event_id: enrollment.data?.enrollment?.latest_event_id ?? null }); }
+                  catch (error) { void live.refetch(); throw error; }
+                },
                 signing: sign.isPending,
               }
             : undefined
         }
       />
+      <EnrollmentUpdates />
       <MyFormsMount />
     </div>
   );

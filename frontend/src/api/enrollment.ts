@@ -129,6 +129,7 @@ export interface CloseMemberNote {
 
 /** What Close would do, computed by running close's own checks read-only. */
 export interface WindowClosePreview {
+  returned?: number;
   total: number;
   confirmed: number;
   submitted: number;
@@ -146,6 +147,7 @@ export interface WindowClosePreview {
 export type EnrollmentStatus =
   | "not_started"
   | "in_progress"
+  | "returned"
   | "submitted"
   | "confirmed"
   | "deemed"
@@ -536,6 +538,7 @@ export interface EnrollmentDetail {
   staff_id: string;
   employee_name: string | null;
   status: string;
+  latest_event_id?: string | null;
   baseline_snapshot: {
     products?: Record<
       string,
@@ -1034,6 +1037,8 @@ export function useEnrollmentOptions(enrollmentId: string | null) {
 }
 
 function invalidateEnrollment(qc: ReturnType<typeof useQueryClient>) {
+  qc.invalidateQueries({ queryKey: ["enrollment-events"] });
+  qc.invalidateQueries({ queryKey: ["enrollment-forms"] });
   qc.invalidateQueries({ queryKey: ["enrollment"] });
   qc.invalidateQueries({ queryKey: ["enrollments"] });
   qc.invalidateQueries({ queryKey: ["enrollment-progress"] });
@@ -1097,7 +1102,7 @@ export function useConfirmEnrollment() {
 export function useReopenEnrollment() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (id: string) => api.post<EnrollmentDetail>(`/enrollments/${id}/reopen`, {}),
+    mutationFn: ({ id, reason }: { id: string; reason: string }) => api.post<EnrollmentDetail>(`/enrollments/${id}/reopen`, { reason }),
     onSuccess: () => invalidateEnrollment(qc),
   });
 }
@@ -1197,11 +1202,33 @@ export function useRevertCoverage(employeeId: string | undefined) {
 export function useResetEnrollment() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (id: string) => api.post<EnrollmentDetail>(`/enrollments/${id}/reset`, {}),
+    mutationFn: ({ id, reason }: { id: string; reason: string }) => api.post<EnrollmentDetail>(`/enrollments/${id}/reset`, { reason }),
     onSuccess: () => {
       invalidateEnrollment(qc);
       qc.invalidateQueries({ queryKey: ["coverage-history"] });
     },
+  });
+}
+
+export interface EnrollmentDraftInput {
+  elections?: ElectionIn[];
+  leave?: { action: string; days: number };
+  expected_event_id?: string | null;
+}
+
+export function useSaveEnrollmentDraft() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, ...body }: EnrollmentDraftInput & { id: string }) => api.put<EnrollmentDetail>(`/enrollments/${id}/draft`, body),
+    onSuccess: () => invalidateEnrollment(qc),
+  });
+}
+
+export function useReturnEnrollment() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, reason }: { id: string; reason: string }) => api.post<EnrollmentDetail>(`/enrollments/${id}/return`, { reason }),
+    onSuccess: () => invalidateEnrollment(qc),
   });
 }
 
