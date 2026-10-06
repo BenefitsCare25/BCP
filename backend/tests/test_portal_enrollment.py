@@ -1010,7 +1010,7 @@ def test_live_state_locks_closed_period_and_rejects_late_drafts(broker):
         assert not list(db.scalars(select(EnrollmentElection)))
 
 
-def test_migration_recovers_only_audited_cancellations(broker: TestClient) -> None:
+def test_migration_recovers_only_audited_cancellations(broker: TestClient, monkeypatch) -> None:
     import importlib.util
     from datetime import UTC, datetime, timedelta
 
@@ -1028,8 +1028,11 @@ def test_migration_recovers_only_audited_cancellations(broker: TestClient) -> No
             action="reset_enrollment", entity_type="enrollment", entity_id=eid,
             created_at=datetime.now(UTC) + timedelta(seconds=1)))
         db.flush()
-        migration._backfill_cancelled(db.connection(), None, EnrollmentEvent.__table__)
-        migration._backfill_cancelled(db.connection(), None, EnrollmentEvent.__table__)
+        # Provisioning from current models can create the event table before
+        # Alembic reaches this revision; upgrading must reuse it without loss.
+        monkeypatch.setattr(migration.op, "get_bind", lambda: db.connection())
+        migration.upgrade()
+        migration.upgrade()
         db.expire_all()
         assert db.get(EnrollmentFormSubmission, original.id).status == "cancelled"
         assert db.get(EnrollmentFormSubmission, original.id).content_sha256 == original_hash

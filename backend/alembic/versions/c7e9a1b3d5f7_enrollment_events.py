@@ -22,6 +22,13 @@ def upgrade() -> None:
                 schemas.append(schema)
     for schema in schemas:
         prefix = f"{schema}." if schema else ""
+        # Model-based firm provisioning may already include this table while
+        # Alembic is advancing older revisions. Retain it and reconcile history.
+        if sa.inspect(bind).has_table("enrollment_events", schema=schema):
+            events = sa.Table("enrollment_events", sa.MetaData(), schema=schema,
+                              autoload_with=bind, resolve_fks=False)
+            _backfill_cancelled(bind, schema, events)
+            continue
         events = op.create_table(
             "enrollment_events",
             sa.Column("id", sa.String(36), primary_key=True),
