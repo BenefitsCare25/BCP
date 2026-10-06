@@ -47,7 +47,9 @@ process.once("exit", () => rmSync(e2eDirectory, { recursive: true, force: true }
 export default defineConfig({
   testDir: "./e2e",
   outputDir: "./test-results",
-  globalTimeout: process.env.CI ? 8 * 60_000 : undefined,
+  // The full desktop/mobile suite runs on two CI workers; keep per-test timeouts
+  // while allowing all journeys (and failure diagnostics) to finish.
+  globalTimeout: process.env.CI ? 20 * 60_000 : undefined,
   fullyParallel: false,
   forbidOnly: Boolean(process.env.CI),
   retries: process.env.CI ? 2 : 0,

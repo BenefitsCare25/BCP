@@ -36,6 +36,9 @@ function line(code: string, name: string, items: ReturnType<typeof item>[], fami
 }
 
 async function mockMember(page: Page, descriptionsOnly = false) {
+  await page.route("**/api/v1/portal/enrollment/notices", route => route.fulfill({
+    json: { items: [], unread: 0 },
+  }));
   await page.route("**/api/v1/portal/auth/refresh", route => route.fulfill({ json: {
     token: "e2e-member-token", expires_at: "2100-01-01T00:00:00Z", member: MEMBER,
   } }));

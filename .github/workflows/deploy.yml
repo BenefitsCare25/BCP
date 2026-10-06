@@ -174,7 +174,7 @@ jobs:
 
       - name: Frontend end-to-end
         working-directory: frontend
-        timeout-minutes: 10
+        timeout-minutes: 25
         run: pnpm exec playwright test
 
   # Preserve the established required-check name while the independent stacks
