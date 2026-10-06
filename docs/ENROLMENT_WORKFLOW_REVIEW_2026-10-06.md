@@ -109,8 +109,8 @@ fake-mailer tests. Physical Safari/device acceptance is also untested.
 Scheduled opening announcements, deadline reminders and delivery-bounce webhooks
 are separate enhancements, not implemented or implied by this correction.
 Current notices cover submission, revision, return, cancellation, reopening,
-confirmation and default finalisation. A production release is not yet performed
-or certified by the local checks.
+confirmation and default finalisation. Production release evidence is recorded
+below separately from these local checks.
 
 ## Review follow-up: passive sessions, paper receipts and partial drafts
 
@@ -158,4 +158,40 @@ recovery and a rejected save racing closure. Desktop/mobile screenshots were
 visually reviewed; scoped accessibility and overflow checks passed. Production
 frontend build passed. PowerShell's redirected stderr reported a nonzero shell
 status for warning output despite the successful runner summary; the build was
-also verified directly without redirection. No deployment or live mail was sent.
+also verified directly without redirection. No live mail was sent by these checks.
+
+## Production deployment: 6 October 2026
+
+Released commit `95085647effed08bd4235d3d2d52d3904066a12e` through
+[successful deployment run 37408661534](https://github.com/BenefitsCare25/BCP/actions/runs/37408661534).
+The release includes the lifecycle work, all three review corrections and the
+partial-form/closure safeguards described above.
+
+Deployment monitoring exposed and resolved three release blockers before rollout:
+
+- PostgreSQL tenant provisioning can already create the event table from current
+  models. The migration now reuses that table and retains idempotent backfill.
+- Updated transitive Seroval to 1.6.8; production dependency audits passed.
+- Added notice endpoint mocks to existing claims/coverage browser fixtures. Their
+  synthetic tokens had reached the real API and triggered sign-out. The complete
+  browser suite now has a 20-minute budget within a 25-minute workflow step;
+  individual test timeouts and assertions remain unchanged.
+
+Final CI: **2,619 backend tests passed, 115 skipped**; **269 desktop/mobile browser
+tests passed, one skipped** in 7.3 minutes. Lint, strict typing, production build,
+dependency audits and container build passed. The complete local browser suite
+also passed 269 tests with one skip. CI included PostgreSQL migration checks.
+
+The private production migration completed before switching the portal and
+worker. Both services passed the exact-commit and stable-readiness release gate.
+Independent HTTPS checks at approximately **11:37 Singapore time** confirmed:
+
+- Portal `/health`: HTTP 200 and the released commit.
+- Portal `/readiness`: HTTP 200, database and Redis both `ok`.
+- Worker `/readyz`: HTTP 200 and the same released commit.
+- Employee `/portal/sign-in`: HTTP 200 and the deployed SPA entry document.
+
+No production employee records were created or submitted as a smoke test, and no
+test message was sent to a real mailbox. Actual SMTP delivery and physical Safari
+acceptance remain unverified; deployment health does not certify those journeys.
+Unrelated local packaging, container and workflow edits were preserved.
