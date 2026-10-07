@@ -318,7 +318,7 @@ def _company_activity(db: Session, py: PolicyYear, ctx: BuildContext) -> Workboo
 # ── The composites ───────────────────────────────────────────────────────────
 
 def _full_el(db: Session, py: PolicyYear, ctx: BuildContext) -> Workbook:
-    from app.services.full_el_workbook import build_full_el
+    from app.services.full_el import build_full_el
 
     return build_full_el(db, py, masked=ctx.masked, employee_status=ctx.employee_status)
 
@@ -327,26 +327,25 @@ WORKBOOKS: dict[str, WorkbookSpec] = {
     "full-el": WorkbookSpec(
         key="full-el", label="Full Employee Listing (EL)",
         description=(
-            "Company setup, dynamic product coverage, linked dependants and annual premiums. "
-            "Draft rates and missing rules are flagged for review."
+            "The company's employee listing in its own layout: employees with their "
+            "dependants, a column block per product and live formulas."
         ),
         supports_employee_status=True, build=_full_el,
         sheets=[
-            SheetSpec("Basis of Cover",
-                      description="Company, product terms, eligibility and category rates."),
-            SheetSpec("Full EL",
-                      description="Employee details, cover, underwriting and annual premiums.",
-                      columns=("Staff ID", "Employment", "Product cover", "Annual premiums")),
-            SheetSpec("Dependants",
-                      description="Linked dependants with their own cover and underwriting."),
-            SheetSpec("Source Setup",
-                      description="Stored placement-slip setup, schedules and source references."),
-            SheetSpec("Headcount & Annual Premium",
-                      description="Counts and premiums by product, entity, category and plan."),
-            SheetSpec("Setup & Data Gaps",
-                      description="Missing rules, rates, mappings and member details."),
-            SheetSpec("Declaration",
+            SheetSpec("Summary - Basis of Cover",
+                      description="Products, insurers, policy numbers and listed categories."),
+            SheetSpec("Employee Listing",
+                      description="Employees then their dependants; category, plan, family "
+                                  "tier, sums insured, underwriting and premium per product.",
+                      columns=("Employee", "Dependants", "Product blocks")),
+            SheetSpec("Declaration - Please Read",
                       description="Company declaration for completion before submission."),
+            SheetSpec("Inspro Use - System Category",
+                      description="Grade and work pass against each product's category."),
+            SheetSpec("Headcount Summary",
+                      description="Live counts, sums insured and premiums by category."),
+            SheetSpec("Setup & Data Gaps",
+                      description="Unconfirmed setup, missing rates, GST and member details."),
         ],
     ),
     "insurer-submission": WorkbookSpec(

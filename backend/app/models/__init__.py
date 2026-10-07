@@ -33,6 +33,7 @@ from app.models.email_template import (
     EmailTemplateVersion,
 )
 from app.models.employee import Employee
+from app.models.employee_listing import ElLayoutProfile, ListingAssignment
 from app.models.employee_plan_override import EmployeePlanOverride
 from app.models.enrollment import Enrollment, EnrollmentElection
 from app.models.enrollment_event import EnrollmentEvent
@@ -94,6 +95,7 @@ __all__ = [
     "ClientAuthPolicy",
     "Dependant",
     "DualCoverageDecision",
+    "ElLayoutProfile",
     "EligibilityMappingProfile",
     "EmailBranding",
     "EmailPreparation",
@@ -116,6 +118,7 @@ __all__ = [
     "Invitation",
     "LeaveElection",
     "LeavePolicy",
+    "ListingAssignment",
     "MemberAccount",
     "MemberEnquiry",
     "MemberOtpCode",

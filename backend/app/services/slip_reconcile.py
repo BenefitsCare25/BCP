@@ -171,6 +171,21 @@ def _reconcile_product(product: ProductSlip) -> tuple[ProductSlip, ProductDiagno
         else:
             emitted.append(cover)
 
+    # One descriptive schedule shared by every category (GTL/GPA cohorts that
+    # differ only by sum insured): each fanned "plan" is that category's cover,
+    # so it is named after the category rather than "Schedule of Benefits" /
+    # "Plan 2", which the slip never printed.
+    if fanned and len(plans) == 1:
+        names: dict[str, str] = {}
+        for c in cats:
+            names.setdefault((c.plan_code or "").strip(), c.category.strip())
+        emitted = [
+            replace(p, display_name=names[p.code.strip()])
+            if names.get(p.code.strip()) and not p.source_label
+            else p
+            for p in emitted
+        ]
+
     # Preserve any parsed plans that were never referenced (don't lose schedules).
     kept = [p for p in plans if id(p) not in consumed]
     new_plans = tuple(emitted + kept)

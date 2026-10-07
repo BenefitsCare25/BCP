@@ -167,6 +167,84 @@ def _fill_plan_spans(
     return out, spans
 
 
+def _location_terms(category: ExtractedCategory) -> tuple[Any, ...]:
+    """What a cohort is entitled to, independent of where it works."""
+    return (
+        category.basis,
+        category.participation.strip().lower(),
+        category.premium_rate,
+        category.rate_basis,
+        repr(sorted((category.rate_tiers or {}).items())),
+        category.member_scope,
+    )
+
+
+def _merge_location_splits(
+    categories: tuple[ExtractedCategory, ...],
+) -> tuple[ExtractedCategory, ...]:
+    """One category per cohort when a slip repeats the same cohorts per depot.
+
+    GAS's GPA lists Directors / Professionals / Other Staff / Bus Drivers once
+    for Loyang Depot and again for East Coast Depot with identical terms. The
+    location then only splits headcount and sum insured, so the rows merge into
+    one category carrying a per-location breakdown. Cohorts whose terms differ
+    by location stay separate, location-scoped categories, as do locations
+    stated in Participation ("Compulsory - SG Office"), which define who is
+    eligible rather than where a sum insured is reported.
+    """
+    scoped = [
+        c for c in categories
+        if c.location_scope and c.location_scope in (c.source_insured or "")
+    ]
+    if len({c.location_scope for c in scoped}) < 2:
+        return categories
+    groups: dict[tuple[str, str], list[ExtractedCategory]] = {}
+    for c in scoped:
+        groups.setdefault((c.insured.strip().lower(), c.category.strip().lower()), []).append(c)
+    if any(
+        len({c.location_scope for c in group}) != len(group)
+        or len({_location_terms(c) for c in group}) != 1
+        for group in groups.values()
+    ):
+        return categories
+
+    def _total(values: list[float | int | None]) -> float | None:
+        known = [v for v in values if v is not None]
+        return sum(known) if known else None
+
+    merged: dict[tuple[str, str], ExtractedCategory] = {}
+    out: list[ExtractedCategory] = []
+    member_ids = {id(c) for c in scoped}
+    for c in categories:
+        if id(c) not in member_ids:
+            out.append(c)
+            continue
+        key = (c.insured.strip().lower(), c.category.strip().lower())
+        if key in merged:
+            continue
+        group = groups[key]
+        employees = _total([g.num_employees for g in group])
+        merged[key] = replace(
+            c,
+            location_scope=None,
+            num_employees=int(employees) if employees is not None else None,
+            sum_insured=_total([g.sum_insured for g in group]),
+            annual_premium=_total([g.annual_premium for g in group]),
+            estimated_annual_earnings=_total([g.estimated_annual_earnings for g in group]),
+            location_breakdown=tuple(
+                {
+                    "location": g.location_scope,
+                    "num_employees": g.num_employees,
+                    "sum_insured": g.sum_insured,
+                    "source_row": g.source_row,
+                }
+                for g in group
+            ),
+        )
+        out.append(merged[key])
+    return tuple(out)
+
+
 def _extract_categories_from_sheet(
     sheet: Sheet,
     product_code: str = "",
@@ -250,7 +328,7 @@ def _extract_categories_from_sheet(
                 source_insured=category.insured,
             )
         scoped_categories.append(category)
-    categories = tuple(scoped_categories)
+    categories = _merge_location_splits(tuple(scoped_categories))
     if rate_schedules:
         missing = [
             c

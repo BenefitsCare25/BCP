@@ -5,8 +5,16 @@ import { Card, CardContent } from "@/components/ui/card";
 import { InfoHint } from "@/components/ui/tooltip";
 import { ImportAction } from "./ImportAction";
 import { ListingSyncSheet } from "./ListingSyncSheet";
+import { EmployeeListingSheet, LISTING_NOT_COVERED } from "./EmployeeListingSheet";
 import { useListingApply, useListingPreview } from "@/api/adc";
-import { formatError } from "@/lib/errors";
+import {
+  mappingFromPreview,
+  useEmployeeListingApply,
+  useEmployeeListingPreview,
+  type ListingMapping,
+  type ListingPreview,
+} from "@/api/employeeListing";
+import { errorCode, formatError } from "@/lib/errors";
 import type { AdcPreview } from "@/types";
 
 /**
@@ -52,6 +60,92 @@ export function ListingImportBar({ policyYearId, stats, hasRows }: Props) {
   const [mappingDirty, setMappingDirty] = useState(false);
   const previewMut = useListingPreview();
   const applyMut = useListingApply();
+  // A company's own Employee Listing (per-product cover columns) is read by
+  // the listing import; any other workbook falls back to the template sync.
+  const elPreviewMut = useEmployeeListingPreview();
+  const elApplyMut = useEmployeeListingApply();
+  const [elPreview, setElPreview] = useState<ListingPreview | null>(null);
+  const [elMapping, setElMapping] = useState<ListingMapping>({
+    block_products: {},
+    labels: {},
+  });
+  const [elDirty, setElDirty] = useState(false);
+
+  function acceptElPreview(next: ListingPreview) {
+    setElPreview(next);
+    setElMapping(mappingFromPreview(next));
+    setElDirty(false);
+  }
+
+  function closeEl() {
+    setElPreview(null);
+    setFile(null);
+    setTerminateMissing(false);
+    setElDirty(false);
+  }
+
+  function onElLabelChange(block: number, key: string, value: string) {
+    setElMapping((current) => {
+      const labels = { ...current.labels, [String(block)]: { ...current.labels[String(block)] } };
+      labels[String(block)][key] =
+        value === LISTING_NOT_COVERED ? { not_covered: true } : { category_id: value };
+      return { ...current, labels };
+    });
+  }
+
+  function onElBlockToggle(block: number, code: string, on: boolean) {
+    setElMapping((current) => {
+      const chosen = new Set(current.block_products[String(block)] ?? []);
+      if (on) chosen.add(code);
+      else chosen.delete(code);
+      return {
+        ...current,
+        block_products: { ...current.block_products, [String(block)]: [...chosen].sort() },
+      };
+    });
+    setElDirty(true);
+  }
+
+  function onElRecheck() {
+    if (!file) return;
+    elPreviewMut.mutate(
+      { file, policyYearId, mapping: elMapping },
+      { onSuccess: acceptElPreview, onError: (e) => toast.error(formatError(e)) },
+    );
+  }
+
+  function onElApply() {
+    if (!file || !elPreview) return;
+    elApplyMut.mutate(
+      {
+        file,
+        policyYearId,
+        mapping: elMapping,
+        terminateMissing,
+        missingDigest: elPreview.members.missing_digest ?? null,
+      },
+      {
+        onSuccess: (r) => {
+          const parts = [
+            r.added ? `${r.added} added` : null,
+            r.changed ? `${r.changed} changed` : null,
+            r.deleted || r.missing_terminated
+              ? `${r.deleted + r.missing_terminated} terminated`
+              : null,
+            `${r.assignments.toLocaleString()} listed covers`,
+            r.joiner_rules_written ? `${r.joiner_rules_written} joiner rules` : null,
+            r.underwriting_updated
+              ? `${r.underwriting_updated} underwriting cases updated`
+              : null,
+          ].filter(Boolean);
+          toast.success(`Applied — ${parts.join(", ")}`);
+          if (r.flex_errors.length) toast.warning(r.flex_errors.join(" "));
+          closeEl();
+        },
+        onError: (e) => toast.error(formatError(e)),
+      },
+    );
+  }
 
   function close() {
     setPreview(null);
@@ -80,11 +174,23 @@ export function ListingImportBar({ policyYearId, stats, hasRows }: Props) {
   function onPick(picked: File) {
     setFile(picked);
     setTerminateMissing(false);
-    previewMut.mutate(
+    elPreviewMut.mutate(
       { file: picked, policyYearId },
       {
-        onSuccess: acceptPreview,
-        onError: (e) => toast.error(formatError(e)),
+        onSuccess: acceptElPreview,
+        onError: (e) => {
+          if (errorCode(e) !== "not_employee_listing") {
+            toast.error(formatError(e));
+            return;
+          }
+          previewMut.mutate(
+            { file: picked, policyYearId },
+            {
+              onSuccess: acceptPreview,
+              onError: (err) => toast.error(formatError(err)),
+            },
+          );
+        },
       },
     );
   }
@@ -156,12 +262,15 @@ export function ListingImportBar({ policyYearId, stats, hasRows }: Props) {
 
           <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
             <ImportAction
-              templatePath={`/policy-years/${policyYearId}/reports/member-listing-template`}
-              templateFilename="member-listing-template.xlsx"
-              templateLabel="Download template"
+              // The Full Employee Listing in the company's own layout doubles as
+              // the editable listing: re-uploading it maps straight back, and
+              // its masked NRICs are never imported over the real numbers.
+              templatePath={`/policy-years/${policyYearId}/reports/workbooks/full-el?masked=true&employee_status=active`}
+              templateFilename="employee-listing.xlsx"
+              templateLabel="Download listing"
               uploadLabel="Upload listing"
               onPick={onPick}
-              pending={previewMut.isPending}
+              pending={previewMut.isPending || elPreviewMut.isPending}
               // Filled only on an empty roster, where uploading is the page's
               // one job. On a populated one the tab row already has a filled
               // "Run matching"; two primaries in one header compete.
@@ -170,16 +279,18 @@ export function ListingImportBar({ policyYearId, stats, hasRows }: Props) {
 
             <InfoHint side="bottom">
               <p className="mb-1.5">
-                <strong>Download template</strong> — the full member listing
-                (staff ID, name, NRIC/FIN, DOB, category, bank details, insurer
-                member IDs), pre-filled with everyone already on file. It has an{" "}
-                <em>Employees</em> and a <em>Dependants</em> sheet.
+                <strong>Download listing</strong> — the company&apos;s Employee
+                Listing in its own layout, pre-filled with everyone active on
+                file: employees followed by their dependants, and a column block
+                per product. NRIC/FIN numbers are masked.
               </p>
               <p className="mb-1.5">
-                <strong>Upload listing</strong> — edit that file and send it
-                back. New rows are added, edited rows are updated, and a row
-                whose leaving date has passed is terminated. You review all of
-                it before anything is applied.
+                <strong>Upload listing</strong> — the edited download or the
+                client&apos;s own Employee Listing. Each listed category is mapped
+                to its placement-slip category; mappings you confirmed before
+                are reused. New rows are added, edited rows are updated, and a
+                row whose leaving date has passed is terminated. You review all
+                of it before anything is applied.
               </p>
               <p>
                 Someone on file but missing from the upload is listed
@@ -189,6 +300,21 @@ export function ListingImportBar({ policyYearId, stats, hasRows }: Props) {
           </div>
         </CardContent>
       </Card>
+
+      <EmployeeListingSheet
+        preview={elPreview}
+        mapping={elMapping}
+        onLabelChange={onElLabelChange}
+        onBlockProductToggle={onElBlockToggle}
+        dirty={elDirty}
+        onRecheck={onElRecheck}
+        checking={elPreviewMut.isPending}
+        terminateMissing={terminateMissing}
+        onTerminateMissingChange={setTerminateMissing}
+        onClose={closeEl}
+        onApply={onElApply}
+        applying={elApplyMut.isPending}
+      />
 
       <ListingSyncSheet
         preview={preview}

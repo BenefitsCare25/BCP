@@ -275,7 +275,7 @@ def _count_values(
 # group: GPA's "Spouse (Option 1)" / "Child (Option 2)" option rows, and VDL's
 # dependants-sheet categories ("Grade 40 & above … eligible dependants").
 _DEP_CATEGORY_RE = re.compile(
-    r"^(spouse|child(?:ren)?|dependan[td]s?)\b", re.IGNORECASE
+    r"^(spouse|child(?:ren)?|depend[ae]n[td]s?)\b", re.IGNORECASE
 )
 
 

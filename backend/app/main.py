@@ -44,6 +44,7 @@ from app.api.v1 import (
     dual_coverage,
     eligibility_mappings,
     email_templates,
+    employee_listing,
     employees,
     enquiries,
     enrollment_forms,
@@ -210,6 +211,7 @@ def create_app() -> FastAPI:
     app.include_router(email_templates.router, prefix=api_prefix)
     api_routers = (
         adc.router,
+        employee_listing.router,
         dashboard.router,
         workflow_notifications.router,
         underwriting_reminders.router,

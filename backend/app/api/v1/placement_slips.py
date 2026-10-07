@@ -61,6 +61,7 @@ from app.schemas.api import (
 from app.services import product_registry
 from app.services.ai_slip_extractor import maybe_ai_augment
 from app.services.dynamic_template import merge_file_overlay, synthesize_template
+from app.services.el_import.refresh import refresh_listing_links
 from app.services.eligibility_mapping import auto_map_policy_year, category_signature
 from app.services.matching_engine import insured_names, match_policy_year, normalize_entity
 from app.services.period_parser import parse_period_of_insurance
@@ -78,7 +79,7 @@ from app.services.rule_generator import description_to_rule
 from app.services.slip_reconcile import reconcile_slip
 from app.services.slip_template_memory import make_resolver, save_profile
 from app.services.slip_to_setup import build_setup_answers, merge_product_sheets
-from app.services.slip_variants import assign_variants
+from app.services.slip_variants import assign_variants, separate_existing_policies
 
 logger = logging.getLogger(__name__)
 
@@ -418,6 +419,21 @@ def _affected_rows(result: object) -> int:
     return int(getattr(result, "rowcount", 0) or 0)
 
 
+def _setup_policy_numbers(db: Session, policy_year_id: str) -> dict[str, str]:
+    """Product code → the policy number its saved setup recorded this year."""
+    out: dict[str, str] = {}
+    for code, answers in db.execute(
+        select(ProductSetup.product_code, ProductSetup.answers).where(
+            ProductSetup.policy_year_id == policy_year_id
+        )
+    ):
+        header = (answers or {}).get("header") if isinstance(answers, dict) else None
+        policy = str((header or {}).get("policy_no") or "").strip()
+        if policy:
+            out[code.upper()] = policy
+    return out
+
+
 def _confirmed_setup_codes(db: Session, policy_year_id: str) -> set[str]:
     """Template codes whose guided setup is already confirmed for this year.
 
@@ -522,6 +538,11 @@ async def parse_upload(
             ).scalars()
         )
         raw_parsed = assign_variants(raw_parsed, client_codes)
+        # A second slip for this year (e.g. a separate directors' policy) adds
+        # its own policies rather than overwriting the first slip's products.
+        raw_parsed = separate_existing_policies(
+            raw_parsed, _setup_policy_numbers(db, policy_year_id)
+        )
         reconciled = reconcile_slip(raw_parsed)
         reconciled = maybe_ai_augment(
             db, client_id, policy_year_id, tmp_path, reconciled
@@ -623,10 +644,39 @@ async def parse_upload(
             assignments.get("location_scope"),
         )
         preserved_by_key.setdefault(key, existing_category)
+    # Only this upload's products are regenerated. Other slips of the same
+    # year (a separate directors' policy, a WICA-only slip) keep their rows;
+    # an earlier upload of this same file also drops rows for products the
+    # revised slip no longer carries.
+    upload_product_ids = {
+        product.id
+        for product_slip in parsed.products
+        if (
+            product := _find_product(
+                db, product_slip.product_code, product_slip.sheet, products_cache
+            )
+        )
+        is not None
+    }
+    earlier_same_file = [
+        f"placement_slip://{slip_id}/"
+        for slip_id in db.execute(
+            select(PlacementSlipRow.id).where(
+                PlacementSlipRow.policy_year_id == policy_year_id,
+                PlacementSlipRow.filename == slip_row.filename,
+                PlacementSlipRow.id != slip_row.id,
+            )
+        ).scalars()
+    ]
     clear_stmt = delete(Category).where(
         Category.policy_year_id == policy_year_id,
         Category.source == SourceKind.system_generated.value,
         Category.status == CategoryStatus.needs_review.value,
+        or_(
+            Category.product_id.is_(None),
+            Category.product_id.in_(upload_product_ids),
+            *(Category.source_ref.startswith(prefix) for prefix in earlier_same_file),
+        ),
     )
     if confirmed_product_ids:
         clear_stmt = clear_stmt.where(
@@ -649,6 +699,10 @@ async def parse_upload(
         Plan.source == SourceKind.system_generated.value,
         Plan.status == CategoryStatus.needs_review.value,
         Plan.human_modified.is_(False),
+        or_(
+            Plan.product_id.in_(upload_product_ids),
+            *(Plan.source_ref.startswith(prefix) for prefix in earlier_same_file),
+        ),
     )
     if confirmed_product_ids:
         plan_clear = plan_clear.where(
@@ -949,6 +1003,9 @@ async def parse_upload(
         policy_year_id=policy_year_id,
         client_id=client_id,
     )
+    # Fresh category rows: re-link the company Employee Listing's cover and
+    # re-learn its joiner rules, so listed people keep their categories.
+    listing_relinked, listing_rules = refresh_listing_links(db, client_id, policy_year_id)
 
     slip_row.parse_status = ParseStatus.parsed
     slip_row.parse_log = {
@@ -974,6 +1031,8 @@ async def parse_upload(
         "variants_created": variants_created,
         "period_terms_autofilled": period_autofilled,
         "nel_terms_autofilled": nel_autofilled,
+        "listing_cover_relinked": listing_relinked,
+        "listing_rules_written": listing_rules,
         "skipped_sheets": parsed.diagnostics.get("skipped_sheets", []),
         "products_detected": [
             {

@@ -750,6 +750,7 @@ export type MatchMethod =
   | "exact_name"
   | "fuzzy_name"
   | "rule"
+  | "listing"
   | "manual_override";
 
 export interface MatchResultItem {

@@ -50,6 +50,12 @@ def _norm(value: str | None) -> str:
     return re.sub(r"[^a-z0-9]+", " ", (value or "").casefold()).strip()
 
 
+def _policy_key(value: str | None) -> str:
+    """A policy number as compared across slips. Older drafts stored numeric
+    cells as floats ("50011771.0"); that is the same policy as "50011771"."""
+    return _norm(re.sub(r"^(\d+)\.0+$", r"\g<1>", str(value or "").strip()))
+
+
 def _core(value: str | None) -> frozenset[str]:
     """The words that name a party, legal-form words dropped."""
     return frozenset(w for w in _norm(value).split() if w not in _LEGAL_WORDS)
@@ -106,7 +112,7 @@ class _Policy:
             if (
                 header.policy_no
                 and other.policy_no
-                and _norm(header.policy_no) != _norm(other.policy_no)
+                and _policy_key(header.policy_no) != _policy_key(other.policy_no)
             ):
                 return False
         return (
@@ -225,3 +231,49 @@ def assign_variants(
                 )
 
     return replace(slip, products=tuple(final[id(p)] for p in slip.products))
+
+
+def separate_existing_policies(
+    slip: PlacementSlip, existing: dict[str, str]
+) -> PlacementSlip:
+    """Keep a policy year's other placement slips intact.
+
+    ``existing`` maps each product code already set up this year (upper-cased)
+    to the policy number its slip printed. A sheet whose product already holds
+    a DIFFERENT policy number — a second slip for the same employer, such as a
+    separate directors' policy — becomes that policy's variant
+    (``GHS-50011774``) instead of replacing the other policy's setup. A sheet
+    whose policy number some code already holds lands on that code again, so
+    re-uploading either slip stays idempotent. Sheets without a policy number,
+    or whose product holds none, keep their code.
+    """
+    out: list[ProductSlip] = []
+    for product in slip.products:
+        policy = _policy_key(product.policy_header.policy_no)
+        code = product.product_code.upper()
+        base = product_registry.base_code(code)
+        if not policy:
+            out.append(product)
+            continue
+        same_type = {
+            c: p for c, p in existing.items() if product_registry.base_code(c) == base
+        }
+        holder = next(
+            (c for c, p in sorted(same_type.items()) if _policy_key(p) == policy), None
+        )
+        if holder is not None and holder != code:
+            label = product_registry.variant_label_of(holder) or ""
+            out.append(replace(
+                product, product_code=holder,
+                variant_of=base if holder != base else None,
+                variant_label=label or None,
+            ))
+        elif holder is None and _policy_key(existing.get(code)) not in ("", policy):
+            number = str(product.policy_header.policy_no).strip()
+            out.append(replace(
+                product, product_code=product_registry.variant_code(base, number),
+                variant_of=base, variant_label=f"Policy {number}",
+            ))
+        else:
+            out.append(product)
+    return replace(slip, products=tuple(out))

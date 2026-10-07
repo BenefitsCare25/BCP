@@ -322,31 +322,48 @@ def _extract_voluntary_rates(rows: list[list[Cell]]) -> tuple[dict[str, Any], ..
     return tuple(bands)
 
 
+def _header_tiers(val: Cell) -> list[str]:
+    """Canonical tiers a rate-table header cell prices.
+
+    A combined header ("ES / EC") prices every tier it names at one rate, so
+    each named tier reads the same column. Any part naming no tier makes the
+    cell non-tier text.
+    """
+    canon = product_registry.canonical_tier(val)
+    if canon is not None:
+        return [canon]
+    parts = [p for p in re.split(r"[/&]", str(val or "")) if p.strip()]
+    if len(parts) < 2:
+        return []
+    tiers = [product_registry.canonical_tier(p) for p in parts]
+    return [t for t in tiers if t] if all(tiers) else []
+
+
 def _tier_cells(row: list[Cell]) -> dict[str, int]:
     """Canonical tier key → column for cells that name a tier (any wording the
-    registry vocabulary resolves: "EO", "Per Spouse", "Child(ren)"). Used to
-    find the tier header row and its columns."""
+    registry vocabulary resolves: "EO", "Per Spouse", "Child(ren)", "ES / EC").
+    Used to find the tier header row and its columns."""
     out: dict[str, int] = {}
     for c, val in enumerate(row or []):
         if val is None:
             continue
-        canon = product_registry.canonical_tier(val)
-        if canon is not None and canon not in out:
-            out[canon] = c
+        for canon in _header_tiers(val):
+            out.setdefault(canon, c)
     return out
 
 
 def _tier_labels(row: list[Cell]) -> dict[str, str]:
     """Canonical tier key → the slip's own label, for non-identity tokens
-    ("Spouse" → SO). Lets the UI keep the client's vocabulary."""
+    ("Spouse" → SO, "ES / EC" → ES and EC). Lets the UI keep the client's
+    vocabulary."""
     out: dict[str, str] = {}
     for val in row or []:
         if val is None:
             continue
         s = str(val).strip()
-        canon = product_registry.canonical_tier(s)
-        if canon is not None and s.upper() != canon:
-            out.setdefault(canon, s)
+        for canon in _header_tiers(s):
+            if s.upper() != canon:
+                out.setdefault(canon, s)
     return out
 
 
@@ -465,14 +482,20 @@ def _parse_tiered_rates(rows: list[list[Cell]], tier_row: int) -> list[_RateRow]
 
         tiers: dict[str, dict[str, float]] = {}
         total_premium = 0.0
+        priced_cols: set[int] = set()
         for tier_name, tier_col in tier_cols.items():
             rate_col = tier_col
             prem_col = tier_col + 1
             r = _safe_float(row, rate_col)
             p = _safe_float(row, prem_col)
             if r is not None or p is not None:
-                tiers[tier_name] = {"rate": r or 0.0, "premium": p or 0.0}
-                total_premium += p or 0.0
+                # A combined column ("ES / EC") prices several tiers at one
+                # rate; its premium is one amount, kept on the first tier only.
+                shared = tier_col in priced_cols
+                tiers[tier_name] = {"rate": r or 0.0, "premium": 0.0 if shared else p or 0.0}
+                if not shared:
+                    total_premium += p or 0.0
+                    priced_cols.add(tier_col)
 
         if not tiers:
             continue

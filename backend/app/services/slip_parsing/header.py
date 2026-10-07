@@ -70,12 +70,20 @@ def _up_to_age(text: str | None) -> str | None:
 
 def _find_nel_text(rows: list[list[Cell]]) -> str | None:
     """The Non-Evidence / Free-Cover Limit row text (lives in the footer, after
-    Basis of Cover, so it's scanned separately from the header block)."""
+    Basis of Cover, so it's scanned separately from the header block).
+
+    A section title ("Non-Evidence Limit & Experience Refund") can precede the
+    row that states the limit, so the first row carrying an amount or age wins;
+    a bare title is only the fallback.
+    """
+    first = None
     for row in rows:
         text = _row_text(row or [])
         if re.search(r"non[\s-]*evidence\s+limit|free\s+cover\s+limit", text, re.IGNORECASE):
-            return text
-    return None
+            if _nel_amount(text) is not None or _age_from_birthday(text):
+                return text
+            first = first or text
+    return first
 
 
 def _nel_amount(text: str | None) -> float | None:

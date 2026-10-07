@@ -14,6 +14,7 @@ const METHOD_LABEL: Record<string, string> = {
   exact_name: "Exact match",
   fuzzy_name: "Name match",
   rule: "Rule match",
+  listing: "Employee listing",
   manual_override: "Manual override",
 };
 

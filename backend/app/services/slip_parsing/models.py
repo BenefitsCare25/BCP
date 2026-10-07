@@ -61,6 +61,11 @@ class ExtractedCategory:
     # Location qualifier from a scoped Participation cell ("Compulsory - SG
     # Office" → "SG Office"). Scoped categories stay distinct cohorts.
     location_scope: str | None = None
+    # Per-location figures when one cohort's identical terms were listed once
+    # per depot/site and merged into a single category:
+    # ({"location", "num_employees", "sum_insured"}, ...). Reporting only;
+    # location does not decide who the category covers.
+    location_breakdown: tuple[dict[str, Any], ...] | None = None
     # Who this category covers: "dependant" for dependant-scope rows (GPA
     # "Spouse (Option 1)", VDL's GHS - Dependants sheet); None/"employee"
     # otherwise. Dependant-scope categories feed dependant pricing, never the

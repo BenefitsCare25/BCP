@@ -1943,6 +1943,10 @@ def _category_plan_assignments(
     for field in ("location_scope", "source_insured"):
         if row.get(field):
             pa[field] = str(row[field]).strip()
+    if isinstance(row.get("location_breakdown"), list) and row["location_breakdown"]:
+        pa["location_breakdown"] = [
+            dict(item) for item in row["location_breakdown"] if isinstance(item, dict)
+        ]
     sum_insured = _coerce_money(row.get("sum_insured"))
     basis = str(row.get("basis") or "").strip()
     if basis_model == "sum_assured":

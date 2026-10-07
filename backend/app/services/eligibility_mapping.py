@@ -63,10 +63,14 @@ from app.services.rule_evaluator import evaluate
 
 Rule = dict[str, Any]
 
+# Source marker for rules learned from a company's Employee Listing
+# (``services/el_import/joiner_rules``); such rules survive auto-mapping.
+LISTING_RULE_SOURCE = "employee_listing"
+
 _PLAN_PREFIX_RE = re.compile(r"^\s*plan\s+[a-z0-9/]+\s*(?:-|:|\u2013|\u2014)\s*", re.IGNORECASE)
 _DEPENDANT_TAIL_RE = re.compile(
-    r"\s+(?:and|&)\s+(?:their|the)\s+(?:eligible\s+)?"
-    r"dependan[td]s?.*$",
+    r"\s+(?:and|&)\s+(?:(?:their|the)\s+)?(?:eligible\s+)?"
+    r"depend[ae]n[td]s?.*$",
     re.IGNORECASE,
 )
 _OPTION_TAIL_RE = re.compile(r"\s*\(option\s+\d+\)\s*$", re.IGNORECASE)
@@ -2867,11 +2871,17 @@ def auto_map_policy_year(
         # A broker-edited OR broker-confirmed rule is never recompiled: this runs
         # on every "Re-run matching", and re-proposing a confirmed rule could
         # demote the category (and un-publish its plan) without anyone asking.
+        # Rules learned from the company's Employee Listing are kept too: they
+        # reflect how the company actually assigns people, not slip wording.
+        from_listing = isinstance(category.rule_validation, dict) and (
+            category.rule_validation.get("source") == LISTING_RULE_SOURCE
+        )
         preserve = bool(
             category.matching_rule
             and (
                 category.human_modified
                 or category.status == CategoryStatus.confirmed.value
+                or from_listing
             )
         )
         if preserve:
@@ -2885,7 +2895,8 @@ def auto_map_policy_year(
                 rule=category.matching_rule,
                 human_readable=category.rule_human_readable or category.display_name,
                 confidence=float(category.confidence or 0.85),
-                source="manual",
+                source=LISTING_RULE_SOURCE if from_listing and not category.human_modified
+                else "manual",
                 validation_state="proposed",
                 referenced_attributes=validation.referenced_attributes,
             )

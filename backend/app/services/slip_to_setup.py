@@ -63,7 +63,7 @@ _SPOUSE_TIER_CODES = {"ES", "EF", "SO", "SC", "FO"}
 _CHILD_TIER_CODES = {"EC", "EF", "CO", "SC", "FO"}
 _SPOUSE_RE = re.compile(r"\bspou(?:se|ses)\b|\bwives\b|\bhusband\b", re.I)
 _CHILD_RE = re.compile(r"\bchild(?:ren)?\b|\bson\b|\bdaughter\b", re.I)
-_DEPENDANT_RE = re.compile(r"\bdependan[td]s?\b", re.I)
+_DEPENDANT_RE = re.compile(r"\bdepend[ae]n[td]s?\b", re.I)
 
 
 def _s(value: Any) -> str:
@@ -81,16 +81,12 @@ def _set_by_exact_id(
 
 
 def _header_answers(slip: ProductSlip, tpl: ProductTemplate) -> dict[str, str]:
-    from app.services.el_report_rules import explicit_age_basis
-
     ph = slip.policy_header
     out = {f.id: "" for f in tpl.header_fields}
     for attr, candidate_ids in _HEADER_FIELD_HINTS:
         value = _s(getattr(ph, attr, None))
         if value:
             _set_by_exact_id(out, tpl.header_fields, candidate_ids, value)
-    if "el_age_basis" in out:
-        out["el_age_basis"] = explicit_age_basis(_s(ph.eligibility))
     return out
 
 
@@ -587,6 +583,8 @@ def _category_rows(slip: ProductSlip, tpl: ProductTemplate) -> list[dict[str, An
                 "insured": _s(cat.insured),
                 "source_insured": cat.source_insured,
                 "location_scope": cat.location_scope,
+                "location_breakdown": [dict(item) for item in cat.location_breakdown or ()]
+                or None,
                 "category": _s(cat.category),
                 "participation": _s(cat.participation),
                 "plan_code": _s(cat.plan_code),

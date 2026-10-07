@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
@@ -747,41 +748,15 @@ def evaluate_listing(
     if has_sheet(path, "Dependants") or not has_employee_sheet:
         dropped += max(0, _data_rows(path, "Dependants") - len(dep_records))
 
-    employees = list(
-        db.execute(
-            select(Employee).where(
-                Employee.client_id == client_id,
-                Employee.policy_year_id == policy_year_id,
-            )
-        ).scalars().all()
+    plan, preview = evaluate_records(
+        db,
+        policy_year_id,
+        client_id,
+        emp_records,
+        dep_records,
+        dropped_rows=dropped,
+        employee_mapping=employee_mapping if has_employee_sheet else None,
     )
-    dependants = list(
-        db.execute(
-            select(Dependant).where(
-                Dependant.client_id == client_id,
-                Dependant.policy_year_id == policy_year_id,
-            )
-        ).scalars().all()
-    )
-
-    plan = _Plan()
-    plan.employee_mapping = employee_mapping if has_employee_sheet else None
-    plan.dropped_rows = dropped
-    _plan_employees(plan, emp_records, employees)
-    _plan_dependants(plan, dep_records, dependants, employees)
-    # The denominator for "is this a partial export?" — only the kinds this file
-    # actually covers, so an employees-only upload isn't measured against a
-    # roster that includes every dependant.
-    plan.roster_total = (
-        sum(1 for e in employees if e.status == EMPLOYEE_STATUS_ACTIVE)
-        if emp_records
-        else 0
-    ) + (
-        sum(1 for d in dependants if d.status == DEPENDANT_STATUS_ACTIVE)
-        if dep_records
-        else 0
-    )
-    preview = _to_preview(plan)
     if has_employee_sheet:
         preview.roster_mapping = RosterMappingPreview(
             sheet_name=employee_mapping.sheet_name,
@@ -814,6 +789,58 @@ def evaluate_listing(
             ],
         )
     return plan, preview
+
+
+def evaluate_records(
+    db: Session,
+    policy_year_id: str,
+    client_id: str,
+    emp_records: list[EmployeeRecord],
+    dep_records: list[DependantRecord],
+    *,
+    dropped_rows: int = 0,
+    employee_mapping: EmployeeMapping | None = None,
+) -> tuple[_Plan, AdcPreview]:
+    """Diff parsed member records against the roster. No mutation.
+
+    Shared by the member-listing template and a company's own Employee
+    Listing, so both resolve identities and movements the same way.
+    """
+    employees = list(
+        db.execute(
+            select(Employee).where(
+                Employee.client_id == client_id,
+                Employee.policy_year_id == policy_year_id,
+            )
+        ).scalars().all()
+    )
+    dependants = list(
+        db.execute(
+            select(Dependant).where(
+                Dependant.client_id == client_id,
+                Dependant.policy_year_id == policy_year_id,
+            )
+        ).scalars().all()
+    )
+
+    plan = _Plan()
+    plan.employee_mapping = employee_mapping
+    plan.dropped_rows = dropped_rows
+    _plan_employees(plan, emp_records, employees)
+    _plan_dependants(plan, dep_records, dependants, employees)
+    # The denominator for "is this a partial export?" — only the kinds this file
+    # actually covers, so an employees-only upload isn't measured against a
+    # roster that includes every dependant.
+    plan.roster_total = (
+        sum(1 for e in employees if e.status == EMPLOYEE_STATUS_ACTIVE)
+        if emp_records
+        else 0
+    ) + (
+        sum(1 for d in dependants if d.status == DEPENDANT_STATUS_ACTIVE)
+        if dep_records
+        else 0
+    )
+    return plan, _to_preview(plan)
 
 
 def _dep_name(attrs: dict[str, Any] | None) -> str | None:
@@ -987,6 +1014,35 @@ def apply_listing(
                 "and review the terminations again."
             )
 
+    return apply_plan(
+        db,
+        user,
+        policy_year_id,
+        client_id,
+        plan,
+        terminate_missing=terminate_missing,
+        source_filename=source_filename,
+    )
+
+
+def apply_plan(
+    db: Session,
+    user: CurrentUser,
+    policy_year_id: str,
+    client_id: str,
+    plan: _Plan,
+    *,
+    terminate_missing: bool = False,
+    source_filename: str | None = None,
+    after_members: Callable[[Session], None] | None = None,
+) -> AdcApplyResult:
+    """Write an evaluated plan, then re-match and re-assign flex.
+
+    ``after_members`` runs inside the same transaction once every member row
+    has an id, before matching — the Employee Listing import records each
+    person's listed cover there so matching sees it.
+    """
+    employee_mapping = plan.employee_mapping
     schemas = list(
         db.execute(
             select(EmployeeAttributeSchema).where(
@@ -1144,6 +1200,9 @@ def apply_listing(
             mapping=employee_mapping,
             created_by=user.user_id,
         )
+    if after_members is not None:
+        db.flush()
+        after_members(db)
     db.commit()
 
     # Re-match + re-size flex for the (now changed) active roster. Best-effort,
@@ -1173,6 +1232,18 @@ def apply_listing(
         )
         summary = match_policy_year(db, policy_year_id, user)
         rematched = summary.employees_matched
+        # Recorded like every other matching run, so the match results don't
+        # read as stale after a listing apply already re-matched everyone.
+        write_audit(
+            db, user, action="run_matching", entity_type="policy_year",
+            entity_id=policy_year_id,
+            after={
+                "employees_total": summary.employees_total,
+                "employees_matched": summary.employees_matched,
+                "errors": summary.errors,
+                "trigger": "listing_apply",
+            },
+        )
         db.commit()
         matched_cleanly = not summary.errors
     except Exception:

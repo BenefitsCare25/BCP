@@ -343,6 +343,26 @@ def _load_history(
     return history
 
 
+def listed_present_si(db: Session, policy_year_id: str) -> dict[tuple[str, str], float]:
+    """(life id, product id) -> sum insured in force per the uploaded Employee
+    Listing ("Present Sum Insured", else "Last Accepted Sum Insured")."""
+    from app.models.employee_listing import ListingAssignment
+
+    out: dict[tuple[str, str], float] = {}
+    for member_key, product_id, recorded in db.execute(
+        select(
+            ListingAssignment.member_key,
+            ListingAssignment.product_id,
+            ListingAssignment.recorded,
+        ).where(ListingAssignment.policy_year_id == policy_year_id)
+    ):
+        values = recorded or {}
+        amount = values.get("present_si", values.get("last_accepted_si"))
+        if isinstance(amount, (int, float)) and not isinstance(amount, bool) and amount >= 0:
+            out[(member_key[2:], product_id)] = float(amount)
+    return out
+
+
 def _guaranteed_for(
     eligible: float,
     fcl: float | None,
@@ -517,6 +537,7 @@ def refresh_underwriting_cases(
                 entry.new_life = entry.key not in history.present
     else:
         history = _History(known=False)
+    listed = listed_present_si(db, policy_year.id) if eligibles else {}
     # Subjects this run is allowed to retire a case for. An unscoped run owns
     # every case in the year; a scoped one must leave other households alone
     # (their coverage wasn't recomputed, so "not seen" proves nothing).
@@ -555,6 +576,10 @@ def refresh_underwriting_cases(
         if life is None:
             continue
         last = history.last_covered.get((life.key, product_id))
+        if last is None and not history.known:
+            # First year on the platform: the company's own Employee Listing
+            # states the sum insured each person already has in force.
+            last = listed.get((subject_id, product_id))
         guaranteed = _guaranteed_for(
             eligible,
             fcl_by_product.get(product_id),

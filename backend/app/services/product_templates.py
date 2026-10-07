@@ -201,8 +201,13 @@ def ensure_standard_header_fields(fields: list[TemplateField]) -> list[TemplateF
     # Coverage dates now live in ProductTerm and are filled directly from the
     # placement slip. Remove the legacy duplicate text field from every
     # hand-authored and synthesized template.
+    from app.services.el_report_rules import RULE_LABELS
+
+    # Report metadata remains in saved answers; it is not a separate setup form.
+    # Filter old stored templates too, rather than only stopping new injection.
     fields[:] = [
-        field for field in fields if field.id not in {"period_of_insurance", "period"}
+        field for field in fields
+        if field.id not in {"period_of_insurance", "period", *RULE_LABELS}
     ]
     # Normalise an existing address field.
     for f in fields:
@@ -221,15 +226,6 @@ def ensure_standard_header_fields(fields: list[TemplateField]) -> list[TemplateF
         fields.append(
             TemplateField(id="admin_basis", label="Type of Administration", type="text")
         )
-    from app.services.el_report_rules import RULE_CHOICES, RULE_LABELS
-
-    for key, label in RULE_LABELS.items():
-        if key not in ids:
-            fields.append(TemplateField(
-                id=key, label=label,
-                type="choice" if key in RULE_CHOICES else "text",
-                options=list(RULE_CHOICES[key]) if key in RULE_CHOICES else None,
-            ))
     return fields
 
 

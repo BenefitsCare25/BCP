@@ -60,6 +60,8 @@ def build_plan_assignments(
     # and an annotated premium's full text.
     if getattr(cat, "location_scope", None):
         pa["location_scope"] = cat.location_scope
+    if getattr(cat, "location_breakdown", None):
+        pa["location_breakdown"] = [dict(item) for item in cat.location_breakdown]
     if getattr(cat, "source_insured", None):
         pa["source_insured"] = cat.source_insured
     if getattr(cat, "member_scope", None):

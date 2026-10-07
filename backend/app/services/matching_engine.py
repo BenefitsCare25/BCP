@@ -71,7 +71,7 @@ _DEPENDANTS_TAIL_RE = re.compile(
 )
 _PAREN_QUALIFIER_RE = re.compile(r"\([^)]*\)")
 
-MatchMethod = Literal["exact_name", "fuzzy_name", "rule"]
+MatchMethod = Literal["exact_name", "fuzzy_name", "rule", "listing"]
 
 # ── Insured-entity gate ───────────────────────────────────────────────────────
 # Multi-subsidiary slips (WICA-style per-entity blocks) repeat category names
@@ -337,6 +337,11 @@ def category_specificity(category: Category) -> int:
     return -1 if relative_remainder(category) else rule_specificity(category.matching_rule)
 
 
+def _listing_rule(category: Category) -> bool:
+    validation = category.rule_validation
+    return isinstance(validation, dict) and validation.get("source") == "employee_listing"
+
+
 def match_one(
     employee: MatchableEmployee,
     categories_by_priority: list[Category],
@@ -387,6 +392,10 @@ def match_one(
             return False
         if rule_has_validation_errors(cat):
             return False
+        # A rule learned from the company's Employee Listing decides on its own:
+        # a roster label cannot pull someone into that category by name.
+        if _listing_rule(cat):
+            return bool(cat.matching_rule) and evaluate(cat.matching_rule, view)
         # A roster text label cannot override codes explicitly stated on the
         # slip, regardless of which employee field holds those codes.
         if cat.id in explicit_code_categories:
@@ -585,6 +594,37 @@ def _build_product_indices(
     return indices
 
 
+def _listing_assignments(
+    db: Session, policy_year_id: str, category_ids: set[str]
+) -> tuple[dict[str, dict[str, str | None]], set[str]]:
+    """Employee -> {product id -> listed category id} from the uploaded
+    Employee Listing, and every product that listing reports on.
+
+    A listed category deleted since the upload no longer applies (None), so
+    the employee shows as unmatched for review instead of silently falling
+    back to rules.
+    """
+    from app.models.employee_listing import ListingAssignment
+
+    listed: dict[str, dict[str, str | None]] = {}
+    products: set[str] = set()
+    for employee_id, product_id, category_id in db.execute(
+        select(
+            ListingAssignment.employee_id,
+            ListingAssignment.product_id,
+            ListingAssignment.category_id,
+        ).where(
+            ListingAssignment.policy_year_id == policy_year_id,
+            ListingAssignment.dependant_id.is_(None),
+        )
+    ):
+        products.add(product_id)
+        listed.setdefault(employee_id, {})[product_id] = (
+            category_id if category_id in category_ids else None
+        )
+    return listed, products
+
+
 def match_policy_year(
     db: Session,
     policy_year_id: str,
@@ -647,8 +687,10 @@ def match_policy_year(
         .all()
     )
 
+    listed, listed_products = _listing_assignments(db, policy_year_id, category_ids)
+
     by_method: dict[str, int] = {
-        "exact_name": 0, "fuzzy_name": 0, "rule": 0, "manual_override": 0
+        "exact_name": 0, "fuzzy_name": 0, "rule": 0, "manual_override": 0, "listing": 0
     }
     matched = 0
     errors = 0
@@ -688,7 +730,26 @@ def match_policy_year(
             best_outcome = MatchOutcome(None, None, None)
             best_confidence: float = -1.0
 
+            on_listing = emp.id in listed
             for idx in product_indices:
+                if on_listing and idx.product_id in listed_products:
+                    # The company's Employee Listing states this person's
+                    # category for this product; no listed category means the
+                    # listing gives them no cover under it.
+                    category_id = listed[emp.id].get(idx.product_id)
+                    if category_id is None:
+                        continue
+                    outcome = MatchOutcome(category_id, "listing", 1.0)
+                    all_matches.append({
+                        "category_id": category_id,
+                        "product_code": idx.product_code,
+                        "method": "listing",
+                        "confidence": 1.0,
+                    })
+                    if 1.0 > best_confidence:
+                        best_confidence = 1.0
+                        best_outcome = outcome
+                    continue
                 outcome = match_one(
                     emp,
                     idx.categories_by_priority,

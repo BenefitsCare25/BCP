@@ -1,109 +1,88 @@
 # Full Employee Listing
 
 Reports Center → Policy Admin → Internal registers → **Full Employee Listing (EL)**.
-This is a separate company-wide workbook. Member Register and insurer submissions
-remain available. The same tenant authorization, masking permission and export audit
-apply. Full EL downloads are current snapshots; they are not retained submission versions.
 
-## Workbook
+The workbook reproduces the company's own Employee Listing (`services/full_el/`). It
+replaced the earlier 7-sheet workbook (Basis of Cover / Full EL / Dependants / Source
+Setup / …), which did not match how clients keep their listing. Tenant authorization,
+NRIC masking, All / Active only and the export audit are unchanged.
+
+## Layout
+
+- **Company listing uploaded.** A company that uploaded its own listing
+  ([EMPLOYEE_LISTING_IMPORT.md](EMPLOYEE_LISTING_IMPORT.md)) gets that layout back:
+  the same blocks, headings, column positions and listed category wording.
+- **No listing uploaded.** Other companies get a layout in the same template shape,
+  built from their products. Blocks are grouped by product type, so a directors'
+  policy variant shares its type's block. Each block's columns follow how the product
+  is rated:
+  - **Life** (GTL): admin, age, category, present / eligible / pending SI,
+    underwriting status, decision, letter dates, last accepted SI, loading,
+    acceptance date, premium.
+  - **Per-$1,000 SI** (GPA): admin, age, category, eligible SI, premium, premium
+    with GST.
+  - **Family-tier medical** (GHS, SP): admin, age, category, plan, family group,
+    premium, premium with GST.
+  - **Flat / per-member** (GP, dental): admin, age, category, plan, premium,
+    premium with GST.
+  - **Payroll- or policy-rated products** (WICA, annual business travel) get no
+    per-person block.
+
+Because the download matches the upload layout, it doubles as the editable listing.
+Exporting GAS and re-uploading the file previews 0 changes for 1,939 people, with all
+19 category mappings restored. Masked identifiers in a masked download are never
+imported over real ones.
+
+## Sheets
 
 | Sheet | Content |
 | --- | --- |
-| Basis of Cover | Company, benefit period, product periods, administration, eligibility, category cover/rates, GST and underwriting limits |
-| Full EL | Employment details, lifecycle dates, insurer member IDs and dynamic product coverage, underwriting and annual premium columns |
-| Dependants | Staff ID links, individual identity, actual resolved cover and per-life underwriting |
-| Source Setup | Saved setup fields, schedules, selected/historical rate periods, terms, endorsements and source references |
-| Headcount & Annual Premium | Product, insurer, entity, category, plan, family, administration and currency groups |
-| Setup & Data Gaps | Missing setup, rates, mappings, identity fields, source documents and unresolved calculation rules |
-| Declaration | Unsigned company declaration for completion before submission |
+| Summary - Basis of Cover | Product, insurer, policy number, period, administration and categories per block |
+| Employee Listing | Row 1 reference date (and one per-$1,000 rate when a block has a single rate); row 2 banners; row 3 headings; each employee followed by their dependants |
+| Declaration - Please Read | Company declaration naming the broker firm |
+| Inspro Use - System Category | Grade and work pass against each block's category, as applied |
+| Headcount Summary | Live COUNTIFS / SUMIFS of employees, dependants, SI, premium and GST by category |
+| Setup & Data Gaps | Unconfirmed setup, missing rates, unknown GST, members without cover, salary or DOB, members above the NEL |
 
-All / Active only and NRIC masking apply to the whole workbook. Source wording and
-remarks are also scanned for ordinary Singapore national-ID strings in masked exports.
-Dates and money are native Excel values. Untrusted strings are formula-escaped.
+## Row values
 
-## Rules and source review
+- **Category and plan.** The person's matched category per block, written in the
+  listing's own wording when known. The plan is the listed wording, otherwise the
+  plan code. A dependant row carries the cover listed for that dependant. Without a
+  listing, dependants are covered under categories that cover dependants.
+- **Family group.** Derived from the covered dependants (EO / ES / EC / EF).
+- **Age.** A live formula against the row-1 reference date (the benefit-year start).
+  It uses ANB when the slip's eligibility says ANB; the heading reads "Age (ANB)".
+- **Eligible SI.** A salary multiple (`=MIN(48*N4,1600000)`) or a flat amount,
+  capped at the slip's maximum per insured person.
+- **Pending SI.** `=MAX(eligible - present, 0)` where the listing records a present
+  SI. Underwriting fields come from the listing.
+- **Administration.** As listed. Otherwise the policy's basis, or Named for a person
+  whose new or increased cover exceeds the non-evidence limit by amount or age.
+- **Premium.** Uses the slip's rates for the selected benefit year:
+  - **Per $1,000 SI.** Rate × eligible SI.
+  - **Family tier.** The employee row carries the tier's rate.
+  - **Per member.** Dependant rows are priced too when the category covers them.
+  - Missing rates stay blank and appear in the gaps sheet.
+- **GST.** `premium × factor`. The factor comes from the product terms when they are
+  set. Otherwise it comes from the slip's own rate heading: "GST Exempt" means no GST,
+  and "Subj to GST" means 9%. If neither is stated, GST is blank and listed as a gap.
 
-Header & Policy contains the Full EL age convention/reference, premium SI basis,
-currency, maximum SI and administration exception fields. Explicit ANB/ALB wording,
-currency in selected rate headers and unambiguous per-person limits can prefill
-these fields from this company's retained extraction. Benefit payout wording does
-not establish the premium SI basis. A name-basis movement clause does not override
-a headcount administration header automatically.
+## Verification (7 October 2026)
 
-Setup confirmation fills missing NEL amount/age and explicit GST-exempt treatment
-from unambiguous saved source wording. It preserves existing terms and explicit
-edits/clears, uses the existing term-update audit and runs in the same transaction.
-Configured-field markers preserve those clears across later confirmations and
-placement-slip autofill. Pre-migration blank terms have unknown provenance and
-remain blank until a broker explicitly sets them; they are not silently refilled.
-This also repairs the old extraction case `200,000 or age next birthday 70` without
-interpreting the trailing digits of a monetary amount as an age.
+**GAS (local).** The workbook was recalculated in Excel with no formula errors.
+Headcount Summary reproduces the client's own listing:
 
-Unconfirmed setup or category mapping withholds annual premiums. Rates for a
-different renewal are withheld. Unknown GST leaves gross premium blank. Missing
-prices never become zero or a complete total. Summary rows label known subtotals
-and show a complete gross total only when every premium unit is priced.
+| Product | Employees per category |
+|---|---|
+| GTL | 5 / 116 / 112 / 1,697 |
+| GHS | 5 / 114 / 93 / 668 / 1,050 |
+| GP | 5 / 1,925 |
+| SP | 5 / 114 / 1,811 |
+| Dental | 5 |
 
-The applied maximum SI lives on the product term separately from pending setup
-answers. Saving or discarding a draft retains the applied cap; confirmation changes
-it atomically. Hydration, enrolment offers, slip-derived prices, dependant cover and
-bulk previews share the cap, preserving stricter category limits. Renewal copies
-inherit applied caps with the other policy terms, including legacy confirmed setups.
+Directors' dependants: 8. A ninth shares another child's NRIC in the source file and
+is skipped.
 
-Premiums are annual, without proration. Family-tier/flat household premiums appear
-once on the employee row; linked medical dependants do not duplicate them. Coverage
-must overlap the product and benefit-year windows. Earnings-rated and policy-level
-group premiums remain in Basis of Cover rather than being copied to individuals.
-Substandard dependant medical cover requires a reviewed family price; standard
-family pricing is not silently applied to that exception.
-
-Underwriting details include historical standard accepted SI, loading wording and
-new/renewal letter dates to the member and insurer. An individual annual premium
-requires explicit insurer confirmation and currency. It is invalidated for reporting
-when SI or the underwriting decision changes. Correspondence-only edits do not reconfirm the price or reset the
-decision date. Loading text is informational, never guessed into a numeric surcharge.
-The underwriting register uses the same confirmation check and leaves stale annual
-premium and currency cells blank. Full EL also checks the live coverage figures.
-
-The workbook shows recorded movement/lifecycle fields. It does not infer A/D/C
-against a previous Full EL. Existing insurer submission history remains the facility
-for submission-to-submission movement comparison.
-
-## Existing company data
-
-The sample workbooks are layout references, not pricing authority. The labelled GAS
-mapping-review company was removed from the shared local database at the user's
-request on 7 October 2026; its configuration was not merged into the primary GAS
-company. WDNS is not present in the current shared local database. GAS draft setup,
-missing rates/mappings and unretained original placement slips are exposed as gaps;
-the generator cannot manufacture the missing source data or approve the setup.
-
-## Release and verification
-
-Review-fix migration `f0b2c4d6e8a0` adds nullable `product_terms.report_rules` and
-`configured_fields` in SQLite, PostgreSQL public and existing firm schemas. Apply
-it before deploying the fixes. Existing values are preserved; confirmed legacy caps
-remain readable and are snapshotted before draft edits. Roll back the application
-without dropping populated columns if a release must be reversed.
-
-Review-fix verification covered applied caps through draft edits/discard, pricing
-agreement, rollback, renewal, persistent clears, pending-term deduplication and
-stale SI/decision premiums in both exports. The migration passed repeat upgrade and
-downgrade/re-upgrade checks while preserving 5,000 synthetic rows. These checks used
-in-memory data, not real member or underwriting changes.
-
-Migration `e9a1b3c5d7f0` adds nullable `underwriting_cases.report_details` in SQLite,
-the PostgreSQL public schema and each existing firm schema. Apply it before the API
-release. The migration preserves existing records and supports newly provisioned
-firm schemas through the ORM model. For production rollback, leave the additive
-column in place and roll back application code; do not drop populated reporting data.
-
-Locally verified: the additive migration preserved counts and foreign-key integrity;
-upgrade/idempotence/downgrade preserved 5,000 synthetic rows; a browser download for
-GAS contained 1,926 employees and all seven sheets. Isolated checks covered annual
-SI rating/caps, ANB boundaries, family/GST reconciliation, group totals, missing
-prices, substandard premiums, stale confirmations, formula protection and masking.
-The focused backend suite passed 169 tests and the frontend production build passed.
-PostgreSQL execution remains a release check: the local Docker daemon was unavailable;
-the migration's public/firm-schema paths were reviewed, but not run against PostgreSQL.
-No real member, eligibility or underwriting decision was changed for verification.
+**CDL and STM.** Both export with generated layouts. PostgreSQL was not exercised
+locally.
