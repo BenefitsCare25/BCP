@@ -12,7 +12,6 @@ import {
   useCreateCategory,
   useMemberCounts,
   usePlans,
-  useProducts,
 } from "@/api/hooks";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -141,7 +140,6 @@ export function EmployeeCategoryPlanTab(props: Props) {
             onToggle={() => toggleGroup(group.key)}
             onEditAssignment={(id) => setEditing((current) => (current === id ? null : id))}
             onEditRule={props.onEditRule}
-            productEntities={data.productEntities}
           />
         ))
       )}
@@ -189,15 +187,7 @@ function useEmployeeCategoryData(props: Props) {
     props.policyYearId,
     props.productId ?? undefined,
   );
-  const { data: products } = useProducts();
   const planOptions = useMemo(() => sortPlans(plans?.items ?? []), [plans]);
-  const productEntities = useMemo(
-    () =>
-      insuredNames(
-        products?.find((item) => item.id === props.productId)?.entities,
-      ),
-    [products, props.productId],
-  );
   const groups = useMemo(
     () => groupEmployeeCategories(props.categories),
     [props.categories],
@@ -213,7 +203,7 @@ function useEmployeeCategoryData(props: Props) {
                 ?.insured,
             ),
       })),
-    [groups, productEntities],
+    [groups],
   );
   const query = useMemberCounts(
     props.policyYearId,
@@ -232,7 +222,6 @@ function useEmployeeCategoryData(props: Props) {
     groups,
     counts,
     planOptions,
-    productEntities,
     employeesTotal: query.data?.employees_total ?? null,
     employeesInScope: query.data?.employees_in_scope ?? null,
     employeesMatched: query.data?.employees_matched ?? null,
@@ -367,7 +356,6 @@ function EmployeeCategoryRow({
   onToggle,
   onEditAssignment,
   onEditRule,
-  productEntities,
 }: {
   group: EmployeeCategoryGroup;
   overlapEmployees: OverlapEmployee[];
@@ -383,7 +371,6 @@ function EmployeeCategoryRow({
   onToggle: () => void;
   onEditAssignment: (id: string) => void;
   onEditRule: (category: Category) => void;
-  productEntities: string[];
 }) {
   return (
     <section className="rounded-lg border border-border bg-card">
@@ -468,7 +455,6 @@ function EmployeeCategoryRow({
                       rateModel={rateModel}
                       tiers={tiers}
                       hasDependants={hasDependants}
-                      insuredEntities={productEntities}
                       onEditRule={() => onEditRule(category)}
                       assignmentOnly
                     />
@@ -516,7 +502,7 @@ function RuleStatus({
       ? <Badge variant="good">Mapping confirmed</Badge>
       : <Badge variant="info">Rule checks passed · confirm mapping</Badge>;
   }
-  if (status === "unmapped") return <Badge variant="error">Employee category rule missing</Badge>;
+  if (status === "unmapped") return <Badge variant="error">Rule not set</Badge>;
   if (status === "proposed" && !employeesAvailable) {
     return <Badge variant="info">Proposed — awaiting employee listing</Badge>;
   }

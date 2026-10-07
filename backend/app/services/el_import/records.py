@@ -162,6 +162,15 @@ def build_records(workbook: ElWorkbook, known_ids: frozenset[str]) -> ListingRec
     return ListingRecords(employees, dependants, attribute_ids)
 
 
+def unreadable_rows(workbook: ElWorkbook) -> int:
+    """Listing rows the reader could not turn into a member record: a dependant
+    with no employee row, or an ID with no name. Employee rows with neither a
+    Staff ID nor a readable NRIC are counted by the shared planner
+    (`adc._plan_employees`), so both upload paths count them once.
+    """
+    return len(workbook.unread_rows)
+
+
 def _dependant_records(
     emp: ElEmployee, staff_id: str, name: str, has_block: bool
 ) -> list[DependantRecord]:

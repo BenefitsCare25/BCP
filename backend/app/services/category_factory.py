@@ -2,7 +2,8 @@
 
 Two flows create categories from a free-text description: the category cards'
 ``POST /categories`` (status ``needs_review``) and the first-confirm seed in
-``_materialize_categories`` (status ``confirmed``). Both derive the matching
+``_materialize_categories`` (also ``needs_review``: confirming a product does
+not confirm its inferred employee-matching rule). Both derive the matching
 rule from the description and share the same provenance envelope, so the build
 lives here once to keep them from drifting.
 """

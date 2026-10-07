@@ -391,6 +391,9 @@ def _plan_employees(
                 AdcIssue(row=rec.row, record_type="employee",
                          message="No Staff ID or NRIC on this row — skipped")
             )
+            # Whoever this row lists can't be told apart from someone absent,
+            # so it counts as unreadable and blocks blind termination.
+            plan.dropped_rows += 1
             continue
         # A row identifies by NRIC *and* staff id. When those resolve to two
         # DIFFERENT people the row is a conflict, not a movement — merging it
@@ -957,6 +960,26 @@ class UnresolvedRosterMapping(Exception):
     """A populated source column still lacks an explicit decision."""
 
 
+class TerminationBlockedByDroppedRows(Exception):
+    """`terminate_missing` was asked for on a file with rows that were not read."""
+
+
+def refuse_blind_termination(dropped_rows: int, terminate_missing: bool) -> None:
+    """Absence is only evidence when the whole file was read.
+
+    Someone "missing" may be sitting on a row the parser could not identify,
+    so the opt-in is refused outright — recomputed from the uploaded file,
+    never taken from the client's word that the preview was clean.
+    """
+    if terminate_missing and dropped_rows > 0:
+        rows = f"{dropped_rows} row{'' if dropped_rows == 1 else 's'}"
+        raise TerminationBlockedByDroppedRows(
+            f"Terminating people missing from this file is unavailable while {rows} "
+            "could not be read — one of them may be a person on the roster. Fix the "
+            "file and upload it again."
+        )
+
+
 def apply_listing(
     db: Session,
     user: CurrentUser,
@@ -1003,6 +1026,7 @@ def apply_listing(
             "The employee column mapping changed since preview. Review the file again."
         )
 
+    refuse_blind_termination(plan.dropped_rows, terminate_missing)
     # Only the terminations are gated: re-deriving adds and changes against the
     # newest roster is correct and wanted, but ending someone's cover must
     # happen to the exact people the broker read and ticked.

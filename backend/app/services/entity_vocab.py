@@ -31,11 +31,11 @@ from app.core.pagination import MAX_LIMIT
 from app.models import Category, Employee, PolicyYear, Product, ProductSetup
 from app.services.matching_engine import (
     EntityAliases,
+    category_gate_names,
     entity_alias_map,
     insured_names,
     jaccard,
     normalize_entity,
-    product_entities,
     resolve_entities,
     tokenize,
 )
@@ -161,30 +161,21 @@ def _gating_entities(
 ) -> dict[str, str]:
     """{resolved: raw spelling} for every entity that actually GATES matching.
 
-    Must cover BOTH sources, in the same precedence the matcher applies
-    (`_build_product_indices`): a product's own `product_metadata["entities"]`
-    when set, otherwise each of its categories' `plan_assignments["insured"]`.
-    Reading only the category side would mark a roster entity "unclaimed" while
-    a product gate is actively excluding everyone else — which is precisely the
-    silent exclusion the reconciliation panel exists to surface.
+    Uses the matcher's own gate (`category_entity_gate`: the product's
+    `product_metadata["entities"]` intersected with each category's
+    `plan_assignments["insured"]`, either side alone when only one names
+    entities). Reading only the category side would mark a roster entity
+    "unclaimed" while a product gate is actively excluding everyone else, and
+    letting either side override the other would claim entities the
+    intersection excludes — both are silent exclusions this panel must surface.
     """
     out: dict[str, str] = {}
-
-    def _add(raw_value: object) -> None:
-        for name in insured_names(raw_value):
-            # An aliased entity may expand to several — record every one, so a
-            # roster spelling covering any of them counts as claimed.
-            for norm in resolve_entities(name, aliases):
-                out.setdefault(norm, name)
-
     cats = list(
         db.execute(
-            select(Category.product_id, Category.plan_assignments).where(
-                Category.policy_year_id == policy_year_id
-            )
-        ).all()
+            select(Category).where(Category.policy_year_id == policy_year_id)
+        ).scalars()
     )
-    product_ids = {pid for pid, _ in cats if pid}
+    product_ids = {c.product_id for c in cats if c.product_id}
     products = (
         {
             p.id: p
@@ -195,15 +186,14 @@ def _gating_entities(
         if product_ids
         else {}
     )
-    for product_id, pa in cats:
-        gate = product_entities(products.get(product_id), aliases)
-        if gate:
-            # Product-level field wins — record its RAW spellings, not the
-            # normalized set, so the UI can show what the broker typed.
-            meta = products[product_id].product_metadata or {}
-            _add(meta.get("entities"))
-        elif isinstance(pa, dict):
-            _add(pa.get("insured"))
+    for cat in cats:
+        product = products.get(cat.product_id) if cat.product_id else None
+        names = category_gate_names(cat, product, aliases) or {}
+        # Record the RAW spelling the broker typed, against every gate entity
+        # it stands for, so a roster spelling covering any of them is claimed.
+        for name, norms in names.items():
+            for norm in norms:
+                out.setdefault(norm, name)
     return out
 
 

@@ -28,7 +28,14 @@ function rowValues(item: SobItemAnswer, columns: SobColumn[]): string[] {
   return columns.map((col) => cellValue(item, col.id));
 }
 
-export function rowIssues(items: SobItemAnswer[], columns: SobColumn[]): Map<string, string[]> {
+/** `canRemove`: only system admins have the row Remove control, so everyone
+ * else is told who can remove a row rather than to do it themselves. */
+export function rowIssues(
+  items: SobItemAnswer[],
+  columns: SobColumn[],
+  canRemove: boolean,
+): Map<string, string[]> {
+  const removeAdvice = canRemove ? "remove" : "ask a system admin to remove";
   const issues = new Map<string, string[]>();
   const add = (uid: string, message: string) =>
     issues.set(uid, [...(issues.get(uid) ?? []), message]);
@@ -43,7 +50,7 @@ export function rowIssues(items: SobItemAnswer[], columns: SobColumn[]): Map<str
     const key = rowKey(name);
     if (key) {
       const first = seen.get(key);
-      if (first) add(item.uid, `Same benefit as "${first}" — remove one`);
+      if (first) add(item.uid, `Same benefit as "${first}" — ${removeAdvice} one`);
       else seen.set(key, name);
     }
     if (STRUCTURAL_KINDS.has(item.kind ?? "")) continue;
@@ -52,7 +59,7 @@ export function rowIssues(items: SobItemAnswer[], columns: SobColumn[]): Map<str
       (sub) => !isAbsentValue(sub.base_value) || Object.values(sub.overrides ?? {}).some((v) => !isAbsentValue(v)),
     );
     if (values.every((v) => !String(v ?? "").trim()) && !hasSubValues && !item.note) {
-      add(item.uid, "No value in any plan — fill it in or remove the row");
+      add(item.uid, `No value in any plan — fill it in or ${removeAdvice} the row`);
     }
     const kind = item.kind ?? "amount";
     if (

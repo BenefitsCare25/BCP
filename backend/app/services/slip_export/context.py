@@ -31,6 +31,7 @@ from sqlalchemy.orm import Session
 from app.core.deps import tenant_or_global
 from app.models import Category, Plan, PolicyYear, Product, ProductSetup, ProductTerm
 from app.services.category_member_counts import build_category_member_counts
+from app.services.matching_engine import EntityAliases, entity_alias_map
 from app.services.plan_hydration import basis_amount
 from app.services.product_insurer import insurer_from_answers, insurers_from_answers
 from app.services.product_registry import dependant_count_from_tiers
@@ -91,6 +92,9 @@ class SlipContext:
     # show as tabs in Company & Benefits, so the export names them rather than
     # leaving the reader to wonder why they are missing.
     setup_only: list[Product] = field(default_factory=list)
+    # The client's entity alias map, so the Insured line resolves the entity
+    # gate exactly as matching does.
+    entity_aliases: EntityAliases = field(default_factory=dict)
 
     @property
     def blank_rates(self) -> bool:
@@ -289,4 +293,5 @@ def load_context(db: Session, py: PolicyYear, mode: Mode) -> SlipContext:
         answers_by_code=answers_by_code,
         figures=figures,
         setup_only=setup_only,
+        entity_aliases=entity_alias_map(db, py.client_id),
     )

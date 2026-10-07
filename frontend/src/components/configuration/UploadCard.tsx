@@ -20,6 +20,7 @@ import {
 import { useRegistry } from "@/api/registry";
 import { PeriodMismatchError, type PeriodMismatchDetail } from "@/api/client";
 import { useSession } from "@/stores/session";
+import { requestSetupContextChange } from "@/stores/setupNavigation";
 import type {
   InsuranceLine,
   ParseResult,
@@ -518,12 +519,16 @@ export function useSlipUpload(policyYearId: string) {
   };
 
   const switchYearAndUpload = () => {
-    if (!periodMismatch?.matching_policy_year_id || !mismatchFile) return;
-    setPolicyYear(periodMismatch.matching_policy_year_id);
-    runUpload(mismatchFile, {
-      targetYearId: periodMismatch.matching_policy_year_id,
+    const targetYearId = periodMismatch?.matching_policy_year_id;
+    const file = mismatchFile;
+    if (!targetYearId || !file) return;
+    // Unsaved setup edits get the save/discard prompt first; cancelling it
+    // keeps the mismatch notice so the broker can choose again.
+    requestSetupContextChange(() => {
+      setPolicyYear(targetYearId);
+      runUpload(file, { targetYearId });
+      dismissMismatch();
     });
-    dismissMismatch();
   };
 
   const uploadAnyway = () => {
@@ -729,7 +734,7 @@ export function SlipUploadPanel({ slip }: { slip: SlipUpload }) {
             {(result.rules_proposed ?? 0) > 0 && (
               <div className="text-muted-foreground">
                 {result.rules_proposed} rule proposal
-                {result.rules_proposed === 1 ? "" : "s"} created without a
+                {result.rules_proposed === 1 ? "" : "s"} created without an
                 employee listing; upload employees to validate actual matches.
               </div>
             )}

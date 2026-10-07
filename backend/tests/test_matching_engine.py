@@ -46,7 +46,7 @@ def _cat(
     priority: int = 0,
     rule: dict[str, Any] | None = None,
     confidence: float | None = None,
-    insured: str | None = None,
+    insured: str | list[str] | None = None,
 ) -> Category:
     return Category(
         id=cid,
@@ -621,28 +621,88 @@ def test_entity_vocab_reconciliation_and_suggestions() -> None:
     assert _acronym("city serviced offices pte ltd") == "cso"
 
 
-def test_product_entities_take_precedence_over_category_insured() -> None:
-    """The product's Entities field (set once on the setup header) gates every
-    category. Only when it is EMPTY does each category's own slip `insured`
-    still gate — that fallback is what keeps multi-entity slips and every
-    pre-existing configuration matching unchanged."""
+def test_product_entities_intersect_category_insured() -> None:
+    """The gate is the INTERSECTION of the product's Entities field and each
+    category's own slip `insured`. Either side alone gates unchanged when the
+    other names nothing; disjoint sides admit nobody rather than widening into
+    a wildcard; a blank roster entity fails any category that names entities."""
     from app.models.product import Product
-    from app.services.matching_engine import product_entities
+    from app.services.matching_engine import (
+        _entity_allows,
+        category_entity_gate,
+        product_entities,
+    )
 
-    cat = _cat("c1", "All Employees", insured=["Le Grove Management Pte Ltd"])
-
+    cat = _cat("c1", "All Employees", insured=["Le Grove Pte Ltd", "CDL Pte Ltd"])
     prod = Product(id="p1", code="GTL", display_name="GTL", product_metadata=None)
     assert product_entities(prod) == frozenset()
-    # Empty product field → category's own insured is the gate.
-    gate = product_entities(prod) or category_insured_entities(cat)
-    assert gate == frozenset({"le grove management pte ltd"})
+    # Empty product field → the category's own insured is the gate.
+    assert category_entity_gate(cat, product_entities(prod)) == frozenset(
+        {"le grove pte ltd", "cdl pte ltd"}
+    )
 
-    prod.product_metadata = {"entities": ["City Developments Limited"]}
-    gate = product_entities(prod) or category_insured_entities(cat)
-    assert gate == frozenset({"city developments ltd"})
+    prod.product_metadata = {"entities": ["CDL Pte. Ltd.", "Other Co Pte Ltd"]}
+    gate = category_entity_gate(cat, product_entities(prod))
+    assert gate == frozenset({"cdl pte ltd"})
+    assert _entity_allows(gate, frozenset({"cdl pte ltd"}))
+    assert not _entity_allows(gate, frozenset({"other co pte ltd"}))
+    assert not _entity_allows(gate, frozenset({"le grove pte ltd"}))
+    assert not _entity_allows(gate, frozenset())
+
+    # Category names nothing → the product field alone gates.
+    bare = _cat("c2", "All Employees")
+    assert category_entity_gate(bare, product_entities(prod)) == frozenset(
+        {"cdl pte ltd", "other co pte ltd"}
+    )
+    # Neither side names entities → wildcard.
+    assert category_entity_gate(bare, frozenset()) == frozenset()
+    assert _entity_allows(frozenset(), frozenset())
+
+    prod.product_metadata = {"entities": ["Unrelated Pte Ltd"]}
+    disjoint = category_entity_gate(cat, product_entities(prod))
+    assert disjoint
+    assert not _entity_allows(disjoint, frozenset({"unrelated pte ltd"}))
+    assert not _entity_allows(disjoint, frozenset({"cdl pte ltd"}))
+    assert not _entity_allows(disjoint, frozenset())
 
     # Absent product (unlinked categories) must not raise.
     assert product_entities(None) == frozenset()
+
+
+def test_category_gate_names_spell_the_effective_gate() -> None:
+    """`category_gate_names` reports the raw spellings behind the effective
+    gate — what the reconciliation panel, the slip's Insured line and the
+    category badge all display — so none can disagree with matching."""
+    from app.models.product import Product
+    from app.services.matching_engine import category_gate_names
+
+    cat = _cat("c1", "All Employees", insured=["Le Grove Pte Ltd", "CDL Pte Ltd"])
+    bare = _cat("c2", "All Employees")
+    prod = Product(id="p1", code="GTL", display_name="GTL", product_metadata=None)
+
+    assert category_gate_names(bare, prod) is None
+    assert category_gate_names(bare, None) is None
+    # One side only: that side's spellings, in order, as typed.
+    assert list(category_gate_names(cat, prod) or {}) == ["Le Grove Pte Ltd", "CDL Pte Ltd"]
+    prod.product_metadata = {"entities": ["CDL Pte. Ltd.", "Other Co Pte Ltd"]}
+    assert list(category_gate_names(bare, prod) or {}) == ["CDL Pte. Ltd.", "Other Co Pte Ltd"]
+
+    # Both sides: only the overlap, under the product's spelling — the
+    # category's own spelling of the same entity is redundant.
+    assert category_gate_names(cat, prod) == {"CDL Pte. Ltd.": frozenset({"cdl pte ltd"})}
+
+    # Disjoint: restricted to nobody, distinct from unrestricted (None).
+    prod.product_metadata = {"entities": ["Unrelated Pte Ltd"]}
+    assert category_gate_names(cat, prod) == {}
+
+    # An alias spanning entities outside the gate contributes only the overlap.
+    aliases = {"stm": frozenset({"stm amk", "stm tpy"})}
+    prod.product_metadata = {"entities": ["STM"]}
+    amk = _cat("c3", "All Employees", insured=["STM AMK"])
+    assert category_gate_names(amk, prod, aliases) == {"STM AMK": frozenset({"stm amk"})}
+    prod.product_metadata = {"entities": ["STM AMK", "STM TPY"]}
+    aliased = _cat("c4", "All Employees", insured=["STM"])
+    assert list(category_gate_names(aliased, prod, aliases) or {}) == ["STM AMK", "STM TPY"]
 
 
 def test_name_match_confirmed_by_the_rows_rule_reports_rule() -> None:

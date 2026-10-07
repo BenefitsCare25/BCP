@@ -927,6 +927,8 @@ export function useUpdateProduct() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["schemas", "products"] });
       qc.invalidateQueries({ queryKey: ["member-counts"] });
+      // Product entities feed each category's resolved `entity_gate`.
+      qc.invalidateQueries({ queryKey: ["categories"] });
       // Classification (form_profile / line / layout_family) reshapes the
       // setup templates and tab routing.
       qc.invalidateQueries({ queryKey: ["setup-products"] });

@@ -32,6 +32,7 @@ from app.schemas.adc import AdcApplyResult, AdcPreview, RosterReadiness
 from app.services.adc import (
     StaleListingPreview,
     StaleRosterMapping,
+    TerminationBlockedByDroppedRows,
     UnresolvedRosterMapping,
     apply_listing,
     preview_listing,
@@ -165,6 +166,11 @@ async def apply_listing_upload(
             raise HTTPException(
                 status.HTTP_409_CONFLICT,
                 {"code": "stale_listing_preview", "message": str(exc)},
+            ) from exc
+        except TerminationBlockedByDroppedRows as exc:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
+                {"code": "termination_blocked_dropped_rows", "message": str(exc)},
             ) from exc
         except StaleRosterMapping as exc:
             raise HTTPException(

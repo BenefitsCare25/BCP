@@ -247,7 +247,11 @@ function EditForm({
       ? current.status === "confirmed" ? "Mapping confirmed" : "Rule checks passed"
       : current.rule_status === "needs_review"
         ? "Rule needs attention"
-        : current.rule_status?.replaceAll("_", " ");
+        : current.rule_status === "unmapped"
+          ? "Rule not set"
+          : current.rule_status === "proposed"
+            ? "Proposed rule"
+            : null;
   const ruleCheckVariant =
     current.rule_status === "validated"
       ? current.status === "confirmed" ? "good" : "info"

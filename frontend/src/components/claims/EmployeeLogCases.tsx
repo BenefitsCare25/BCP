@@ -7,7 +7,7 @@
  *
  * Placement is a reachability decision, not a file-location one — these are
  * mounted from `routes/operations/coverage.tsx`, a page `router.tsx` routes
- * today (see docs/ORPHANED_UI_RECOVERY.md for what happens when that is assumed
+ * today (see docs/archive/ORPHANED_UI_RECOVERY.md for what happens when that is assumed
  * rather than checked).
  *
  * It is deliberately TWO pieces. The action belongs in the identity strip,

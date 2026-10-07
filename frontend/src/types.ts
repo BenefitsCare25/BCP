@@ -260,6 +260,10 @@ export interface Category {
   modified_by: string | null;
   created_at: string;
   updated_at: string;
+  // Effective insured-entity gate (product entities ∩ the category's own
+  // insured), resolved by /categories/grouped only. null/absent = unrestricted;
+  // [] = the two sides are disjoint, so the category matches nobody.
+  entity_gate?: string[] | null;
 }
 
 export interface CategoryGroup {

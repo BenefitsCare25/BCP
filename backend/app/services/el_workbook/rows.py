@@ -20,6 +20,10 @@ _DATE_ROLES = {"date_of_birth", "date_of_hire", "last_day_of_service",
                "mu_letter_member", "mu_letter_insurer", "acceptance_date",
                "retrenchment_start", "retrenchment_end", "reemployment_start",
                "reemployment_end"}
+# A row carrying one of these but no name is a person the reader cannot read,
+# not a totals or notes line.
+_EMPLOYEE_IDENTITY = {"staff_id", "national_id", "date_of_birth"}
+_DEPENDANT_IDENTITY = {"national_id", "date_of_birth", "relationship"}
 
 
 class ElFormatError(ValueError):
@@ -59,9 +63,22 @@ def _covers(layout: ElLayout, row: list[Cell], row_no: int, issues: list[ElIssue
     return out
 
 
+def _carries_identity(layout: ElLayout, row: list[Cell]) -> bool:
+    identity = [
+        column
+        for block, roles in ((layout.employee, _EMPLOYEE_IDENTITY),
+                             (layout.dependant, _DEPENDANT_IDENTITY))
+        if block is not None
+        for column in block.columns
+        if column.role in roles
+    ]
+    return any(text(_cell(row, column.index)) for column in identity)
+
+
 def read_rows(layout: ElLayout, rows: list[list[Cell]]) -> ElWorkbook:
     employee_block, dependant_block = layout.employee, layout.dependant
     issues: list[ElIssue] = []
+    unread: list[int] = []
     emp_name = employee_block.column("name") if employee_block else None
     if employee_block is None or emp_name is None:
         raise ElFormatError("The listing has no employee name column.")
@@ -86,6 +103,7 @@ def read_rows(layout: ElLayout, rows: list[list[Cell]]) -> ElWorkbook:
                     row_no, "staff_id", "orphan_dependant",
                     f"Row {row_no}: dependant has no employee row with the same staff ID.",
                 ))
+                unread.append(row_no)
                 continue
             if owner is not employees[-1]:
                 issues.append(ElIssue(
@@ -103,6 +121,8 @@ def read_rows(layout: ElLayout, rows: list[list[Cell]]) -> ElWorkbook:
             )
             continue
         if not text(_cell(row, emp_name.index)):
+            if _carries_identity(layout, row):
+                unread.append(row_no)
             continue
         fields = _block_values(employee_block, row, row_no, issues)
         employee = ElEmployee(
@@ -128,7 +148,7 @@ def read_rows(layout: ElLayout, rows: list[list[Cell]]) -> ElWorkbook:
                 f"Row {row_no}: date of birth is blank; age limits cannot be applied.",
             ))
         employees.append(employee)
-    return ElWorkbook(layout, employees, issues)
+    return ElWorkbook(layout, employees, issues, unread)
 
 
 def read_employee_listing(path: Path | str) -> ElWorkbook:

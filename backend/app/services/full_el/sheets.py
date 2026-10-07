@@ -7,6 +7,7 @@ COUNTIFS/SUMIFS over the listing) and Setup & Data Gaps.
 from __future__ import annotations
 
 from collections import Counter, defaultdict
+from datetime import date
 from typing import Any
 
 from openpyxl.styles import Alignment, Font
@@ -16,6 +17,7 @@ from app.models import BrokerFirm
 from app.services.full_el.context import ElContext
 from app.services.full_el.listing_sheet import FIRST_ROW, employee_covers
 from app.services.insurer_reports import safe_cell
+from app.services.roster_attributes import roster_date
 
 LISTING = "Employee Listing"
 _BOLD = Font(bold=True)
@@ -40,8 +42,9 @@ def write_summary(ws: Worksheet, ctx: ElContext) -> None:
     ws["A1"], ws["A1"].font = f"{ctx.client.legal_name or ctx.client.name} — Basis of Cover", _BOLD
     ws["A2"] = f"Benefit year {ctx.year.start_date:%d/%m/%Y} to {ctx.year.end_date:%d/%m/%Y}"
     row = 4
-    for col, title in zip("ABCDEFG", ("No.", "Product", "Insurer", "Policy No.", "Period",
-                                      "Administration", "Categories"), strict=True):
+    for col, title in zip("ABCDEFGH", ("No.", "Product", "Insurer", "Policy No.", "Period",
+                                       "Administration", "Premium currency", "Categories"),
+                          strict=True):
         ws[f"{col}{row}"], ws[f"{col}{row}"].font = title, _BOLD
     row += 1
     number = 0
@@ -57,14 +60,18 @@ def write_summary(ws: Worksheet, ctx: ElContext) -> None:
             ws[f"C{row}"] = safe_cell(info.insurer) or None
             ws[f"D{row}"] = safe_cell(info.policy_no) or None
             ws[f"E{row}"] = (f"{start:%d/%m/%Y} to {end:%d/%m/%Y}" if start and end else None)
-            ws[f"F{row}"] = safe_cell(info.admin_basis) or None
+            # The reviewed interpretation sits under the slip's administration wording.
+            admin = "\n".join(a for a in (info.admin_basis, info.rules.admin_resolution) if a)
+            ws[f"F{row}"] = safe_cell(admin) or None
+            ws[f"F{row}"].alignment = _WRAP
+            ws[f"G{row}"] = safe_cell(info.rules.currency) or None
             codes = {info.product.code}
             labels = [lbl for lbl, cat in _block_labels(ctx, index) if cat.product.code in codes]
-            ws[f"G{row}"] = "\n".join(labels) or "NIL"
-            ws[f"G{row}"].alignment = _WRAP
+            ws[f"H{row}"] = "\n".join(labels) or "NIL"
+            ws[f"H{row}"].alignment = _WRAP
             row += 1
         row += 1
-    for col, width in zip("ABCDEFG", (6, 40, 22, 14, 26, 22, 70), strict=True):
+    for col, width in zip("ABCDEFGH", (6, 40, 22, 14, 26, 30, 12, 70), strict=True):
         ws.column_dimensions[col].width = width
 
 
@@ -179,6 +186,13 @@ def setup_gaps(ctx: ElContext, stats: dict[str, Any]) -> list[tuple[str, str, st
         if info.gst_factor is None:
             gaps.append((code, "GST unknown",
                          "Premium with GST is left blank; set GST on the product terms."))
+        if info.rules.age_reference == "Member effective date" and (missing := sum(
+            not isinstance(roster_date((e.attribute_values or {}).get("effective_date")), date)
+            for e in ctx.employees
+        )):
+            gaps.append((code, f"{missing} employees without an effective date",
+                         "Ages for this product run to the member effective date; "
+                         "theirs are left blank."))
     for cat in ctx.categories.values():
         if cat.rate_basis == "earnings_based":
             continue

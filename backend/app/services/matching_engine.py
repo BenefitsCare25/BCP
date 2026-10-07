@@ -200,6 +200,51 @@ def category_entity_gate(
     return product_gate or category_gate
 
 
+def category_gate_names(
+    category: Category,
+    product: Product | None,
+    aliases: EntityAliases | None = None,
+) -> dict[str, frozenset[str]] | None:
+    """The raw spellings behind `category_entity_gate`, for display.
+
+    {name as typed: the gate entities it stands for}, product spellings first.
+    None when the category is unrestricted; an empty dict when the product and
+    category name disjoint entities, so the gate admits nobody.
+
+    A spelling wholly inside the gate is preferred, and a category spelling
+    adds nothing the product's spellings already cover (so one entity isn't
+    listed twice under two spellings). An alias that also covers entities
+    outside the gate is used only for gate entities nothing else names, and
+    contributes just those — it must not claim entities the gate excludes.
+    """
+    gate = category_entity_gate(category, product_entities(product, aliases), aliases)
+    if not gate:
+        return None
+    meta = (
+        product.product_metadata
+        if product is not None and isinstance(product.product_metadata, dict)
+        else {}
+    )
+    pa = category.plan_assignments if isinstance(category.plan_assignments, dict) else {}
+    sides = [
+        [(name, resolve_entities(name, aliases)) for name in insured_names(raw)]
+        for raw in (meta.get("entities"), pa.get("insured"))
+    ]
+    out: dict[str, frozenset[str]] = {}
+    covered: set[str] = set()
+    for side in sides:
+        before = frozenset(covered)
+        for name, resolved in side:
+            if resolved and resolved <= gate and not resolved <= before:
+                out[name] = resolved
+                covered |= resolved
+    for name, resolved in sides[0] + sides[1]:
+        if name not in out and (extra := (resolved & gate) - covered):
+            out[name] = resolved & gate
+            covered |= extra
+    return out
+
+
 def employee_entity(
     attribute_values: dict[str, Any] | None, aliases: EntityAliases | None = None
 ) -> frozenset[str]:
@@ -571,10 +616,10 @@ def _build_product_indices(
         sorted_cats = sorted(cats, key=lambda c: (_status_rank(c.status), c.priority))
         product = product_lookup.get(pid)
         # The product-level Entities field (set on the setup header from the
-        # roster vocabulary) is the gate when present: it applies to EVERY
-        # category of the product. Only when it's unset does each category's own
-        # slip-parsed `insured` still gate — that keeps multi-entity slips and
-        # every pre-existing configuration matching exactly as before.
+        # roster vocabulary) applies to EVERY category of the product and is
+        # intersected with each category's own slip-parsed `insured`
+        # (`category_entity_gate`); either side alone gates when the other is
+        # unset, so pre-existing configurations match exactly as before.
         prod_entities = product_entities(product, aliases)
         indices.append(
             _ProductIndex(

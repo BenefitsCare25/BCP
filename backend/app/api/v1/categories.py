@@ -56,6 +56,11 @@ from app.services.eligibility_mapping import (
     normalize_ai_matching_rule,
     validate_ai_matching_rule,
 )
+from app.services.matching_engine import (
+    EntityAliases,
+    category_gate_names,
+    entity_alias_map,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -101,13 +106,20 @@ def list_categories(
     return list(db.execute(stmt).scalars().all())
 
 
+def _entity_gate(
+    category: Category, product: Product | None, aliases: EntityAliases
+) -> list[str] | None:
+    names = category_gate_names(category, product, aliases)
+    return None if names is None else list(names)
+
+
 @router.get("/grouped", response_model=list[CategoryGrouped])
 def list_categories_grouped(
     policy_year_id: str,
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> list[CategoryGrouped]:
-    assert_policy_year_for_user(policy_year_id, user, db)
+    py = assert_policy_year_for_user(policy_year_id, user, db)
     cats = list(
         db.execute(
             select(Category)
@@ -125,6 +137,7 @@ def list_categories_grouped(
         .scalars()
         .all()
     }
+    aliases = entity_alias_map(db, py.client_id)
     grouped: dict[str | None, list[Category]] = {}
     for c in cats:
         grouped.setdefault(c.product_id, []).append(c)
@@ -137,7 +150,12 @@ def list_categories_grouped(
                 product_display_name=product.display_name if product else "Unassigned",
                 product_id=product_id,
                 line=product.line if product else "medical",
-                categories=[CategoryOut.model_validate(c) for c in items],
+                categories=[
+                    CategoryOut.model_validate(c).model_copy(
+                        update={"entity_gate": _entity_gate(c, product, aliases)}
+                    )
+                    for c in items
+                ],
             )
         )
     out.sort(key=lambda g: g.product_code)

@@ -74,7 +74,7 @@ function BrokerStatementPane({ employeeId }: { employeeId: string }) {
        * portal account, mint a set-password link or set their password: the
        * backend endpoints have no other UI, and it shipped unreachable once
        * already when the nav consolidation retired the page that hosted it (see
-       * docs/ORPHANED_UI_RECOVERY.md). It stays on the first screenful, with
+       * docs/archive/ORPHANED_UI_RECOVERY.md). It stays on the first screenful, with
        * the account's state printed on the button, so nothing about it is
        * hidden — only the controls that change it.
        *
@@ -325,7 +325,7 @@ export function EmployeeCoveragePage() {
         />
 
         {/* `min-w-0` is load-bearing: a grid item defaults to `min-width:auto`,
-         * so the coverage table's own `min-w-[40rem]` pushed this 1fr column
+         * so the coverage table's own `min-w-[42rem]` pushed this 1fr column
          * WIDER than its track instead of scrolling inside it — and the card
          * around it clips its corners with `overflow-hidden`, so at laptop
          * widths the Claims column was simply cut off with no way to reach it. */}

@@ -8,11 +8,10 @@ from openpyxl.worksheet.worksheet import Worksheet
 from sqlalchemy.orm import Session
 
 from app.models import Category, Plan, PolicyYear, Product, ProductTerm
-from app.services.matching_engine import insured_names
+from app.services.matching_engine import EntityAliases, category_gate_names, insured_names
 from app.services.product_terms import envelope_for
 from app.services.slip_export.basis import (
     insured_text,
-    plan_assignments,
     write_basis_of_cover,
 )
 from app.services.slip_export.context import Mode, SlipContext, load_context
@@ -62,24 +61,27 @@ def _sheet_title(base: str, taken: set[str]) -> str:
 
 
 def _distinct_insured(
-    categories: list[Category], product: Product | None = None
+    categories: list[Category],
+    product: Product | None = None,
+    aliases: EntityAliases | None = None,
 ) -> list[str]:
     """Every distinct entity covered, in first-seen order.
 
-    Mirrors the matching gate's precedence (`_build_product_indices`): the
-    product's own `entities` when set, otherwise whatever the categories name.
+    Each category contributes its effective matching gate
+    (`category_gate_names`: product entities intersected with the category's
+    own `insured`), so the slip can never name an entity matching excludes.
     Without the product arm this line goes out BLANK for any product configured
     through the setup header — the per-category `insured` has no editor, so a
     manually built product never populates it.
     """
-    product_names = insured_names(
-        (product.product_metadata or {}).get("entities") if product else None
-    )
-    if product_names:
-        return product_names
+    if not categories:
+        # No category yet to intersect with: the product's own field is the gate.
+        return insured_names(
+            (product.product_metadata or {}).get("entities") if product else None
+        )
     seen: list[str] = []
     for c in categories:
-        for name in insured_names(plan_assignments(c).get("insured")):
+        for name in category_gate_names(c, product, aliases) or {}:
             if name not in seen:
                 seen.append(name)
     return seen
@@ -116,7 +118,7 @@ def _write_product_sheet(
     style_row(ws, font=TITLE)
     spacer_row(ws)
 
-    insured = ", ".join(_distinct_insured(categories, product))
+    insured = ", ".join(_distinct_insured(categories, product, ctx.entity_aliases))
     answers = ctx.answers_for(product)
     write_header_block(
         ws, py, product, term, answers, insured, quotation=ctx.blank_rates

@@ -20,7 +20,7 @@ from app.core.rate_limit import limiter
 from app.core.uploads import WORKBOOK_SUFFIXES, saved_upload
 from app.db.session import get_db
 from app.schemas.employee_listing import ListingApplyOut, ListingMappingIn, ListingPreviewOut
-from app.services.adc import StaleListingPreview
+from app.services.adc import StaleListingPreview, TerminationBlockedByDroppedRows
 from app.services.el_import import service
 
 router = APIRouter(prefix="/policy-years", tags=["employee-listing"])
@@ -80,7 +80,8 @@ async def apply_employee_listing(
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> ListingApplyOut:
-    """Write members and listed cover, then re-match. One transaction."""
+    """Commit members, listed cover, mapping and joiner rules together, then
+    re-match best-effort after the commit."""
     client_id = require_client_id(user)
     assert_policy_year_for_user(policy_year_id, user, db)
     decisions = _mapping(mapping) or ListingMappingIn()
@@ -100,6 +101,11 @@ async def apply_employee_listing(
             raise HTTPException(
                 status.HTTP_409_CONFLICT,
                 {"code": "stale_listing_preview", "message": str(exc)},
+            ) from exc
+        except TerminationBlockedByDroppedRows as exc:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
+                {"code": "termination_blocked_dropped_rows", "message": str(exc)},
             ) from exc
         except service.UnresolvedListingMapping as exc:
             raise HTTPException(

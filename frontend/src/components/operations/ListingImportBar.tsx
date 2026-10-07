@@ -121,7 +121,10 @@ export function ListingImportBar({ policyYearId, stats, hasRows }: Props) {
         file,
         policyYearId,
         mapping: elMapping,
-        terminateMissing,
+        // Never sent over unread rows: the sheet hides the tick, and a tick
+        // from before a recheck must not reach the server, which refuses it.
+        terminateMissing:
+          terminateMissing && (elPreview.members.counts.dropped_rows ?? 0) === 0,
         missingDigest: elPreview.members.missing_digest ?? null,
       },
       {
@@ -229,7 +232,8 @@ export function ListingImportBar({ policyYearId, stats, hasRows }: Props) {
       {
         file,
         policyYearId,
-        terminateMissing,
+        terminateMissing:
+          terminateMissing && (preview?.counts.dropped_rows ?? 0) === 0,
         missingDigest: preview?.missing_digest ?? null,
         mappingDigest: preview?.roster_mapping?.digest ?? null,
         employeeColumnMapping: columnMapping ?? undefined,

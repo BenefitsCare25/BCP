@@ -323,7 +323,7 @@ def compute_member_counts(
     # broker sees a headcount the run won't reproduce — so aliases too, loaded
     # once outside the loop.
     aliases = entity_alias_map(db, client_id)
-    # ...and the same precedence: the product's Entities field wins over each
+    # ...and the same gate: the product's Entities field intersected with each
     # row's own `insured`, exactly as `_build_product_indices` resolves it.
     prod_entities = product_entities(
         db.get(Product, product_id) if product_id else None, aliases

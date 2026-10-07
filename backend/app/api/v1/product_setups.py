@@ -5,12 +5,18 @@ standard SME scheme template, then materializes it into the catalog `Product`
 plus per-plan `Plan` rows (`source="manual"`) — the same shape the placement-slip
 parser emits, so everything downstream (matching, activation) works unchanged.
 
-- GET  /product-templates                                  — list available templates
-- GET  /product-templates/{code}                           — full template (drives the form)
-- GET  /policy-years/{id}/product-setups                   — list this year's setup drafts
-- GET  /policy-years/{id}/product-setups/{code}            — one draft (resume editing)
-- PUT  /policy-years/{id}/product-setups/{code}            — save/replace the draft answers
-- POST /policy-years/{id}/product-setups/{code}/confirm    — save + materialize Product/Plan
+- GET    /policy-years/{id}/setup-products                         — products available to set up
+- GET    /policy-years/{id}/setup-products/{code}/template         — template that drives the form
+- GET    /product-registry                                          — product catalog registry
+- GET    /policy-years/{id}/entity-vocab                            — insured-entity vocabulary
+- POST   /policy-years/{id}/member-counts                           — headcounts for the form
+- GET    /policy-years/{id}/product-setups                          — this year's setup drafts
+- GET    /policy-years/{id}/product-setups/{code}                   — one draft (resume editing)
+- GET    /policy-years/{id}/product-setups/{code}/field-suggestions — answer suggestions
+- PUT    /policy-years/{id}/product-setups/{code}                   — save/replace the draft
+- DELETE /policy-years/{id}/product-setups/{code}                   — discard the draft
+- DELETE /policy-years/{id}/products/{code}                         — remove the product
+- POST   /policy-years/{id}/product-setups/{code}/confirm           — save + materialize
 
 Tenant scoping rides on `load_policy_year` (the setup is keyed by the already
 tenant-checked policy year), matching the recommendations router pattern.

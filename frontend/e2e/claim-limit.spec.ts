@@ -470,7 +470,7 @@ test("broker reviews claim limits in one grid across plans", async ({
   await expect(grid).toBeVisible();
   await expect(grid.getByRole("heading", { name: "Benefit limits" })).toBeVisible();
 
-  // Overall yearly limit: one decision, applied to every plan column.
+  // Overall annual limit: one decision, applied to every plan column.
   await grid.getByRole("row", { name: /Overall annual limit/ }).getByRole("button").first().click();
   await expect(grid.getByRole("radio", { name: "Annual amount" })).toBeChecked();
   await grid.getByRole("spinbutton", { name: "Limit (S$)" }).fill("2500");

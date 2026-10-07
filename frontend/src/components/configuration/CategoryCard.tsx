@@ -109,7 +109,6 @@ export function CategoryCard({
   hasDependants,
   count,
   countsError = false,
-  insuredEntities = [],
   onEditRule,
   assignmentOnly = false,
 }: {
@@ -123,10 +122,6 @@ export function CategoryCard({
   // True when the member-counts query failed — shows "Count unavailable"
   // instead of a perpetual "Calculating…".
   countsError?: boolean;
-  // The legal entities gating this category, already resolved by the parent in
-  // the matcher's precedence (product-level field, else the slip's own value).
-  // Empty = covers every entity.
-  insuredEntities?: string[];
   onEditRule: () => void;
   assignmentOnly?: boolean;
 }) {
@@ -137,6 +132,7 @@ export function CategoryCard({
   const [showDelete, setShowDelete] = useState(false);
 
   const assignments = (category.plan_assignments ?? {}) as PlanAssignment;
+  const entityGate = category.entity_gate ?? null;
 
   // Local field state so typing is smooth and concurrent field edits compose.
   // The parent remounts this card (its key includes updated_at) whenever the
@@ -556,19 +552,26 @@ export function CategoryCard({
               Dependant option
             </Badge>
           )}
-          {/* Multi-entity products (WICA per-subsidiary blocks): which legal
-              entities this category covers. Click to edit — this is a real
-              matching gate, so it has to agree with the roster's Entity value. */}
-          {/* Read-only: entities are chosen ONCE per product on the setup
-              header ("Entities covered") and gate every category. Shown here so
-              an active restriction is visible where the categories are. */}
-          {insuredEntities.length > 0 && (
+          {/* Read-only: the effective entity gate exactly as matching applies
+              it — the product's "Entities covered" intersected with this
+              category's own insured — so an active restriction is visible
+              where the categories are. */}
+          {entityGate && entityGate.length > 0 && (
             <Badge
               variant="outline"
               className="max-w-64 truncate text-2xs"
-              title={`Only employees of ${insuredEntities.join(", ")} match this category`}
+              title={`Only employees of ${entityGate.join(", ")} match this category`}
             >
-              {insuredEntities.join(", ")}
+              {entityGate.join(", ")}
+            </Badge>
+          )}
+          {entityGate && entityGate.length === 0 && (
+            <Badge
+              variant="error"
+              className="text-2xs"
+              title="The product's entities and this category's insured entities don't overlap, so no employee can match this category"
+            >
+              No entity overlap
             </Badge>
           )}
         </div>

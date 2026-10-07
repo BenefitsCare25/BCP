@@ -26,7 +26,7 @@ from app.core.clock import today as business_today  # noqa: E402
 from app.db.base import Base  # noqa: E402
 from app.db.session import SessionLocal, engine  # noqa: E402
 from app.main import app  # noqa: E402
-from app.models import Dependant, Employee  # noqa: E402
+from app.models import AuditLog, Dependant, Employee  # noqa: E402
 from app.models.dependant import DEPENDANT_STATUS_TERMINATED  # noqa: E402
 from app.models.employee import EMPLOYEE_STATUS_TERMINATED  # noqa: E402
 from scripts.seed_demo import seed  # noqa: E402
@@ -369,6 +369,7 @@ def test_row_without_identifier_is_flagged(client: TestClient) -> None:
     )).json()
     assert body["counts"]["additions"] == 0
     assert any("No Staff ID or NRIC" in i["message"] for i in body["issues"])
+    assert body["counts"]["dropped_rows"] == 1
 
 
 def test_rows_the_parser_drops_are_counted(client: TestClient) -> None:
@@ -582,6 +583,54 @@ def test_dropped_rows_block_the_termination_opt_in(client: TestClient) -> None:
     ])).json()
     assert body["counts"]["dropped_rows"] == 1
     assert body["counts"]["missing"] > 0
+
+
+def test_whitespace_staff_id_counts_as_a_dropped_row(client: TestClient) -> None:
+    py = _py(client)
+    body = _preview(client, py, _listing([
+        ["   ", "Blank Id", "", "1990-01-01", "Executive", ""],
+        ROSTER[0],
+    ])).json()
+    assert body["counts"]["dropped_rows"] == 1
+
+
+def _roster_snapshot() -> tuple[list[tuple[str, str, str]], int]:
+    db = SessionLocal()
+    try:
+        employees = sorted(
+            (e.id, e.staff_id, e.status)
+            for e in db.execute(select(Employee)).scalars()
+        )
+        audits = len(db.execute(select(AuditLog)).scalars().all())
+        return employees, audits
+    finally:
+        db.close()
+
+
+def test_apply_refuses_termination_when_rows_were_dropped(client: TestClient) -> None:
+    """The sheet withholding the tick is not the guard — the server is. Apply
+    recomputes the dropped rows from the file and refuses before any write."""
+    py = _py(client)
+    content = _listing([
+        ["", "No Staff Id", "", "1990-01-01", "Executive", ""],
+        ["DROP-NEW", "Would Be Added", "", "1990-01-01", "Executive", ""],
+        ROSTER[0],
+    ])
+    preview = _preview(client, py, content).json()
+    assert preview["counts"]["dropped_rows"] == 1
+    assert preview["counts"]["missing"] > 0
+    before = _roster_snapshot()
+
+    res = client.post(
+        f"/api/v1/policy-years/{py}/adc/apply",
+        files={"file": ("listing.xlsx", content, XLSX_MIME)},
+        data={"terminate_missing": "true", "missing_digest": preview["missing_digest"]},
+    )
+    assert res.status_code == 422, res.text
+    detail = res.json()["detail"]
+    assert detail["code"] == "termination_blocked_dropped_rows"
+    assert "1 row could not be read" in detail["message"]
+    assert _roster_snapshot() == before, "nothing may be written"
 
 
 # ── Round-trip fidelity, continued ──────────────────────────────────────────

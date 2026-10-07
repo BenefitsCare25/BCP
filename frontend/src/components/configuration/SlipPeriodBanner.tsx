@@ -3,6 +3,7 @@ import { CalendarClock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { usePolicyYears, useProductSetups } from "@/api/hooks";
 import { useSession } from "@/stores/session";
+import { requestSetupContextChange } from "@/stores/setupNavigation";
 import { formatPolicyRange, parsePeriodOfInsurance } from "@/lib/policy-year";
 import type { ProductSetup } from "@/types";
 
@@ -75,7 +76,7 @@ export function SlipPeriodBanner({ policyYearId }: { policyYearId: string }) {
         <Button
           size="sm"
           variant="outline"
-          onClick={() => setPolicyYear(matchingYear.id)}
+          onClick={() => requestSetupContextChange(() => setPolicyYear(matchingYear.id))}
         >
           Switch to {formatPolicyRange(matchingYear.start_date, matchingYear.end_date)}
         </Button>

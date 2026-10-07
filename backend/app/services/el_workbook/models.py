@@ -110,3 +110,6 @@ class ElWorkbook:
     layout: ElLayout
     employees: list[ElEmployee]
     issues: list[ElIssue]
+    # 1-based rows that hold a person's details but were not read as anyone:
+    # a dependant with no employee row, or a row with an ID but no name.
+    unread_rows: list[int] = field(default_factory=list)

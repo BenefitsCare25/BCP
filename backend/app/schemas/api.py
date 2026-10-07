@@ -460,6 +460,12 @@ class CategoryOut(_Base):
     modified_by: str | None
     created_at: datetime
     updated_at: datetime
+    # The effective insured-entity gate as matching applies it (product
+    # entities intersected with the category's own insured), as raw spellings.
+    # None = unrestricted (or not resolved by this endpoint); [] = the two
+    # sides are disjoint, so the category matches nobody. Only
+    # `/categories/grouped` resolves it.
+    entity_gate: list[str] | None = None
 
 
 class CategoryPatch(BaseModel):

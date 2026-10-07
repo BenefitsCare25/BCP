@@ -81,6 +81,7 @@ export function EmployeeListingSheet({
   const members = preview?.members;
   const counts = members?.counts ?? {};
   const missing = members?.missing ?? [];
+  const unreadable = counts.dropped_rows ?? 0;
   const productBlocks = preview?.layout.blocks.filter((b) => b.kind === "product") ?? [];
   const unresolved =
     preview?.labels.filter(
@@ -117,6 +118,24 @@ export function EmployeeListingSheet({
             )}
             {(counts.issues ?? 0) > 0 && <Badge variant="error">{counts.issues} issues</Badge>}
           </div>
+
+          {unreadable > 0 && (
+            // Rows the reader couldn't turn into a person — a dependant with no
+            // employee row, an ID with no name, an employee with neither Staff
+            // ID nor NRIC. Without this the file imports what it can and the
+            // rest vanishes.
+            <div className="flex items-start gap-2 rounded-md border border-warn/40 bg-warn-soft/40 p-2.5">
+              <AlertTriangle className="mt-0.5 size-4 shrink-0 text-warn" />
+              <p className="text-xs text-foreground">
+                <strong>
+                  {unreadable} row{unreadable === 1 ? "" : "s"} could not be read
+                </strong>{" "}
+                and {unreadable === 1 ? "is" : "are"} not included in these changes.
+                An employee row needs a name and a Staff ID or NRIC; a dependant row
+                needs its employee&apos;s row in the file.
+              </p>
+            </div>
+          )}
 
           {productBlocks.map((block) => {
             const chosen = mapping.block_products[String(block.index)] ?? [];
@@ -207,17 +226,27 @@ export function EmployeeListingSheet({
                 {missing.length.toLocaleString()} on the roster{" "}
                 {missing.length === 1 ? "is" : "are"} not in this listing.
               </p>
-              <label className="flex cursor-pointer items-start gap-2 text-sm">
-                <Checkbox
-                  checked={terminateMissing}
-                  onCheckedChange={(v) => onTerminateMissingChange(v === true)}
-                  className="mt-0.5"
-                />
-                <span className="text-foreground">
-                  Also terminate {missing.length === 1 ? "this person" : "these people"},
-                  effective today
-                </span>
-              </label>
+              {unreadable > 0 ? (
+                // Absence is only evidence when the whole file was read; the
+                // server refuses the opt-in too (termination_blocked_dropped_rows).
+                <p className="rounded-md border border-border bg-muted px-2.5 py-2 text-xs text-foreground">
+                  Terminating is unavailable while {unreadable} row
+                  {unreadable === 1 ? "" : "s"} could not be read — one of them may
+                  be one of these people. Fix the file and upload again.
+                </p>
+              ) : (
+                <label className="flex cursor-pointer items-start gap-2 text-sm">
+                  <Checkbox
+                    checked={terminateMissing}
+                    onCheckedChange={(v) => onTerminateMissingChange(v === true)}
+                    className="mt-0.5"
+                  />
+                  <span className="text-foreground">
+                    Also terminate {missing.length === 1 ? "this person" : "these people"},
+                    effective today
+                  </span>
+                </label>
+              )}
             </section>
           )}
 

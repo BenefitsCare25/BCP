@@ -15,6 +15,7 @@ import {
   unassignedColumns,
 } from "@/lib/sob";
 import { rowIssues, rowVisibility, type RowVisibility } from "@/lib/sobAttention";
+import { useMe } from "@/api/hooks";
 import { ColumnManager } from "./ColumnManager";
 import { SobRow } from "./SobRow";
 import { SobRowDetail } from "./SobRowDetail";
@@ -59,7 +60,12 @@ export function SobEditor({
   const usesAxis = columnAxis.length > 0;
 
   const unassigned = useMemo(() => unassignedColumns(sob), [sob]);
-  const issues = useMemo(() => rowIssues(sob.items, sob.columns), [sob.items, sob.columns]);
+  const { data: me } = useMe();
+  const canRemove = me?.role === "system_admin";
+  const issues = useMemo(
+    () => rowIssues(sob.items, sob.columns, canRemove),
+    [sob.items, sob.columns, canRemove],
+  );
   const visibility = useMemo(
     () => new Map<string, RowVisibility>(sob.items.map((item) => [item.uid, rowVisibility(item, sob.columns)])),
     [sob.items, sob.columns],

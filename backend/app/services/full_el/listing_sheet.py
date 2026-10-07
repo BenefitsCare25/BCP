@@ -18,6 +18,7 @@ from app.services.full_el.cells import (
     employee_value,
     needs_underwriting,
     number_text,
+    product_age_basis,
     product_value,
 )
 from app.services.full_el.context import ElContext
@@ -102,9 +103,17 @@ def _rate_cells(ctx: ElContext) -> dict[int, tuple[str, float]]:
     return out
 
 
-def _header_text(block: ElBlock, header: str, role: str, basis: str) -> str:
-    if role == "age" and block.kind in {"employee", "dependant"} and header.strip() == "Age":
-        return f"Age ({basis})"
+def _header_text(ctx: ElContext, index: int, header: str, role: str) -> str:
+    """Age headings name their basis; a product block only when it differs."""
+    if role != "age" or header.strip() != "Age":
+        return header
+    block = ctx.layout.blocks[index]
+    if block.kind in {"employee", "dependant"}:
+        return f"Age ({ctx.age_basis})"
+    bases = {product_age_basis(ctx.products[code], ctx)
+             for code in ctx.block_products.get(index, []) if code in ctx.products}
+    if len(bases) == 1 and bases != {ctx.age_basis}:
+        return f"Age ({bases.pop()})"
     return header
 
 
@@ -132,7 +141,7 @@ def write_listing(ws: Worksheet, ctx: ElContext, *, masked: bool) -> dict[str, A
     for letter_, rate in rate_cells.values():
         ws[f"{letter_}1"] = f"={number_text(rate)}/1000"
 
-    for block in layout.blocks:
+    for index, block in enumerate(layout.blocks):
         anchor = block.column("category") if block.kind == "product" else block.column("name")
         anchor = anchor or (block.columns[0] if block.columns else None)
         if anchor is not None:
@@ -140,7 +149,7 @@ def write_listing(ws: Worksheet, ctx: ElContext, *, masked: bool) -> dict[str, A
             ws[f"{anchor.letter}2"].font = bold
         for column in block.columns:
             cell = ws[f"{column.letter}3"]
-            cell.value = _header_text(block, column.header, column.role, ctx.age_basis)
+            cell.value = _header_text(ctx, index, column.header, column.role)
             cell.font, cell.alignment = bold, wrap
     for column in layout.trailing:
         cell = ws[f"{column.letter}3"]
@@ -164,7 +173,7 @@ def write_listing(ws: Worksheet, ctx: ElContext, *, masked: bool) -> dict[str, A
         for column in [*(emp_block.columns if emp_block else ()), *layout.trailing]:
             _put(ws, column.letter, row, column.role,
                  employee_value(column.role, column.letter, emp, ctx, row, refs, masked))
-        _write_covers(ws, ctx, covers, row, refs, rate_cells, uw, None)
+        _write_covers(ws, ctx, covers, row, refs, rate_cells, uw, None, attrs)
         row += 1
         for dep in ctx.dependants.get(emp.id, []):
             if dep_block is None:
@@ -182,7 +191,8 @@ def write_listing(ws: Worksheet, ctx: ElContext, *, masked: bool) -> dict[str, A
                 b: Cover(c.info, ctx.listed.get((f"D:{dep.id}", c.info.product.id)), None, [])
                 for b, c in covers.items() if dep in c.covered_dependants
             }
-            _write_covers(ws, ctx, dep_covers, row, refs, rate_cells, uw, dep)
+            _write_covers(ws, ctx, dep_covers, row, refs, rate_cells, uw, dep,
+                          dep.attribute_values or {})
             stats["dependants"] += 1
             row += 1
     stats["last_row"] = row - 1
@@ -199,6 +209,7 @@ def write_listing(ws: Worksheet, ctx: ElContext, *, masked: bool) -> dict[str, A
 def _write_covers(
     ws: Worksheet, ctx: ElContext, covers: dict[int, Cover], row: int, refs: Refs,
     rate_cells: dict[int, tuple[str, float]], uw: dict[int, bool], dependant: Any,
+    attrs: dict[str, Any],
 ) -> None:
     for index, cover in covers.items():
         block = ctx.layout.blocks[index]
@@ -208,7 +219,8 @@ def _write_covers(
         for column in block.columns:
             value = product_value(
                 column.role, block, letters, cover, ctx, row, refs,
-                dependant=dependant, rate_cell=rate_cell, uw=uw.get(index, False),
+                dependant=dependant, attrs=attrs, rate_cell=rate_cell,
+                uw=uw.get(index, False),
             )
             _put(ws, column.letter, row, column.role, value)
 

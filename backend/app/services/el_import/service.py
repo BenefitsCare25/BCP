@@ -3,8 +3,9 @@
 Preview reads the workbook, suggests block → product and listing wording →
 slip category decisions (reusing the company's reviewed mapping), diffs the
 members against the roster with the same movement engine as the listing
-template, and reports cover inconsistencies. Apply writes the members, records
-each person's listed cover per product and re-matches, in one transaction.
+template, and reports cover inconsistencies. Apply commits the members, listed
+cover, saved mapping and joiner rules together, then re-matches best-effort
+after the commit.
 """
 from __future__ import annotations
 
@@ -39,6 +40,7 @@ from app.services.adc import (
     apply_plan,
     evaluate_records,
     missing_digest,
+    refuse_blind_termination,
 )
 from app.services.el_import.checks import cover_checks
 from app.services.el_import.joiner_rules import (
@@ -58,7 +60,12 @@ from app.services.el_import.mapping import (
     suggest_block_products,
     suggest_labels,
 )
-from app.services.el_import.records import PII_ATTRIBUTES, ListingRecords, build_records
+from app.services.el_import.records import (
+    PII_ATTRIBUTES,
+    ListingRecords,
+    build_records,
+    unreadable_rows,
+)
 from app.services.el_import.underwriting import apply_listing_underwriting
 from app.services.el_workbook import ElCover, ElFormatError, ElLayout, ElWorkbook
 from app.services.el_workbook import read_employee_listing as read_workbook
@@ -235,7 +242,8 @@ def preview(
         db, policy_year_id, build_records(workbook, _known_attribute_ids(db, client_id))
     )
     plan, members = evaluate_records(
-        db, policy_year_id, client_id, records.employees, records.dependants
+        db, policy_year_id, client_id, records.employees, records.dependants,
+        dropped_rows=unreadable_rows(workbook),
     )
     members.missing_digest = missing_digest(plan)
     return ListingPreviewOut(
@@ -530,10 +538,15 @@ def apply(
     records = _with_sole_entity(
         db, policy_year_id, build_records(workbook, _known_attribute_ids(db, client_id))
     )
-    _ensure_attributes(db, client_id, records.attribute_ids)
+    # Planned (read-only, exactly as the preview did) before
+    # `_ensure_attributes`, the first write, so a blocked termination writes
+    # nothing. The planner adds rows that identify nobody to the reader's count.
     plan, _ = evaluate_records(
-        db, policy_year_id, client_id, records.employees, records.dependants
+        db, policy_year_id, client_id, records.employees, records.dependants,
+        dropped_rows=unreadable_rows(workbook),
     )
+    refuse_blind_termination(plan.dropped_rows, terminate_missing)
+    _ensure_attributes(db, client_id, records.attribute_ids)
     if terminate_missing and expected_missing_digest is not None and (
         missing_digest(plan) != expected_missing_digest
     ):

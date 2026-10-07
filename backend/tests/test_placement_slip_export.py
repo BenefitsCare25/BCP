@@ -970,3 +970,34 @@ def test_unassigned_sheet_and_audit(client: TestClient) -> None:
             .all()
         }
         assert {"placement-slip", "quotation-slip"} <= reports
+
+
+def test_insured_line_uses_the_effective_entity_gate() -> None:
+    """The Insured line names exactly the entities matching gates on: the
+    product's Entities intersected with each category's own insured — never
+    the product's list overriding a narrower category."""
+    from app.services.slip_export.workbook import _distinct_insured
+
+    def cat(insured: list[str] | None) -> Category:
+        return Category(
+            policy_year_id=PY_ID, display_name="x", raw_description="x",
+            plan_assignments={"insured": insured} if insured else {},
+        )
+
+    prod = Product(code="GTL", display_name="GTL", product_metadata=None)
+    narrow = cat(["Sub B Pte Ltd", "Sub C Pte Ltd"])
+    bare = cat(None)
+
+    # One side only: unchanged — the categories' names, or the product's.
+    assert _distinct_insured([narrow, bare], prod) == ["Sub B Pte Ltd", "Sub C Pte Ltd"]
+    prod.product_metadata = {"entities": ["Sub A Pte Ltd", "Sub B Pte. Ltd."]}
+    assert _distinct_insured([bare], prod) == ["Sub A Pte Ltd", "Sub B Pte. Ltd."]
+    assert _distinct_insured([], prod) == ["Sub A Pte Ltd", "Sub B Pte. Ltd."]
+
+    # Both sides: the intersection per category, unioned across categories.
+    assert _distinct_insured([narrow], prod) == ["Sub B Pte. Ltd."]
+    assert _distinct_insured([narrow, bare], prod) == ["Sub B Pte. Ltd.", "Sub A Pte Ltd"]
+
+    # Disjoint sides cover nobody, so name nobody.
+    prod.product_metadata = {"entities": ["Unrelated Pte Ltd"]}
+    assert _distinct_insured([narrow], prod) == []

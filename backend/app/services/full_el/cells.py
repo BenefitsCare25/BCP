@@ -1,7 +1,8 @@
 """Cell values and live formulas for one person's row of the Employee Listing.
 
 Formulas follow the client's own workbook: ages from the date of birth against
-the reference date in row 1, sums insured from salary multiples, premiums from
+the reference date in row 1 (a product block uses its reviewed age basis and
+reference date where they differ), sums insured from salary multiples, premiums from
 the rate and the eligible sum insured, GST as a gross-up. Values the slip or
 the listing cannot establish stay blank (and are reported as gaps) rather
 than being guessed.
@@ -15,9 +16,9 @@ from typing import Any
 from app.models import Dependant, Employee
 from app.models.employee_listing import ListingAssignment
 from app.services.el_workbook import ElBlock
-from app.services.full_el.context import CategoryInfo, ElContext
+from app.services.full_el.context import CategoryInfo, ElContext, ProductInfo
 from app.services.insurer_reports import safe_cell
-from app.services.roster_attributes import mask_nric
+from app.services.roster_attributes import mask_nric, roster_date
 
 DATE_ROLES = {"date_of_birth", "date_of_hire", "last_day_of_service", "mu_letter_member",
               "mu_letter_insurer", "acceptance_date", "retrenchment_start", "retrenchment_end",
@@ -95,6 +96,41 @@ def age_formula(dob_col: str | None, row: int, reference: str | None, basis: str
     # dependant born after the benefit year started.
     dob = f"{dob_col}{row}"
     return f'=IF(OR({dob}="",{dob}>{reference}),"",DATEDIF({dob},{reference},"y"){plus})'
+
+
+def _date_literal(value: date) -> str:
+    return f"DATE({value.year},{value.month},{value.day})"
+
+
+def product_age_basis(product: ProductInfo, ctx: ElContext) -> str:
+    return product.rules.age_basis or ctx.age_basis
+
+
+def _age_reference(
+    product: ProductInfo, ctx: ElContext, refs: Refs, attrs: dict[str, Any]
+) -> str | None:
+    """The reviewed age reference date as a formula operand (row 1 = year start)."""
+    rule = product.rules.age_reference
+    if rule == "Member effective date":
+        effective = roster_date(attrs.get("effective_date"))
+        return _date_literal(effective) if isinstance(effective, date) else None
+    start = product.period[0]
+    if rule == "Product cover start" and start and start != ctx.reference_date:
+        return _date_literal(start)
+    return refs.reference
+
+
+def product_age(
+    product: ProductInfo, ctx: ElContext, row: int, refs: Refs,
+    attrs: dict[str, Any], dependant: bool,
+) -> str | None:
+    """The member's age under this product's reviewed basis and reference date."""
+    basis = product_age_basis(product, ctx)
+    reference = _age_reference(product, ctx, refs, attrs)
+    age_col = refs.dep_age if dependant else refs.age
+    if age_col and basis == ctx.age_basis and reference == refs.reference:
+        return f"={age_col}{row}"
+    return age_formula(refs.dep_dob if dependant else refs.dob, row, reference, basis)
 
 
 def employee_value(
@@ -190,6 +226,7 @@ def product_value(
     refs: Refs,
     *,
     dependant: Dependant | None,
+    attrs: dict[str, Any],
     rate_cell: str | None,
     uw: bool,
 ) -> Any:
@@ -199,8 +236,7 @@ def product_value(
     if role == "admin_type":
         return _admin(cover, ctx, uw and dependant is None)
     if role == "age":
-        age_col = refs.dep_age if dependant is not None else refs.age
-        return f"={age_col}{row}" if age_col else None
+        return product_age(product, ctx, row, refs, attrs, dependant is not None)
     if role == "category":
         return _plain(cover.assignment.listed_category if cover.assignment and
                       cover.assignment.listed_category else info.label)

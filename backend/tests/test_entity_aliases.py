@@ -20,7 +20,7 @@ from app.core.auth import (
 )
 from app.db.session import SessionLocal
 from app.main import app
-from app.models import Category, Employee, EntityAlias, PolicyYear
+from app.models import Category, Employee, EntityAlias, PolicyYear, Product
 from app.models.category import CategoryStatus, SourceKind
 from app.models.policy_year import PolicyYearStatus
 from app.services.entity_vocab import entity_vocabulary
@@ -297,3 +297,127 @@ def test_vocab_reconciled_with_multi_entity_alias() -> None:
         assert stm_row.count == 2
         assert not [k for k in vocab.known if k.value in {STM_AMK, STM_TPY}]
         db.rollback()
+
+
+def test_vocab_claims_only_the_product_category_intersection() -> None:
+    """The panel claims exactly what matching gates on: the product's Entities
+    INTERSECTED with each category's insured. A product entity the category
+    excludes stays unclaimed — "product wins" would mark it claimed while
+    matching silently drops everyone employed by it."""
+    with SessionLocal() as db:
+        py = PolicyYear(
+            id="stm-py-intersect",
+            client_id=DEMO_CLIENT_ID,
+            year=2033,
+            start_date=date(2033, 1, 1),
+            end_date=date(2033, 12, 31),
+            status=PolicyYearStatus.draft,
+        )
+        db.add(py)
+        db.add(
+            Product(
+                id="stm-prod-intersect",
+                client_id=DEMO_CLIENT_ID,
+                code="STMGTL",
+                display_name="STM GTL",
+                product_metadata={"entities": [STM_AMK, STM_TPY]},
+            )
+        )
+        db.flush()
+        db.add(
+            Category(
+                id="stm-intersect-cat",
+                policy_year_id=py.id,
+                product_id="stm-prod-intersect",
+                priority=0,
+                display_name="All Employees",
+                raw_description="All Employees",
+                source=SourceKind.system_generated.value,
+                status=CategoryStatus.confirmed.value,
+                human_modified=False,
+                plan_assignments={"insured": [STM_AMK, "Other Co Pte Ltd"]},
+            )
+        )
+        for i, entity in enumerate((STM_AMK, STM_TPY, "Other Co Pte Ltd")):
+            db.add(
+                Employee(
+                    id=f"stm-intersect-emp-{i}",
+                    client_id=DEMO_CLIENT_ID,
+                    policy_year_id=py.id,
+                    staff_id=f"STMI{i}",
+                    employee_name=f"Person {i}",
+                    attribute_values={"entity": entity},
+                    derived_attribute_values={},
+                    source="csv_import",
+                    status="active",
+                )
+            )
+        db.flush()
+
+        vocab = entity_vocabulary(db, py)
+        claimed = {r.value: r.claimed for r in vocab.roster}
+        assert claimed == {STM_AMK: True, STM_TPY: False, "Other Co Pte Ltd": False}
+        db.rollback()
+
+
+def test_grouped_categories_report_the_effective_gate(client: TestClient) -> None:
+    """The category badge reads `entity_gate` from /categories/grouped: the
+    intersection as raw spellings, None when unrestricted, [] when disjoint."""
+    py_id, prod_id = "stm-py-gate-api", "stm-prod-gate-api"
+    cats = {
+        "stm-gate-narrow": [STM_AMK, "Other Co Pte Ltd"],
+        "stm-gate-bare": None,
+        "stm-gate-disjoint": ["Other Co Pte Ltd"],
+    }
+    with SessionLocal() as db:
+        db.add(
+            PolicyYear(
+                id=py_id,
+                client_id=DEMO_CLIENT_ID,
+                year=2034,
+                start_date=date(2034, 1, 1),
+                end_date=date(2034, 12, 31),
+                status=PolicyYearStatus.draft,
+            )
+        )
+        db.add(
+            Product(
+                id=prod_id,
+                client_id=DEMO_CLIENT_ID,
+                code="STMGATE",
+                display_name="STM Gate",
+                product_metadata={"entities": [STM_AMK, STM_TPY]},
+            )
+        )
+        db.flush()
+        for priority, (cid, insured) in enumerate(cats.items()):
+            db.add(
+                Category(
+                    id=cid,
+                    policy_year_id=py_id,
+                    product_id=prod_id,
+                    priority=priority,
+                    display_name=cid,
+                    raw_description=cid,
+                    source=SourceKind.system_generated.value,
+                    status=CategoryStatus.confirmed.value,
+                    human_modified=False,
+                    plan_assignments={"insured": insured} if insured else {},
+                )
+            )
+        db.commit()
+    try:
+        res = client.get(f"/api/v1/categories/grouped?policy_year_id={py_id}")
+        assert res.status_code == 200, res.text
+        gates = {c["id"]: c["entity_gate"] for g in res.json() for c in g["categories"]}
+        assert gates == {
+            "stm-gate-narrow": [STM_AMK],
+            "stm-gate-bare": [STM_AMK, STM_TPY],
+            "stm-gate-disjoint": [],
+        }
+    finally:
+        with SessionLocal() as db:
+            db.query(Category).filter(Category.policy_year_id == py_id).delete()
+            db.query(Product).filter(Product.id == prod_id).delete()
+            db.query(PolicyYear).filter(PolicyYear.id == py_id).delete()
+            db.commit()

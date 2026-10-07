@@ -1124,11 +1124,8 @@ export interface CoverageHistoryEntry {
 export interface CoverageHistory {
   employee_id: string;
   entries: CoverageHistoryEntry[];
-  /** Whether a window baseline exists — gates the 'Revert to baseline' control. */
+  /** Whether an enrolment window baseline exists for this employee. */
   has_baseline: boolean;
-  /** Whether that baseline lands anywhere other than the cohort default. False
-   *  means both revert actions do the same thing, so only one is offered. */
-  baseline_differs_from_default: boolean;
 }
 
 export interface CoverageChange {

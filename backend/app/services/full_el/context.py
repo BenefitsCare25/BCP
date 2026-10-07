@@ -25,7 +25,12 @@ from app.models.employee_listing import ElLayoutProfile, ListingAssignment
 from app.models.product_setup import ProductSetupStatus
 from app.models.product_term import DEFAULT_GST_RATE
 from app.services.el_import.mapping import normalize_label
-from app.services.el_report_rules import explicit_age_basis, positive_number, source_maximum
+from app.services.el_report_rules import (
+    ReportRules,
+    positive_number,
+    reviewed_si_caps,
+    source_maximum,
+)
 from app.services.el_workbook import ElLayout
 from app.services.eligibility_mapping import category_signature
 from app.services.full_el.layout import default_layout, layout_from_json
@@ -56,7 +61,8 @@ class ProductInfo:
     eligibility: dict[str, Any]
     period: tuple[date | None, date | None]
     gst_factor: float | None  # None = unknown
-    max_si: float | None
+    max_si: float | None  # the reviewed cap shared with listings, plans and flex
+    rules: ReportRules  # reviewed Full EL rules; slip wording only where unset
     nel_amount: float | None
     nel_age: int | None
     confirmed: bool
@@ -143,15 +149,15 @@ def load_context(
         label_map = {}
 
     infos: dict[str, ProductInfo] = {}
-    age_bases: set[str] = set()
+    caps = reviewed_si_caps(db, year.id)
+    gaps: list[tuple[str, str, str]] = []
     for code, product in products.items():
         setup = setups.get(code.upper())
         answers = setup.answers if setup and isinstance(setup.answers, dict) else {}
         header = answers.get("header") or {}
         eligibility = answers.get("eligibility") or {}
         term = terms.get(product.id)
-        if basis := explicit_age_basis(str(eligibility.get("eligibility") or "")):
-            age_bases.add(basis)
+        rules = ReportRules.from_answers(answers)
         infos[code] = ProductInfo(
             product=product,
             insurer=str(header.get("insurer") or product.insurer or ""),
@@ -161,13 +167,15 @@ def load_context(
             eligibility=eligibility,
             period=(term.coverage_start if term else None, term.coverage_end if term else None),
             gst_factor=_gst_factor(term, answers),
-            max_si=source_maximum(answers),
+            max_si=caps.get(code.upper()),
+            rules=rules,
             nel_amount=(term.free_cover_limit if term and term.free_cover_limit else
                         _nel_amount(answers)),
             nel_age=(term.nel_age_limit if term and term.nel_age_limit else
                      _age(eligibility.get("age_limit_no_underwriting"))),
             confirmed=bool(setup and setup.status == ProductSetupStatus.confirmed),
         )
+        gaps.extend(_rule_gaps(infos[code], source_maximum(answers)))
 
     cat_infos = _category_infos(categories, by_id, block_products, label_map)
     employees = list(db.execute(
@@ -186,6 +194,7 @@ def load_context(
             select(ListingAssignment).where(ListingAssignment.policy_year_id == year.id)
         ).scalars()
     }
+    age_bases = {i.rules.age_basis for i in infos.values() if i.rules.age_basis}
     return ElContext(
         year=year, client=client, layout=layout, block_products=block_products,
         products=infos, categories=cat_infos, employees=employees, dependants=dependants,
@@ -193,7 +202,25 @@ def load_context(
         age_basis="ALB" if age_bases == {"ALB"} else "ANB",
         reference_date=year.start_date,
         listing_source=profile.source_filename if profile else None,
+        gaps=gaps,
     )
+
+
+def _rule_gaps(info: ProductInfo, slip_cap: float | None) -> list[tuple[str, str, str]]:
+    """Reviewed rules the listing cannot apply as written, and unreviewed caps."""
+    code, rules = info.product.code, info.rules
+    gaps = []
+    if info.max_si is None and slip_cap is not None:
+        gaps.append((code, f"Slip maximum SI {slip_cap:,.0f} not reviewed",
+                     "Sums insured are not capped; confirm the maximum in the product setup."))
+    if rules.age_reference == "Product cover start" and info.period[0] is None:
+        gaps.append((code, "Product cover start unknown",
+                     "Ages use the benefit-year start; set the cover start on the product terms."))
+    if rules.premium_si_basis == "Accepted SI":
+        gaps.append((code, "Premium SI basis is Accepted SI",
+                     "Premiums are calculated on the eligible SI; adjust members whose "
+                     "accepted SI is lower."))
+    return gaps
 
 
 def _nel_amount(answers: dict[str, Any]) -> float | None:

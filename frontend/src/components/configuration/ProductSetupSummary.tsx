@@ -308,7 +308,7 @@ function ClaimLimitSummary({
             <tbody>
               {hasOverall && (
                 <tr className="border-b border-border">
-                  <td className="px-3 py-2 text-sm font-medium text-foreground">Overall yearly limit</td>
+                  <td className="px-3 py-2 text-sm font-medium text-foreground">Overall annual limit</td>
                   {columns.map((col) => {
                     const setting = overallFor(col.id);
                     const { text, tone } = setting
