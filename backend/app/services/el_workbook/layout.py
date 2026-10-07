@@ -119,8 +119,9 @@ def _banner_kind(text: str) -> BlockKind:
 def _code_hint(banner: str, headers: list[str]) -> str | None:
     known = product_registry.known_codes()
     for token in re.findall(r"\(([A-Za-z]{2,6})\)", banner):
-        if token.upper() in known:
-            return token.upper()
+        code = str(token).upper()
+        if code in known:
+            return code
     for header in headers:
         match = re.match(r"\s*([A-Za-z]{2,6})\b", header)
         if match and match.group(1).upper() in known and "premium" in header.lower():

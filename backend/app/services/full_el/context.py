@@ -103,6 +103,8 @@ def load_context(
     db: Session, year: PolicyYear, *, employee_status: str = "all"
 ) -> ElContext:
     client = db.get(Client, year.client_id)
+    if client is None:
+        raise LookupError(f"Policy year {year.id} has no client record.")
     categories = list(db.execute(
         select(Category).where(Category.policy_year_id == year.id).order_by(Category.priority)
     ).scalars())

@@ -376,7 +376,8 @@ def _write_assignments(
         staff_id = text(listed.fields.get("staff_id")).lower()
         employee = by_staff.get(staff_id) if staff_id else None
         if employee is None:
-            employee = by_nric.get(employee_nric({"id_no": listed.fields.get("national_id")}))
+            nric = employee_nric({"id_no": listed.fields.get("national_id")})
+            employee = by_nric.get(nric) if nric else None
         if employee is None:
             continue
         own: dict[int, LabelSuggestion] = {}

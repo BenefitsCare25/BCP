@@ -7,7 +7,12 @@ function runtimeMonitor(page: Page) {
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(`pageerror: ${error.message}`));
   page.on("console", (message) => {
-    if (message.type() === "error") errors.push(`console: ${message.text()}`);
+    if (message.type() !== "error") return;
+    // The browser logs the Employee Listing reader's expected decline (422).
+    const declined =
+      message.text().startsWith("Failed to load resource") &&
+      message.location().url.includes("/employee-listing/preview");
+    if (!declined) errors.push(`console: ${message.text()}`);
   });
   page.on("response", (response) => {
     if (response.status() >= 500) {
@@ -128,6 +133,19 @@ test("unknown employee columns require mapping and a recalculated preview", asyn
   await installSession(page, client.id, year.id);
 
   const runtimeErrors = runtimeMonitor(page);
+  // The upload tries the company Employee Listing reader first; a flat roster
+  // is declined with this code and falls through to the template sync.
+  await page.route("**/api/v1/policy-years/*/employee-listing/preview", async (route) => {
+    await route.fulfill({
+      status: 422,
+      json: {
+        detail: {
+          code: "not_employee_listing",
+          message: "This file is not a company Employee Listing.",
+        },
+      },
+    });
+  });
   let previewCount = 0;
   await page.route("**/api/v1/policy-years/*/adc/preview", async (route) => {
     previewCount += 1;

@@ -62,9 +62,9 @@ def _covers(layout: ElLayout, row: list[Cell], row_no: int, issues: list[ElIssue
 def read_rows(layout: ElLayout, rows: list[list[Cell]]) -> ElWorkbook:
     employee_block, dependant_block = layout.employee, layout.dependant
     issues: list[ElIssue] = []
-    if employee_block is None or employee_block.column("name") is None:
+    emp_name = employee_block.column("name") if employee_block else None
+    if employee_block is None or emp_name is None:
         raise ElFormatError("The listing has no employee name column.")
-    emp_name = employee_block.column("name")
     emp_id = employee_block.column("staff_id")
     dep_name = dependant_block.column("name") if dependant_block else None
 

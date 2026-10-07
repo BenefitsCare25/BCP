@@ -6,6 +6,7 @@ either format in the wild.
 """
 from __future__ import annotations
 
+import zipfile
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
@@ -62,6 +63,10 @@ class Sheet:
     merged_ranges: tuple[tuple[int, int, int, int], ...] = ()
 
 
+class UnreadableWorkbook(ValueError):
+    """The upload is not a readable .xlsx/.xls workbook."""
+
+
 class Workbook(Protocol):
     @property
     def sheet_names(self) -> list[str]: ...
@@ -81,12 +86,23 @@ def open_workbook(
     """Open a workbook. Always use as a context manager so file handles release
     on Windows before the caller tries to delete the source file.
     """
+    from openpyxl.utils.exceptions import InvalidFileException
+    from xlrd import XLRDError
+
     path = Path(path)
     suffix = path.suffix.lower()
-    if suffix == ".xls":
-        return _XlrdWorkbook(path)
-    if suffix in {".xlsx", ".xlsm"}:
-        return _OpenpyxlWorkbook(path, include_merged_ranges=include_merged_ranges)
+    try:
+        if suffix == ".xls":
+            return _XlrdWorkbook(path)
+        if suffix in {".xlsx", ".xlsm"}:
+            return _OpenpyxlWorkbook(path, include_merged_ranges=include_merged_ranges)
+    except (zipfile.BadZipFile, InvalidFileException, XLRDError, KeyError) as exc:
+        # A corrupt file, or another format renamed to .xlsx/.xls. Surfaced as a
+        # ValueError so upload endpoints answer 422 rather than 500.
+        raise UnreadableWorkbook(
+            "The file could not be read as an Excel workbook. "
+            "Open it in Excel, save it as .xlsx and upload it again."
+        ) from exc
     raise ValueError(f"Unsupported file extension: {suffix}")
 
 

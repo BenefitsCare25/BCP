@@ -118,8 +118,10 @@ def employee_value(
         return _date(attrs.get(_EMPLOYEE_ATTRS.get(role, role)))
     if role == "salary":
         number = attrs.get("salary")
+        if number is None or number == "":
+            return None
         try:
-            return float(number) if number not in (None, "") else None
+            return float(number)
         except (TypeError, ValueError):
             return _plain(number)
     attr = _EMPLOYEE_ATTRS.get(role)
@@ -166,6 +168,7 @@ def needs_underwriting(cover: Cover, ctx: ElContext, salary: float | None,
 
 
 def eligible_amount(info: CategoryInfo, salary: float | None, cap: float | None) -> float | None:
+    amount: float | None
     if info.salary_multiple is not None:
         if salary is None:
             return None

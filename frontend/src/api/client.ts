@@ -122,11 +122,12 @@ function uploadError(text: string, statusText: string, status: number): Error {
     ) {
       return new PeriodMismatchError(detail as PeriodMismatchDetail);
     }
-    if (detail !== undefined) return new Error(String(detail));
   } catch {
-    // not JSON — fall through to raw text
+    // not JSON — errorFromText keeps the raw text
   }
-  return new Error(text || statusText);
+  // Keeps the status and any coded `detail` ({code, message}) so callers can
+  // branch on errorCode(), and never renders an object detail as "[object Object]".
+  return errorFromText(status, text, statusText);
 }
 
 async function authHeader(): Promise<Record<string, string>> {

@@ -122,6 +122,9 @@ interface PreviewArgs {
 /** Read a company Employee Listing and suggest its mapping. No mutation. */
 export function useEmployeeListingPreview() {
   return useMutation({
+    // The caller owns every outcome: "not_employee_listing" is the routine
+    // hand-off to the template sync, not a failure to report.
+    meta: { localErrorHandling: true },
     mutationFn: ({ file, policyYearId, mapping }: PreviewArgs) => {
       const fd = new FormData();
       fd.append("file", file);

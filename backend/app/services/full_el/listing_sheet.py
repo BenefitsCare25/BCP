@@ -171,10 +171,10 @@ def write_listing(ws: Worksheet, ctx: ElContext, *, masked: bool) -> dict[str, A
                 break
             # A dependant row repeats the staff ID and name to link to its employee.
             for role in ("staff_id", "name"):
-                column = emp_block.column(role) if emp_block else None
-                if column is not None:
-                    _put(ws, column.letter, row, role,
-                         employee_value(role, column.letter, emp, ctx, row, refs, masked))
+                link = emp_block.column(role) if emp_block else None
+                if link is not None:
+                    _put(ws, link.letter, row, role,
+                         employee_value(role, link.letter, emp, ctx, row, refs, masked))
             for column in dep_block.columns:
                 _put(ws, column.letter, row, column.role,
                      dependant_value(column.role, dep, ctx, row, refs, masked))

@@ -177,6 +177,7 @@ def category_options(
             signature=category_signature(c.raw_description or c.display_name),
         )
         for c in rows
+        if c.product_id is not None
     ]
 
 

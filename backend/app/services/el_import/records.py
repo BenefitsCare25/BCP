@@ -175,7 +175,7 @@ def _dependant_records(
             if value in (None, "") or _masked(attr_id, value):
                 continue
             if role == "relationship":
-                value = value.capitalize()
+                value = str(value).capitalize()
             attrs[attr_id] = _value(attr_id, value)
         if staff_id:
             attrs["employee_staff_id"] = staff_id

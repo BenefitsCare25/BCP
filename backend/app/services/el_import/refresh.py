@@ -9,6 +9,8 @@ re-linked cover — no listing re-upload needed.
 """
 from __future__ import annotations
 
+from typing import Any
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -82,7 +84,7 @@ def refresh_listing_links(db: Session, client_id: str, policy_year_id: str) -> t
         if a.dependant_id is None and a.employee_id in employees:
             listed.setdefault(a.employee_id, {})[codes.get(a.product_id, "")] = a.category_id
     block_codes = {c for codes_ in (profile.block_products or {}).values() for c in codes_}
-    rows: dict[str, list[tuple[str, dict, str | None]]] = {}
+    rows: dict[str, list[tuple[str, dict[str, Any], str | None]]] = {}
     for code in sorted(block_codes & set(codes.values())):
         rows[code] = [
             (employees[e].staff_id or "", employees[e].attribute_values or {},

@@ -119,6 +119,9 @@ def write_system_category(ws: Worksheet, ctx: ElContext) -> bool:
 
 
 def write_headcount(ws: Worksheet, ctx: ElContext, last_row: int) -> None:
+    def rng(letter: str) -> str:
+        return f"'{LISTING}'!${letter}${FIRST_ROW}:${letter}${max(last_row, FIRST_ROW)}"
+
     layout = ctx.layout
     dep_name = layout.dependant.column("name") if layout.dependant else None
     row = 1
@@ -135,7 +138,6 @@ def write_headcount(ws: Worksheet, ctx: ElContext, last_row: int) -> None:
         for col, title in enumerate(titles, start=1):
             ws.cell(row, col, title).font = _BOLD
         row += 1
-        rng = lambda col: f"'{LISTING}'!${col}${FIRST_ROW}:${col}${max(last_row, FIRST_ROW)}"  # noqa: E731
         first = row
         for label, info in _block_labels(ctx, index):
             crit = f'"{label.replace(chr(34), chr(34) * 2)}"'
@@ -164,8 +166,8 @@ def write_headcount(ws: Worksheet, ctx: ElContext, last_row: int) -> None:
             total.font = _BOLD
             total.number_format = "#,##0" if col < 6 else "#,##0.00"
         row += 2
-    for col, width in zip("ABCDEFGH", (60, 14, 28, 16, 16, 18, 16, 18), strict=True):
-        ws.column_dimensions[col].width = width
+    for letter, width in zip("ABCDEFGH", (60, 14, 28, 16, 16, 18, 16, 18), strict=True):
+        ws.column_dimensions[letter].width = width
 
 
 def setup_gaps(ctx: ElContext, stats: dict[str, Any]) -> list[tuple[str, str, str]]:
@@ -177,12 +179,11 @@ def setup_gaps(ctx: ElContext, stats: dict[str, Any]) -> list[tuple[str, str, st
         if info.gst_factor is None:
             gaps.append((code, "GST unknown",
                          "Premium with GST is left blank; set GST on the product terms."))
-    for info in ctx.categories.values():
-        if info.rate_basis == "earnings_based":
+    for cat in ctx.categories.values():
+        if cat.rate_basis == "earnings_based":
             continue
-        priced = info.rate or info.tiers
-        if not priced:
-            gaps.append((info.product.code, f"No rate: {info.category.display_name}",
+        if not (cat.rate or cat.tiers):
+            gaps.append((cat.product.code, f"No rate: {cat.category.display_name}",
                          "Premium is left blank; enter the rate in the product setup."))
     unmatched = sum(1 for e in ctx.employees if not e.matched_categories)
     if unmatched:
@@ -207,5 +208,5 @@ def write_gaps(ws: Worksheet, gaps: list[tuple[str, str, str]]) -> None:
         ws.cell(row, 1, safe_cell(product))
         ws.cell(row, 2, safe_cell(finding))
         ws.cell(row, 3, safe_cell(action)).alignment = _WRAP
-    for col, width in zip("ABC", (16, 50, 80), strict=True):
-        ws.column_dimensions[col].width = width
+    for letter, width in zip("ABC", (16, 50, 80), strict=True):
+        ws.column_dimensions[letter].width = width
