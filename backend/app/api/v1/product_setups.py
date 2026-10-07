@@ -709,6 +709,13 @@ def discard_setup(
     setup = _find_setup(db, policy_year_id, product_code)
     if setup is None:
         return None
+    if setup.status == ProductSetupStatus.confirmed and setup.materialized_product_id:
+        from app.services.el_report_rules import apply_report_rules
+
+        apply_report_rules(
+            db, policy_year_id, setup.materialized_product_id, setup.answers,
+            preserve_existing=True,
+        )
     db.delete(setup)
     write_audit(
         db, user, action="discard_setup_draft", entity_type="product_setup",
@@ -1052,6 +1059,9 @@ def confirm_setup(
         setup.confirmed_at = datetime.now(UTC)
         setup.confirmed_by = user.user_id
         setup.materialized_product_id = product.id
+        from app.services.el_report_rules import apply_report_rules
+
+        apply_report_rules(db, policy_year_id, product.id, setup.answers)
         # Applied patches must not be replayed over later operational term edits.
         setup.answers = {**setup.answers, "policy_terms": {}}
         write_audit(
@@ -1293,6 +1303,13 @@ def _upsert_draft(
         if current_utc != expected_utc:
             raise _stale_setup(
                 "This setup was updated by another user. Reload the latest version before saving."
+            )
+        if setup.status == ProductSetupStatus.confirmed and setup.materialized_product_id:
+            from app.services.el_report_rules import apply_report_rules
+
+            apply_report_rules(
+                db, policy_year_id, setup.materialized_product_id, setup.answers,
+                preserve_existing=True,
             )
         # Shallow-merge top-level sections so a partial body (e.g. a confirm that
         # only carries `plans`) can't silently wipe a previously-saved section

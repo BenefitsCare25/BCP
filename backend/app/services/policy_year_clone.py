@@ -37,8 +37,45 @@ from app.models.flex_pricing import FlexPricing
 from app.models.flex_scheme import FlexScheme, FlexSchemeStatus
 from app.models.leave_policy import LeavePolicy
 from app.models.plan import Plan
+from app.models.product import Product
 from app.models.product_setup import ProductSetup, ProductSetupStatus
 from app.models.product_term import ProductTerm
+from app.services.el_report_rules import reviewed_si_caps
+
+
+def _clone_product_terms(db: Session, source_id: str, target_id: str, client_id: str) -> int:
+    terms = list(db.scalars(select(ProductTerm).where(ProductTerm.policy_year_id == source_id)))
+    caps = reviewed_si_caps(db, source_id)
+    caps_by_id = {
+        pid: caps[code.upper()]
+        for pid, code in db.execute(select(Product.id, Product.code).where(
+            Product.client_id == client_id,
+        ))
+        if code.upper() in caps
+    }
+    copied = set()
+    for term in terms:
+        rules = copy.deepcopy(term.report_rules)
+        if rules is None and term.product_id in caps_by_id:
+            rules = {"max_sum_insured": caps_by_id[term.product_id]}
+        db.add(ProductTerm(
+            id=new_uuid(), policy_year_id=target_id, product_id=term.product_id,
+            coverage_start=None, coverage_end=None,
+            gst_included=term.gst_included, gst_rate=term.gst_rate,
+            free_cover_limit=term.free_cover_limit, nel_age_limit=term.nel_age_limit,
+            underwriting_required=term.underwriting_required,
+            policy_number=None, policy_number_mappings=[], report_rules=rules,
+            configured_fields=copy.deepcopy(term.configured_fields),
+        ))
+        copied.add(term.product_id)
+    # Older confirmed setups may have a cap but no ProductTerm row yet.
+    for pid in caps_by_id.keys() - copied:
+        db.add(ProductTerm(
+            id=new_uuid(), policy_year_id=target_id, product_id=pid,
+            policy_number_mappings=[], report_rules={"max_sum_insured": caps_by_id[pid]},
+        ))
+        copied.add(pid)
+    return len(copied)
 
 
 def _remap_price_tags(pricing: dict[str, Any], id_map: dict[str, str]) -> dict[str, Any]:
@@ -130,29 +167,7 @@ def clone_policy_year_config(
 
     # 3. Product terms — GST opinion + free-cover limit. Coverage dates and the
     #    insurer policy number are year-specific, so they are dropped.
-    terms = (
-        db.execute(select(ProductTerm).where(ProductTerm.policy_year_id == source_id))
-        .scalars()
-        .all()
-    )
-    for t in terms:
-        db.add(
-            ProductTerm(
-                id=new_uuid(),
-                policy_year_id=target_id,
-                product_id=t.product_id,
-                coverage_start=None,
-                coverage_end=None,
-                gst_included=t.gst_included,
-                gst_rate=t.gst_rate,
-                free_cover_limit=t.free_cover_limit,
-                nel_age_limit=t.nel_age_limit,
-                underwriting_required=t.underwriting_required,
-                policy_number=None,
-                policy_number_mappings=[],
-            )
-        )
-    counts["product_terms"] = len(terms)
+    counts["product_terms"] = _clone_product_terms(db, source_id, target_id, client_id)
 
     # 4. Product-setup drafts — the resumable guided-form answers.
     setups = (

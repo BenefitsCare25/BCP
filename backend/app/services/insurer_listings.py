@@ -52,7 +52,6 @@ from app.services.insurer_reports import (
 )
 from app.services.leave_pricing_resolver import leave_sell_eligible
 from app.services.plan_hydration import (
-    basis_amount,
     hydrate_plans,
     resolve_basis_amount,
 )
@@ -167,7 +166,10 @@ def product_blocks(db: Session, py: PolicyYear) -> list[ProductBlock]:
     )
 
     insurers = insurer_map(db, py.id, products.values())
+    from app.services.el_report_rules import reviewed_si_caps, with_si_cap
+
     terms = {term.product_id: term for term in resolve_terms(db, py)}
+    caps = reviewed_si_caps(db, py.id)
     blocks: dict[str, ProductBlock] = {}
     for pid, product in products.items():
         blocks[pid] = ProductBlock(
@@ -185,7 +187,7 @@ def product_blocks(db: Session, py: PolicyYear) -> list[ProductBlock]:
         if not cat.product_id or cat.product_id not in blocks:
             continue
         block = blocks[cat.product_id]
-        pa = cat.plan_assignments or {}
+        pa = with_si_cap(cat.plan_assignments or {}, caps.get(block.product.code.upper()))
         if pa.get("member_scope") == "dependant":
             text = f"{cat.display_name or ''} {cat.raw_description or ''}"
             role = classify_relationship(text)
@@ -193,7 +195,7 @@ def product_blocks(db: Session, py: PolicyYear) -> list[ProductBlock]:
                 m = _OPTION_MARKER.search(text)
                 block.role_options.setdefault(role, []).append(DepOption(
                     category_id=cat.id,
-                    basis=basis_amount(pa),
+                    basis=resolve_basis_amount(pa, None),
                     marker=m.group(1) if m else None,
                 ))
         elif pa.get("basis") not in (None, ""):

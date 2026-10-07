@@ -26,6 +26,7 @@ from sqlalchemy.orm import Session
 from app.models import Employee, Plan
 from app.models.category import Category
 from app.schemas.api import PlanFinancials
+from app.services.el_report_rules import reviewed_si_caps, with_si_cap
 from app.services.matching_engine import category_insured_entities
 from app.services.plan_hydration import (
     basis_amount,
@@ -252,6 +253,7 @@ def _sibling_tiers(
     siblings: list[Category],
     age: int | None = None,
     attrs: dict[str, Any] | None = None,
+    max_sum_insured: float | None = None,
 ) -> list[CohortTier]:
     """Tier objects for a cohort's sibling categories (baseline + voluntary).
 
@@ -275,7 +277,9 @@ def _sibling_tiers(
                 participation=_employee_mode(c),
                 direction="same" if is_base else _direction(baseline, c),
                 is_baseline=is_base,
-                financials=member_financials(c.plan_assignments, age, attrs)
+                financials=member_financials(
+                    with_si_cap(c.plan_assignments, max_sum_insured), age, attrs
+                )
                 if isinstance(c.plan_assignments, dict)
                 else None,
                 dependant_participation=(
@@ -331,6 +335,7 @@ def _build_tier_set(
     product_code: str,
     age: int | None = None,
     attrs: dict[str, Any] | None = None,
+    max_sum_insured: float | None = None,
 ) -> ProductTierSet:
     """Assemble one product's electable, direction-ordered tier set for a member."""
     key = cohort_key(baseline.raw_description)
@@ -348,7 +353,7 @@ def _build_tier_set(
         (_detail(c).get("dependant") for c in siblings if _detail(c).get("dependant")),
         None,
     )
-    tiers = _sibling_tiers(baseline, siblings, age, attrs)
+    tiers = _sibling_tiers(baseline, siblings, age, attrs, max_sum_insured)
     # Unclaimed product plans are a fallback for single-category-multi-plan
     # products (the slip expressed tiers as Plan rows). When the slip ALREADY
     # enumerated this cohort's alternatives as sibling categories, that
@@ -439,6 +444,7 @@ def electable_tiers_for_employee(
 
     # Member's age (as of the policy year start) drives voluntary life-tier premiums.
     age = member_age(db, employee)
+    caps = reviewed_si_caps(db, employee.policy_year_id)
 
     out: dict[str, ProductTierSet] = {}
     for baseline in baselines:
@@ -460,6 +466,7 @@ def electable_tiers_for_employee(
             # resolves to THEIR figure. Without it every such tier reported the
             # cohort's aggregate as the member's cover.
             employee.attribute_values,
+            caps.get(product_code.upper()),
         )
     out = _mark_current_tiers(db, employee, out)
     if not include_differences:
@@ -694,6 +701,7 @@ def list_product_tiers(
     ).all():
         plan_codes_by_pid.setdefault(pid_val, set()).add(str(code_val))
 
+    caps = reviewed_si_caps(db, policy_year_id)
     out: dict[str, ProductTierSet] = {}
     for pid, product_cats in by_product.items():
         product_code = code_by_pid.get(pid, product_cats[0].display_name)
@@ -706,7 +714,8 @@ def list_product_tiers(
         for members in _group_by_cohort(product_cats).values():
             baseline = _pick_baseline(members)
             ts = _build_tier_set(
-                baseline, product_cats, plan_codes_by_pid.get(pid, set()), product_code
+                baseline, product_cats, plan_codes_by_pid.get(pid, set()), product_code,
+                max_sum_insured=caps.get(product_code.upper()),
             )
             for t in ts.tiers:
                 k = tier_key(t.tier_category_id, t.plan_code)
@@ -746,6 +755,7 @@ class ProductTierIndex:
 
     sets: dict[str, ProductTierSet]
     categories: dict[str, Category]
+    max_sum_insured: float | None = None
 
     def plan_codes_for(self, baseline_category_id: str | None) -> set[str] | None:
         """Plan codes electable from that baseline, or None when the cohort is
@@ -822,6 +832,7 @@ def tier_index_for_product(
             )
         ).all()
     }
+    cap = reviewed_si_caps(db, policy_year_id).get(product_code.upper())
     sets: dict[str, ProductTierSet] = {}
     for cat in cats:
         # Dependant-scope categories price dependant cover standalone and are
@@ -829,8 +840,8 @@ def tier_index_for_product(
         # dependant pricing as an employee tier.
         if _is_dependant_scope(cat):
             continue
-        sets[cat.id] = _build_tier_set(cat, cats, plan_codes, product_code)
-    return ProductTierIndex(sets=sets, categories={c.id: c for c in cats})
+        sets[cat.id] = _build_tier_set(cat, cats, plan_codes, product_code, max_sum_insured=cap)
+    return ProductTierIndex(sets=sets, categories={c.id: c for c in cats}, max_sum_insured=cap)
 
 
 def _group_by_cohort(

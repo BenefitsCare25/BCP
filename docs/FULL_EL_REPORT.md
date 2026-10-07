@@ -33,6 +33,9 @@ a headcount administration header automatically.
 Setup confirmation fills missing NEL amount/age and explicit GST-exempt treatment
 from unambiguous saved source wording. It preserves existing terms and explicit
 edits/clears, uses the existing term-update audit and runs in the same transaction.
+Configured-field markers preserve those clears across later confirmations and
+placement-slip autofill. Pre-migration blank terms have unknown provenance and
+remain blank until a broker explicitly sets them; they are not silently refilled.
 This also repairs the old extraction case `200,000 or age next birthday 70` without
 interpreting the trailing digits of a monetary amount as an age.
 
@@ -40,6 +43,12 @@ Unconfirmed setup or category mapping withholds annual premiums. Rates for a
 different renewal are withheld. Unknown GST leaves gross premium blank. Missing
 prices never become zero or a complete total. Summary rows label known subtotals
 and show a complete gross total only when every premium unit is priced.
+
+The applied maximum SI lives on the product term separately from pending setup
+answers. Saving or discarding a draft retains the applied cap; confirmation changes
+it atomically. Hydration, enrolment offers, slip-derived prices, dependant cover and
+bulk previews share the cap, preserving stricter category limits. Renewal copies
+inherit applied caps with the other policy terms, including legacy confirmed setups.
 
 Premiums are annual, without proration. Family-tier/flat household premiums appear
 once on the employee row; linked medical dependants do not duplicate them. Coverage
@@ -53,6 +62,8 @@ new/renewal letter dates to the member and insurer. An individual annual premium
 requires explicit insurer confirmation and currency. It is invalidated for reporting
 when SI or the underwriting decision changes. Correspondence-only edits do not reconfirm the price or reset the
 decision date. Loading text is informational, never guessed into a numeric surcharge.
+The underwriting register uses the same confirmation check and leaves stale annual
+premium and currency cells blank. Full EL also checks the live coverage figures.
 
 The workbook shows recorded movement/lifecycle fields. It does not infer A/D/C
 against a previous Full EL. Existing insurer submission history remains the facility
@@ -60,13 +71,26 @@ for submission-to-submission movement comparison.
 
 ## Existing company data
 
-The sample workbooks are layout references, not pricing authority. The primary GAS
-context and the separately labelled mapping-review context are never merged by a
-report. WDNS is not present in the current shared local database. GAS draft setup,
+The sample workbooks are layout references, not pricing authority. The labelled GAS
+mapping-review company was removed from the shared local database at the user's
+request on 7 October 2026; its configuration was not merged into the primary GAS
+company. WDNS is not present in the current shared local database. GAS draft setup,
 missing rates/mappings and unretained original placement slips are exposed as gaps;
 the generator cannot manufacture the missing source data or approve the setup.
 
 ## Release and verification
+
+Review-fix migration `f0b2c4d6e8a0` adds nullable `product_terms.report_rules` and
+`configured_fields` in SQLite, PostgreSQL public and existing firm schemas. Apply
+it before deploying the fixes. Existing values are preserved; confirmed legacy caps
+remain readable and are snapshotted before draft edits. Roll back the application
+without dropping populated columns if a release must be reversed.
+
+Review-fix verification covered applied caps through draft edits/discard, pricing
+agreement, rollback, renewal, persistent clears, pending-term deduplication and
+stale SI/decision premiums in both exports. The migration passed repeat upgrade and
+downgrade/re-upgrade checks while preserving 5,000 synthetic rows. These checks used
+in-memory data, not real member or underwriting changes.
 
 Migration `e9a1b3c5d7f0` adds nullable `underwriting_cases.report_details` in SQLite,
 the PostgreSQL public schema and each existing firm schema. Apply it before the API

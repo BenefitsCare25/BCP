@@ -241,6 +241,7 @@ def member_figures(
     age: int | None,
     employee: Employee,
     gst_multiplier: float = 1.0,
+    max_sum_insured: float | None = None,
 ) -> MemberFigures:
     """Cover and premium for ONE member on one tier.
 
@@ -251,7 +252,9 @@ def member_figures(
     """
     if category is None or not isinstance(category.plan_assignments, dict):
         return MemberFigures(None, None, False)
-    pa = category.plan_assignments
+    from app.services.el_report_rules import with_si_cap
+
+    pa = with_si_cap(category.plan_assignments, max_sum_insured)
     quoted = pa.get("basis") is not None or pa.get("sum_insured") is not None
     fin = member_financials(pa, age, employee.attribute_values)
     if fin is None:

@@ -8,7 +8,12 @@ from typing import Any
 
 from app.models import Category, Dependant, Employee
 from app.models.underwriting_case import DECISION_LABELS, normalize_uw_status
-from app.services.el_report_rules import mapping, positive_number, validate_report_rules
+from app.services.el_report_rules import (
+    mapping,
+    positive_number,
+    validate_report_rules,
+    with_si_cap,
+)
 from app.services.flex_membership import classify_relationship
 from app.services.full_el_data import FullELData, ProductProfile, matched_category
 from app.services.insurer_listings import EmployeeCoverage, _dependant_amount
@@ -18,6 +23,7 @@ from app.services.policy_numbers import member_entity, resolve_policy_number
 from app.services.roster_attributes import REL_KEYS, anb_from_attrs, first_value, resolved_last_day
 from app.services.roster_attributes import roster_date as as_date
 from app.services.underwriting import report_uw_amounts
+from app.services.underwriting_premiums import premium_confirmation_is_current
 
 
 @dataclass
@@ -212,14 +218,7 @@ def _individual_price(data: FullELData, p: ProductProfile, member: Any, line: Me
         line.pricing = "Individual override requires a reviewed member / family premium basis"
     elif details.get("premium_currency") != p.rules.currency:
         line.pricing = "Individual premium currency differs from the product setup"
-    elif (
-        line.eligible is None
-        or details.get("premium_eligible_si") != line.eligible
-        or details.get("premium_accepted_si") != line.accepted
-        or case is None
-        or case.eligible_si != line.eligible
-        or details.get("premium_status") != normalize_uw_status(case.status)
-    ):
+    elif not premium_confirmation_is_current(case, eligible=line.eligible, accepted=line.accepted):
         line.pricing = "Reconfirm the premium after the SI or underwriting decision change"
     else:
         line.net = net
@@ -323,7 +322,7 @@ def member_line(
     pa = mapping(cat.plan_assignments) if cat else {}
     if p.reviewed and p.rules.max_sum_insured is not None and line.eligible is not None:
         line.eligible = min(line.eligible, p.rules.max_sum_insured)
-        pa = {**pa, "max_sum_insured": p.rules.max_sum_insured}
+        pa = with_si_cap(pa, p.rules.max_sum_insured)
     has_source_cap = (
         "maximum sum" in p.source_text or "maximum limit per insured person" in p.source_text
     )

@@ -23,7 +23,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.clock import today as business_today
-from app.models import Category, Dependant, Employee, FlexPricing, FlexScheme, PolicyYear
+from app.models import Category, Dependant, Employee, FlexPricing, FlexScheme, PolicyYear, Product
 from app.models.employee_plan_override import EmployeePlanOverride
 from app.models.enrollment_window import (
     EnrollmentWindow,
@@ -36,6 +36,7 @@ from app.schemas.api import PlanFinancials
 from app.services import flex_proration
 from app.services.cohort_tiers import first_category_per_product, tier_key
 from app.services.coverage_resolver import employee_category_defaults, load_overrides
+from app.services.el_report_rules import positive_number, reviewed_si_caps, with_si_cap
 from app.services.plan_hydration import (
     basis_amount,
     member_financials,
@@ -1184,6 +1185,14 @@ def dependant_option_role(text: str | None) -> str | None:
     return "spouse" if m.group(1).lower().startswith("spouse") else "child"
 
 
+def _dependant_basis(pa: dict[str, Any]) -> float | None:
+    amount = basis_amount(pa)
+    if amount is None:
+        amount = positive_number(pa.get("sum_insured"))
+    cap = positive_number(pa.get("max_sum_insured"))
+    return min(amount, cap) if amount is not None and cap is not None else amount
+
+
 def _dependant_option_spec(
     pa: dict[str, Any]
 ) -> float | dict[str, Any] | None:
@@ -1196,10 +1205,7 @@ def _dependant_option_spec(
     group SI must reduce via ``basis``."""
     if not isinstance(pa, dict):
         return None
-    amount = basis_amount(pa)
-    si = pa.get("sum_insured")
-    if amount is None and isinstance(si, (int, float)):
-        amount = float(si)
+    amount = _dependant_basis(pa)
     vol = pa.get("voluntary_rates")
     if isinstance(vol, list) and vol and amount is not None:
         return {"basis": amount, "voluntary_rates": [dict(b) for b in vol]}
@@ -1255,6 +1261,13 @@ def dependant_option_overlay(
     ]
     if not dep_cats:
         return {}
+    caps = reviewed_si_caps(db, policy_year_id)
+    caps_by_id = {
+        pid: caps.get(code.upper())
+        for pid, code in db.execute(select(Product.id, Product.code).where(
+            Product.id.in_({c.product_id for c in dep_cats if c.product_id is not None})
+        ))
+    }
     dep_ids = {c.id for c in dep_cats}
     emp_cats = [c for c in cats if c.id not in dep_ids]
 
@@ -1283,7 +1296,7 @@ def dependant_option_overlay(
         # Role rows (Spouse/Child) grouped for the sole-row rule.
         role_rows: dict[str, list[Category]] = {}
         for dc in p_deps:
-            pa = dc.plan_assignments or {}
+            pa = with_si_cap(dc.plan_assignments or {}, caps_by_id.get(pid))
             comp = _composition_amounts(pa)
             if comp:
                 # Rule 2: composition row → same-plan employee tiers.
@@ -1318,7 +1331,9 @@ def dependant_option_overlay(
         # covered dependant.
         for role, rows in role_rows.items():
             if len(rows) == 1:
-                spec = _dependant_option_spec(rows[0].plan_assignments or {})
+                spec = _dependant_option_spec(
+                    with_si_cap(rows[0].plan_assignments or {}, caps_by_id.get(pid))
+                )
                 if spec is None:
                     continue
                 for key in emp_keys_all:
@@ -1326,14 +1341,11 @@ def dependant_option_overlay(
                 continue
             choices = []
             for dc in rows:
-                pa = dc.plan_assignments or {}
+                pa = with_si_cap(dc.plan_assignments or {}, caps_by_id.get(pid))
                 spec = _dependant_option_spec(pa)
                 if spec is None:
                     continue
-                cover = basis_amount(pa)
-                si = pa.get("sum_insured")
-                if cover is None and isinstance(si, (int, float)):
-                    cover = float(si)
+                cover = _dependant_basis(pa)
                 choices.append({
                     "category_id": dc.id,
                     "label": (dc.raw_description or "").strip() or role.title(),

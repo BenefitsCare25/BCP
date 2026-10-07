@@ -766,6 +766,17 @@ def test_nel_autofill_fills_blanks_only() -> None:
     from app.services.product_terms import autofill_nel_terms
 
     with SessionLocal() as s:
+        term = s.execute(
+            select(ProductTerm).where(
+                ProductTerm.policy_year_id == PY_ID,
+                ProductTerm.product_id == LIF_PROD,
+            )
+        ).scalar_one()
+        # Earlier cases clear the age through the API. This case starts with
+        # an age that has never been configured, not that intentional clear.
+        term.nel_age_limit = None
+        term.configured_fields = ["free_cover_limit"]
+        s.flush()
         # LIF has FCL 50000 set manually and no age: amount must NOT be
         # overwritten, age fills in.
         assert autofill_nel_terms(s, PY_ID, LIF_PROD, 999999.0, 70) is True

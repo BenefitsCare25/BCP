@@ -73,6 +73,7 @@ from app.services.underwriting import (
     free_cover_limits,
     nel_age_limits,
 )
+from app.services.underwriting_premiums import premium_confirmation_is_current
 
 # Reminder counts include confirmed platform deliveries, never queued or failed
 # attempts. Historical off-platform correspondence is not included.
@@ -300,7 +301,13 @@ def build_underwriting_report(
             as_date(details.get(key)) if key.endswith("_date") else details.get(key)
             for _, key in REPORT_DETAIL_COLUMNS
         )
-        row.extend([details.get("annual_premium_net"), details.get("premium_currency")])
+        premium_current = premium_confirmation_is_current(
+            case, eligible=eligible, accepted=accepted
+        )
+        row.extend([
+            details.get("annual_premium_net") if premium_current else None,
+            details.get("premium_currency") if premium_current else None,
+        ])
         # Scan order: the household, then its dependants, then product — the
         # order a broker reads the manual file in.
         sort_key = (

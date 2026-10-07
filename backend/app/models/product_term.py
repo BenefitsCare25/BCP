@@ -84,6 +84,10 @@ class ProductTerm(Base, TimestampMixin):
     policy_number: Mapped[str | None] = mapped_column(String(64), nullable=True)
     # None retains a legacy scalar; [] explicitly records no assigned number.
     policy_number_mappings: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True)
+    # Applied rules survive pending setup edits and discarded drafts.
+    report_rules: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    # None is legacy/unknown; [] means no term field has been configured yet.
+    configured_fields: Mapped[list[str] | None] = mapped_column(JSON, nullable=True, default=list)
     # How long before an admission, and after a discharge, a consultation is
     # still claimable against it ("within 90 days prior / 100 days after" in the
     # policy wording). Drives the pre-/post-hospitalisation window check in

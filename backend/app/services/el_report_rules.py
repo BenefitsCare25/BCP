@@ -176,19 +176,53 @@ class ReportRules:
 def reviewed_si_caps(db: Any, policy_year_id: str) -> dict[str, float]:
     from sqlalchemy import select
 
-    from app.models import ProductSetup
+    from app.models import Product, ProductSetup, ProductTerm
 
     caps = {}
+    applied = set()
+    for code, rules in db.execute(
+        select(Product.code, ProductTerm.report_rules)
+        .join(ProductTerm, ProductTerm.product_id == Product.id)
+        .where(ProductTerm.policy_year_id == policy_year_id)
+    ):
+        if rules is not None:
+            applied.add(code.upper())
+            cap = positive_number(mapping(rules).get("max_sum_insured"))
+            if cap is not None:
+                caps[code.upper()] = cap
+    # Compatibility for confirmed setups predating applied-rule storage. Their
+    # current applied cap is snapshotted before the first subsequent draft save.
     for setup in db.scalars(
         select(ProductSetup).where(
             ProductSetup.policy_year_id == policy_year_id,
             ProductSetup.status == "confirmed",
         )
     ):
+        if setup.product_code.upper() in applied:
+            continue
         cap = ReportRules.from_answers(mapping(setup.answers)).max_sum_insured
         if cap is not None:
             caps[setup.product_code.upper()] = cap
     return caps
+
+
+def apply_report_rules(
+    db: Any, policy_year_id: str, product_id: str, answers: dict[str, Any],
+    *, preserve_existing: bool = False,
+) -> None:
+    from app.services.product_terms import _term_for_update
+
+    term = _term_for_update(db, policy_year_id, product_id)
+    if not preserve_existing or term.report_rules is None:
+        term.report_rules = {"max_sum_insured": ReportRules.from_answers(answers).max_sum_insured}
+        db.flush()
+
+
+def with_si_cap(assignments: dict[str, Any], cap: float | None) -> dict[str, Any]:
+    if cap is None:
+        return assignments
+    category_cap = positive_number(assignments.get("max_sum_insured"))
+    return {**assignments, "max_sum_insured": min(cap, category_cap) if category_cap else cap}
 
 
 def prefill_report_headers(answers: dict[str, Any]) -> dict[str, Any]:

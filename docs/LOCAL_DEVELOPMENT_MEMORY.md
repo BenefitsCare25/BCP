@@ -55,6 +55,22 @@ Local `.env` files, SQLite databases and `backend/var/` are excluded by both Doc
 
 ## Consolidation evidence
 
+On 7 October 2026, the user explicitly requested removal of GAS (local mapping
+review), STM (demo) and VDL (demo). Their exact company IDs were checked before one
+foreign-key-enforced deletion transaction. This removed 1,928 employees and three
+policy years across the three companies. Every company/year-scoped row count for
+the surviving companies was unchanged: GAS retains 1,926 employees, STM 4,806 and
+CDL 491. SQLite integrity returned OK and foreign-key checks were clear. Local
+audit entries record each deletion. No company data was merged and no database
+copy, backup or production deletion was performed. Historical consolidation counts
+below describe the earlier state, before this authorized cleanup.
+
+The same database is now at `f0b2c4d6e8a0`, adding applied report rules and
+configured-term markers. Frontend/API sessions still use this shared database;
+the company picker now lists only CDL, GAS and STM. The session endpoint returns
+no active company when the mock default refers to a deleted demo, allowing the
+normal company selection flow to continue.
+
 On 7 October 2026, the shared local database was brought to `e9a1b3c5d7f0`.
 This additive migration adds nullable underwriting correspondence and annual-premium
 details for the separate Full EL report. Existing row counts and foreign-key integrity

@@ -665,15 +665,17 @@ def _evaluate_change(
 
         age = employee_age(emp, flex.ref) if flex.ref else None
         gst = wctx.gst_multipliers.get(product.id, 1.0)
+        tier_index = wctx.tier_indexes.get(product.id)
+        cap = tier_index.max_sum_insured if tier_index else None
         before_fig = warn.member_figures(
             warn.target_category(wctx, product.id, base_cat, current.plan_code),
-            age, emp, gst,
+            age, emp, gst, cap,
         )
         after_fig = (
             warn.MemberFigures(None, None, False)
             if declined_after
             else warn.member_figures(
-                warn.target_category(wctx, product.id, base_cat, to_plan), age, emp, gst
+                warn.target_category(wctx, product.id, base_cat, to_plan), age, emp, gst, cap
             )
         )
         # A tier that quotes cover but will not reduce to THIS member is the

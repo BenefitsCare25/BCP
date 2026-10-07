@@ -51,6 +51,6 @@ def get_me(
         display_name=record.display_name if record else None,
         role=user.role,
         broker_firm_id=user.broker_firm_id,
-        active_client_id=user.client_id,
+        active_client_id=user.client_id if any(c.id == user.client_id for c in clients) else None,
         accessible_clients=[ClientSummary(id=c.id, name=c.name) for c in clients],
     )

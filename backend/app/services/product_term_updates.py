@@ -22,7 +22,12 @@ from app.services.policy_numbers import (
     source_numbers,
     validate_assignments,
 )
-from app.services.product_terms import term_window, uses_life_thresholds
+from app.services.product_terms import (
+    _term_for_update,
+    configured_term_fields,
+    term_window,
+    uses_life_thresholds,
+)
 from app.services.underwriting import refresh_underwriting_cases
 
 
@@ -65,11 +70,11 @@ def apply_source_term_defaults(
     source = source_policy_terms(answers)
     if not uses_life_thresholds(product):
         source = {key: value for key, value in source.items() if key == "gst_included"}
-    term = db.scalar(select(ProductTerm).where(
-        ProductTerm.policy_year_id == py.id, ProductTerm.product_id == product.id,
-    ))
+    term = _term_for_update(db, py.id, product.id)
+    configured = configured_term_fields(term)
     missing = {key: value for key, value in source.items()
-               if key not in explicit_fields and (term is None or getattr(term, key) is None)}
+               if key not in explicit_fields | configured
+               and getattr(term, key) is None}
     if missing:
         apply_product_term_update(db, py, product, ProductTermUpdate.model_validate(missing), user)
 
@@ -118,6 +123,9 @@ def apply_product_term_update(
         action = "set_product_term"
     else:
         action = "update_product_term"
+
+    configured = configured_term_fields(term)
+    term.configured_fields = sorted(configured | sent)
 
     # Partial update: apply ONLY the dimensions the caller actually sent, so a
     # GST-only body can't wipe the coverage period and a dates-only body can't

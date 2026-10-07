@@ -20,7 +20,7 @@ from app.models.category import Category
 from app.models.product import Product
 from app.schemas.api import MatchedPlan, PlanFinancials, VoluntaryRateBand
 from app.services.coverage_resolver import load_overrides, resolve_plan
-from app.services.el_report_rules import positive_number, reviewed_si_caps
+from app.services.el_report_rules import positive_number, reviewed_si_caps, with_si_cap
 from app.services.plan_labels import member_plan_label
 from app.services.product_terms import product_gst_multipliers
 from app.services.roster_attributes import age_from_attrs, band_for_age, first_value
@@ -179,7 +179,7 @@ def hydrate_plans(
             # into THIS member's sum insured instead of falling back to the
             # cohort aggregate.
             if fin_pa and pcode and pcode.upper() in caps:
-                fin_pa = {**fin_pa, "max_sum_insured": caps[pcode.upper()]}
+                fin_pa = with_si_cap(fin_pa, caps[pcode.upper()])
             fin = (
                 member_financials(fin_pa, emp_age, emp.attribute_values)
                 if fin_pa

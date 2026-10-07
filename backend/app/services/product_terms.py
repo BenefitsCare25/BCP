@@ -12,12 +12,21 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import inspect, select
 from sqlalchemy.orm import Session
 
 from app.models import Category, Plan, PolicyYear, Product, ProductTerm
 from app.models.product_term import DEFAULT_GST_RATE
 from app.services import product_registry
+
+SOURCE_DEFAULT_FIELDS = frozenset({"free_cover_limit", "nel_age_limit", "gst_included"})
+
+
+def configured_term_fields(term: ProductTerm) -> set[str]:
+    if term.configured_fields is not None:
+        return set(term.configured_fields)
+    # Pre-migration blanks may be deliberate clears. New rows have no edits yet.
+    return set(SOURCE_DEFAULT_FIELDS) if inspect(term).persistent else set()
 
 
 @dataclass(frozen=True)
@@ -256,13 +265,21 @@ def autofill_nel_terms(
     if nel_amount is None and nel_age is None:
         return False
     term = _term_for_update(db, policy_year_id, product_id)
+    configured = configured_term_fields(term)
     changed = False
-    if nel_amount is not None and term.free_cover_limit is None:
+    if (
+        nel_amount is not None and term.free_cover_limit is None
+        and "free_cover_limit" not in configured
+    ):
         term.free_cover_limit = float(nel_amount)
+        configured.add("free_cover_limit")
         changed = True
-    if nel_age is not None and term.nel_age_limit is None:
+    if nel_age is not None and term.nel_age_limit is None and "nel_age_limit" not in configured:
         term.nel_age_limit = int(nel_age)
+        configured.add("nel_age_limit")
         changed = True
+    if changed:
+        term.configured_fields = sorted(configured)
     return changed
 
 
