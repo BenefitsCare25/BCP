@@ -26,6 +26,12 @@ from app.models.client_ai_config import ClientAIConfig
 from app.models.dependant import Dependant
 from app.models.dual_coverage_decision import DualCoverageDecision
 from app.models.eligibility_mapping_profile import EligibilityMappingProfile
+from app.models.email_template import (
+    EmailBranding,
+    EmailPreparation,
+    EmailTemplate,
+    EmailTemplateVersion,
+)
 from app.models.employee import Employee
 from app.models.employee_plan_override import EmployeePlanOverride
 from app.models.enrollment import Enrollment, EnrollmentElection
@@ -89,6 +95,10 @@ __all__ = [
     "Dependant",
     "DualCoverageDecision",
     "EligibilityMappingProfile",
+    "EmailBranding",
+    "EmailPreparation",
+    "EmailTemplate",
+    "EmailTemplateVersion",
     "Employee",
     "EmployeeAttributeSchema",
     "EmployeePlanOverride",

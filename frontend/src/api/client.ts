@@ -212,7 +212,7 @@ export const api = {
     }),
   put: <T>(path: string, body: unknown, init: RequestInit = {}) =>
     request<T>(path, { ...init, method: "PUT", body: JSON.stringify(body) }),
-  delete: <T>(path: string) => request<T>(path, { method: "DELETE" }),
+  delete: <T>(path: string, init: RequestInit = {}) => request<T>(path, { ...init, method: "DELETE" }),
   /** Fetch a binary response (e.g. an .xlsx export) as a Blob. */
   download: async (path: string, headers: Record<string, string> = {}): Promise<Blob> => {
     const auth = await authHeader();

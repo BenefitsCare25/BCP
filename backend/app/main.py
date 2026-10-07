@@ -43,6 +43,7 @@ from app.api.v1 import (
     dependants,
     dual_coverage,
     eligibility_mappings,
+    email_templates,
     employees,
     enquiries,
     enrollment_forms,
@@ -205,6 +206,8 @@ def create_app() -> FastAPI:
     app.add_middleware(RequestIDMiddleware)
 
     api_prefix = "/api/v1"
+    # Preview/review are POST reads; this router enforces read/write broker roles itself.
+    app.include_router(email_templates.router, prefix=api_prefix)
     api_routers = (
         adc.router,
         dashboard.router,
