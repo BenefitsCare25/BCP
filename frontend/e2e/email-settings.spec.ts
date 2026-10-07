@@ -125,3 +125,27 @@ test("branding validates addresses and viewers cannot edit", async ({ page, requ
   await page.getByRole("button", { name: "Employee welcome", exact: true }).click();
   await expect(page.getByLabel("Template title", { exact: true })).toBeDisabled();
 });
+
+test("HTTPS branding images render inside a sandbox under production CSP", async ({ page, request }) => {
+  const me = await request.get("/api/v1/me");
+  const csp = me.headers()["content-security-policy"];
+  expect(csp).toContain("script-src 'self'");
+  const clientId = (await me.json()).active_client_id;
+  const response = await request.post("/api/v1/email-templates/preview", {
+    headers: { "X-Inspro-Client": clientId },
+    data: { content: { title: "CSP preview", subject: "Hello", body: "Hello {{recipient_name}}" } },
+  });
+  expect(response.ok()).toBe(true);
+  // Exercise a configured-logo element under the real response policy without
+  // modifying shared test-company branding or making external image requests.
+  const html = (await response.json()).html.replace("<main>", '<main><img alt="Company logo" src="https://logo.example.invalid/logo.png">');
+  await page.route("https://logo.example.invalid/logo.png", route => route.fulfill({ contentType: "image/png",
+    body: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l9sAAAAASUVORK5CYII=", "base64") }));
+  await page.route("https://preview.example.invalid/", route => route.fulfill({ contentType: "text/html",
+    headers: { "Content-Security-Policy": csp }, body: '<!doctype html><html lang="en"><title>Preview shell</title><iframe title="Email" sandbox=""></iframe></html>' }));
+  await page.goto("https://preview.example.invalid/");
+  await page.locator("iframe").evaluate((frame: HTMLIFrameElement, content) => { frame.srcdoc = content; }, html);
+  const logo = page.frameLocator("iframe").getByRole("img", { name: "Company logo" });
+  await expect.poll(() => logo.evaluate((img: HTMLImageElement) => img.complete && img.naturalWidth > 0)).toBe(true);
+  await expect(page.locator("iframe")).toHaveAttribute("sandbox", "");
+});

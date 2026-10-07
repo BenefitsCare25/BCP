@@ -17,7 +17,10 @@ DEFAULT_CSP = (
     "default-src 'self'; "
     "script-src 'self'; "
     "style-src 'self' 'unsafe-inline'; "
-    "img-src 'self' data: blob:; "
+    # Company email branding permits HTTPS logos. srcdoc email previews inherit
+    # this policy; their own stricter policy cannot relax a parent restriction.
+    # Scripts, connections and framing remain limited by their own directives.
+    "img-src 'self' data: blob: https:; "
     "font-src 'self' data:; "
     "connect-src 'self' https://login.microsoftonline.com; "
     # Claim review renders authenticated PDF bytes through an object URL. Keep
