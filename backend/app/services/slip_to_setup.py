@@ -81,12 +81,16 @@ def _set_by_exact_id(
 
 
 def _header_answers(slip: ProductSlip, tpl: ProductTemplate) -> dict[str, str]:
+    from app.services.el_report_rules import explicit_age_basis
+
     ph = slip.policy_header
     out = {f.id: "" for f in tpl.header_fields}
     for attr, candidate_ids in _HEADER_FIELD_HINTS:
         value = _s(getattr(ph, attr, None))
         if value:
             _set_by_exact_id(out, tpl.header_fields, candidate_ids, value)
+    if "el_age_basis" in out:
+        out["el_age_basis"] = explicit_age_basis(_s(ph.eligibility))
     return out
 
 
@@ -669,6 +673,8 @@ def merge_product_sheets(sheets: list[ProductSlip]) -> ProductSlip:
 
 def build_setup_answers(slip: ProductSlip, tpl: ProductTemplate) -> dict[str, Any]:
     """Project a parsed ``ProductSlip`` onto the ``SetupAnswers`` form shape."""
+    from app.services.el_report_rules import prefill_report_headers
+
     plans = _plan_answers(slip, tpl)
     # De-dupe the per-plan SOB grid into the decoupled column model: a life/CI
     # slip with many sum-insured tiers collapses to one "All plans" column, while
@@ -691,7 +697,7 @@ def build_setup_answers(slip: ProductSlip, tpl: ProductTemplate) -> dict[str, An
         }
         for p in plans
     ]
-    return {
+    return prefill_report_headers({
         "header": _header_answers(slip, tpl),
         "eligibility": _eligibility_answers(slip, tpl),
         "participation": _participation(slip),
@@ -706,4 +712,4 @@ def build_setup_answers(slip: ProductSlip, tpl: ProductTemplate) -> dict[str, An
         "terms": _terms(slip),
         "sections": _sections(slip),
         "arrangements": {},
-    }
+    })

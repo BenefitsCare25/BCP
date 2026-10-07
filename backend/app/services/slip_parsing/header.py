@@ -18,8 +18,15 @@ class _HeaderScan:
 # A number followed (within a short gap) by a birthday qualifier. ANB = "age
 # next birthday", ALB = "age last birthday". The gap absorbs "years", "(age ",
 # etc. between the number and the qualifier.
+_BIRTHDAY_QUALIFIER = r"(?:next\s+birthday|last\s+birthday|anb|alb)"
 _AGE_BIRTHDAY_RE = re.compile(
-    r"(\d{1,3})[^\d]{0,25}?(next\s+birthday|last\s+birthday|anb|alb)\b",
+    rf"(?<![\d,.])(?P<age>\d{{1,3}})\s*(?:years?\s*)?"
+    rf"(?:[\[(]?\s*age\s+)?[\[(]?\s*(?P<qual>{_BIRTHDAY_QUALIFIER})\b",
+    re.IGNORECASE,
+)
+_BIRTHDAY_AGE_RE = re.compile(
+    rf"\b(?P<qual>{_BIRTHDAY_QUALIFIER})\s*[:=]?\s*"
+    r"(?P<age>\d{1,3})(?![\d,.])",
     re.IGNORECASE,
 )
 
@@ -32,11 +39,13 @@ def _age_from_birthday(text: str | None) -> str | None:
     figure in the same cell is never mistaken for an age)."""
     if not text:
         return None
-    m = _AGE_BIRTHDAY_RE.search(str(text))
+    m = _BIRTHDAY_AGE_RE.search(str(text)) or _AGE_BIRTHDAY_RE.search(str(text))
     if not m:
         return None
-    n = int(m.group(1))
-    qual = m.group(2).lower()
+    n = int(m.group("age"))
+    if not 1 <= n <= 120:
+        return None
+    qual = m.group("qual").lower()
     return str(n + 1 if qual.startswith("last") or qual == "alb" else n)
 
 
@@ -46,8 +55,8 @@ def _normalize_age(text: str | None) -> str | None:
     by_birthday = _age_from_birthday(text)
     if by_birthday is not None:
         return by_birthday
-    m = re.search(r"\b(\d{1,3})(?:\.0+)?\b", str(text or ""))
-    return str(int(m.group(1))) if m else None
+    m = re.search(r"(?<![\d,.])(\d{1,3})(?:\.0+)?(?![\d,.])", str(text or ""))
+    return str(int(m.group(1))) if m and 1 <= int(m.group(1)) <= 120 else None
 
 
 def _up_to_age(text: str | None) -> str | None:
@@ -74,7 +83,15 @@ def _nel_amount(text: str | None) -> float | None:
     exceeding S$500,000 or existing FCL …" → 500000.0)."""
     if not text:
         return None
-    m = re.search(r"S?\$\s*([\d,]+(?:\.\d+)?)", str(text))
+    # Some slips omit the currency symbol. Only accept a bare number when
+    # explicitly attached to sum insured / NEL / FCL, never an age or year.
+    m = re.search(r"S?\$\s*([\d,]+(?:\.\d+)?)", str(text), re.IGNORECASE)
+    if not m:
+        m = re.search(
+            r"(?:sum\s+insured\s+exceeding|(?:non[\s-]*evidence|free\s+cover)"
+            r"\s+limit\s*(?:of|is|:|=)?)\s*([\d,]+(?:\.\d+)?)",
+            str(text), re.IGNORECASE,
+        )
     if not m:
         return None
     try:

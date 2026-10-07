@@ -279,10 +279,18 @@ def _employee_coverage(
             pa, detail, disp, raw = cat_facts.get(
                 mp.category_id or "", ({}, None, None, None)
             )
+            override = overrides.get((emp.id, block.product.id))
+            if override and override.tier_category_id:
+                pa, detail, disp, raw = cat_facts.get(
+                    override.tier_category_id, ({}, None, None, None)
+                )
             # Salary-multiple bases ("36 times basic monthly salary") resolve
             # against the member's roster salary, so lump-sum SI (and the
             # underwriting sync reading it) is per-member, not blank.
             eligible = resolve_basis_amount(pa, emp.attribute_values)
+            if block.lump_sum and pa.get("basis") not in (None, "") and mp.financials is not None:
+                # Hydration prices the elected tier and applies reviewed SI caps.
+                eligible = mp.financials.sum_insured
             basis_raw = pa.get("basis")
             if mp.covered_dependant_ids is not None:
                 covered = [

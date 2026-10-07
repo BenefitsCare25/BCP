@@ -37,6 +37,7 @@ from app.models.underwriting_case import (
     UnderwritingStatus,
     normalize_uw_status,
 )
+from app.schemas.underwriting_reporting import UnderwritingReportDetails
 from app.services.flex_membership import classify_relationship
 from app.services.roster_attributes import (
     EMPLOYEE_ID_KEYS,
@@ -76,6 +77,7 @@ class UnderwritingCaseOut(BaseModel):
     status: str  # decision vocabulary (pending / approved_standard / …)
     decided_on: date | None
     remarks: str | None
+    report_details: UnderwritingReportDetails | None = None
 
 
 class UnderwritingReviewOut(BaseModel):
@@ -109,6 +111,8 @@ class UnderwritingDecisionIn(BaseModel):
     guaranteed_si: float | None = Field(default=None, ge=0)
     decided_on: date | None = None
     remarks: str | None = Field(default=None, max_length=1024)
+    report_details: UnderwritingReportDetails | None = None
+    confirm_annual_premium: bool = False
 
 
 class RefreshOut(BaseModel):
@@ -134,6 +138,10 @@ def _case_out(case: UnderwritingCase, products: dict[str, Product]) -> Underwrit
         status=decision,
         decided_on=case.decided_on,
         remarks=case.remarks,
+        report_details=(UnderwritingReportDetails.model_validate({
+            key: value for key, value in (case.report_details or {}).items()
+            if key in UnderwritingReportDetails.model_fields
+        }) if case.report_details else None),
     )
 
 
@@ -334,6 +342,27 @@ def update_review(
     return _reload_review_out(db, review)
 
 
+def _update_report_details(case: UnderwritingCase, body: UnderwritingDecisionIn) -> None:
+    if "report_details" not in body.model_fields_set:
+        return
+    details = body.report_details.model_dump(mode="json") if body.report_details else {}
+    if details.get("annual_premium_net") is not None:
+        previous = case.report_details or {}
+        changed_price = any(details.get(key) != previous.get(key)
+                            for key in ("annual_premium_net", "premium_currency"))
+        if changed_price and not body.confirm_annual_premium:
+            raise HTTPException(422, "Confirm the insurer's annual premium for the current SI.")
+        details.update({
+            "premium_status": (normalize_uw_status(case.status) if body.confirm_annual_premium
+                               else previous.get("premium_status")),
+            "premium_eligible_si": (case.eligible_si if body.confirm_annual_premium
+                                    else previous.get("premium_eligible_si")),
+            "premium_accepted_si": (case.accepted_si if body.confirm_annual_premium
+                                    else previous.get("premium_accepted_si")),
+        })
+    case.report_details = details or None
+
+
 @router.patch(
     "/underwriting/cases/{case_id}", response_model=UnderwritingReviewOut
 )
@@ -356,8 +385,9 @@ def decide_case(
             status.HTTP_422_UNPROCESSABLE_CONTENT,
             f"status must be one of {sorted(VALID_UW_STATUSES)}",
         )
-    before = {
+    before: dict[str, object] = {
         "status": case.status,
+        "report_details": case.report_details,
         "accepted_si": case.accepted_si,
         "guaranteed_si": case.guaranteed_si,
         "decided_on": case.decided_on.isoformat() if case.decided_on else None,
@@ -386,13 +416,18 @@ def decide_case(
     else:
         # Undecided (pending / postponed) with no figure: guaranteed in force.
         case.accepted_si = min(guaranteed, case.eligible_si)
+    decision_changed = (
+        normalize_uw_status(str(before["status"])) != case.status
+        or before["accepted_si"] != case.accepted_si
+    )
     case.decided_on = (
-        (body.decided_on or business_today())
+        (body.decided_on or (case.decided_on if not decision_changed else None) or business_today())
         if body.status in DECIDED_UW_STATUSES
         else None
     )
     if body.remarks is not None:
         case.remarks = body.remarks or None
+    _update_report_details(case, body)
     case.modified_by = user.user_id
     db.flush()
     write_audit(
@@ -400,6 +435,7 @@ def decide_case(
         entity_id=case.id, before=before,
         after={
             "status": case.status,
+            "report_details": case.report_details,
             "accepted_si": case.accepted_si,
             "guaranteed_si": case.guaranteed_si,
             "decided_on": case.decided_on.isoformat() if case.decided_on else None,

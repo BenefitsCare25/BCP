@@ -202,6 +202,18 @@ export function FieldControl({
         />
       ) : field.type === "taglist" ? (
         <TagListControl value={textValue} onChange={onChange} />
+      ) : field.type === "choice" ? (
+        <Select value={textValue || "__unset"} onValueChange={(v) => onChange(v === "__unset" ? "" : v)}>
+          <SelectTrigger aria-label={field.label}>
+            <SelectValue placeholder="Not established" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="__unset">Not established</SelectItem>
+            {(field.options ?? []).map((option) => (
+              <SelectItem key={option} value={option}>{option}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       ) : isWideField(field) ? (
         <AutoTextarea value={textValue} onChange={onChange} />
       ) : (

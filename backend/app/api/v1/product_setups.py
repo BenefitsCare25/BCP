@@ -210,12 +210,14 @@ class EntityVocabOut(BaseModel):
 
 
 def _setup_out(s: ProductSetup) -> SetupOut:
+    from app.services.el_report_rules import prefill_report_headers
+
     return SetupOut(
         id=s.id,
         policy_year_id=s.policy_year_id,
         product_code=s.product_code,
         template_version=s.template_version,
-        answers=s.answers or {},
+        answers=prefill_report_headers(s.answers or {}),
         status=s.status,
         origin=s.origin,
         confirmed_at=s.confirmed_at,
@@ -1014,6 +1016,11 @@ def confirm_setup(
         _sync_term_policy_number(db, product, policy_year_id, setup.answers, user)
         if staged_terms.model_fields_set:
             apply_product_term_update(db, py, product, staged_terms, user)
+        from app.services.product_term_updates import apply_source_term_defaults
+
+        apply_source_term_defaults(
+            db, py, product, setup.answers, staged_terms.model_fields_set, user,
+        )
         created, updated, removed = _materialize_plans(
             db, user, product, policy_year_id, setup.answers, selected,
             cover_description, schedules,
@@ -1252,6 +1259,12 @@ def _upsert_draft(
     *,
     lock: bool = False,
 ) -> ProductSetup:
+    from app.services.el_report_rules import validate_report_rules
+
+    try:
+        validate_report_rules(body.answers)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
     setup = _find_setup(db, policy_year_id, code, lock=lock)
     if setup is None:
         setup = ProductSetup(

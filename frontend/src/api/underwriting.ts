@@ -3,6 +3,18 @@ import { api } from "@/api/client";
 import { useSession } from "@/stores/session";
 
 // Per-product decision line under a review.
+export interface UnderwritingReportDetails {
+  last_standard_accepted_si?: number | null;
+  health_loading?: string | null;
+  residency_loading?: string | null;
+  new_member_letter_date?: string | null;
+  new_insurer_letter_date?: string | null;
+  renewal_member_letter_date?: string | null;
+  renewal_insurer_letter_date?: string | null;
+  annual_premium_net?: number | null;
+  premium_currency?: string | null;
+}
+
 export interface UnderwritingCaseLine {
   id: string;
   product_id: string;
@@ -21,6 +33,7 @@ export interface UnderwritingCaseLine {
     | "closed";
   decided_on: string | null;
   remarks: string | null;
+  report_details?: UnderwritingReportDetails | null;
 }
 
 // One underwriting case per (life, insurer): workflow status + requirements
@@ -128,6 +141,8 @@ export function useDecideUnderwriting(policyYearId: string) {
       guaranteed_si?: number | null;
       decided_on?: string | null;
       remarks?: string | null;
+      report_details?: UnderwritingReportDetails | null;
+      confirm_annual_premium?: boolean;
     }) =>
       api.patch<UnderwritingReview>(`/underwriting/cases/${caseId}`, body),
     onSuccess: () =>

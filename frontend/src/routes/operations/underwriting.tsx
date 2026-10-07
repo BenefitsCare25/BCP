@@ -38,11 +38,13 @@ import {
   useUpdateReview,
   type UnderwritingCaseLine,
   type UnderwritingReview,
+  type UnderwritingReportDetails,
 } from "@/api/underwriting";
 import { useSession } from "@/stores/session";
 import { formatError } from "@/lib/errors";
 import { fmtCurrency } from "@/lib/format";
 import { UnderwritingReminders } from "@/components/operations/UnderwritingReminders";
+import { UnderwritingReportFields, normalizedReportDetails, validReportDetails } from "@/components/operations/UnderwritingReportFields";
 
 const OPEN_STATUSES = new Set([
   "pending_requirements",
@@ -55,6 +57,8 @@ interface LineEdit {
   status: UnderwritingCaseLine["status"];
   accepted: string;
   remarks: string;
+  reportDetails: UnderwritingReportDetails;
+  premiumConfirmed: boolean;
 }
 
 function lineEdit(line: UnderwritingCaseLine): LineEdit {
@@ -62,6 +66,8 @@ function lineEdit(line: UnderwritingCaseLine): LineEdit {
     status: line.status,
     accepted: String(line.accepted_si),
     remarks: line.remarks ?? "",
+    reportDetails: normalizedReportDetails(line.report_details),
+    premiumConfirmed: false,
   };
 }
 
@@ -124,6 +130,7 @@ function ProductDecisionBlock({
                     approving && atFloor
                       ? String(line.requested_si)
                       : edit.accepted,
+                  premiumConfirmed: false,
                 });
               }}
             >
@@ -145,7 +152,7 @@ function ProductDecisionBlock({
             </Label>
             <Input
               value={edit.accepted}
-              onChange={(e) => onChange({ ...edit, accepted: e.target.value })}
+              onChange={(e) => onChange({ ...edit, accepted: e.target.value, premiumConfirmed: false })}
               className="h-8 w-32 text-right text-sm"
               aria-label={`${line.product_code} accepted amount`}
             />
@@ -164,6 +171,13 @@ function ProductDecisionBlock({
           maxLength={1024}
           onChange={(e) => onChange({ ...edit, remarks: e.target.value })}
           aria-label={`${line.product_code} remarks`}
+        />
+        <UnderwritingReportFields
+          caseId={line.id}
+          value={edit.reportDetails}
+          premiumConfirmed={edit.premiumConfirmed}
+          onConfirmPremium={(premiumConfirmed) => onChange({ ...edit, premiumConfirmed })}
+          onChange={(reportDetails) => onChange({ ...edit, reportDetails, premiumConfirmed: false })}
         />
       </div>
     </div>
@@ -193,9 +207,10 @@ function ReviewDetail({
     const edit = edits[c.id];
     if (!edit) return false;
     return (
-      edit.status !== c.status ||
+      edit.premiumConfirmed || edit.status !== c.status ||
       Number(edit.accepted.trim()) !== c.accepted_si ||
-      edit.remarks !== (c.remarks ?? "")
+      edit.remarks !== (c.remarks ?? "") ||
+      JSON.stringify(edit.reportDetails) !== JSON.stringify(normalizedReportDetails(c.report_details))
     );
   });
   // A blank amount must NOT parse to 0 (Number("") === 0) and silently record
@@ -204,7 +219,12 @@ function ReviewDetail({
     const edit = edits[c.id];
     const trimmed = edit.accepted.trim();
     const parsed = Number(trimmed);
-    return trimmed !== "" && Number.isFinite(parsed) && parsed >= 0;
+    const priceChanged = edit.reportDetails.annual_premium_net != null && (
+      edit.reportDetails.annual_premium_net !== c.report_details?.annual_premium_net ||
+      edit.reportDetails.premium_currency !== c.report_details?.premium_currency
+    );
+    return trimmed !== "" && Number.isFinite(parsed) && parsed >= 0 &&
+      validReportDetails(edit.reportDetails) && (!priceChanged || edit.premiumConfirmed);
   });
   const dirty = headerDirty || dirtyLines.length > 0;
   const busy = updateReview.isPending || decide.isPending;
@@ -220,12 +240,17 @@ function ReviewDetail({
       }
       for (const line of dirtyLines) {
         const edit = edits[line.id];
-        await decide.mutateAsync({
+        const saved = await decide.mutateAsync({
           caseId: line.id,
           status: edit.status,
           accepted_si: Number(edit.accepted.trim()),
           remarks: edit.remarks.trim() || null,
+          report_details: edit.reportDetails,
+          confirm_annual_premium: edit.premiumConfirmed,
         });
+        const savedLine = saved.cases.find((item) => item.id === line.id);
+        if (savedLine) setEdits((current) => current[line.id] === edit
+          ? { ...current, [line.id]: lineEdit(savedLine) } : current);
       }
       toast.success("Underwriting case saved");
     } catch (err) {

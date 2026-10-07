@@ -425,7 +425,7 @@ function PaReports({ year }: { year: PolicyYear }) {
         title="Internal registers"
         hint="Our own records — these span every insurer and aren't insurer-scoped."
       >
-        <Workbooks keys={["member-register", "leavers", "underwriting"]} year={year} />
+        <Workbooks keys={["full-el", "member-register", "leavers", "underwriting"]} year={year} />
       </ReportSection>
 
     </div>

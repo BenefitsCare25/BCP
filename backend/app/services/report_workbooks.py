@@ -10,8 +10,9 @@ a workbook of five sheets carry the same bytes, but only one of them can be
 read, filtered and cross-referenced in place, and only one keeps the sheet
 names attached to the file after it is emailed on.
 
-**Every sheet here is GRAFTED from the existing single-sheet builder, never
-reimplemented.** ``graft`` copies a built worksheet's values into a named sheet
+Existing reports are GRAFTED from their single-sheet builders. The Full EL
+uses one batch builder to share its snapshot across all seven sheets.
+``graft`` copies a built worksheet's values into a named sheet
 of the composite. That is the whole mechanism, and it is deliberate: the
 composite is then provably the same rows as the standalone file, so the two can
 never disagree about a member's cover — which is the single thing a broker uses
@@ -103,7 +104,7 @@ class SheetSpec:
     """
 
     title: str
-    build: Callable[[Session, PolicyYear, BuildContext], Workbook]
+    build: Callable[[Session, PolicyYear, BuildContext], Workbook] | None = None
     # What the sheet holds, in one line. SERVED to the Reports page so a broker
     # knows what is inside a workbook before downloading it — the reason this
     # is data and not a frontend constant is that a sheet added here must not
@@ -134,6 +135,7 @@ class WorkbookSpec:
     # control on exactly the workbook it changes, rather than above a tab where
     # it would read as scoping reports it does nothing to.
     supports_employee_status: bool = False
+    build: Callable[[Session, PolicyYear, BuildContext], Workbook] | None = None
 
 
 # ── Sheet builders ───────────────────────────────────────────────────────────
@@ -315,7 +317,38 @@ def _company_activity(db: Session, py: PolicyYear, ctx: BuildContext) -> Workboo
 
 # ── The composites ───────────────────────────────────────────────────────────
 
+def _full_el(db: Session, py: PolicyYear, ctx: BuildContext) -> Workbook:
+    from app.services.full_el_workbook import build_full_el
+
+    return build_full_el(db, py, masked=ctx.masked, employee_status=ctx.employee_status)
+
+
 WORKBOOKS: dict[str, WorkbookSpec] = {
+    "full-el": WorkbookSpec(
+        key="full-el", label="Full Employee Listing (EL)",
+        description=(
+            "Company setup, dynamic product coverage, linked dependants and annual premiums. "
+            "Draft rates and missing rules are flagged for review."
+        ),
+        supports_employee_status=True, build=_full_el,
+        sheets=[
+            SheetSpec("Basis of Cover",
+                      description="Company, product terms, eligibility and category rates."),
+            SheetSpec("Full EL",
+                      description="Employee details, cover, underwriting and annual premiums.",
+                      columns=("Staff ID", "Employment", "Product cover", "Annual premiums")),
+            SheetSpec("Dependants",
+                      description="Linked dependants with their own cover and underwriting."),
+            SheetSpec("Source Setup",
+                      description="Stored placement-slip setup, schedules and source references."),
+            SheetSpec("Headcount & Annual Premium",
+                      description="Counts and premiums by product, entity, category and plan."),
+            SheetSpec("Setup & Data Gaps",
+                      description="Missing rules, rates, mappings and member details."),
+            SheetSpec("Declaration",
+                      description="Company declaration for completion before submission."),
+        ],
+    ),
     "insurer-submission": WorkbookSpec(
         key="insurer-submission",
         label="Insurer Submission",
@@ -610,11 +643,15 @@ def build_workbook(
     roster's five sheets inside a normal request's memory.
     """
     context = ctx or BuildContext()
+    if spec.build is not None:
+        return spec.build(db, py, context)
     wb = Workbook()
     # openpyxl seeds a blank default sheet; the first graft supplies the real
     # one, so remove it rather than leaving an empty "Sheet" in the file.
     wb.remove(wb.active)
     for sheet in spec.sheets:
+        if sheet.build is None:
+            raise ValueError(f"No builder configured for {spec.key}/{sheet.title}")
         graft(wb, sheet.title, sheet.build(db, py, context))
     return wb
 

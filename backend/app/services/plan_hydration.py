@@ -20,6 +20,7 @@ from app.models.category import Category
 from app.models.product import Product
 from app.schemas.api import MatchedPlan, PlanFinancials, VoluntaryRateBand
 from app.services.coverage_resolver import load_overrides, resolve_plan
+from app.services.el_report_rules import positive_number, reviewed_si_caps
 from app.services.plan_labels import member_plan_label
 from app.services.product_terms import product_gst_multipliers
 from app.services.roster_attributes import age_from_attrs, band_for_age, first_value
@@ -131,6 +132,7 @@ def hydrate_plans(
     )
 
     result: dict[str, list[MatchedPlan]] = {}
+    caps = reviewed_si_caps(db, policy_year_id) if policy_year_id else {}
     dangling = 0
     for emp in employees:
         emp_age = _employee_age(emp, ref)
@@ -176,6 +178,8 @@ def hydrate_plans(
             # resolves a salary-multiple basis ("12 times basic monthly salary")
             # into THIS member's sum insured instead of falling back to the
             # cohort aggregate.
+            if fin_pa and pcode and pcode.upper() in caps:
+                fin_pa = {**fin_pa, "max_sum_insured": caps[pcode.upper()]}
             fin = (
                 member_financials(fin_pa, emp_age, emp.attribute_values)
                 if fin_pa
@@ -382,7 +386,8 @@ def resolve_basis_amount(
     """
     amount = basis_amount(pa)
     if amount is not None:
-        return amount
+        cap = positive_number(pa.get("max_sum_insured"))
+        return min(amount, cap) if cap is not None else amount
     parsed = salary_multiple(pa)
     if parsed is None:
         return None
@@ -392,7 +397,9 @@ def resolve_basis_amount(
         return None
     if is_annual:
         salary *= 12.0
-    return salary * mult
+    amount = salary * mult
+    cap = positive_number(pa.get("max_sum_insured"))
+    return min(amount, cap) if cap is not None else amount
 
 
 def voluntary_rate_for_age(bands: list[Any] | None, age: int | None) -> float | None:

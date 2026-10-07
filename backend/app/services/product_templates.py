@@ -221,6 +221,15 @@ def ensure_standard_header_fields(fields: list[TemplateField]) -> list[TemplateF
         fields.append(
             TemplateField(id="admin_basis", label="Type of Administration", type="text")
         )
+    from app.services.el_report_rules import RULE_CHOICES, RULE_LABELS
+
+    for key, label in RULE_LABELS.items():
+        if key not in ids:
+            fields.append(TemplateField(
+                id=key, label=label,
+                type="choice" if key in RULE_CHOICES else "text",
+                options=list(RULE_CHOICES[key]) if key in RULE_CHOICES else None,
+            ))
     return fields
 
 

@@ -45,6 +45,7 @@ from app.models.underwriting_case import (
     REVIEW_STATUS_LABELS,
     normalize_uw_status,
 )
+from app.schemas.underwriting_reporting import REPORT_DETAIL_COLUMNS
 from app.services.insurer_listings import policy_period
 from app.services.insurer_reports import (
     append_safe,
@@ -110,6 +111,9 @@ HEADER = [
     "Policy Number",
     "Policy Number Source",
     "Policy Number Status",
+    *[label for label, _ in REPORT_DETAIL_COLUMNS],
+    "Insurer-confirmed Annual Net Premium",
+    "Individual Premium Currency",
 ]
 
 
@@ -291,6 +295,12 @@ def build_underwriting_report(
             "Current configuration",
             policy.status,
         ]
+        details = (case.report_details or {}) if case else {}
+        row.extend(
+            as_date(details.get(key)) if key.endswith("_date") else details.get(key)
+            for _, key in REPORT_DETAIL_COLUMNS
+        )
+        row.extend([details.get("annual_premium_net"), details.get("premium_currency")])
         # Scan order: the household, then its dependants, then product — the
         # order a broker reads the manual file in.
         sort_key = (

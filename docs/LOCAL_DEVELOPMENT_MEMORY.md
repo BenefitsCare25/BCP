@@ -55,6 +55,15 @@ Local `.env` files, SQLite databases and `backend/var/` are excluded by both Doc
 
 ## Consolidation evidence
 
+On 7 October 2026, the shared local database was brought to `e9a1b3c5d7f0`.
+This additive migration adds nullable underwriting correspondence and annual-premium
+details for the separate Full EL report. Existing row counts and foreign-key integrity
+were preserved. Verification used in-memory synthetic data and read-only GAS exports;
+no member data or decisions were replaced, no GAS contexts were merged, and no WDNS
+company was invented from the sample workbook. No database copies or backups were made.
+See [Full EL report](FULL_EL_REPORT.md) for calculation rules and unresolved source gaps.
+This entry records local verification, not a production deployment.
+
 On 4 October 2026, the shared database was brought to migration
 `a5c7e9b1d3f6`. This additive change stores a broker account's authenticator
 requirement, off by default as explicitly requested during development. Only

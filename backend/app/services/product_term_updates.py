@@ -55,6 +55,25 @@ def parse_setup_policy_terms(value: Any) -> ProductTermUpdate:
         raise HTTPException(422, f"Review the draft policy terms: {messages}") from None
 
 
+def apply_source_term_defaults(
+    db: Session, py: PolicyYear, product: Product, answers: dict[str, Any],
+    explicit_fields: set[str], user: CurrentUser,
+) -> None:
+    """Repair missing extraction-derived values as part of reviewed setup confirmation."""
+    from app.services.el_report_rules import source_policy_terms
+
+    source = source_policy_terms(answers)
+    if not uses_life_thresholds(product):
+        source = {key: value for key, value in source.items() if key == "gst_included"}
+    term = db.scalar(select(ProductTerm).where(
+        ProductTerm.policy_year_id == py.id, ProductTerm.product_id == product.id,
+    ))
+    missing = {key: value for key, value in source.items()
+               if key not in explicit_fields and (term is None or getattr(term, key) is None)}
+    if missing:
+        apply_product_term_update(db, py, product, ProductTermUpdate.model_validate(missing), user)
+
+
 def apply_product_term_update(
     db: Session, py: PolicyYear, product: Product,
     body: ProductTermUpdate, user: CurrentUser,
