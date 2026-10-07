@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useRouterState } from "@tanstack/react-router";
 import { AlertCircle, Bell, Info, TriangleAlert, X } from "lucide-react";
 import {
   useNotifications,
@@ -38,7 +39,21 @@ function ago(at: number): string {
  * on the existing row) and stays until dismissed, so nothing is missed and
  * nothing blocks a click.
  */
-export function NotificationBell({ largeTarget = false, persistent, persistentUnread = 0 }: { largeTarget?: boolean; persistent?: ReactNode; persistentUnread?: number }) {
+export function NotificationBell({
+  largeTarget = false,
+  persistent,
+  persistentUnread = 0,
+  onOpen,
+  emptyLabel,
+}: {
+  largeTarget?: boolean;
+  persistent?: ReactNode;
+  persistentUnread?: number;
+  /** Opening the panel acknowledges the persistent section too. */
+  onOpen?: () => void;
+  /** Shown under the persistent section when there are no other notifications. */
+  emptyLabel?: string;
+}) {
   // Mounted in all three shells. On the member portal it is a TOUCH target and
   // its rows must be dismissable without a pointer — see the two uses below.
   const inLeaf = useInLeaf();
@@ -84,10 +99,18 @@ export function NotificationBell({ largeTarget = false, persistent, persistentUn
     };
   }, [open]);
 
+  // A link inside the panel (a persistent notice's "Review") navigates; the
+  // panel must not stay open over the page it led to.
+  const href = useRouterState({ select: (s) => s.location.href });
+  useEffect(() => setOpen(false), [href]);
+
   const toggle = () => {
     const next = !open;
     setOpen(next);
-    if (next) markAllRead(); // opening IS the acknowledgement
+    if (next) {
+      markAllRead(); // opening IS the acknowledgement
+      onOpen?.();
+    }
   };
 
   return (
@@ -149,7 +172,7 @@ export function NotificationBell({ largeTarget = false, persistent, persistentUn
           {persistent && <div className="max-h-[22rem] overflow-y-auto">{persistent}</div>}
           {items.length === 0 ? (
             <p className="px-3 py-6 text-center text-sm text-muted-foreground">
-              {persistent ? "No browser alerts" : "No notifications"}
+              {emptyLabel ?? (persistent ? "No browser alerts" : "No notifications")}
             </p>
           ) : (
             <ul className="max-h-[22rem] overflow-y-auto">

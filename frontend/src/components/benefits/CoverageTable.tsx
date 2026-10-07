@@ -33,6 +33,7 @@ import type { CoverageLine, FinancialGap, Utilization } from "@/types";
 import { CoverageDetail } from "./CoverageDetail";
 import { SourceFlag, SourceIcon } from "./SourceLink";
 import { ClaimPosition, indexUsage } from "./usage";
+import { limitBadge } from "@/components/limits/limitKinds";
 
 /**
  * How a match is flagged in the LIST.
@@ -272,6 +273,21 @@ export function CoverageTable({
                                 categoryId={line.category_id}
                               />
                             )}
+                          </div>
+                        )}
+                        {(line.limit_alerts?.length ?? 0) > 0 && (
+                          // Slip limits this line crosses: the reason a figure or
+                          // the cover itself may be wrong, on the row it affects.
+                          <div className="mt-1 flex flex-wrap gap-1">
+                            {(line.limit_alerts ?? []).map((alert, n) => (
+                              <Badge
+                                key={`${alert.kind}-${alert.dependant_id ?? ""}-${n}`}
+                                variant={alert.severity === "action" ? "warn" : "outline"}
+                                title={alert.message}
+                              >
+                                {limitBadge(alert)}
+                              </Badge>
+                            ))}
                           </div>
                         )}
                       </div>

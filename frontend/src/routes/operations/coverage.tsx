@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
-import { Loader2, TableProperties, UserSearch } from "lucide-react";
+import { Loader2, TableProperties, TriangleAlert, UserSearch } from "lucide-react";
 import { useEmployeeUtilization } from "@/api/claims";
+import { useCoverageLimits } from "@/api/coverageLimits";
 import { useBenefitStatement, useCoverageSummary, useMe } from "@/api/hooks";
 import { useSession } from "@/stores/session";
 import { Button } from "@/components/ui/button";
@@ -23,6 +24,7 @@ import {
 import { EmployeePicker } from "@/components/operations/EmployeePicker";
 import { MemberAccountActions } from "@/components/operations/MemberAccountActions";
 import { PortalFrame } from "@/components/operations/PortalFrame";
+import { LimitAlertList } from "@/components/limits/LimitAlertList";
 import { cn } from "@/lib/cn";
 
 const ANY = "__any__";
@@ -30,6 +32,8 @@ const ANY = "__any__";
 // auditing cover goes looking for.
 const NEEDS_CHECK = "__check__";
 const HAS_ELIGIBLE = "__eligible__";
+// Members (or covered dependants) crossing a slip limit that needs action.
+const CROSSES_LIMIT = "__limits__";
 
 type CoverageView = "broker" | "employee";
 
@@ -117,19 +121,54 @@ function BrokerStatementPane({ employeeId }: { employeeId: string }) {
  * The Broker view shows the full statement (financials, utilization, schedules
  * and the flex wallet); the Employee view shows the read-only portal replica.
  * Both ride the URL (?employee=&view=) so links stay shareable. */
+/** The year's limit crossings, while "Crossing a limit" is chosen and no
+ * member is open — the list the bell's "Review" leads to. */
+function LimitsOverview({ policyYearId }: { policyYearId: string }) {
+  const { data, isLoading } = useCoverageLimits(policyYearId);
+  const alerts = data?.alerts ?? [];
+  return (
+    <div className="rounded-lg border border-border bg-card p-4">
+      <h2 className="text-sm font-semibold text-foreground">Coverage limits</h2>
+      <p className="mt-0.5 text-xs text-muted-foreground">
+        Members crossing a placement-slip limit. Nothing is changed automatically:
+        end the cover, record the insurer's agreement, or correct the listing.
+      </p>
+      <div className="mt-3">
+        {isLoading ? (
+          <p className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Loader2 className="size-4 animate-spin" /> Checking limits…
+          </p>
+        ) : alerts.length ? (
+          <LimitAlertList alerts={alerts} />
+        ) : (
+          <p className="text-sm text-muted-foreground">No member crosses a limit.</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function EmployeeCoveragePage() {
   const policyYearId = useSession((s) => s.currentPolicyYearId);
   const navigate = useNavigate();
   const search = useSearch({ strict: false }) as {
     employee?: string;
     view?: string;
+    show?: string;
   };
   const view: CoverageView = search.view === "employee" ? "employee" : "broker";
   const selectedId = search.employee ?? null;
   const previousPolicyYearId = useRef(policyYearId);
 
   const [query, setQuery] = useState("");
-  const [countFilter, setCountFilter] = useState<string>(ANY);
+  const [countFilter, setCountFilter] = useState<string>(
+    search.show === "limits" ? CROSSES_LIMIT : ANY,
+  );
+  // The bell's "Review in Member Coverage" lands here with ?show=limits, also
+  // when the page is already open.
+  useEffect(() => {
+    if (search.show === "limits") setCountFilter(CROSSES_LIMIT);
+  }, [search.show]);
   // Off by default: this page is about who is covered NOW, and a roster that
   // silently included everyone who ever left would change the figure every
   // broker reads off the header. On, it is the only way to reach a leaver's
@@ -164,20 +203,30 @@ export function EmployeeCoveragePage() {
   // Drop the active count filter if a roster reload no longer has that count.
   const checkCount = items.filter((it) => it.needs_check).length;
   const eligibleCount = items.filter((it) => (it.eligible_count ?? 0) > 0).length;
+  const limitCount = items.filter((it) => (it.limit_alerts ?? 0) > 0).length;
 
   useEffect(() => {
     // An attention filter whose last member was just resolved (enrolled,
     // re-matched) drops its option — fall back rather than show an empty list
     // under a blank selector.
-    if (countFilter === NEEDS_CHECK || countFilter === HAS_ELIGIBLE) {
-      const remaining = countFilter === NEEDS_CHECK ? checkCount : eligibleCount;
+    if (
+      countFilter === NEEDS_CHECK ||
+      countFilter === HAS_ELIGIBLE ||
+      countFilter === CROSSES_LIMIT
+    ) {
+      const remaining =
+        countFilter === NEEDS_CHECK
+          ? checkCount
+          : countFilter === HAS_ELIGIBLE
+            ? eligibleCount
+            : limitCount;
       if (summary && remaining === 0) setCountFilter(ANY);
       return;
     }
     if (countFilter !== ANY && !counts.includes(Number(countFilter))) {
       setCountFilter(ANY);
     }
-  }, [counts, countFilter, checkCount, eligibleCount, summary]);
+  }, [counts, countFilter, checkCount, eligibleCount, limitCount, summary]);
 
   const setSearchParams = (next: { employee?: string; view?: CoverageView }) =>
     void navigate({
@@ -211,6 +260,7 @@ export function EmployeeCoveragePage() {
     }
     if (countFilter === NEEDS_CHECK) return Boolean(it.needs_check);
     if (countFilter === HAS_ELIGIBLE) return (it.eligible_count ?? 0) > 0;
+    if (countFilter === CROSSES_LIMIT) return (it.limit_alerts ?? 0) > 0;
     if (countFilter !== ANY && it.product_count !== Number(countFilter)) {
       return false;
     }
@@ -240,6 +290,11 @@ export function EmployeeCoveragePage() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value={ANY}>Everyone</SelectItem>
+                {limitCount > 0 && (
+                  <SelectItem value={CROSSES_LIMIT}>
+                    Crossing a limit ({limitCount})
+                  </SelectItem>
+                )}
                 {checkCount > 0 && (
                   <SelectItem value={NEEDS_CHECK}>
                     Name matches to check ({checkCount})
@@ -279,18 +334,28 @@ export function EmployeeCoveragePage() {
             // which already carries the product count.
             subtitle: it.left ? `${it.staff_id} · Left` : it.staff_id,
             trailing: (
-              <span
-                className={cn(
-                  "shrink-0 rounded-full px-1.5 py-0.5 text-2xs tabular-nums",
-                  it.product_count > 0
-                    ? "bg-muted text-muted-foreground"
-                    : "text-subtle",
+              <span className="flex shrink-0 items-center gap-1">
+                {(it.limit_alerts ?? 0) > 0 && (
+                  <TriangleAlert
+                    aria-label="Crosses a slip limit"
+                    className="size-3.5 text-warn"
+                  />
                 )}
-                title={`${it.product_count} ${it.product_count === 1 ? "product" : "products"} covered${
-                  it.eligible_count ? `, eligible for ${it.eligible_count} more` : ""
-                }${it.needs_check ? " · name match to check" : ""}`}
-              >
-                {it.product_count}
+                <span
+                  className={cn(
+                    "rounded-full px-1.5 py-0.5 text-2xs tabular-nums",
+                    it.product_count > 0
+                      ? "bg-muted text-muted-foreground"
+                      : "text-subtle",
+                  )}
+                  title={`${it.product_count} ${it.product_count === 1 ? "product" : "products"} covered${
+                    it.eligible_count ? `, eligible for ${it.eligible_count} more` : ""
+                  }${it.needs_check ? " · name match to check" : ""}${
+                    it.limit_alerts ? " · crosses a slip limit" : ""
+                  }`}
+                >
+                  {it.product_count}
+                </span>
               </span>
             ),
           }))}
@@ -330,7 +395,9 @@ export function EmployeeCoveragePage() {
          * around it clips its corners with `overflow-hidden`, so at laptop
          * widths the Claims column was simply cut off with no way to reach it. */}
         <div className="min-w-0">
-          {!selectedId ? (
+          {!selectedId && view === "broker" && countFilter === CROSSES_LIMIT ? (
+            <LimitsOverview policyYearId={policyYearId} />
+          ) : !selectedId ? (
             <div className="rounded-lg border border-dashed border-border p-10 text-center">
               <UserSearch className="mx-auto size-6 text-muted-foreground" />
               <p className="mt-2 text-sm text-muted-foreground">

@@ -42,6 +42,7 @@ import { ScheduleOfBenefitsSection } from "./setup/ScheduleOfBenefitsSection";
 import { ClaimLimitsPanel } from "./setup/limits/ClaimLimitsPanel";
 import { EndorsementsSection } from "./setup/EndorsementsSection";
 import { SetupGapsPanel } from "./setup/SetupGapsPanel";
+import { ProductLimitCheck } from "./setup/ProductLimitCheck";
 import {
   gapCountsBySection,
   setupGaps,
@@ -700,6 +701,7 @@ export const ProductSetupForm = forwardRef<ProductSetupFormHandle, Props>(functi
       </div>
     ),
     eligibility: (
+      <div className="flex flex-col gap-4">
       <div className="grid grid-cols-3 gap-3">
         {visibleEligibilityFields.map((f) => (
           <div
@@ -724,6 +726,13 @@ export const ProductSetupForm = forwardRef<ProductSetupFormHandle, Props>(functi
             />
           </div>
         ))}
+      </div>
+      <ProductLimitCheck
+        policyYearId={policyYearId}
+        productCode={template.code}
+        eligibility={answers.eligibility}
+        maxSumInsured={String(answers.header.el_max_sum_insured ?? "")}
+      />
       </div>
     ),
     // One row per unique employee category, with its plan assignments nested

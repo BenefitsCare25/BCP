@@ -36,6 +36,7 @@ def build_member_statement(db: Session, employee: Employee) -> BenefitStatementO
                 "financials": member_cover_view(line.financials),
                 "premium_note": None,
                 "financial_gaps": [],
+                "limit_alerts": [],
                 "match_method": None,
                 "match_confidence": None,
                 "rule_human_readable": None,

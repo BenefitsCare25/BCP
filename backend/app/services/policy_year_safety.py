@@ -25,6 +25,7 @@ from app.models import (
     MemberEnquiry,
     PlacementSlipRow,
     Plan,
+    PolicyYear,
     PolicyYearCard,
     PolicyYearPanel,
     ProductSetup,
@@ -155,4 +156,38 @@ def readiness(db: Session, policy_year_id: str) -> tuple[dict[str, int], list[st
         warnings.append("No member roster has been loaded for this benefit year.")
     if scheme is not None and leave_policy == 0:
         warnings.append("Flex is configured without a buy/sell leave policy.")
+    if employees:
+        warnings.extend(_limit_warnings(db, policy_year_id))
     return metrics, blockers, warnings
+
+
+# One readiness line per kind of crossing; the detail lives on Member Coverage.
+_LIMIT_WARNINGS: dict[str, tuple[str, str, str]] = {
+    "over_age": ("employee is", "employees are", "above a product's age limit"),
+    "over_entry_age": ("employee", "employees", "joined above a product's last entry age"),
+    "dependant_over_age": ("dependant is", "dependants are", "above a spouse or child age limit"),
+    "underwriting": ("member needs", "members need", "underwriting before the excess is covered"),
+    "no_salary": ("employee has", "employees have", "no salary for a salary-based sum insured"),
+    "no_dob": ("employee has", "employees have", "no date of birth to check age limits"),
+}
+
+
+def _limit_warnings(db: Session, policy_year_id: str) -> list[str]:
+    """Limit crossings a broker should resolve before (or after) going live.
+
+    Warnings, never blockers: a crossing may be covered by an insurer
+    arrangement, so the broker decides; the readiness panel just makes sure
+    nobody goes live without having seen them.
+    """
+    from app.services.coverage_limits import coverage_limit_alerts, limit_counts
+
+    py = db.get(PolicyYear, policy_year_id)
+    if py is None:
+        return []
+    counts = limit_counts(coverage_limit_alerts(db, py))
+    out: list[str] = []
+    for kind, (one, many, text) in _LIMIT_WARNINGS.items():
+        n = counts.get(kind, 0)
+        if n:
+            out.append(f"{n} {one if n == 1 else many} {text}. Review them in Member Coverage.")
+    return out

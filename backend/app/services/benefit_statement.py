@@ -41,6 +41,7 @@ from app.schemas.api import (
     StatementAttribute,
     StatementEmployee,
 )
+from app.schemas.coverage_limits import CoverageLimitAlert
 from app.services.dependant_coverage import (
     category_covers_dependants as _shared_category_covers_dependants,
 )
@@ -431,6 +432,22 @@ def _member_line_financials(
     )
 
 
+def _limit_alerts_by_product(
+    db: Session, employee: Employee
+) -> dict[str, list[CoverageLimitAlert]]:
+    """This employee's (and their covered dependants') limit crossings, by
+    product code — the same alerts the bell and readiness count."""
+    from app.services.coverage_limits import coverage_limit_alerts
+
+    py = db.get(PolicyYear, employee.policy_year_id)
+    if py is None:
+        return {}
+    out: dict[str, list[CoverageLimitAlert]] = {}
+    for alert in coverage_limit_alerts(db, py, employee_ids={employee.id}):
+        out.setdefault(alert.product_code.upper(), []).append(alert)
+    return out
+
+
 def build_benefit_statement(db: Session, employee: Employee) -> BenefitStatementOut:
     matched_plans = hydrate_plans([employee], db, employee.policy_year_id).get(employee.id, [])
 
@@ -445,6 +462,7 @@ def build_benefit_statement(db: Session, employee: Employee) -> BenefitStatement
         ],
     )
     enrolled = enrolled_products(db, employee.policy_year_id, [employee.id])
+    limit_alerts = _limit_alerts_by_product(db, employee)
 
     dependants = list(
         db.execute(
@@ -520,6 +538,7 @@ def build_benefit_statement(db: Session, employee: Employee) -> BenefitStatement
             ),
             premium_note=premium_note,
             financial_gaps=financial_gaps,
+            limit_alerts=limit_alerts.get(mp.product_code.upper(), []),
         ))
 
     # Stable, predictable ordering for the UI.

@@ -703,8 +703,12 @@ const paMemberListingRoute = createRoute({
 const paMemberCoverageRoute = createRoute({
   getParentRoute: () => paLayoutRoute,
   path: "/member-coverage",
-  validateSearch: (search: Record<string, unknown>) => ({
+  validateSearch: (
+    search: Record<string, unknown>,
+  ): { employee?: string; view?: "employee" | "broker"; show?: "limits" } => ({
     employee: typeof search.employee === "string" ? search.employee : undefined,
+    // "limits" opens the list on the members crossing a slip limit.
+    show: search.show === "limits" ? ("limits" as const) : undefined,
     view:
       search.view === "employee"
         ? ("employee" as const)

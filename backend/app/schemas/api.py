@@ -8,6 +8,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
 
+from app.schemas.coverage_limits import CoverageLimitAlert
 from app.schemas.policy_numbers import PolicyNumberAssignment
 
 ParticipationModelStr = Literal["standard", "extended", "eo_only"]
@@ -794,6 +795,10 @@ class CoverageSummaryItem(BaseModel):
     #: Terminated on the roster. Only ever true when the caller asked for
     #: leavers, but served unconditionally so the row can say so.
     left: bool = False
+    #: Slip limits this member (or a covered dependant) crosses that need the
+    #: broker — age ceilings, last entry age, underwriting, missing DOB/salary
+    #: (``services/coverage_limits.py``). Informational caps are not counted.
+    limit_alerts: int = 0
 
 
 class CoverageSummary(BaseModel):
@@ -901,6 +906,9 @@ class CoverageLine(BaseModel):
     financial_gaps: list[
         Literal["basis", "salary", "rate", "tier_rate", "dependant_rate"]
     ] = Field(default_factory=list)
+    # Slip limits this line crosses (age ceiling, entry age, dependant age,
+    # underwriting, cap). Broker-only, stripped for members.
+    limit_alerts: list[CoverageLimitAlert] = Field(default_factory=list)
 
 
 class StatementEmployee(BaseModel):

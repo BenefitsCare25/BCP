@@ -74,6 +74,10 @@ from app.services.claim_limits import (
     setting_display,
     validate_schedule_limits,
 )
+from app.services.dependant_coverage import (
+    per_head_dependant_rate,
+    slip_participation_detail,
+)
 from app.services.dynamic_template import (
     generic_starter_template,
     merge_file_overlay,
@@ -2102,6 +2106,15 @@ def _materialize_categories(
             continue
         raw_participation = str(row.get("participation") or "")
         pspec = parse_participation(raw_participation)
+        assignments = _category_plan_assignments(row, rate_table, rate_model, basis_model)
+        detail = slip_participation_detail(
+            pspec.to_dict(),
+            has_dependants=bool(product.has_dependants),
+            plan_assignments=assignments,
+            display_name=name,
+            raw_description=name,
+        )
+        assignments = per_head_dependant_rate(assignments, detail.get("dependant"))
         cat = build_manual_category(
             policy_year_id=policy_year_id,
             product_id=product.id,
@@ -2116,10 +2129,8 @@ def _materialize_categories(
             human_modified=False,
             participation_model=pspec.employee
             or normalize_participation(raw_participation),
-            participation_detail=pspec.to_dict(),
-            plan_assignments=_category_plan_assignments(
-                row, rate_table, rate_model, basis_model
-            ),
+            participation_detail=detail,
+            plan_assignments=assignments,
         )
         db.add(cat)
         db.flush()

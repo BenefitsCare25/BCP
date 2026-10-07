@@ -60,6 +60,10 @@ from app.schemas.api import (
 )
 from app.services import product_registry
 from app.services.ai_slip_extractor import maybe_ai_augment
+from app.services.dependant_coverage import (
+    per_head_dependant_rate,
+    slip_participation_detail,
+)
 from app.services.dynamic_template import merge_file_overlay, synthesize_template
 from app.services.el_import.refresh import refresh_listing_links
 from app.services.eligibility_mapping import auto_map_policy_year, category_signature
@@ -793,6 +797,14 @@ async def parse_upload(
                 cat.insured,
                 cat.location_scope,
             )
+            detail = slip_participation_detail(
+                pspec.to_dict(),
+                has_dependants=bool(product and product.has_dependants),
+                plan_assignments=assignments,
+                display_name=cat.category,
+                raw_description=cat.category,
+            )
+            assignments = per_head_dependant_rate(assignments, detail.get("dependant"))
             if preserved := preserved_by_key.pop(reconcile_key, None):
                 if not preserved.human_modified:
                     preserved.display_name = cat.category[:512]
@@ -800,7 +812,16 @@ async def parse_upload(
                 preserved.participation_model = (
                     pspec.employee or normalize_participation(cat.participation)
                 )
-                preserved.participation_detail = pspec.to_dict()
+                previous = preserved.participation_detail
+                if (
+                    preserved.human_modified
+                    and isinstance(previous, dict)
+                    and "dependant" in previous
+                ):
+                    # A re-upload refreshes the slip's wording, never the
+                    # broker's dependant decision on a reviewed category.
+                    detail["dependant"] = previous["dependant"]
+                preserved.participation_detail = detail
                 preserved.plan_assignments = assignments
                 preserved.source_ref = source_ref
                 continue
@@ -813,7 +834,7 @@ async def parse_upload(
                 matching_rule=envelope.rule,
                 rule_human_readable=envelope.human_readable,
                 participation_model=pspec.employee or normalize_participation(cat.participation),
-                participation_detail=pspec.to_dict(),
+                participation_detail=detail,
                 plan_assignments=assignments,
                 source=SourceKind.system_generated.value,
                 source_ref=source_ref,

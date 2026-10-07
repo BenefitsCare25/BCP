@@ -5,6 +5,7 @@ import { cn } from "@/lib/cn";
 import { AccountMenu } from "./AccountMenu";
 import { ContextBar } from "./ContextBar";
 import { NotificationBell } from "./NotificationBell";
+import { useLimitNotices } from "@/components/limits/LimitNotices";
 import { FIRM_NAV } from "./nav";
 
 export function TopBar({
@@ -16,6 +17,7 @@ export function TopBar({
 }) {
   const { data: me } = useMe();
   const path = useRouterState({ select: (s) => s.location.pathname });
+  const limitNotices = useLimitNotices();
 
   // Firm-wide surfaces live in the top bar as icon shortcuts (not the sidebar,
   // which is company-scoped). Access & Companies stays broker-admin gated.
@@ -70,7 +72,12 @@ export function TopBar({
             );
           })}
         </nav>
-        <NotificationBell />
+        <NotificationBell
+          persistent={limitNotices.content}
+          persistentUnread={limitNotices.unread}
+          onOpen={limitNotices.acknowledge}
+          emptyLabel={limitNotices.content ? "No other notifications" : undefined}
+        />
         <div className="mx-0.5 h-5 w-px bg-border" aria-hidden="true" />
         <AccountMenu />
       </div>

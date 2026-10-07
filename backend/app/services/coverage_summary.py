@@ -11,7 +11,7 @@ from __future__ import annotations
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import Employee
+from app.models import Employee, PolicyYear
 from app.models.category import Category
 from app.models.employee import EMPLOYEE_STATUS_ACTIVE
 from app.models.product import Product
@@ -65,6 +65,7 @@ def build_coverage_items(
                 code, name, cat.product_id, employee_participation(cat) == "voluntary"
             )
     enrolled = enrolled_products(db, policy_year_id, [row[0] for row in rows])
+    alerts_by_employee = _action_alerts_by_employee(db, policy_year_id)
 
     items: list[CoverageSummaryItem] = []
     for emp_id, staff_id, employee_name, matched, status in rows:
@@ -106,6 +107,22 @@ def build_coverage_items(
                 # active colleague's is how a broker reads a leaver's coverage
                 # as current.
                 left=status != EMPLOYEE_STATUS_ACTIVE,
+                limit_alerts=alerts_by_employee.get(emp_id, 0),
             )
         )
     return items
+
+
+def _action_alerts_by_employee(db: Session, policy_year_id: str) -> dict[str, int]:
+    """Limit crossings needing the broker, per employee (their dependants'
+    included) — the "Crossing a limit" filter and its count."""
+    from app.services.coverage_limits import ACTION_KINDS, coverage_limit_alerts
+
+    py = db.get(PolicyYear, policy_year_id)
+    if py is None:
+        return {}
+    counts: dict[str, int] = {}
+    for alert in coverage_limit_alerts(db, py):
+        if alert.kind in ACTION_KINDS:
+            counts[alert.employee_id] = counts.get(alert.employee_id, 0) + 1
+    return counts

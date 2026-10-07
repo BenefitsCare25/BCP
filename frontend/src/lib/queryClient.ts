@@ -58,6 +58,9 @@ export const queryClient = new QueryClient({
   mutationCache: new MutationCache({
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["dashboard-summary"] });
+      // Limit crossings are recomputed from roster, matching and setup, so any
+      // saved change may add or clear one.
+      void queryClient.invalidateQueries({ queryKey: ["coverage-limits"] });
     },
     onError: (error, _variables, _context, mutation) => {
       // Mutations that own their error UX (e.g. a structured-409 dialog on

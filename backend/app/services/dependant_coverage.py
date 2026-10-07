@@ -96,6 +96,57 @@ def category_covers_dependants(
     )
 
 
+def slip_participation_detail(
+    detail: dict[str, Any],
+    *,
+    has_dependants: bool,
+    plan_assignments: dict[str, Any] | None,
+    display_name: str | None,
+    raw_description: str | None,
+) -> dict[str, Any]:
+    """A slip row's participation detail with the dependant mode made explicit.
+
+    A Participation cell usually states the employee's mode only
+    ("Compulsory"). Stored as ``dependant: None`` that read as the broker's
+    "Not covered", which outranks everything else — so "Directors and
+    Eligible Dependents" priced EO/ES/EC/EF covered no dependants at all. A
+    cell that is silent on dependants leaves the decision to the slip's other
+    evidence (the row's wording and its family-tier rates), resolved here once
+    so every reader sees the same stored answer.
+    """
+    out = dict(detail)
+    if _clean_mode(out.get("dependant")) is None:
+        out["dependant"] = category_dependant_mode(
+            has_dependants, plan_assignments, None, display_name, raw_description
+        )
+    return out
+
+
+def per_head_dependant_rate(
+    plan_assignments: dict[str, Any], dependant_mode: str | None
+) -> dict[str, Any]:
+    """Price each covered dependant at a row's single per-head rate.
+
+    "Directors and Eligible Dependents · headcount 8 · rate 710 · premium
+    5,680" prices every insured person — director or spouse — at 710. Left
+    without a ``dependant_rate``, ``member_premium`` refuses to price a member
+    with dependants rather than understate them. A slip that prices dependants
+    separately (a "Dependents" row, or EO/ES/EF tiers) keeps its own figures.
+    """
+    pa = dict(plan_assignments)
+    if (
+        dependant_mode in _VALID_DEPENDANT_MODES
+        and pa.get("rate_basis") in ("flat", "per_member")
+        and isinstance(pa.get("premium_rate"), (int, float))
+        and not isinstance(pa.get("premium_rate"), bool)
+        and pa["premium_rate"] > 0
+        and pa.get("dependant_rate") is None
+        and not pa.get("rate_tiers")
+    ):
+        pa["dependant_rate"] = pa["premium_rate"]
+    return pa
+
+
 def has_member_cover_eligibility_answer(answers: Any) -> bool:
     if not isinstance(answers, dict):
         return False

@@ -576,6 +576,8 @@ export interface CoverageSummaryItem {
   needs_check?: boolean;
   /** Terminated on the roster — only present when leavers were asked for. */
   left: boolean;
+  /** Slip limits this member or a covered dependant crosses that need action. */
+  limit_alerts?: number;
 }
 
 export interface CoverageSummary {
@@ -673,6 +675,42 @@ export interface CoverageLine {
   premium_note?: string | null;
   /** Broker only: the setup or roster input that stops cover/premium resolving. */
   financial_gaps?: FinancialGap[];
+  /** Broker only: slip limits this line crosses (`services/coverage_limits.py`). */
+  limit_alerts?: CoverageLimitAlert[];
+}
+
+export type LimitKind =
+  | "over_age"
+  | "over_entry_age"
+  | "dependant_over_age"
+  | "underwriting"
+  | "capped"
+  | "no_salary"
+  | "no_dob";
+
+/** One slip limit one person crosses on one product. */
+export interface CoverageLimitAlert {
+  kind: LimitKind;
+  /** "action" needs the broker; "info" states a fact the slip intends. */
+  severity: "action" | "info";
+  product_code: string;
+  product_name: string;
+  employee_id: string;
+  staff_id: string;
+  employee_name: string | null;
+  dependant_id: string | null;
+  dependant_name: string | null;
+  relationship: string | null;
+  age: number | null;
+  limit: number | null;
+  amount: number | null;
+  message: string;
+}
+
+export interface CoverageLimits {
+  alerts: CoverageLimitAlert[];
+  /** People affected per kind; a person crossing three products counts once. */
+  counts: Partial<Record<LimitKind, number>>;
 }
 
 export type FinancialGap = "basis" | "salary" | "rate" | "tier_rate" | "dependant_rate";
