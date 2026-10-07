@@ -290,6 +290,7 @@ def selection_snapshot(body: SelectionIn, user: CurrentUser, db: Session) -> dic
             422, "Configure the company portal address before preparing invitations."
         )
     branding = BrandingContent.model_validate(store.branding_out(db, firm_id, client.id)["content"])
+    company_values, _ = context_values(client, content, branding, None)
     for row in rows:
         values, _ = context_values(client, content, branding, row)
         resolved_errors = validate_values(content, values)
@@ -304,6 +305,7 @@ def selection_snapshot(body: SelectionIn, user: CurrentUser, db: Session) -> dic
         "source": source,
         "policy_year_id": body.policy_year_id,
         "company_name": client.legal_name or client.name,
+        "company_values": {key: company_values[key] for key in ("company_name", "portal_url")},
         "recipients": rows,
     }
 
@@ -460,8 +462,14 @@ def preparation_detail(
     if content.audience == "hr" and user.role == "broker_viewer":
         raise HTTPException(403, "HR account details require broker administration access.")
     branding = BrandingContent.model_validate(row.snapshot["branding"])
-    values, _ = context_values(None, content, branding, None)
-    values["company_name"] = row.snapshot.get("company_name") or "Company name (sample)"
+    # Sample only recipient data. Older preparations did not snapshot the portal
+    # URL, so use their authorized company's current URL as the fallback.
+    values, _ = context_values(client, content, branding, None)
+    values["company_name"] = row.snapshot.get("company_name") or values["company_name"]
+    saved_company_values = row.snapshot.get("company_values", {})
+    for key in ("company_name", "portal_url"):
+        if key in saved_company_values:
+            values[key] = saved_company_values[key]
     return {
         "id": row.id,
         "title": row.template_title,

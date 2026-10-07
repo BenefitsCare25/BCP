@@ -47,16 +47,27 @@ function EmailWorkspace() {
   const sending = query.data?.items.find(item => item.key === sendKey);
   const back = () => guard(() => { setSelected(null); setSendKey(null); setCopyContent(undefined); setDirty(false); });
   const resetView = () => { setSelected(null); setSendKey(null); setCopyContent(undefined); setDirty(false); };
+  const refreshInheritedCatalogs = () => qc.invalidateQueries({
+    queryKey: ["email-templates"],
+    predicate: query => query.queryKey[2] === "company",
+    refetchType: "all",
+  });
   const saved = (item: Template) => {
     qc.setQueryData<Catalog>(["email-templates", clientId, scope], previous => previous ? ({ ...previous,
       items: previous.items.some(row => row.key === item.key) ? previous.items.map(row => row.key === item.key ? item : row) : [...previous.items, item] }) : previous);
     setSelected(item.key); setCopyContent(undefined); setDirty(false);
     void qc.invalidateQueries({ queryKey: ["email-versions"] });
+    if (scope === "firm") void refreshInheritedCatalogs();
   };
   const confirmRemove = async () => {
     if (!remove) return;
     setBusy(true); setError("");
-    try { await api.delete(apiPath(scope, `/${remove.key}`), clientOptions(clientId)); setRemove(null); await query.refetch(); }
+    try {
+      await api.delete(apiPath(scope, `/${remove.key}`), clientOptions(clientId));
+      setRemove(null);
+      if (scope === "firm") await refreshInheritedCatalogs();
+      await query.refetch();
+    }
     catch (caught) { setError(formatError(caught)); }
     finally { setBusy(false); }
   };
@@ -75,7 +86,7 @@ function EmailWorkspace() {
     </div>
     {error && <p role="alert" className="text-sm text-error">{error}</p>}
     {tab === "branding" ? <BrandingEditor key={scope} scope={scope} editable={editable} onDirty={onDirty} /> : tab === "prepared" ? <PreparedMessages /> :
-      query.isError ? <p role="alert" className="text-sm text-error">{formatError(query.error)} <Button size="sm" variant="link" onClick={() => void query.refetch()}>Retry</Button></p> : !query.data ?
+      query.isError ? <p role="alert" className="text-sm text-error">{formatError(query.error)} <Button size="sm" variant="link" onClick={() => void query.refetch()}>Retry</Button></p> : !query.data || (query.isFetching && query.isStale && !selected && !sendKey) ?
         <p role="status" className="text-sm text-muted-foreground">Loading email templates…</p> : sending?.published_content ?
           <SendFlow key={`${clientId}-${sending.key}`} item={sending} onBack={back} onDirty={onDirty} onPrepared={() => { void qc.invalidateQueries({ queryKey: ["email-preparations"] }); }} /> : selected ?
           <TemplateEditor key={`${scope}-${selected}`} item={row} initial={copyContent} scope={scope} fields={query.data.placeholders} editable={editable}

@@ -79,7 +79,9 @@ test("real recipient preview and selected preparation work without SMTP", async 
     policy_year_id: yearId, file: { name: "email-review.xlsx", mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", buffer: workbook },
   } });
   expect(upload.ok(), await upload.text()).toBe(true);
-  const content = { title: `Manual email ${suffix}`, subject: "Welcome {{recipient_name}}", body: "Hello {{recipient_name}} at {{company_name}}.", audience: "employee", purpose: "general" };
+  const content = { title: `Manual email ${suffix}`, subject: "Welcome {{recipient_name}}",
+    body: "Hello {{recipient_name}} at {{company_name}}. Visit {{portal_url}}.", audience: "employee", purpose: "general",
+    button_label: "Open portal", button_url: "{{portal_url}}" };
   const created = await (await request.post("/api/v1/email-templates", { headers, data: { content } })).json();
   const published = await request.post(`/api/v1/email-templates/${created.key}/publish`, { headers, data: { revision: created.revision } });
   expect(published.ok(), await published.text()).toBe(true);
@@ -91,6 +93,8 @@ test("real recipient preview and selected preparation work without SMTP", async 
   await page.getByLabel("Preview recipient").selectOption(value!);
   await expect(page.getByText("Real recipient data · preview only", { exact: true })).toBeVisible();
   await expect(page.frameLocator('iframe[title="Rendered email preview"]').getByText("Hello Email Review Alex at", { exact: false })).toBeVisible();
+  const portalUrl = await page.frameLocator('iframe[title="Rendered email preview"]').getByRole("link", { name: "Open portal" }).getAttribute("href");
+  expect(portalUrl).not.toContain("example.invalid");
   await page.getByRole("button", { name: "Templates", exact: true }).last().click();
   await page.getByRole("row").filter({ has: page.getByRole("button", { name: content.title, exact: true }) }).getByRole("button", { name: "Send email", exact: true }).click();
   await page.getByLabel("Find employees").fill(suffix);
@@ -106,6 +110,7 @@ test("real recipient preview and selected preparation work without SMTP", async 
   await page.getByRole("button", { name: content.title, exact: true }).click();
   await expect(page.getByRole("heading", { name: "1 saved recipients" })).toBeVisible();
   await expect(page.frameLocator('iframe[title="Saved email preview"]').getByText("Hello Alex Tan (sample)", { exact: false })).toBeVisible();
+  await expect(page.frameLocator('iframe[title="Saved email preview"]').getByRole("link", { name: "Open portal" })).toHaveAttribute("href", portalUrl!);
   const delivery = await request.post("/api/v1/email-templates/send", { headers, data: {} });
   expect(delivery.status()).toBe(503);
   await page.screenshot({ path: testInfo.outputPath("email-prepared.png"), fullPage: true });
@@ -124,6 +129,89 @@ test("branding validates addresses and viewers cannot edit", async ({ page, requ
   await expect(page.getByRole("button", { name: "Send email", exact: true })).toHaveCount(0);
   await page.getByRole("button", { name: "Employee welcome", exact: true }).click();
   await expect(page.getByLabel("Template title", { exact: true })).toBeDisabled();
+});
+
+test("broker publications refresh an already loaded company catalog", async ({ page, request }, testInfo) => {
+  const suffix = `${testInfo.project.name}-${Date.now()}`;
+  const initialTitle = `Existing broker default ${suffix}`;
+  const me = await (await request.get("/api/v1/me")).json();
+  const headers = { "X-Inspro-Client": me.active_client_id };
+  const created = await request.post("/api/v1/email-templates?scope=firm", { headers, data: {
+    content: { title: initialTitle, subject: "Initial broker subject", body: "Hello {{recipient_name}}." },
+  } });
+  expect(created.ok(), await created.text()).toBe(true);
+  const initial = await created.json();
+  const published = await request.post(`/api/v1/email-templates/${initial.key}/publish?scope=firm`, {
+    headers, data: { revision: initial.revision },
+  });
+  expect(published.ok(), await published.text()).toBe(true);
+  await enter(page, request);
+  await expect(page.getByRole("button", { name: initialTitle, exact: true })).toBeVisible();
+  const subject = `Updated broker welcome ${suffix}`;
+  await page.getByLabel("Configure", { exact: true }).selectOption("firm");
+  await page.getByRole("button", { name: initialTitle, exact: true }).click();
+  await page.getByLabel("Email subject", { exact: true }).fill(subject);
+  await page.getByRole("button", { name: "Publish template" }).click();
+  await page.getByRole("button", { name: "Publish", exact: true }).click();
+  await expect(page.getByText("Template published. No email was sent.", { exact: true })).toBeVisible();
+  await page.getByLabel("Configure", { exact: true }).selectOption("company");
+  await page.getByRole("button", { name: initialTitle, exact: true }).click();
+  await expect(page.getByLabel("Email subject", { exact: true })).toHaveValue(subject);
+
+  await page.getByLabel("Configure", { exact: true }).selectOption("firm");
+  await page.getByRole("button", { name: "New template", exact: true }).click();
+  const title = `New broker default ${suffix}`;
+  await page.getByLabel("Template title", { exact: true }).fill(title);
+  await page.getByLabel("Email subject", { exact: true }).fill("Broker announcement");
+  await page.getByLabel("Email content", { exact: true }).fill("Hello {{recipient_name}}.");
+  await page.getByRole("button", { name: "Publish template" }).click();
+  await page.getByRole("button", { name: "Publish", exact: true }).click();
+  await expect(page.getByRole("dialog", { name: "Publish this template?" })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Edit template", exact: true })).toBeVisible();
+  await page.getByLabel("Configure", { exact: true }).selectOption("company");
+  await expect(page.getByRole("button", { name: title, exact: true })).toBeVisible();
+});
+
+test("removing a broker default refreshes the cached inherited company catalog", async ({ page, request }) => {
+  let removed = false;
+  const title = "Disposable broker catalog removal";
+  // Exercise the system-admin UI with a synthetic catalog; no privileged API
+  // mutation or role change is made in the disposable test database.
+  await page.route("**/api/v1/me", async route => {
+    const response = await route.fetch();
+    await route.fulfill({ response, json: { ...await response.json(), role: "system_admin" } });
+  });
+  await page.route("**/api/v1/email-templates**", async route => {
+    const url = new URL(route.request().url());
+    if (route.request().method() === "DELETE" && url.pathname.endsWith("/custom_cache-removal")) {
+      removed = true;
+      await route.fulfill({ status: 204 });
+      return;
+    }
+    if (route.request().method() !== "GET" || url.pathname !== "/api/v1/email-templates") {
+      await route.continue();
+      return;
+    }
+    const response = await route.fetch();
+    const catalog = await response.json();
+    if (!removed) {
+      const base = catalog.items[0];
+      catalog.items.push({ ...base, key: "custom_cache-removal", source: "firm",
+        content: { ...base.content, title }, published_content: { ...base.content, title },
+        has_local_draft: url.searchParams.get("scope") === "firm", has_changes: false });
+    }
+    await route.fulfill({ response, json: catalog });
+  });
+  await enter(page, request);
+  await expect(page.getByRole("button", { name: title, exact: true })).toBeVisible();
+  await page.getByLabel("Configure", { exact: true }).selectOption("firm");
+  await page.getByRole("button", { name: `Remove ${title}`, exact: true }).click();
+  await page.getByRole("button", { name: "Remove template", exact: true }).click();
+  await expect(page.getByRole("button", { name: title, exact: true })).toHaveCount(0);
+  await page.getByLabel("Configure", { exact: true }).selectOption("company");
+  await expect(page.getByRole("button", { name: "Employee welcome", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: title, exact: true })).toHaveCount(0);
+  await page.unrouteAll({ behavior: "wait" });
 });
 
 test("HTTPS branding images render inside a sandbox under production CSP", async ({ page, request }) => {

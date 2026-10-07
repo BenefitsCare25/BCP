@@ -13,6 +13,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.api.v1.email_templates import router
 from app.core.auth import CurrentUser, get_current_user
+from app.core.settings import get_settings
 from app.db.base import Base
 from app.db.session import get_db
 from app.models import (
@@ -487,24 +488,115 @@ def test_hr_real_preview_and_preparation_do_not_change_credentials(setup):
         for row in client.get("/email-templates").json()["items"]
         if row["key"] == "hr_invitation"
     )["content"]
+    content["body"] += "\n\nVisit {{portal_url}}."
+    row = publish(client, create(client, content))
     preview = client.post(
         "/email-templates/preview", json={"content": content, "recipient_id": "hr"}
     ).json()
     assert preview["values"]["recipient_name"] == "HR Example"
     assert preview["values"]["hr_role_label"] == "HR Officer"
     assert "/hr/sign-in" in preview["values"]["portal_url"]
-    body = {"template_key": "hr_invitation", "recipient_ids": ["hr"]}
+    body = {"template_key": row["key"], "recipient_ids": ["hr"]}
     review = client.post("/email-templates/review", json=body).json()
     assert review["eligible_count"] == 1
     saved = client.post(
         "/email-templates/prepare",
         json=body | {"request_key": str(uuid4()), "review_token": review["review_token"]},
     ).json()
+    sample = client.post("/email-templates/preview", json={"content": content}).json()
+    detail = client.get(f"/email-templates/preparations/{saved['id']}").json()
+    assert detail["preview"] == {
+        key: sample[key] for key in ("subject", "preheader", "html", "text")
+    }
     with factory() as db:
         assert db.get(AuthCredential, "cred").password_hash == "unchanged-test-hash"
         assert db.get(User, "hr").status == "invited"
     actors[0] = replace(actors[0], role="broker_viewer")
     assert client.get(f"/email-templates/preparations/{saved['id']}").status_code == 403
+
+
+@pytest.mark.parametrize("tenant_mode", ["header", "subdomain"])
+def test_saved_preview_retains_company_values_after_company_changes(
+    setup, monkeypatch, tenant_mode
+):
+    client, factory, _ = setup
+    settings = replace(
+        get_settings(),
+        tenant_mode=tenant_mode,
+        base_domain="benefits.example.com",
+        frontend_origin="https://benefits.example.com",
+    )
+    monkeypatch.setattr("app.services.email_template_recipients.get_settings", lambda: settings)
+    monkeypatch.setattr("app.services.member_invite.get_settings", lambda: settings)
+    content = BASE | {
+        "body": "Hello {{recipient_name}} at {{company_name}}. Visit {{portal_url}}.",
+        "button_label": "Open portal",
+        "button_url": "{{portal_url}}",
+    }
+    row = publish(client, create(client, content))
+    preview = client.post("/email-templates/preview", json={"content": content}).json()
+    assert "acme" in preview["values"]["portal_url"]
+    selection = {"template_key": row["key"], "policy_year_id": "year", "recipient_ids": ["bob"]}
+    review = client.post("/email-templates/review", json=selection).json()
+    request = selection | {"request_key": str(uuid4()), "review_token": review["review_token"]}
+    response = client.post("/email-templates/prepare", json=request)
+    assert response.status_code == 201, response.text
+    saved_id = response.json()["id"]
+    with factory() as db:
+        company = db.get(Client, "c1")
+        company.legal_name, company.slug = "Changed company", "changed"
+        db.commit()
+    detail = client.get(f"/email-templates/preparations/{saved_id}").json()
+    assert detail["preview"] == {
+        key: preview[key] for key in ("subject", "preheader", "html", "text")
+    }
+    assert "Alex Tan (sample)" in detail["preview"]["text"]
+    assert "Bob Example" not in detail["preview"]["text"]
+    assert client.post("/email-templates/prepare", json=request).status_code == 409
+
+
+def test_legacy_saved_preview_uses_company_portal_and_saved_name(setup):
+    client, factory, _ = setup
+    content = BASE | {
+        "body": "Visit {{portal_url}} for {{company_name}}.",
+        "button_label": "Open portal",
+        "button_url": "{{portal_url}}",
+    }
+    row = publish(client, create(client, content))
+    selection = {"template_key": row["key"], "policy_year_id": "year", "recipient_ids": ["bob"]}
+    review = client.post("/email-templates/review", json=selection).json()
+    saved_id = client.post(
+        "/email-templates/prepare",
+        json=selection | {"request_key": str(uuid4()), "review_token": review["review_token"]},
+    ).json()["id"]
+    with factory() as db:
+        saved = db.get(EmailPreparation, saved_id)
+        saved.snapshot = {
+            key: value for key, value in saved.snapshot.items() if key != "company_values"
+        }
+        db.get(Client, "c1").legal_name = "Changed company"
+        db.commit()
+    preview = client.post("/email-templates/preview", json={"content": content}).json()
+    detail = client.get(f"/email-templates/preparations/{saved_id}").json()
+    assert preview["values"]["portal_url"] in detail["preview"]["text"]
+    assert "ACME Pte Ltd" in detail["preview"]["text"]
+    assert "Changed company" not in detail["preview"]["text"]
+    assert "https://example.invalid" not in detail["preview"]["html"]
+
+
+def test_portal_address_change_requires_recipient_review_again(setup):
+    client, factory, _ = setup
+    row = publish(client, create(client, BASE | {"body": "Visit {{portal_url}}."}))
+    selection = {"template_key": row["key"], "policy_year_id": "year", "recipient_ids": ["bob"]}
+    review = client.post("/email-templates/review", json=selection).json()
+    with factory() as db:
+        db.get(Client, "c1").slug = "changed"
+        db.commit()
+    response = client.post(
+        "/email-templates/prepare",
+        json=selection | {"request_key": str(uuid4()), "review_token": review["review_token"]},
+    )
+    assert response.status_code == 409
 
 
 def test_tampered_review_and_branding_reset_permissions(setup):
