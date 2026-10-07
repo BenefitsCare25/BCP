@@ -32,6 +32,7 @@ import { MountRow } from "@/components/portal/leaf/Mount";
 import { choiceControl, choiceRowClass } from "./choiceRow";
 import { TierDifferences } from "./TierDifferences";
 import { cn } from "@/lib/cn";
+import { basisWording, coverWording } from "@/lib/basis";
 
 /** Above this, the options stop being comparable and become a list to search. */
 const MAX_CHOICE_ROWS = 6;
@@ -162,14 +163,17 @@ function TierFigureRows({
   siTerm: string;
 }) {
   const si = tier.financials?.sum_insured ?? null;
+  const basis = coverWording(tier.financials?.basis, tier.financials?.max_sum_insured);
   const price = priceTerm(tier, flexOnChange);
   return (
     <>
-      {si != null && (
+      {si != null ? (
         <Row term={siTerm}>
           <Money value={si} currency={currency} />
         </Row>
-      )}
+      ) : basis ? (
+        <Row term={siTerm}>{basis}</Row>
+      ) : null}
       {price?.amount != null && (
         <Row term={price.term}>
           <Money value={price.amount} currency={currency} />
@@ -217,10 +221,16 @@ function hasPremiumRows(price: TierPrice | null | undefined): boolean {
   return !!price && (price.premium !== null || price.share !== null);
 }
 
+/** A stated amount, or a worded basis ("48 × basic monthly salary") sent in
+ * its place — the portal never receives a salary-derived sum insured. */
+function hasCover(tier: CohortTier): boolean {
+  return tier.financials?.sum_insured != null || basisWording(tier.financials?.basis) != null;
+}
+
 /** True when a tier has any figure worth a `<dl>` at all. */
 function hasFigureRows(tier: CohortTier, flexOnChange: boolean): boolean {
   return (
-    tier.financials?.sum_insured != null ||
+    hasCover(tier) ||
     priceTerm(tier, flexOnChange)?.amount != null
   );
 }
@@ -239,7 +249,7 @@ function TierFigures({
   isCurrent?: boolean;
 }) {
   const price = priceTerm(tier, flexOnChange);
-  if (tier.financials?.sum_insured == null && !price && !hasPremiumRows(premium)) return null;
+  if (!hasCover(tier) && !price && !hasPremiumRows(premium)) return null;
   return (
     <>
       {(hasFigureRows(tier, flexOnChange) || hasPremiumRows(premium)) && (

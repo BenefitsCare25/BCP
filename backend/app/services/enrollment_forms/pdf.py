@@ -148,6 +148,11 @@ def _cover(sel: dict[str, Any]) -> str:
         parts.append(escape(str(sel["highlight"])))
     if isinstance(sel.get("sum_insured"), (int, float)):
         parts.append(f"Sum insured {_money(sel['sum_insured'])}")
+    elif sel.get("basis"):
+        cover = escape(str(sel["basis"]))
+        if isinstance(sel.get("max_sum_insured"), (int, float)):
+            cover += f", up to {_money(sel['max_sum_insured'])}"
+        parts.append(f"Sum insured {cover}")
     return "<br/>".join(parts) or "-"
 
 

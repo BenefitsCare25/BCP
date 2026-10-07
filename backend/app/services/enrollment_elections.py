@@ -112,7 +112,7 @@ from app.services.leave_pricing_resolver import (
     leave_sell_eligible,
 )
 from app.services.member_premium import member_premium
-from app.services.plan_hydration import apply_gst_to_financials
+from app.services.plan_hydration import apply_gst_to_financials, member_cover_view
 from app.services.plan_labels import member_plan_label
 
 
@@ -233,40 +233,20 @@ def _member_safe_options(options: EnrollmentOptionsOut) -> EnrollmentOptionsOut:
     disagreeing about what a member may see is how a leak survives review.
 
     What SURVIVES is what a member actually decides on:
-      * ``sum_insured`` — how much they'd be covered for, and
+      * their cover, via ``member_cover_view`` — the basis WORDING when cover
+        is a salary multiple or relative ("48 x basic monthly salary"), never
+        the amount multiplied out from their salary; the stated amount when
+        the basis is a plain figure; and
       * ``price_tag`` (untouched, on the tier itself) — what the change costs
         THEM out of their own flex wallet.
 
-    ``num_employees`` and ``basis`` go too: the first is the slip's cohort
-    headcount and the second the group rating basis, both broker aggregates
-    about the scheme rather than facts about this member. Nothing renders them,
-    but they were still in the JSON the member's browser received.
+    ``num_employees`` goes too: it is the slip's cohort headcount, a broker
+    aggregate about the scheme rather than a fact about this member.
 
     A premium is what the company pays the insurer. It is not a price the
     member can act on, and showing it next to a wallet figure invites reading
     one as the other.
     """
-
-    def scrub(fin: PlanFinancials | None) -> PlanFinancials | None:
-        if fin is None:
-            return None
-        return fin.model_copy(
-            update={
-                "premium_rate": None,
-                "annual_premium": None,
-                "rate_basis": None,
-                "rate_tiers": None,
-                "dependant_rate": None,
-                "estimated_annual_earnings": None,
-                "voluntary_rates": None,
-                # Broker aggregates about the COHORT, not this member: the
-                # slip's stated headcount and the basis it was rated on.
-                "num_employees": None,
-                "basis": None,
-                # The badge only means anything beside a premium figure.
-                "gst_included": False,
-            }
-        )
 
     return options.model_copy(
         update={
@@ -274,7 +254,7 @@ def _member_safe_options(options: EnrollmentOptionsOut) -> EnrollmentOptionsOut:
                 p.model_copy(
                     update={
                         "tiers": [
-                            t.model_copy(update={"financials": scrub(t.financials)})
+                            t.model_copy(update={"financials": member_cover_view(t.financials)})
                             for t in p.tiers
                         ]
                     }

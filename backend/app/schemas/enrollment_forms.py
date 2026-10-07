@@ -188,6 +188,11 @@ class PlanFactOut(BaseModel):
     label: str
     highlight: str | None = None
     sum_insured: float | None = None
+    # Cover stated as wording ("48 x basic monthly salary"); set instead of
+    # ``sum_insured`` so the member never sees the salary-derived amount.
+    basis: str | None = None
+    # The policy maximum beside a worded basis ("… up to S$1,600,000").
+    max_sum_insured: float | None = None
     insurer: str | None = None
 
 

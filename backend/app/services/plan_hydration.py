@@ -160,10 +160,12 @@ def hydrate_plans(
             # category id), price off that tier's plan_assignments — its
             # age-banded voluntary rate + basis — instead of the matched baseline.
             fin_pa = pa
+            pricing_category_id: str | None = None
             if override and not resolved.declined and override.tier_category_id:
                 elected = cat_info.get(override.tier_category_id)
                 if elected and elected[1]:
                     fin_pa = elected[1]
+                    pricing_category_id = override.tier_category_id
                 else:
                     # The elected tier's category was deleted (re-parse) — the
                     # member's premium silently reverts to the baseline tier's
@@ -230,6 +232,7 @@ def hydrate_plans(
                 plan_overridden=resolved.overridden,
                 override_source=resolved.override_source,
                 covered_dependant_ids=resolved.covered_dependant_ids,
+                pricing_category_id=pricing_category_id,
             ))
         if matched:
             result[emp.id] = matched
@@ -278,6 +281,7 @@ def build_financials(pa: dict[str, Any]) -> PlanFinancials | None:
         dependant_rate=pa.get("dependant_rate"),
         estimated_annual_earnings=pa.get("estimated_annual_earnings"),
         voluntary_rates=bands or None,
+        max_sum_insured=positive_number(pa.get("max_sum_insured")),
     )
 
 
@@ -301,6 +305,11 @@ def member_age(db: Session, employee: Employee) -> int | None:
     return _employee_age(employee, _reference_date(db, employee.policy_year_id))
 
 
+# A plain amount as a slip or broker writes it: "10000.0", "1,000,000",
+# "S$10,000.00". Mirrors frontend lib/basis.ts::parseAmount (AMOUNT_RE).
+_PLAIN_AMOUNT = re.compile(r"(?:S?\$\s*)?(\d[\d,]*(?:\.\d+)?)")
+
+
 def basis_amount(pa: dict[str, Any]) -> float | None:
     """Per-member sum assured from ``basis`` — but only when it's a plain amount.
 
@@ -309,13 +318,15 @@ def basis_amount(pa: dict[str, Any]) -> float | None:
     until a salary / linked SI is applied → None.
     """
     b = pa.get("basis")
+    if isinstance(b, bool):
+        return None
     if isinstance(b, (int, float)):
         return float(b)
     if isinstance(b, str):
-        try:
-            return float(b.strip())
-        except ValueError:
+        match = _PLAIN_AMOUNT.fullmatch(b.strip())
+        if match is None:
             return None
+        return float(match.group(1).replace(",", ""))
     return None
 
 
@@ -504,6 +515,39 @@ def member_financials(
             "annual_premium": premium,
             "num_employees": None,
         }
+    )
+
+
+def worded_basis(basis: Any) -> str | None:
+    """The basis as wording ("48 x basic monthly salary", "50% of GTL"), or
+    None when it is blank or a plain amount."""
+    text = str(basis or "").strip()
+    if not text or basis_amount({"basis": text}) is not None:
+        return None
+    return text
+
+
+def member_cover_view(fin: PlanFinancials | None) -> PlanFinancials | None:
+    """What an employee may see of their own cover — nothing about premiums.
+
+    A worded basis is shown as its wording and the computed amount withheld:
+    "48 x basic monthly salary" tells the member how cover works, while the
+    S$ figure multiplied out from their salary is not something the employer
+    wants printed on the portal. A plain-amount basis IS the stated cover, so
+    that amount stays. Every premium and cohort field is dropped.
+    """
+    if fin is None:
+        return None
+    wording = worded_basis(fin.basis)
+    sum_insured = None if wording else fin.sum_insured
+    if wording is None and sum_insured is None:
+        return None
+    # The policy maximum is a stated figure, not a salary-derived one: without
+    # it "48 x basic monthly salary" overstates a capped member's cover.
+    return PlanFinancials(
+        basis=wording,
+        sum_insured=sum_insured,
+        max_sum_insured=fin.max_sum_insured if wording else None,
     )
 
 

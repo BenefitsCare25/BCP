@@ -14,6 +14,7 @@
  * comes from a value the plan actually states; a missing row produces no fact,
  * never an invented or "NA" one. */
 import type { BenefitItem, BenefitSubItem, CoverageLine } from "@/types";
+import { coverWording } from "@/lib/basis";
 import { formatValue, subItemsOf } from "@/lib/benefitSchedule";
 import { isAbsentValue } from "@/lib/sobValues";
 
@@ -336,9 +337,14 @@ export function careFacts(line: CoverageLine, routeKey: string): CareFact[] {
   const items = (line.benefit_schedule?.items ?? []).filter((item) => /\p{L}/u.test(item.name ?? ""));
   const code = line.product_code.trim().toUpperCase();
   const facts: CareFact[] = [];
+  // A worded basis ("48 × basic monthly salary") arrives instead of the amount
+  // it multiplies out to — the portal never shows a salary-derived figure.
   const sumInsured = line.financials?.sum_insured;
+  const basis = coverWording(line.financials?.basis, line.financials?.max_sum_insured);
   if (sumInsured != null) {
     facts.push({ label: "Amount you're covered for", value: formatValue(String(sumInsured), "currency", S$)! });
+  } else if (basis) {
+    facts.push({ label: "Amount you're covered for", value: basis });
   }
   if (routeKey !== "dental" && line.annual_policy_limit) {
     facts.push({ label: "Yearly limit", value: money(line.annual_policy_limit) ?? line.annual_policy_limit, note: "The most this plan pays in one policy year" });

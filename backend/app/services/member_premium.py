@@ -68,7 +68,9 @@ def member_premium(
         if rate is None:
             return None
         return MemberPremium(round(rate, 2), f"{tier} tier rate")
-    if fin.rate_basis == "flat" and isinstance(fin.premium_rate, (int, float)):
+    # "per_member" (what the setup card saves) and the slip's "flat" are the
+    # same per-head rate — full_el/cells.py prices them alike.
+    if fin.rate_basis in ("flat", "per_member") and isinstance(fin.premium_rate, (int, float)):
         base = float(fin.premium_rate)
         if base <= 0:
             return None

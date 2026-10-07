@@ -30,6 +30,7 @@ from app.schemas.enrollment_forms import (
     ProductContributionOut,
 )
 from app.services.member_premium import member_premium
+from app.services.plan_hydration import member_cover_view
 
 _COMPOSITIONS: tuple[tuple[str, str | None, int, int], ...] = (
     ("EO", None, 0, 0),
@@ -185,7 +186,10 @@ def plan_facts(
     out: list[PlanFactOut] = []
     for ts in products:
         for t in ts.tiers:
-            si = t.financials.sum_insured if t.financials else None
+            # Member-facing (the e-form and its signed PDF): a worded basis is
+            # shown as wording, never as the amount it multiplies out to.
+            cover = member_cover_view(t.financials)
+            si = cover.sum_insured if cover else None
             out.append(
                 PlanFactOut(
                     product_code=ts.product_code,
@@ -193,6 +197,8 @@ def plan_facts(
                     label=t.label,
                     highlight=highlight.get((ts.product_id, t.plan_code or "")),
                     sum_insured=float(si) if isinstance(si, (int, float)) and si > 0 else None,
+                    basis=cover.basis if cover else None,
+                    max_sum_insured=cover.max_sum_insured if cover else None,
                     insurer=insurers.get(ts.product_id),
                 )
             )

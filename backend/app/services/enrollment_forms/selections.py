@@ -278,6 +278,8 @@ def selection_rows(selections: list[Selection], ctx: MemberFormContextOut) -> li
             "elected_plan": None if sel.declined else (sel.tier.label if sel.tier else None),
             "highlight": fact.highlight if fact else None,
             "sum_insured": fact.sum_insured if fact else None,
+            "basis": fact.basis if fact else None,
+            "max_sum_insured": fact.max_sum_insured if fact else None,
             "declined": sel.declined,
             "family_mode": sel.family_mode,
             "covered": [deps[i].name or "-" for i in sel.covered_ids if i in deps],

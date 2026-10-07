@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   ChevronDown,
   ChevronRight,
@@ -27,7 +27,15 @@ import type {
   TemplateTier,
   VoluntaryRateBand,
 } from "@/types";
-import { CategoryCard, isAgeBanded, type MemberCount } from "./CategoryCard";
+import { CategoryCard, type MemberCount } from "./CategoryCard";
+import { MaxSumInsuredField } from "./MaxSumInsuredField";
+import {
+  assignmentGaps,
+  assignmentGapText,
+  isAgeBanded,
+  type AssignmentGap,
+  type AssignmentGapContext,
+} from "./setup/setupGaps";
 import {
   groupEmployeeCategories,
   onlySavedOverlapWarnings,
@@ -47,6 +55,17 @@ interface Props {
   tiers: TemplateTier[];
   categories: Category[];
   onEditRule: (category: Category) => void;
+  /** The product's member cover includes a spouse or child. */
+  dependantsCovered: boolean;
+  /** The product has one plan, which a blank plan type resolves to. */
+  singlePlan: boolean;
+  /** Checklist jump: open this plan assignment once, then report it handled. */
+  focusCategoryId?: string;
+  focusNonce?: number;
+  onFocusHandled?: () => void;
+  /** Sum-assured products: the slip's maximum sum insured per person. */
+  maxSumInsured: string;
+  onMaxSumInsuredChange: (value: string) => void;
 }
 
 export function EmployeeCategoryPlanTab(props: Props) {
@@ -60,9 +79,39 @@ export function EmployeeCategoryPlanTab(props: Props) {
   const [issuesOnly, setIssuesOnly] = useState(false);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [editing, setEditing] = useState<string | null>(null);
+  const gapContext: AssignmentGapContext = {
+    basisModel: props.basisModel,
+    rateModel: props.rateModel,
+    dependantsCovered: props.dependantsCovered,
+    singlePlan: props.singlePlan,
+  };
+  const { focusCategoryId, focusNonce, onFocusHandled } = props;
+  useEffect(() => {
+    if (!focusCategoryId) return;
+    const group = data.groups.find((item) =>
+      item.categories.some((category) => category.id === focusCategoryId),
+    );
+    // Not loaded yet: the effect re-runs when the groups arrive.
+    if (!group) return;
+    setIssuesOnly(false);
+    setExpanded((current) => new Set(current).add(group.key));
+    setEditing(focusCategoryId);
+    const frame = requestAnimationFrame(() => {
+      document
+        .getElementById(`plan-assignment-${focusCategoryId}`)
+        ?.scrollIntoView({ block: "center", behavior: "smooth" });
+      // Consumed: returning to this tab later must not jump again.
+      onFocusHandled?.();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [focusCategoryId, focusNonce, data.groups, onFocusHandled]);
   const hasIssue = (group: EmployeeCategoryGroup) => {
     if (groupOverlapEmployees(group, overlapsByCategory).length > 0) return true;
-    return group.ruleStatus !== "validated";
+    if (group.ruleStatus !== "validated") return true;
+    // Missing setup data counts too, so "issues only" never hides it.
+    return group.categories.some(
+      (category) => assignmentGaps(category, gapContext).length > 0,
+    );
   };
   const issueCount = data.groups.filter(hasIssue).length;
   const visibleGroups = issuesOnly
@@ -115,6 +164,12 @@ export function EmployeeCategoryPlanTab(props: Props) {
         policyYearId={props.policyYearId}
         productId={props.productId}
       />
+      {props.basisModel === "sum_assured" && (
+        <MaxSumInsuredField
+          value={props.maxSumInsured}
+          onChange={props.onMaxSumInsuredChange}
+        />
+      )}
       {overlapQuery.isError && (
         <p role="alert" className="text-xs text-warn">
           Current overlap details are unavailable. Refresh to check the employee listing again.
@@ -135,6 +190,7 @@ export function EmployeeCategoryPlanTab(props: Props) {
             basisModel={props.basisModel}
             rateModel={props.rateModel}
             tiers={props.tiers}
+            gapContext={gapContext}
             expanded={expanded.has(group.key)}
             editing={editing}
             onToggle={() => toggleGroup(group.key)}
@@ -351,6 +407,7 @@ function EmployeeCategoryRow({
   basisModel,
   rateModel,
   tiers,
+  gapContext,
   expanded,
   editing,
   onToggle,
@@ -366,19 +423,37 @@ function EmployeeCategoryRow({
   basisModel: BasisModel;
   rateModel: RateModel;
   tiers: TemplateTier[];
+  gapContext: AssignmentGapContext;
   expanded: boolean;
   editing: string | null;
   onToggle: () => void;
   onEditAssignment: (id: string) => void;
   onEditRule: (category: Category) => void;
 }) {
+  const gapsByCategory = new Map(
+    group.categories.map((category) => [category.id, assignmentGaps(category, gapContext)]),
+  );
+  const missingCount = [...gapsByCategory.values()].reduce(
+    (total, gaps) => total + gaps.length,
+    0,
+  );
   return (
     <section className="rounded-lg border border-border bg-card">
-      <div className="grid grid-cols-[minmax(16rem,1fr)_auto_auto_auto] items-center gap-3 overflow-x-auto p-3">
-        <button type="button" onClick={onToggle} aria-expanded={expanded} className="flex min-w-0 items-center gap-2 text-left">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 p-3">
+        <button type="button" onClick={onToggle} aria-expanded={expanded} className="flex min-w-0 flex-[1_1_16rem] items-center gap-2 text-left">
           {expanded ? <ChevronDown className="size-4 shrink-0" /> : <ChevronRight className="size-4 shrink-0" />}
           <span className="truncate text-sm font-semibold text-foreground">{group.name}</span>
         </button>
+        {missingCount > 0 ? (
+          <button
+            type="button"
+            onClick={onToggle}
+            aria-expanded={expanded}
+            aria-label={`${missingCount} missing ${missingCount === 1 ? "value" : "values"} · ${expanded ? "hide" : "show"} plan assignments`}
+          >
+            <Badge variant="warn">{missingCount} missing</Badge>
+          </button>
+        ) : null}
         <RuleStatus
           group={group}
           employeesAvailable={employeesAvailable}
@@ -426,8 +501,13 @@ function EmployeeCategoryRow({
           {group.categories.map((category) => {
             const plan = planFor(category, planOptions);
             const warning = assignmentWarning(category, group);
+            const gaps = gapsByCategory.get(category.id) ?? [];
             return (
-              <div key={category.id} className="rounded-md bg-muted/35 p-2">
+              <div
+                key={category.id}
+                id={`plan-assignment-${category.id}`}
+                className="scroll-mt-24 rounded-md bg-muted/35 p-2"
+              >
                 <div className="flex flex-wrap items-center gap-3">
                   <span className="flex min-w-40 flex-1 items-center gap-2 text-sm font-medium text-foreground">
                     <span className="truncate">
@@ -446,6 +526,7 @@ function EmployeeCategoryRow({
                     {editing === category.id ? "Close settings" : "Edit assignment"}
                   </Button>
                 </div>
+                {gaps.length > 0 && <MissingBadge gaps={gaps} />}
                 {editing === category.id && (
                   <div className="mt-2">
                     <CategoryCard
@@ -455,6 +536,8 @@ function EmployeeCategoryRow({
                       rateModel={rateModel}
                       tiers={tiers}
                       hasDependants={hasDependants}
+                      dependantsCovered={gapContext.dependantsCovered}
+                      singlePlan={gapContext.singlePlan}
                       onEditRule={() => onEditRule(category)}
                       assignmentOnly
                     />
@@ -466,6 +549,15 @@ function EmployeeCategoryRow({
         </div>
       )}
     </section>
+  );
+}
+
+function MissingBadge({ gaps }: { gaps: AssignmentGap[] }) {
+  const text = gaps.map(assignmentGapText).join(", ");
+  return (
+    <Badge variant="warn" className="mt-1.5 whitespace-normal">
+      Missing: {text}
+    </Badge>
   );
 }
 
@@ -537,7 +629,7 @@ function assignmentWarning(
   group: EmployeeCategoryGroup,
 ): string | null {
   const code = assignmentCode(category).trim().toLocaleLowerCase();
-  if (!code) return "Plan type missing";
+  if (!code) return null;
   const samePlan = group.categories.filter(
     (item) => assignmentCode(item).trim().toLocaleLowerCase() === code,
   );
@@ -573,7 +665,7 @@ function getVoluntaryRates(categories: Category[]): { bands: VoluntaryRateBand[]
 function EmptyCategories({ issuesOnly }: { issuesOnly: boolean }) {
   return (
     <p className="rounded-lg border border-border bg-card p-4 text-sm text-muted-foreground">
-      {issuesOnly ? "No employee category rules need attention." : "No employee categories yet. Add one to define who is covered."}
+      {issuesOnly ? "No employee categories need attention." : "No employee categories yet. Add one to define who is covered."}
     </p>
   );
 }

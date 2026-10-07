@@ -1,4 +1,4 @@
-"""Member-facing benefit statement — the broker statement with financials gated off.
+"""Member-facing benefit statement — the broker statement with premiums gated off.
 
 `build_benefit_statement` carries per-member premium figures and matching
 internals (method/confidence/rule text) that are broker-facing. The portal view
@@ -23,6 +23,7 @@ from app.schemas.api import BenefitStatementOut, CoverageLine
 from app.schemas.claims import UtilizationOut
 from app.services.benefit_statement import build_benefit_statement
 from app.services.member_schedule import member_schedule
+from app.services.plan_hydration import member_cover_view
 
 
 def build_member_statement(db: Session, employee: Employee) -> BenefitStatementOut:
@@ -30,8 +31,11 @@ def build_member_statement(db: Session, employee: Employee) -> BenefitStatementO
     coverage = [
         line.model_copy(
             update={
-                "financials": None,
+                # Cover only, never premiums: a worded basis ("48 x basic
+                # monthly salary") instead of the amount it multiplies out to.
+                "financials": member_cover_view(line.financials),
                 "premium_note": None,
+                "financial_gaps": [],
                 "match_method": None,
                 "match_confidence": None,
                 "rule_human_readable": None,

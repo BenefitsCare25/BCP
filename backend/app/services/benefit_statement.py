@@ -48,6 +48,7 @@ from app.services.dependant_coverage import (
     category_dependant_mode,
     has_member_cover_eligibility_answer,
 )
+from app.services.el_report_rules import positive_number
 from app.services.flex_membership import (
     classify_relationship,
     count_dependants,
@@ -56,7 +57,7 @@ from app.services.flex_membership import (
 from app.services.flex_pricing_resolver import summarize_employee
 from app.services.flex_proration import proration_line
 from app.services.member_premium import member_premium
-from app.services.plan_hydration import basis_amount, hydrate_plans
+from app.services.plan_hydration import hydrate_plans, salary_from_attrs, salary_multiple
 from app.services.product_registry import get_entry
 from app.services.roster_attributes import (
     DOB_KEYS,
@@ -318,6 +319,75 @@ def _category_facts(
     return facts
 
 
+GapKind = Literal["basis", "salary", "rate", "tier_rate", "dependant_rate"]
+
+
+def _has_basis(pa: dict[str, Any]) -> bool:
+    return str(pa.get("basis") or "").strip() != ""
+
+
+def _sum_assured(pa: dict[str, Any], fin: PlanFinancials | None) -> bool:
+    """Priced per S$1,000 of the member's own cover, or by age band.
+
+    ``member_financials`` has already reduced these to the member: their cover
+    from the basis and, for ``per_1000_si``, the premium on it. A stated basis
+    with no rate model yet is still sum-assured cover awaiting its rate.
+    """
+    rate_basis = fin.rate_basis if fin is not None else pa.get("rate_basis")
+    return (
+        bool(pa.get("voluntary_rates"))
+        or rate_basis == "per_1000_si"
+        or (_has_basis(pa) and not rate_basis)
+    )
+
+
+def _priced_tiers(pa: dict[str, Any]) -> bool:
+    tiers = pa.get("rate_tiers")
+    return isinstance(tiers, dict) and any(
+        isinstance(cell, dict) and positive_number(cell.get("rate")) is not None
+        for cell in tiers.values()
+    )
+
+
+def _financial_gaps(
+    pa: dict[str, Any] | None,
+    fin: PlanFinancials | None,
+    attrs: dict[str, Any],
+    *,
+    dependants: int,
+) -> list[GapKind]:
+    """Which setup or roster input stops this line's cover or premium resolving.
+
+    Lets the broker table say "Rate not set" or "Salary missing" where it would
+    otherwise print a bare dash that reads the same as "not applicable". It
+    reads the plan assignment the line was PRICED from (the elected tier when
+    the member chose one) and never reports a gap for a figure that resolved.
+    """
+    pa = pa or {}
+    if pa.get("rate_basis") in ("annual_flat", "earnings_based"):
+        # Policy-level totals: no per-member figure exists to be missing.
+        return []
+    gaps: list[GapKind] = []
+    if _sum_assured(pa, fin):
+        if not _has_basis(pa):
+            gaps.append("basis")
+        elif salary_multiple(pa) is not None and salary_from_attrs(attrs) is None:
+            gaps.append("salary")
+        if not pa.get("voluntary_rates") and positive_number(pa.get("premium_rate")) is None:
+            gaps.append("rate")
+        return gaps
+    if fin is not None and fin.annual_premium is not None:
+        return gaps
+    if pa.get("rate_basis") == "tiered" or (not pa.get("rate_basis") and pa.get("rate_tiers")):
+        # Some tier is priced but not the one for the family actually covered.
+        gaps.append("tier_rate" if _priced_tiers(pa) else "rate")
+    elif positive_number(pa.get("premium_rate")) is None:
+        gaps.append("rate")
+    elif dependants and positive_number(pa.get("dependant_rate")) is None:
+        gaps.append("dependant_rate")
+    return gaps
+
+
 def _member_line_financials(
     fin: PlanFinancials | None,
     pa: dict[str, Any] | None,
@@ -325,21 +395,23 @@ def _member_line_financials(
 ) -> tuple[PlanFinancials | None, str | None]:
     """Only PER-MEMBER figures reach a coverage line.
 
-    Sum-insured products arrive already reduced (``member_financials``). A flat
-    or tiered reimbursement product is priced here from its per-head rate for
-    the family actually covered. Anything else would carry the GROUP sum
-    insured / total premium straight from the category, so it is suppressed
+    Sum-assured cover arrives already reduced (``member_financials``). Any
+    other product is priced here from its per-head or per-tier rate for the
+    family actually covered. A stated basis was reduced to this member too, so
+    its cover survives even when no premium can be priced; without a basis the
+    stored sum insured and premium are the COHORT's, so they are suppressed
     rather than mislabelled as the member's.
     """
     if fin is None:
         return None, None
     pa = pa or {}
-    if basis_amount(pa) is not None or pa.get("voluntary_rates"):
+    if _sum_assured(pa, fin):
         return fin, None
+    own_cover = fin.sum_insured if _has_basis(pa) else None
     spouses = sum(1 for d in covered_deps if d.role == "spouse")
     children = sum(1 for d in covered_deps if d.role == "child")
     priced = member_premium(fin, spouses=spouses, children=children)
-    if priced is None:
+    if priced is None and own_cover is None:
         return None, None
     tiers = (
         {k: {"rate": v["rate"]} for k, v in fin.rate_tiers.items() if "rate" in v}
@@ -349,13 +421,13 @@ def _member_line_financials(
     return (
         fin.model_copy(
             update={
-                "annual_premium": priced.amount,
-                "sum_insured": None,
+                "annual_premium": priced.amount if priced else None,
+                "sum_insured": own_cover,
                 "num_employees": None,
                 "rate_tiers": tiers,
             }
         ),
-        priced.note,
+        priced.note if priced else None,
     )
 
 
@@ -363,7 +435,14 @@ def build_benefit_statement(db: Session, employee: Employee) -> BenefitStatement
     matched_plans = hydrate_plans([employee], db, employee.policy_year_id).get(employee.id, [])
 
     cat_facts = _category_facts(
-        db, employee.policy_year_id, [mp.category_id for mp in matched_plans if mp.category_id]
+        db,
+        employee.policy_year_id,
+        [
+            cid
+            for mp in matched_plans
+            for cid in (mp.category_id, mp.pricing_category_id)
+            if cid
+        ],
     )
     enrolled = enrolled_products(db, employee.policy_year_id, [employee.id])
 
@@ -403,7 +482,16 @@ def build_benefit_statement(db: Session, employee: Employee) -> BenefitStatement
         eligible_deps = (
             [d for d in dep_summaries if d.id not in covered_ids] if dep_mode else []
         )
-        fin, premium_note = _member_line_financials(mp.financials, facts.pa, covered_deps)
+        # Price and diagnose from the plan assignment the figures came from:
+        # the elected tier when the member chose one, else the matched cohort.
+        pricing_pa = cat_facts.get(mp.pricing_category_id or "", facts).pa
+        fin, premium_note = _member_line_financials(mp.financials, pricing_pa, covered_deps)
+        financial_gaps = _financial_gaps(
+            pricing_pa,
+            fin,
+            employee.attribute_values or {},
+            dependants=len(covered_deps),
+        )
         coverage.append(CoverageLine(
             product_code=mp.product_code,
             product_name=mp.product_name,
@@ -431,6 +519,7 @@ def build_benefit_statement(db: Session, employee: Employee) -> BenefitStatement
                 and str(mp.plan_code) != str((facts.pa or {}).get("plan_code") or "")
             ),
             premium_note=premium_note,
+            financial_gaps=financial_gaps,
         ))
 
     # Stable, predictable ordering for the UI.

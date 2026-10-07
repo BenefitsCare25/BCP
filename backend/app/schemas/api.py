@@ -708,6 +708,8 @@ class PlanFinancials(BaseModel):
     # True when the premium figures above have been grossed up by the product's
     # GST rate (raw slip amounts are GST-exclusive) — so the UI can badge them.
     gst_included: bool = False
+    # The applied "maximum sum insured per insured person" capping this cover.
+    max_sum_insured: float | None = None
 
 
 class MatchedPlan(BaseModel):
@@ -732,6 +734,9 @@ class MatchedPlan(BaseModel):
     override_source: str | None = None
     # Dependant ids the member elected to cover for this product (override only).
     covered_dependant_ids: list[str] | None = None
+    # The category whose plan assignment ``financials`` was priced from: the
+    # elected tier when an override names one, else None (the matched cohort).
+    pricing_category_id: str | None = None
 
 
 class EmployeeRosterField(BaseModel):
@@ -890,6 +895,12 @@ class CoverageLine(BaseModel):
     # How the per-member premium was worked out ("EO tier rate", "Per-member
     # rate", ...). Broker-only, stripped with `financials`.
     premium_note: str | None = None
+    # Inputs that stop the cover or premium resolving for this member: the
+    # setup's basis or rate, or the roster salary a salary-multiple basis
+    # needs. Broker-only, stripped with `financials`.
+    financial_gaps: list[
+        Literal["basis", "salary", "rate", "tier_rate", "dependant_rate"]
+    ] = Field(default_factory=list)
 
 
 class StatementEmployee(BaseModel):

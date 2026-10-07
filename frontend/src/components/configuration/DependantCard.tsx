@@ -1,8 +1,6 @@
-import type { ReactNode } from "react";
 import { useState } from "react";
 import { usePatchCategory } from "@/api/hooks";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
@@ -11,17 +9,23 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { formatError } from "@/lib/errors";
+import { cn } from "@/lib/cn";
 import type { Category, PlanAssignment, RateModel } from "@/types";
 import { toast } from "sonner";
+import { assignmentGaps, type AssignmentGapContext } from "./setup/setupGaps";
+import { AssignmentField } from "./setup/SetupPrimitives";
 
 type DependantParticipation = "not_covered" | "compulsory" | "voluntary";
 
 export function DependantAssignmentFields({
   category,
   rateModel,
+  gapContext,
 }: {
   category: Category;
   rateModel: RateModel;
+  /** The card's checklist context, so this mark agrees with the checklist. */
+  gapContext: AssignmentGapContext;
 }) {
   const patch = usePatchCategory();
   const assignments = (category.plan_assignments ?? {}) as PlanAssignment;
@@ -77,9 +81,25 @@ export function DependantAssignmentFields({
     );
   };
 
+  const typedRate = Number(rate);
+  const rateMissing = assignmentGaps(
+    {
+      ...category,
+      participation_detail: {
+        ...(category.participation_detail ?? {}),
+        dependant: participation === "not_covered" ? null : participation,
+      },
+      plan_assignments: {
+        ...assignments,
+        dependant_rate: rate.trim() !== "" && Number.isFinite(typedRate) ? typedRate : null,
+      },
+    } as Category,
+    gapContext,
+  ).some((gap) => gap.field === "dependant_rate");
+
   return (
     <div className="mt-3 flex flex-wrap items-end gap-4 border-t border-border pt-3">
-      <Field label="Dependant Participation">
+      <AssignmentField label="Dependant Participation">
         <Select
           value={participation}
           onValueChange={(value) =>
@@ -95,18 +115,19 @@ export function DependantAssignmentFields({
             <SelectItem value="voluntary">Voluntary</SelectItem>
           </SelectContent>
         </Select>
-      </Field>
+      </AssignmentField>
       {rateModel !== "tiered" ? (
-        <Field label="Premium Rate Per Dependant">
+        <AssignmentField label="Premium Rate Per Dependant" missing={rateMissing}>
           <Input
             type="number"
             value={rate}
             onChange={(event) => setRate(event.target.value)}
             onBlur={saveRate}
             disabled={participation === "not_covered"}
-            className="h-8 w-44 text-sm"
+            aria-invalid={rateMissing || undefined}
+            className={cn("h-8 w-44 text-sm", rateMissing && "border-warn")}
           />
-        </Field>
+        </AssignmentField>
       ) : (
         <p className="text-xs text-muted-foreground">
           Dependant premiums use the EO, ES, EC and EF tier rates above.
@@ -116,13 +137,3 @@ export function DependantAssignmentFields({
   );
 }
 
-function Field({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <div className="flex flex-col gap-1">
-      <Label className="text-2xs uppercase tracking-wider text-muted-foreground">
-        {label}
-      </Label>
-      {children}
-    </div>
-  );
-}

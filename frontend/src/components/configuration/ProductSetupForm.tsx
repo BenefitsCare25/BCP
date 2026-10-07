@@ -1,4 +1,4 @@
-import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
+import { Fragment, forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { CircleCheck } from "lucide-react";
 import { toast } from "sonner";
@@ -41,6 +41,12 @@ import { employeeCategoryIssueCount } from "./employeeCategoryGroups";
 import { ScheduleOfBenefitsSection } from "./setup/ScheduleOfBenefitsSection";
 import { ClaimLimitsPanel } from "./setup/limits/ClaimLimitsPanel";
 import { EndorsementsSection } from "./setup/EndorsementsSection";
+import { SetupGapsPanel } from "./setup/SetupGapsPanel";
+import {
+  gapCountsBySection,
+  setupGaps,
+  type SetupGap,
+} from "./setup/setupGaps";
 import {
   CoveragePeriodEditor,
   validSetupTerms,
@@ -336,6 +342,12 @@ export const ProductSetupForm = forwardRef<ProductSetupFormHandle, Props>(functi
     initialSection ?? null,
   );
   const [conflictMessage, setConflictMessage] = useState<string | null>(null);
+  // A checklist "go to": the category assignment or header/eligibility input to
+  // bring into view once its tab has rendered. The nonce re-fires a repeat jump.
+  const [focusTarget, setFocusTarget] = useState<
+    { categoryId?: string; fieldId?: string; nonce: number } | null
+  >(null);
+  const clearFocusTarget = useCallback(() => setFocusTarget(null), []);
   const [reloading, setReloading] = useState(false);
   const queryClient = useQueryClient();
   const confirm = useConfirmSetup(policyYearId);
@@ -613,6 +625,24 @@ export const ProductSetupForm = forwardRef<ProductSetupFormHandle, Props>(functi
     return true;
   });
 
+  const gaps = useMemo(
+    () =>
+      setupGaps({
+        answers,
+        template,
+        categories: group?.categories ?? [],
+        term,
+        policyMappings,
+      }),
+    // policyMappings is derived from answers + term on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [answers, template, group?.categories, term],
+  );
+  // Field ids the checklist reports as blank, for the inline "Missing" marks.
+  const missingFields = new Set(
+    gaps.flatMap((gap) => (gap.fieldId ? [gap.fieldId] : [])),
+  );
+
   // Each setup section is one tab PANEL (content only — the tab bar supplies the
   // title). The backend orders `template.sections` per product family (medical,
   // travel, life, accident, statutory); the tabs follow that list, not hardcoded.
@@ -635,12 +665,13 @@ export const ProductSetupForm = forwardRef<ProductSetupFormHandle, Props>(functi
             stay fully readable. */}
         <div className="grid grid-cols-1 items-start gap-x-4 gap-y-3 md:grid-cols-2">
           {template.header_fields.map((f) => (
-            <div key={f.id}>
+            <div key={f.id} id={`setup-field-${f.id}`}>
               <FieldControl
                 field={f.id === "policy_no" ? { ...f, label: "Source policy number(s)" } : f}
                 value={answers.header[f.id] ?? ""}
                 onChange={(v) => setHeader(f.id, v)}
                 suggestions={suggestions?.header[f.id] ?? []}
+                missing={missingFields.has(f.id)}
               />
               {f.id === "policy_no" && <p className="mt-1 text-xs text-muted-foreground">
                 Keep the slip’s wording here. The assignments below control policy numbers in reports.
@@ -673,6 +704,7 @@ export const ProductSetupForm = forwardRef<ProductSetupFormHandle, Props>(functi
         {visibleEligibilityFields.map((f) => (
           <div
             key={f.id}
+            id={`setup-field-${f.id}`}
             className={
               f.type === "multichoice" ||
               f.type === "taglist" ||
@@ -688,6 +720,7 @@ export const ProductSetupForm = forwardRef<ProductSetupFormHandle, Props>(functi
                 setElig(f.id, Array.isArray(v) ? v.join(",") : v)
               }
               suggestions={suggestions?.eligibility[f.id] ?? []}
+              missing={missingFields.has(f.id)}
             />
           </div>
         ))}
@@ -706,6 +739,13 @@ export const ProductSetupForm = forwardRef<ProductSetupFormHandle, Props>(functi
         tiers={template.tiers}
         categories={group?.categories ?? []}
         onEditRule={onEditRule}
+        dependantsCovered={hasDependantsSelected}
+        singlePlan={selectedPlans.length <= 1}
+        focusCategoryId={focusTarget?.categoryId}
+        focusNonce={focusTarget?.nonce}
+        onFocusHandled={clearFocusTarget}
+        maxSumInsured={String(answers.header.el_max_sum_insured ?? "")}
+        onMaxSumInsuredChange={(value) => setHeader("el_max_sum_insured", value)}
       />
     ),
     // Schedule of Benefits = what's covered: cover description + cover-term
@@ -776,11 +816,31 @@ export const ProductSetupForm = forwardRef<ProductSetupFormHandle, Props>(functi
   const activeId =
     activeSection && sections.includes(activeSection) ? activeSection : sections[0];
   const categoryIssues = employeeCategoryIssueCount(group?.categories ?? []);
+  const gapCounts = gapCountsBySection(gaps);
+  const blockingGaps = gaps.filter((gap) => gap.blocking);
+  const goToGap = (gap: SetupGap) => {
+    if (sections.includes(gap.section)) setActiveSection(gap.section);
+    setFocusTarget({ categoryId: gap.categoryId, fieldId: gap.fieldId, nonce: Date.now() });
+  };
 
   const switchSection = (next: string) => {
     if (next === activeId) return;
     setActiveSection(next);
   };
+
+  useEffect(() => {
+    const fieldId = focusTarget?.fieldId;
+    if (!fieldId) return;
+    // Runs after the tab switch committed, so the field is in the DOM.
+    const frame = requestAnimationFrame(() => {
+      const el = document.getElementById(`setup-field-${fieldId}`);
+      el?.scrollIntoView({ block: "center", behavior: "smooth" });
+      el?.querySelector<HTMLElement>("input, textarea, button")?.focus({ preventScroll: true });
+      // Consumed: coming back to this tab later must not jump again.
+      setFocusTarget(null);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [focusTarget]);
 
   const reloadLatestSetup = async () => {
     setReloading(true);
@@ -818,6 +878,12 @@ export const ProductSetupForm = forwardRef<ProductSetupFormHandle, Props>(functi
           onReload={reloadLatestSetup}
         />
       )}
+      <SetupGapsPanel
+        gaps={gaps}
+        sectionLabels={SECTION_LABELS}
+        sections={sections}
+        onGo={goToGap}
+      />
       {/* Single-row section tabs. Section navigation stays inside the current
           edit session; leaving the product is guarded by the parent. */}
       <div className="config-nav flex items-center gap-1 overflow-x-auto overflow-y-hidden rounded-lg bg-muted/40 p-1">
@@ -825,11 +891,16 @@ export const ProductSetupForm = forwardRef<ProductSetupFormHandle, Props>(functi
           const count = id === "endorsements" ? answers.endorsements?.length ?? 0 : 0;
           const categoryNeedsAttention =
             id === "basis_of_cover" && categoryIssues > 0;
+          const missingCount = gapCounts[id as keyof typeof gapCounts] ?? 0;
+          const missingBlocks = blockingGaps.some((gap) => gap.section === id);
+          const missingId = `setup-tab-${id}-missing`;
           return (
+            <Fragment key={id}>
             <button
-              key={id}
               type="button"
               onClick={() => switchSection(id)}
+              // The count is a description, not part of the tab's name.
+              aria-describedby={missingCount > 0 ? missingId : undefined}
               className={cn(
                 "shrink-0 whitespace-nowrap rounded-md px-3 py-2 text-sm font-medium transition-colors",
                 activeId === id
@@ -853,7 +924,25 @@ export const ProductSetupForm = forwardRef<ProductSetupFormHandle, Props>(functi
                   · {count}
                 </span>
               )}
+              {missingCount > 0 && (
+                <span
+                  aria-hidden="true"
+                  title={`${missingCount} missing ${missingCount === 1 ? "value" : "values"}`}
+                  className={cn(
+                    "ml-2 inline-flex min-w-5 items-center justify-center rounded-full px-1.5 text-2xs font-semibold tabular-nums",
+                    missingBlocks ? "bg-error-soft text-error" : "bg-warn-soft text-warn",
+                  )}
+                >
+                  {missingCount}
+                </span>
+              )}
             </button>
+            {missingCount > 0 && (
+              <span id={missingId} className="sr-only">
+                {missingCount} missing {missingCount === 1 ? "value" : "values"}
+              </span>
+            )}
+            </Fragment>
           );
         })}
       </div>
@@ -883,12 +972,18 @@ export const ProductSetupForm = forwardRef<ProductSetupFormHandle, Props>(functi
               Boolean(mappingIssue) ||
               !validSetupTerms(term, answers.policy_terms ?? {})
               || (Boolean(answers.source_issues?.length) && !answers.source_reviewed)
+              || blockingGaps.length > 0
             }
           >
             {confirmLabel}
           </Button>
         </div>
         {mappingIssue && <p className="w-full text-xs text-warn">{mappingIssue}</p>}
+        {blockingGaps.length > 0 && (
+          <p className="w-full text-xs text-error">
+            Fill {blockingGaps.map((gap) => (gap.where ? `${gap.label} (${gap.where})` : gap.label)).join(", ")} before confirming. You can still save a draft.
+          </p>
+        )}
         {!validSetupTerms(term, answers.policy_terms ?? {}) && (
           <p className="w-full text-xs text-error">Review the policy term fields in Header &amp; Policy before confirming. You can still save a draft.</p>
         )}
@@ -904,6 +999,7 @@ export const ProductSetupForm = forwardRef<ProductSetupFormHandle, Props>(functi
         loading={busy}
         onConfirm={onConfirm}
         description={
+          <span className="flex flex-col gap-3">
           <span>
             This {isConfirmed ? "updates" : "creates"} the{" "}
             <strong>{template.code}</strong> product setup and{" "}
@@ -914,8 +1010,29 @@ export const ProductSetupForm = forwardRef<ProductSetupFormHandle, Props>(functi
             untouched here. Re-confirming refreshes the product, plans, and
             policy terms.
           </span>
+          {gaps.length > 0 && <ConfirmGapNote gaps={gaps} />}
+          </span>
         }
       />
     </div>
   );
 });
+
+/** Confirm keeps blank values blank; say which, so it is a decision. */
+function ConfirmGapNote({ gaps }: { gaps: SetupGap[] }) {
+  const shown = gaps.slice(0, 6);
+  const one = gaps.length === 1;
+  return (
+    <span className="block rounded-md bg-warn-soft/50 p-2.5 text-xs text-foreground">
+      <span className="font-medium">
+        {gaps.length} {one ? "value is" : "values are"} still missing.
+      </span>{" "}
+      Confirming keeps {one ? "it" : "them"} blank, and cover or premiums that
+      depend on {one ? "it" : "them"} show as not set.
+      <span className="mt-1.5 block text-muted-foreground">
+        {shown.map((gap) => (gap.where ? `${gap.label} · ${gap.where}` : gap.label)).join("; ")}
+        {gaps.length > shown.length ? `; and ${gaps.length - shown.length} more` : ""}
+      </span>
+    </span>
+  );
+}

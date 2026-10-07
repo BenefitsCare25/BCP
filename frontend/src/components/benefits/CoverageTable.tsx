@@ -26,9 +26,10 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { basisShort, coverWording } from "@/lib/basis";
 import { fmtMoney } from "@/lib/format";
 import { cn } from "@/lib/cn";
-import type { CoverageLine, Utilization } from "@/types";
+import type { CoverageLine, FinancialGap, Utilization } from "@/types";
 import { CoverageDetail } from "./CoverageDetail";
 import { SourceFlag, SourceIcon } from "./SourceLink";
 import { ClaimPosition, indexUsage } from "./usage";
@@ -68,25 +69,57 @@ const rowKey = (line: CoverageLine, i: number) => `${line.product_code}~${i}`;
 const unpublished = (line: CoverageLine) =>
   line.plan_status != null && line.plan_status !== "confirmed";
 
+/** Why a figure is blank, in the words of the input that is missing. A bare
+ * dash reads the same as "not applicable", which hid unpriced GPA cover. */
+const GAP_TEXT: Record<FinancialGap, { label: string; title: string }> = {
+  basis: {
+    label: "Basis not set",
+    title: "The plan assignment has no amount covered. Set the basis of cover in the product setup.",
+  },
+  salary: {
+    label: "Salary missing",
+    title: "Cover is a multiple of salary, and this employee has no monthly salary on the listing.",
+  },
+  rate: {
+    label: "Rate not set",
+    title: "The plan assignment has no premium rate. Set it in the product setup.",
+  },
+  tier_rate: {
+    label: "Tier rate not set",
+    title: "The plan assignment has no rate for this member's family tier (e.g. ES or EF). Set it in the product setup.",
+  },
+  dependant_rate: {
+    label: "Dependant rate not set",
+    title: "Dependants are covered, but the plan assignment has no premium rate per dependant. Set it in the product setup.",
+  },
+};
+
 /** A figure cell: the value, then the pencil to where it is set. */
 function Figure({
   value,
   muted,
   title,
   sub,
+  gap,
   productCode,
 }: {
   value: string | null;
   muted?: boolean;
   title?: string;
   sub?: string;
+  gap?: FinancialGap;
   productCode: string;
 }) {
+  const missing = value == null && gap ? GAP_TEXT[gap] : null;
   return (
     <div className="flex items-center justify-end gap-1">
       <SourceIcon productCode={productCode} section="basis_of_cover" />
-      <span className={cn(muted && "text-muted-foreground")} title={title}>
-        {value ?? <span className="text-subtle">—</span>}
+      <span className={cn(muted && "text-muted-foreground")} title={missing?.title ?? title}>
+        {value ?? (missing ? (
+          <span className="text-xs font-medium text-warn">{missing.label}</span>
+        ) : (
+          <span className="text-subtle">—</span>
+        ))}
         {sub && (
           <span className="block text-2xs font-normal text-muted-foreground">{sub}</span>
         )}
@@ -143,6 +176,7 @@ export function CoverageTable({
             const expanded = open.has(key);
             const usage = usageByProduct.get(line.product_code);
             const fin = line.financials;
+            const gaps = line.financial_gaps ?? [];
             const note = matchNote(line.match_method, line.match_confidence);
             const eligible = line.enrolment === "eligible";
             const premiumSub =
@@ -258,6 +292,9 @@ export function CoverageTable({
                       productCode={line.product_code}
                       value={fin?.sum_insured != null ? fmtMoney(fin.sum_insured) : null}
                       muted={eligible}
+                      sub={basisShort(fin?.basis) ?? undefined}
+                      title={coverWording(fin?.basis, fin?.max_sum_insured) ?? undefined}
+                      gap={gaps.find((g) => g === "basis" || g === "salary")}
                     />
                   </TableCell>
                   <TableCell className="text-right align-middle tabular-nums">
@@ -267,6 +304,9 @@ export function CoverageTable({
                       muted={eligible}
                       title={line.premium_note ?? undefined}
                       sub={premiumSub}
+                      gap={gaps.find(
+                        (g) => g === "rate" || g === "tier_rate" || g === "dependant_rate",
+                      )}
                     />
                   </TableCell>
                   <TableCell className="align-middle">

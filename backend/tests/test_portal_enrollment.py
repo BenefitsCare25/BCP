@@ -472,7 +472,6 @@ def test_member_safe_options_scrubs_premiums() -> None:
     assert fin is not None
     for field in (
         "num_employees",
-        "basis",
         "premium_rate",
         "annual_premium",
         "rate_basis",
@@ -484,9 +483,23 @@ def test_member_safe_options_scrubs_premiums() -> None:
         assert getattr(fin, field) is None, f"leaked {field}"
     assert fin.gst_included is False, "the GST badge only means anything beside a premium"
 
-    # What a member actually decides on survives untouched.
-    assert fin.sum_insured == 250_000.0
+    # A salary-multiple basis reaches the member as its wording; the amount it
+    # multiplies out to from their salary is withheld.
+    assert fin.basis == "12 times basic monthly salary"
+    assert fin.sum_insured is None
     assert _member_safe_options(options).products[0].tiers[0].price_tag == 120.0
+
+    # A plain-amount basis IS the stated cover, so that amount survives.
+    flat_tier = options.products[0].tiers[0].model_copy(
+        update={"financials": PlanFinancials(basis="10000.0", sum_insured=10_000.0)}
+    )
+    flat = options.model_copy(
+        update={"products": [options.products[0].model_copy(update={"tiers": [flat_tier]})]}
+    )
+    flat_fin = _member_safe_options(flat).products[0].tiers[0].financials
+    assert flat_fin is not None
+    assert flat_fin.sum_insured == 10_000.0
+    assert flat_fin.basis is None
 
     # The source object is not mutated — the broker's own payload is built from
     # the same builder and must keep its premiums.

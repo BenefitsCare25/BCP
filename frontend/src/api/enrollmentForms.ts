@@ -130,6 +130,10 @@ export interface PlanFact {
   label: string;
   highlight: string | null;
   sum_insured: number | null;
+  /** Cover stated as wording; sent instead of a salary-derived sum insured. */
+  basis?: string | null;
+  /** The policy maximum beside a worded basis ("… up to S$1,600,000"). */
+  max_sum_insured?: number | null;
   insurer: string | null;
 }
 

@@ -69,6 +69,10 @@ Thumbs.db
 backend.zip
 frontend.zip
 tmp/
+# Local review output (screenshots, generated workbooks, release packages) and
+# browser debug logs.
+/output/
+debug.log
 
 # Retained document storage (claim receipts, dependant proofs) — PII
 backend/var/

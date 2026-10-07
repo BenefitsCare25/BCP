@@ -6,6 +6,7 @@
  * (`ProductContribution`) — the premium of a company-paid plan is not a price
  * the member acts on. The key benefit and sum insured always appear. */
 import type { ContributionTier, PlanFact, ProductContribution } from "@/api/enrollmentForms";
+import { coverWording } from "@/lib/basis";
 import { Money } from "@/components/portal/leaf/Figure";
 import { MountRow, MountRule } from "@/components/portal/leaf/Mount";
 
@@ -76,7 +77,8 @@ export function PlanPricing({
   compact?: boolean;
 }) {
   const tier = contribution?.tiers.find((t) => t.tier_key === tierKey);
-  const hasFacts = !!(fact?.highlight || fact?.sum_insured || fact?.insurer);
+  const basis = coverWording(fact?.basis, fact?.max_sum_insured);
+  const hasFacts = !!(fact?.highlight || fact?.sum_insured || basis || fact?.insurer);
   if (!hasFacts && !tier) return null;
   const breakdown = tier && contribution ? (
     <div>
@@ -99,6 +101,8 @@ export function PlanPricing({
             <MountRow term="Sum insured">
               <Money value={fact.sum_insured} />
             </MountRow>
+          ) : basis ? (
+            <MountRow term="Sum insured">{basis}</MountRow>
           ) : null}
         </dl>
       )}

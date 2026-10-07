@@ -1,5 +1,4 @@
 import { SystemAdminOnly } from "@/components/auth/SystemAdminOnly";
-import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
 import { Check, CheckCheck, Pencil, Sparkles, X } from "lucide-react";
 import { AlertDialog } from "@/components/ui/alert-dialog";
@@ -21,6 +20,7 @@ import {
   useUpdatePlan,
 } from "@/api/hooks";
 import { confidencePill, sourcePill, statusPill } from "@/lib/badges";
+import { cn } from "@/lib/cn";
 import { formatError } from "@/lib/errors";
 import type {
   BasisModel,
@@ -30,10 +30,17 @@ import type {
   RateModel,
   RateTier,
   TemplateTier,
-  VoluntaryRateBand,
 } from "@/types";
 import { toast } from "sonner";
 import { DependantAssignmentFields } from "./DependantCard";
+import { AssignmentField } from "./setup/SetupPrimitives";
+import {
+  assignmentGaps,
+  isAgeBanded,
+  type AssignmentGapContext,
+  type AssignmentGapField,
+} from "./setup/setupGaps";
+import { isSalaryBasis, parseAmount } from "@/lib/basis";
 
 export type MemberCount = { employees: number; dependants: number };
 
@@ -55,49 +62,34 @@ const TIER_ORDER = new Map(TIER_VOCAB.map((t, i) => [t.code, i]));
 const tierVocabLabel = (code: string) =>
   TIER_VOCAB.find((t) => t.code === code)?.label ?? code;
 
-// A voluntary category prices by age band when it carries a voluntary_rates table
-// (or is flagged age_banded). Compulsory / flat-voluntary plans don't.
-export function isAgeBanded(c: Category): boolean {
-  if (c.participation_model !== "voluntary") return false;
-  const pa = (c.plan_assignments ?? {}) as PlanAssignment & {
-    rate_basis?: string;
-    voluntary_rates?: VoluntaryRateBand[] | null;
-  };
-  return pa.rate_basis === "age_banded" || !!pa.voluntary_rates;
-}
+// `basis` can be a plain amount ("1,000,000") or wording ("24x basic monthly
+// salary"). `parseAmount` is the one rule for which is which, shared with the
+// checklist, the portal and the backend's basis_amount.
 
-// `basis` can be a plain amount (e.g. 1000000) or a salary-multiple expression
-// ("24x basic monthly salary"). Only pure numbers are reformatted.
-const NUMERIC_RE = /^-?\d+(\.\d+)?$/;
-
-// Comma-stripped value to store — numbers are float-parsed downstream
+// Separator-free value to store — numbers are float-parsed downstream
 // (coverage / fact-find), so the stored form must never contain separators.
 function toCleanAmount(raw: string): string {
   const trimmed = raw.trim();
-  if (!trimmed) return "";
-  const cleaned = trimmed.replace(/,/g, "");
-  return NUMERIC_RE.test(cleaned) ? cleaned : trimmed;
+  const n = parseAmount(trimmed);
+  return n === null ? trimmed : String(n);
 }
 
-// Display form: a pure number renders as 1,000,000.00; text passes through.
+// Display form: a plain amount renders as 1,000,000.00; wording passes through.
 function formatAmount(raw: string): string {
   const trimmed = raw.trim();
-  if (!trimmed) return "";
-  const cleaned = trimmed.replace(/,/g, "");
-  if (!NUMERIC_RE.test(cleaned)) return trimmed;
-  return Number(cleaned).toLocaleString("en-US", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  });
+  const n = parseAmount(trimmed);
+  return n === null
+    ? trimmed
+    : n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 // Numeric-aware equality so an unchanged amount (stored "1000000.0" vs a
-// re-cleaned "1000000.00") isn't treated as an edit and re-PATCHed.
+// re-cleaned "1000000") isn't treated as an edit and re-PATCHed.
 function sameAmount(a: string, b: string): boolean {
-  const ca = String(a).replace(/,/g, "").trim();
-  const cb = String(b).replace(/,/g, "").trim();
-  if (NUMERIC_RE.test(ca) && NUMERIC_RE.test(cb)) return Number(ca) === Number(cb);
-  return ca === cb;
+  const na = parseAmount(String(a));
+  const nb = parseAmount(String(b));
+  if (na !== null && nb !== null) return na === nb;
+  return String(a).trim() === String(b).trim();
 }
 
 export function CategoryCard({
@@ -107,6 +99,8 @@ export function CategoryCard({
   rateModel,
   tiers,
   hasDependants,
+  dependantsCovered,
+  singlePlan,
   count,
   countsError = false,
   onEditRule,
@@ -118,6 +112,10 @@ export function CategoryCard({
   rateModel: RateModel;
   tiers: TemplateTier[];
   hasDependants: boolean;
+  /** Eligibility ticks Spouse/Child — the same input the setup checklist uses. */
+  dependantsCovered: boolean;
+  /** The product has one plan, which a blank plan type resolves to. */
+  singlePlan: boolean;
   count?: MemberCount;
   // True when the member-counts query failed — shows "Count unavailable"
   // instead of a perpetual "Calculating…".
@@ -516,6 +514,35 @@ export function CategoryCard({
     0,
   );
 
+  // Missing fields, read from what the broker is typing so the highlight clears
+  // the moment a value is entered — the same rules as the setup checklist.
+  const liveNumber = (raw: string) => parseAmount(raw);
+  const gapContext: AssignmentGapContext = {
+    basisModel,
+    rateModel,
+    dependantsCovered,
+    singlePlan,
+  };
+  const missing = new Set<AssignmentGapField>(
+    assignmentGaps(
+      {
+        ...category,
+        plan_assignments: {
+          ...assignments,
+          plan_code: planCode || null,
+          basis: toCleanAmount(basis) || null,
+          premium_rate: liveNumber(rate),
+          annual_premium: liveNumber(annualPremium),
+          estimated_annual_earnings: liveNumber(earnings),
+          rate_tiers: Object.keys(tierRates).length ? tierRates : null,
+        },
+      },
+      gapContext,
+    ).map((gap) => gap.field),
+  );
+  const missingClass = (field: AssignmentGapField) =>
+    missing.has(field) ? "border-warn" : undefined;
+
   return (
     <div className="rounded-lg border border-border bg-card p-4">
       {assignmentOnly && (
@@ -617,15 +644,15 @@ export function CategoryCard({
               : "grid-cols-[2fr_1fr_1fr]"
         }`}
       >
-        {!assignmentOnly && <Field label="Employee Category">
+        {!assignmentOnly && <AssignmentField label="Employee Category">
           <Input
             value={name}
             onChange={(e) => setName(e.target.value)}
             onBlur={saveName}
             className="h-8 text-sm"
           />
-        </Field>}
-        <Field label="Plan Type">
+        </AssignmentField>}
+        <AssignmentField label="Plan Type" missing={missing.has("plan")}>
           {renamingPlan ? (
             <div className="flex items-center gap-1">
               <Input
@@ -660,7 +687,10 @@ export function CategoryCard({
           ) : (
             <div className="flex items-center gap-1">
               <Select value={planCode} onValueChange={savePlan}>
-                <SelectTrigger className="h-8 min-w-0 flex-1 text-sm">
+                <SelectTrigger
+                  aria-invalid={missing.has("plan") || undefined}
+                  className={cn("h-8 min-w-0 flex-1 text-sm", missingClass("plan"))}
+                >
                   <SelectValue placeholder="Plan type" />
                 </SelectTrigger>
                 <SelectContent>
@@ -704,15 +734,18 @@ export function CategoryCard({
               className="mt-1 h-7 text-xs"
             />
           )}
-        </Field>
-        <Field label="Participation">
+        </AssignmentField>
+        <AssignmentField label="Participation" missing={missing.has("participation")}>
           <Select
             value={category.participation_model ?? ""}
             onValueChange={(v) =>
               saveParticipation(v as "compulsory" | "voluntary")
             }
           >
-            <SelectTrigger className="h-8 text-sm">
+            <SelectTrigger
+              aria-invalid={missing.has("participation") || undefined}
+              className={cn("h-8 text-sm", missingClass("participation"))}
+            >
               <SelectValue placeholder="Select…" />
             </SelectTrigger>
             <SelectContent>
@@ -720,16 +753,20 @@ export function CategoryCard({
               <SelectItem value="voluntary">Voluntary</SelectItem>
             </SelectContent>
           </Select>
-        </Field>
+        </AssignmentField>
         {basisModel === "sum_assured" && (
-          <Field label="Basis Amount (Amount Covered Per Employee)">
+          <AssignmentField
+            label="Basis Amount (Amount Covered Per Employee)"
+            missing={missing.has("basis")}
+          >
             <Input
               list="category-basis-bases"
               value={basis}
               onChange={(e) => setBasis(e.target.value)}
               onBlur={saveBasis}
               placeholder="e.g. 24x monthly salary or 1,000,000.00"
-              className="h-8 text-sm"
+              aria-invalid={missing.has("basis") || undefined}
+              className={cn("h-8 text-sm", missingClass("basis"))}
             />
             <datalist id="category-basis-bases">
               {[
@@ -742,7 +779,7 @@ export function CategoryCard({
                 <option key={b} value={b} />
               ))}
             </datalist>
-          </Field>
+          </AssignmentField>
         )}
       </div>
 
@@ -759,25 +796,41 @@ export function CategoryCard({
             </p>
           ) : (
             <>
-              <Field label="Standard Rate (per S$1,000 SI)">
+              <AssignmentField label="Standard Rate (per S$1,000 SI)" missing={missing.has("rate")}>
                 <Input
                   type="number"
                   value={rate}
                   onChange={(e) => setRate(e.target.value)}
                   onBlur={saveRate}
                   placeholder="e.g. 1.62"
-                  className="h-8 w-36 text-sm"
+                  aria-invalid={missing.has("rate") || undefined}
+                  className={cn("h-8 w-36 text-sm", missingClass("rate"))}
                 />
-              </Field>
-              <Field label="Premium per employee">
+              </AssignmentField>
+              <AssignmentField label="Premium per employee">
                 <Input
                   value={premium}
                   onChange={(e) => setPremium(e.target.value)}
                   onBlur={savePremium}
-                  placeholder="e.g. 3,060.00"
+                  placeholder={
+                    hasBasis
+                      ? "e.g. 3,060.00"
+                      : !basis.trim()
+                        ? "Set amount covered"
+                        : isSalaryBasis(basis)
+                          ? "Varies by salary"
+                          : "Varies by member"
+                  }
+                  title={
+                    hasBasis
+                      ? undefined
+                      : !basis.trim()
+                        ? "The premium per employee follows from the amount covered."
+                        : "This basis has no single amount, so each employee's premium is their own cover ÷ 1,000 × the rate."
+                  }
                   className="h-8 w-36 text-sm"
                 />
-              </Field>
+              </AssignmentField>
             </>
           )}
         </div>
@@ -791,43 +844,47 @@ export function CategoryCard({
           onCommit={saveTiers}
           onAdd={addTier}
           onRemove={removeTier}
+          flagMissing={missing.has("tier_rates")}
         />
       ) : rateModel === "flat" ? (
         <div className="mt-3 flex flex-wrap items-end gap-4 border-t border-border pt-3">
-          <Field label="Annual Premium (whole policy)">
+          <AssignmentField label="Annual Premium (whole policy)" missing={missing.has("annual_premium")}>
             <Input
               value={annualPremium}
               onChange={(e) => setAnnualPremium(e.target.value)}
               onBlur={saveAnnualPremium}
               placeholder="e.g. 3,169.80"
-              className="h-8 w-44 text-sm"
+              aria-invalid={missing.has("annual_premium") || undefined}
+              className={cn("h-8 w-44 text-sm", missingClass("annual_premium"))}
             />
-          </Field>
+          </AssignmentField>
           <p className="text-2xs text-muted-foreground">
             One flat annual premium for the whole policy — not a per-member rate.
           </p>
         </div>
       ) : rateModel === "earnings_based" ? (
         <div className="mt-3 flex flex-wrap items-end gap-4 border-t border-border pt-3">
-          <Field label="Estimated Annual Earnings">
+          <AssignmentField label="Estimated Annual Earnings" missing={missing.has("earnings")}>
             <Input
               value={earnings}
               onChange={(e) => setEarnings(e.target.value)}
               onBlur={saveEarnings}
               placeholder="e.g. 71,960,473"
-              className="h-8 w-44 text-sm"
+              aria-invalid={missing.has("earnings") || undefined}
+              className={cn("h-8 w-44 text-sm", missingClass("earnings"))}
             />
-          </Field>
-          <Field label="Rate on Earnings">
+          </AssignmentField>
+          <AssignmentField label="Rate on Earnings" missing={missing.has("rate")}>
             <Input
               type="number"
               value={rate}
               onChange={(e) => setRate(e.target.value)}
               onBlur={saveEarningsRate}
               placeholder="e.g. 0.00033"
-              className="h-8 w-32 text-sm"
+              aria-invalid={missing.has("rate") || undefined}
+              className={cn("h-8 w-32 text-sm", missingClass("rate"))}
             />
-          </Field>
+          </AssignmentField>
           <div className="flex flex-col gap-1">
             <Label className="text-2xs uppercase tracking-wider text-muted-foreground">
               Annual Premium
@@ -844,16 +901,17 @@ export function CategoryCard({
         </div>
       ) : (
         <div className="mt-3 flex flex-wrap items-end gap-4 border-t border-border pt-3">
-          <Field label="Premium Rate Per Employee">
+          <AssignmentField label="Premium Rate Per Employee" missing={missing.has("rate")}>
             <Input
               type="number"
               value={rate}
               onChange={(e) => setRate(e.target.value)}
               onBlur={savePerMemberRate}
               placeholder="e.g. 378"
-              className="h-8 w-44 text-sm"
+              aria-invalid={missing.has("rate") || undefined}
+              className={cn("h-8 w-44 text-sm", missingClass("rate"))}
             />
-          </Field>
+          </AssignmentField>
           {/* Dependant rate moved to the Dependant Category & Plan Type section. */}
           {!showTierGrid && (
             <Button
@@ -881,11 +939,16 @@ export function CategoryCard({
           onCommit={saveTiers}
           onAdd={addTier}
           onRemove={removeTier}
+          flagMissing={missing.has("tier_rates")}
         />
       )}
 
       {hasDependants && (
-        <DependantAssignmentFields category={category} rateModel={rateModel} />
+        <DependantAssignmentFields
+          category={category}
+          rateModel={rateModel}
+          gapContext={gapContext}
+        />
       )}
 
       {!assignmentOnly && category.rule_human_readable && (
@@ -941,16 +1004,6 @@ export function CategoryCard({
   );
 }
 
-function Field({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <div className="flex flex-col gap-1">
-      <Label className="text-2xs uppercase tracking-wider text-muted-foreground">
-        {label}
-      </Label>
-      {children}
-    </div>
-  );
-}
 
 // Tiered medical rate editor (EO/ES/EC/EF): a rate + premium per dependant-tier,
 // with the annual total summed across tiers. Tiers can be added (from the
@@ -966,6 +1019,7 @@ function TierRateGrid({
   onCommit,
   onAdd,
   onRemove,
+  flagMissing = false,
 }: {
   tiers: TemplateTier[];
   tierRates: Record<string, RateTier>;
@@ -975,6 +1029,8 @@ function TierRateGrid({
   onCommit: () => void;
   onAdd: (code: string) => void;
   onRemove: (code: string) => void;
+  /** Outline the tiers that still have no rate. */
+  flagMissing?: boolean;
 }) {
   const safe = (v: string) => {
     const n = Number(v);
@@ -995,6 +1051,7 @@ function TierRateGrid({
         <span />
         {tiers.map((t) => {
           const cell = tierRates[t.code] ?? { rate: 0, premium: 0 };
+          const rateMissing = flagMissing && !((cell.rate ?? 0) > 0);
           return (
             <div key={t.code} className="contents">
               <div className="flex items-baseline gap-1 text-sm text-foreground">
@@ -1006,7 +1063,10 @@ function TierRateGrid({
                 value={cell.rate || ""}
                 onChange={(e) => onField(t.code, "rate", safe(e.target.value))}
                 onBlur={onCommit}
-                className="h-8 text-sm"
+                aria-label={`${t.code} rate`}
+                aria-invalid={rateMissing || undefined}
+                placeholder={rateMissing ? "Missing" : undefined}
+                className={cn("h-8 text-sm", rateMissing && "border-warn")}
               />
               <Input
                 type="number"

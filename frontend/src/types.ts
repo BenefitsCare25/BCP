@@ -427,6 +427,8 @@ export interface PlanFinancials {
   rate_tiers: Record<string, { rate: number; premium: number }> | null;
   /** Age-banded voluntary rate table (life products) — present on voluntary tiers. */
   voluntary_rates?: VoluntaryRateBand[] | null;
+  /** The applied policy maximum capping this cover, when one is set. */
+  max_sum_insured?: number | null;
   /** True when the premium figures are grossed up by the product's GST rate. */
   gst_included?: boolean;
 }
@@ -669,7 +671,11 @@ export interface CoverageLine {
   plan_overridden?: boolean;
   /** Broker only: how the per-member premium was worked out. */
   premium_note?: string | null;
+  /** Broker only: the setup or roster input that stops cover/premium resolving. */
+  financial_gaps?: FinancialGap[];
 }
+
+export type FinancialGap = "basis" | "salary" | "rate" | "tier_rate" | "dependant_rate";
 
 export interface FlexBenefitCategoryLine {
   name: string;
@@ -1354,7 +1360,20 @@ export interface SetupAnswers {
   // migrated on load. New/confirmed drafts always populate this.
   sob?: SobSchedule;
   rate_table: Record<string, Record<string, RateCell>>;
-  source_rate_schedules?: { label: string; sheet?: string; start_date: string | null; end_date: string | null; selected: boolean }[];
+  source_rate_schedules?: {
+    label: string;
+    sheet?: string;
+    start_date: string | null;
+    end_date: string | null;
+    selected: boolean;
+    // Per-category rows as the slip printed them; a null rate is a blank cell.
+    rates?: {
+      key: string;
+      rate: number | null;
+      rate_tiers?: Record<string, unknown> | null;
+      insured?: string | null;
+    }[];
+  }[];
   source_issues?: string[];
   source_reviewed?: boolean;
   categories: BasisOfCoverRow[];

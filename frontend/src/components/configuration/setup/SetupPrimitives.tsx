@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { X } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
@@ -11,7 +11,40 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { InsurerMultiSelect } from "@/components/configuration/InsurerSelect";
+import { cn } from "@/lib/cn";
 import type { TemplateField } from "@/types";
+
+/** "· Missing" beside a setup field label: the inline mark for a value the
+ *  setup checklist reports as blank. */
+export function MissingMark({ show }: { show: boolean }) {
+  if (!show) return null;
+  return (
+    <span className="ml-1.5 font-semibold normal-case tracking-normal text-warn">
+      · Missing
+    </span>
+  );
+}
+
+/** Compact labelled control used on plan-assignment cards. */
+export function AssignmentField({
+  label,
+  missing = false,
+  children,
+}: {
+  label: string;
+  missing?: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <div className="flex flex-col gap-1">
+      <Label className="text-2xs uppercase tracking-wider text-muted-foreground">
+        {label}
+        <MissingMark show={missing} />
+      </Label>
+      {children}
+    </div>
+  );
+}
 
 /** Comma-joined string ↔ list, used by multichoice + taglist fields. Trims and
  *  drops empties so a stray comma never yields a blank chip. */
@@ -141,10 +174,12 @@ function AutoTextarea({
   value,
   onChange,
   minRows = 2,
+  invalid = false,
 }: {
   value: string;
   onChange: (v: string) => void;
   minRows?: number;
+  invalid?: boolean;
 }) {
   const ref = useRef<HTMLTextAreaElement>(null);
   useEffect(() => {
@@ -159,7 +194,11 @@ function AutoTextarea({
       value={value}
       onChange={(e) => onChange(e.target.value)}
       rows={minRows}
-      className="resize-none overflow-hidden rounded-md border border-input bg-card px-3 py-2 text-sm shadow-sm focus-visible:ring-2 focus-visible:ring-ring/40"
+      aria-invalid={invalid || undefined}
+      className={cn(
+        "resize-none overflow-hidden rounded-md border border-input bg-card px-3 py-2 text-sm shadow-sm focus-visible:ring-2 focus-visible:ring-ring/40",
+        invalid && "border-warn",
+      )}
     />
   );
 }
@@ -169,6 +208,7 @@ export function FieldControl({
   value,
   onChange,
   suggestions = [],
+  missing = false,
 }: {
   field: TemplateField;
   value: string | string[];
@@ -176,14 +216,21 @@ export function FieldControl({
   /** Values used before for this field — shown as a quick-pick. Read live from
    *  the client's prior setups, never hardcoded. */
   suggestions?: string[];
+  /** The setup checklist reports this field as blank. */
+  missing?: boolean;
 }) {
   if (field.id === "insurer") {
     return (
-      <InsurerMultiSelect
-        label={field.label}
-        value={value}
-        onChange={onChange}
-      />
+      <div className="flex flex-col gap-1">
+        <InsurerMultiSelect
+          label={field.label}
+          value={value}
+          onChange={onChange}
+        />
+        {missing && (
+          <p className="text-2xs font-semibold text-warn">Missing · choose the insurer</p>
+        )}
+      </div>
     );
   }
 
@@ -193,6 +240,7 @@ export function FieldControl({
     <div className="flex flex-col gap-1.5">
       <Label className="text-2xs uppercase tracking-wider text-muted-foreground">
         {field.label}
+        <MissingMark show={missing} />
       </Label>
       {field.type === "multichoice" ? (
         <MultiChoiceControl
@@ -204,7 +252,11 @@ export function FieldControl({
         <TagListControl value={textValue} onChange={onChange} />
       ) : field.type === "choice" ? (
         <Select value={textValue || "__unset"} onValueChange={(v) => onChange(v === "__unset" ? "" : v)}>
-          <SelectTrigger aria-label={field.label}>
+          <SelectTrigger
+            aria-label={field.label}
+            aria-invalid={missing || undefined}
+            className={cn(missing && "border-warn")}
+          >
             <SelectValue placeholder="Not established" />
           </SelectTrigger>
           <SelectContent>
@@ -215,7 +267,7 @@ export function FieldControl({
           </SelectContent>
         </Select>
       ) : isWideField(field) ? (
-        <AutoTextarea value={textValue} onChange={onChange} />
+        <AutoTextarea value={textValue} onChange={onChange} invalid={missing} />
       ) : (
         <div className="flex items-center gap-2">
           <Input
@@ -223,7 +275,8 @@ export function FieldControl({
             aria-label={field.label}
             type={field.type === "number" ? "number" : "text"}
             onChange={(e) => onChange(e.target.value)}
-            className="flex-1"
+            aria-invalid={missing || undefined}
+            className={cn("flex-1", missing && "border-warn")}
           />
           {hasSuggestions && (
             <Select value="" onValueChange={onChange}>
