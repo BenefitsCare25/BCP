@@ -288,9 +288,9 @@ def create_app() -> FastAPI:
 
     # Employee portal — a SEPARATE auth surface. Deliberately registered
     # OUTSIDE the broker loop: `require_write_access` (broker identity) must
-    # never run for members. `portal_auth` is public (OTP request/verify, its
-    # own abuse guards); `portal` authenticates via its router-level
-    # `get_current_member` dependency.
+    # never run for members. `portal_auth` is public (password sign-in, MFA,
+    # set-password; its own abuse guards); `portal` authenticates via its
+    # router-level `get_current_member` dependency.
     app.include_router(portal_auth.router, prefix=api_prefix)
     app.include_router(broker_auth.router, prefix=api_prefix)
     # HR credential-login surface — public auth, its own tenant + lockout guards

@@ -3,7 +3,7 @@
 Runs inside the normal gated router loop (broker auth + tenant scoping).
 Provisioning creates a control-plane `MemberAccount` from an Employee row
 (email pulled from the roster via `EMAIL_KEYS`, overridable), stamps the
-employee's `member_account_id`, and sends the OTP invite.
+employee's `member_account_id`, and mails the one-time-password invite.
 """
 from __future__ import annotations
 

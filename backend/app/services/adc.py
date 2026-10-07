@@ -1,9 +1,9 @@
 """Roster movement engine — Additions / Changes / Deletions, DERIVED.
 
 There is no hand-marked ``Action`` column and no separate movement template.
-The broker uploads the **member listing** (the same file
-``member_listing_template.py`` hands them, pre-filled with everyone on file) and
-this module diffs it against the roster:
+The broker uploads a **member listing** (a flat ``Employees`` / ``Dependants``
+workbook; a company's own Employee Listing reaches the same diff through
+``el_import``) and this module diffs it against the roster:
 
 - a row whose identity matches nothing on file      → **addition**
 - a row that matches, with fields that differ       → **change**
@@ -11,10 +11,9 @@ this module diffs it against the roster:
 - someone on file whose identity appears nowhere in the sheet → **missing**
 
 The `Action` column was manual work restating what the diff can compute, and
-its absence is what makes the listing template honest: that file's own docstring
-has always said it "doubles as an update template", but the upload path resolved
-each identity and then `continue`d, so every edit to an existing person was
-reported as a skipped duplicate and thrown away.
+its absence is what makes a downloaded listing re-uploadable: the old upload
+path resolved each identity and then `continue`d, so every edit to an existing
+person was reported as a skipped duplicate and thrown away.
 
 **`missing` is NOT a deletion, and that distinction is the safety property of
 this module.** In the old model a termination was an explicit mark; here the
@@ -276,7 +275,7 @@ def _leaving_date(
       listing — so it is an ordinary field change and terminates on a later
       upload, never early.
     - A date the roster ALREADY holds is not a statement, it is the export
-      coming back. `Last Day of Service` is a column of the listing template,
+      coming back. `Last Day of Service` is a column of the member listing,
       so an active employee carrying a stale past date would be proposed for
       termination every time anyone downloaded the file and changed one salary
       — exactly the invariant `_canon` exists to protect. Only a date that is
@@ -806,7 +805,7 @@ def evaluate_records(
 ) -> tuple[_Plan, AdcPreview]:
     """Diff parsed member records against the roster. No mutation.
 
-    Shared by the member-listing template and a company's own Employee
+    Shared by the flat member-listing upload and a company's own Employee
     Listing, so both resolve identities and movements the same way.
     """
     employees = list(

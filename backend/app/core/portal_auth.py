@@ -1,7 +1,8 @@
 """Employee-portal auth seam — a SEPARATE principal type, not a broker role.
 
-Members (insured employees of a client company) authenticate with an email
-OTP and receive an HS256 JWT signed with `INSPRO_PORTAL_JWT_SECRET` carrying
+Members (insured employees of a client company) authenticate with a username
+and password (plus a TOTP step when their company enables portal 2FA) and
+receive an HS256 JWT signed with `INSPRO_PORTAL_JWT_SECRET` carrying
 `typ: "member"`. Broker Entra tokens are RS256 against Entra's JWKS, so
 neither surface's tokens verify on the other — cryptographic separation.
 
@@ -17,7 +18,6 @@ member's own Employee row in the active policy year — never by bare client_id
 
 from __future__ import annotations
 
-import hashlib
 import hmac
 import logging
 import secrets
@@ -55,9 +55,6 @@ logger = logging.getLogger(__name__)
 _JWT_ALGORITHM = "HS256"
 _TOKEN_TYPE_MEMBER = "member"
 
-OTP_TTL_MINUTES = 10
-OTP_MAX_ATTEMPTS = 5
-
 
 @dataclass(frozen=True)
 class CurrentMember:
@@ -67,13 +64,6 @@ class CurrentMember:
     email: str | None
     staff_id: str
     display_name: str | None = None
-
-
-def hash_otp_code(code: str) -> str:
-    """Keyed hash of an OTP code — a leaked `member_otp_codes` table alone
-    can't be brute-forced offline without the app secret."""
-    secret = get_settings().portal_jwt_secret.encode()
-    return hmac.new(secret, code.encode(), hashlib.sha256).hexdigest()
 
 
 def issue_member_token(

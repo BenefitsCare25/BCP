@@ -624,11 +624,9 @@ def test_report_version_movement_summary_cross_tenant_404(
     assert res.status_code == 404
 
 
-def test_reports_member_listing_template_cross_tenant_404(
-    client_as_a: TestClient,
-) -> None:
+def test_reports_full_el_cross_tenant_404(client_as_a: TestClient) -> None:
     res = client_as_a.get(
-        f"/api/v1/policy-years/{PY_B}/reports/member-listing-template"
+        f"/api/v1/policy-years/{PY_B}/reports/workbooks/full-el?employee_status=active"
     )
     assert res.status_code == 404
 
@@ -944,17 +942,6 @@ def test_dependant_coverage_report_cross_tenant_404(client_as_a: TestClient) -> 
 
 _XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 _FAKE_XLSX = ("adc.xlsx", b"PK\x03\x04 not-a-real-xlsx", _XLSX_MIME)
-
-
-def test_member_listing_template_cross_tenant_404(client_as_a: TestClient) -> None:
-    # This replaced /adc/template as the roster download, and it carries the
-    # WHOLE listing with unmasked identifiers — so it is the surface that has to
-    # be tenant-guarded. Pointing this test at the deleted route would have
-    # passed on routing alone, proving nothing.
-    res = client_as_a.get(
-        f"/api/v1/policy-years/{PY_B}/reports/member-listing-template"
-    )
-    assert res.status_code == 404
 
 
 def test_adc_preview_cross_tenant_404(client_as_a: TestClient) -> None:

@@ -8,7 +8,7 @@ export interface PortalMember {
 }
 
 interface PortalSessionState {
-  /** Member bearer token (HS256 JWT from /portal/auth/verify). */
+  /** Member bearer token (HS256 JWT from /portal/auth/login, /mfa or /set-password). */
   token: string | null;
   /** ISO expiry of the token — checked by the route guard. */
   expiresAt: string | null;

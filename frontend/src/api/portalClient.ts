@@ -279,8 +279,8 @@ export const portalApi = {
     if (!res.ok) return failed(res);
     return (await res.json()) as T;
   },
-  /** Unauthenticated call for the OTP flow — a 401 here is a wrong/expired
-   * code the sign-in form handles inline, not a session expiry. */
+  /** Unauthenticated call for the sign-in flow — a 401 here is a wrong
+   * credential or code the sign-in form handles inline, not a session expiry. */
   postPublic: async <T>(path: string, body: unknown): Promise<T> => {
     const res = await fetch(`${API_BASE}${path}`, {
       method: "POST",

@@ -6,7 +6,6 @@ Production code calls the live JWKS URL via `PyJWKClient`.
 """
 from __future__ import annotations
 
-import logging
 from typing import Any
 
 import jwt
@@ -15,8 +14,6 @@ from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
 from jwt import PyJWKClient
 
 from app.core.settings import Settings
-
-logger = logging.getLogger(__name__)
 
 # Allowable clock skew when checking `exp` / `nbf` / `iat`. Entra tokens
 # occasionally arrive within a few seconds of issuance; 30s is safe.
@@ -116,34 +113,3 @@ def verify_entra_token(
     if not isinstance(claims.get("oid"), str) or not claims["oid"]:
         raise EntraAuthError("missing immutable user identifier")
     return claims
-
-
-def role_from_claims(claims: dict[str, Any], settings: Settings) -> str:
-    """Map Entra group/role claims to an Inspro role.
-
-    Order: explicit `roles` claim → group map → lowest-privilege fallback.
-    Unrecognised role strings are dropped, never trusted verbatim. The fallback
-    is `broker_viewer` (not `broker_admin`) so a misconfigured user can sign
-    in but can't mutate data.
-    """
-    # Imported lazily to avoid a circular import (auth → entra → auth).
-    from app.core.auth import ROLE_BROKER_VIEWER, VALID_ROLES
-
-    if claims.get("_claim_names"):
-        # Entra's overage indicator when a user is in >150 groups. We don't
-        # follow the Graph reference — App Roles are the right answer.
-        logger.warning(
-            "Entra token uses group overage (_claim_names) — falling back to "
-            "default role. Configure App Roles for users in >150 groups."
-        )
-
-    for r in claims.get("roles") or []:
-        if isinstance(r, str) and r in VALID_ROLES:
-            return r
-
-    for gid in claims.get("groups", []) or []:
-        mapped = settings.entra_group_role_map.get(gid)
-        if mapped and mapped in VALID_ROLES:
-            return mapped
-
-    return ROLE_BROKER_VIEWER

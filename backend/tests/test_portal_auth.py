@@ -1,4 +1,4 @@
-"""Employee-portal OTP auth: provisioning, request-code, verify, token gating."""
+"""Employee-portal accounts: provisioning, invite → password sign-in, token gating."""
 from __future__ import annotations
 
 import os
@@ -12,6 +12,7 @@ os.environ["INSPRO_DATABASE_URL"] = f"sqlite:///{TEST_DB}"
 
 from fastapi.testclient import TestClient  # noqa: E402
 
+from app.core import passwords as PW  # noqa: E402
 from app.core.auth import (  # noqa: E402
     DEMO_BROKER_FIRM_ID,
     DEMO_CLIENT_ID,
@@ -19,7 +20,7 @@ from app.core.auth import (  # noqa: E402
     get_current_user,
 )
 from app.core.credentials import credential_version  # noqa: E402
-from app.core.portal_auth import hash_otp_code, issue_member_token  # noqa: E402
+from app.core.portal_auth import issue_member_token  # noqa: E402
 from app.db.base import Base  # noqa: E402
 from app.db.session import SessionLocal, engine  # noqa: E402
 from app.main import app  # noqa: E402
@@ -27,7 +28,6 @@ from app.models import (  # noqa: E402
     Client,
     Employee,
     MemberAccount,
-    MemberOtpCode,
     PolicyYear,
 )
 from app.models.member_account import (  # noqa: E402
@@ -42,11 +42,12 @@ EMP_ALICE = "00000000-0000-0000-0000-00000000pa02"
 EMP_NO_EMAIL = "00000000-0000-0000-0000-00000000pa03"
 EMP_NO_EMAIL_2 = "00000000-0000-0000-0000-00000000pa04"
 ALICE_EMAIL = "alice@acme.test"
+# What Alice chooses at set-password in the happy-path test below.
+ALICE_PASSWORD = "Chosen-By-Member-42"
 DEMO_SLUG = "demo"
-# The portal subdomain, stood in for by a header off-prod. `verify` requires it
-# for the same reason `/login` does: it routes the Postgres search_path to the
-# firm schema the leaver check reads, and it pins which company's account a
-# mailed code may be redeemed against.
+# The portal subdomain, stood in for by a header off-prod. The sign-in routes
+# require it: it routes the Postgres search_path to the firm schema the leaver
+# check reads, and it scopes the username lookup to ONE company.
 _TENANT = {"X-Inspro-Tenant-Slug": DEMO_SLUG}
 
 
@@ -153,23 +154,30 @@ def anon_client() -> TestClient:
     return TestClient(app)
 
 
-def _clear_otps() -> None:
-    """Reset per-account cooldown/hourly-cap state between tests."""
-    with SessionLocal() as session:
-        session.query(MemberOtpCode).delete()
-        session.commit()
-
-
-def _request_code(anon: TestClient, email: str = ALICE_EMAIL) -> str | None:
-    res = anon.post("/api/v1/portal/auth/request-code", json={"email": email})
-    assert res.status_code == 202
-    return res.json().get("debug_code")
+def _login(anon: TestClient, identifier: str, password: str):
+    return anon.post(
+        "/api/v1/portal/auth/login",
+        json={"identifier": identifier, "password": password},
+        headers=_TENANT,
+    )
 
 
 # ── Provisioning + happy path ────────────────────────────────────────────────
 
 
-def test_invite_then_otp_sign_in_flow(broker_client: TestClient, anon_client: TestClient):
+def test_invite_then_password_sign_in_flow(
+    broker_client: TestClient, anon_client: TestClient, monkeypatch
+):
+    from app.api.v1 import member_accounts
+
+    # Capture the mailed one-time password — the only copy that ever exists.
+    mailed: list[str] = []
+
+    def _send(account, password, slug, login_source=None) -> bool:
+        mailed.append(password)
+        return True
+
+    monkeypatch.setattr(member_accounts, "send_member_invite", _send)
     res = broker_client.post(f"/api/v1/employees/{EMP_ALICE}/member-account", json={})
     assert res.status_code == 201, res.text
     body = res.json()
@@ -182,40 +190,28 @@ def test_invite_then_otp_sign_in_flow(broker_client: TestClient, anon_client: Te
         emp = session.get(Employee, EMP_ALICE)
         assert emp.member_account_id == body["id"]
 
-    # Inviting mails a ONE-TIME password (no OTP is issued any more) and records
-    # delivery — `invite_sent_at` is what the bulk send targets on.
+    # Inviting mails a ONE-TIME password and records delivery —
+    # `invite_sent_at` is what the bulk send targets on.
+    assert len(mailed) == 1
     with SessionLocal() as session:
         acc = session.get(MemberAccount, body["id"])
         assert acc.invite_sent_at is not None
         assert acc.password_hash is not None
+        assert PW.verify_password(acc.password_hash, mailed[0])
         assert acc.invite_expires_at is not None
-        assert (
-            session.query(MemberOtpCode)
-            .filter(MemberOtpCode.member_account_id == acc.id)
-            .count()
-            == 0
-        )
 
-    _clear_otps()
-    code = _request_code(anon_client)
-    assert code is not None and len(code) == 6  # dev+mock exposes debug_code
-
-    res = anon_client.post(
-        "/api/v1/portal/auth/verify",
-        json={"email": ALICE_EMAIL, "code": code},
-        headers=_TENANT,
-    )
+    res = _login(anon_client, ALICE_EMAIL, mailed[0])
     assert res.status_code == 200, res.text
     out = res.json()
-    # The mailed password is rotation-due on arrival, so proving the mailbox
-    # still can't skip choosing a password — verify hands back the same
-    # forced-rotation challenge `/login` would.
+    # The mailed password is rotation-due on arrival, so it cannot open a
+    # session on its own — `/login` hands back the forced-rotation challenge.
     assert out["status"] == "password_reset_required"
     assert out["challenge_token"]
+    assert "token" not in out
 
     res = anon_client.post(
         "/api/v1/portal/auth/set-password",
-        json={"token": out["challenge_token"], "password": "Chosen-By-Member-42"},
+        json={"token": out["challenge_token"], "password": ALICE_PASSWORD},
         headers={"X-Inspro-Tenant-Slug": DEMO_SLUG},
     )
     assert res.status_code == 200, res.text
@@ -280,101 +276,6 @@ def test_invalid_email_422(broker_client: TestClient):
     assert res.status_code == 422
 
 
-# ── request-code behaviour ───────────────────────────────────────────────────
-
-
-def test_request_code_unknown_email_is_enumeration_safe(anon_client: TestClient):
-    res = anon_client.post(
-        "/api/v1/portal/auth/request-code", json={"email": "nobody@nowhere.test"}
-    )
-    assert res.status_code == 202
-    assert res.json().get("debug_code") is None
-
-
-def test_request_code_cooldown_suppresses_second_issue(anon_client: TestClient):
-    _clear_otps()
-    first = _request_code(anon_client)
-    assert first is not None
-    second = _request_code(anon_client)  # inside the 60s cooldown
-    assert second is None
-
-
-# ── verify behaviour ─────────────────────────────────────────────────────────
-
-
-def test_verify_wrong_code_401(anon_client: TestClient):
-    _clear_otps()
-    _request_code(anon_client)
-    res = anon_client.post(
-        "/api/v1/portal/auth/verify",
-        json={"email": ALICE_EMAIL, "code": "000000"},
-        headers=_TENANT,
-    )
-    assert res.status_code == 401
-
-
-def test_verify_lockout_after_max_attempts(anon_client: TestClient):
-    _clear_otps()
-    code = _request_code(anon_client)
-    assert code is not None
-    wrong = "999999" if code != "999999" else "111111"
-    for _ in range(5):
-        res = anon_client.post(
-            "/api/v1/portal/auth/verify",
-            json={"email": ALICE_EMAIL, "code": wrong},
-            headers=_TENANT,
-        )
-        assert res.status_code == 401
-    # The real code was burned by the failed attempts.
-    res = anon_client.post(
-        "/api/v1/portal/auth/verify",
-        json={"email": ALICE_EMAIL, "code": code},
-        headers=_TENANT,
-    )
-    assert res.status_code == 401
-
-
-def test_verify_expired_code_401(anon_client: TestClient):
-    _clear_otps()
-    with SessionLocal() as session:
-        account = (
-            session.query(MemberAccount)
-            .filter(MemberAccount.email == ALICE_EMAIL)
-            .one()
-        )
-        session.add(
-            MemberOtpCode(
-                member_account_id=account.id,
-                code_hash=hash_otp_code("123456"),
-                expires_at=datetime.now(UTC) - timedelta(minutes=1),
-            )
-        )
-        session.commit()
-    res = anon_client.post(
-        "/api/v1/portal/auth/verify",
-        json={"email": ALICE_EMAIL, "code": "123456"},
-        headers=_TENANT,
-    )
-    assert res.status_code == 401
-
-
-def test_code_single_use(anon_client: TestClient):
-    _clear_otps()
-    code = _request_code(anon_client)
-    ok = anon_client.post(
-        "/api/v1/portal/auth/verify",
-        json={"email": ALICE_EMAIL, "code": code},
-        headers=_TENANT,
-    )
-    assert ok.status_code == 200
-    replay = anon_client.post(
-        "/api/v1/portal/auth/verify",
-        json={"email": ALICE_EMAIL, "code": code},
-        headers=_TENANT,
-    )
-    assert replay.status_code == 401
-
-
 # ── token gating ─────────────────────────────────────────────────────────────
 
 
@@ -398,14 +299,20 @@ def test_disabled_account_token_rejected(broker_client: TestClient, anon_client:
     )
     assert res.status_code == 401
 
-    # Disabled accounts can't request codes either (enumeration-safe 202, no code).
-    assert _request_code(anon_client) is None
+    # Disabled accounts can't sign in either: the CORRECT password gets the
+    # same 401 as an unknown username (no enumeration of disabled accounts).
+    refused = _login(anon_client, ALICE_EMAIL, ALICE_PASSWORD)
+    assert refused.status_code == 401
+    assert refused.json()["detail"] == "Invalid credentials."
 
     # Re-enable for any later test.
     res = broker_client.patch(
         f"/api/v1/member-accounts/{account_id}", json={"status": "active"}
     )
     assert res.status_code == 200
+    # Control: the same password works again once re-enabled, so the 401 above
+    # was the disabled status and not a stale credential.
+    assert _login(anon_client, ALICE_EMAIL, ALICE_PASSWORD).status_code == 200
 
 
 def test_garbage_token_401(anon_client: TestClient):
@@ -445,7 +352,6 @@ def test_wrong_typ_token_401(anon_client: TestClient):
 
 
 def test_resend_invite(broker_client: TestClient):
-    _clear_otps()
     with SessionLocal() as session:
         account = (
             session.query(MemberAccount)
@@ -459,17 +365,12 @@ def test_resend_invite(broker_client: TestClient):
     assert res.status_code == 200
     with SessionLocal() as session:
         acc = session.get(MemberAccount, account_id)
-        # A resend issues a NEW one-time password (no OTP), which is why it is a
+        # A resend issues a NEW one-time password, which is why it is a
         # per-employee action the UI confirms — the old password stops working.
         assert acc.password_hash != before
+        assert not PW.verify_password(acc.password_hash, ALICE_PASSWORD)
         assert acc.invite_sent_at is not None
         assert acc.invite_expires_at is not None
-        assert (
-            session.query(MemberOtpCode)
-            .filter(MemberOtpCode.member_account_id == account_id)
-            .count()
-            == 0
-        )
 
 
 def test_list_member_accounts(broker_client: TestClient):
@@ -667,23 +568,20 @@ def test_rollout_counts_match_the_send(broker_client: TestClient):
     assert queued == roll["invite_pending"]
 
 
-def test_verify_activates_only_on_success(anon_client: TestClient):
-    """A failed verify must not activate an invited account."""
+def test_failed_login_does_not_activate_an_invited_account(anon_client: TestClient):
+    """A failed sign-in must not activate an invited account."""
     with SessionLocal() as session:
         account = MemberAccount(
             client_id=DEMO_CLIENT_ID,
             email="carol@acme.test",
             staff_id="S-102",
             status=MEMBER_STATUS_INVITED,
+            password_hash=PW.hash_password("Carols-Mailed-Pass-7"),
         )
         session.add(account)
         session.commit()
         account_id = account.id
-    res = anon_client.post(
-        "/api/v1/portal/auth/verify",
-        json={"email": "carol@acme.test", "code": "123456"},
-        headers=_TENANT,
-    )
+    res = _login(anon_client, "carol@acme.test", "Not-Carols-Pass-1")
     assert res.status_code == 401
     with SessionLocal() as session:
         assert session.get(MemberAccount, account_id).status == MEMBER_STATUS_INVITED

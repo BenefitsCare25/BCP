@@ -233,8 +233,8 @@ const portalSignInRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/portal/$company/sign-in",
   beforeLoad: async ({ params }) => {
-    // Already signed in (and not following a fresh magic link) → straight in.
-    if ((hasValidPortalSession() || await refreshPortalSession()) && !window.location.search.includes("code=")) {
+    // Already signed in → straight in.
+    if (hasValidPortalSession() || await refreshPortalSession()) {
       if (usePortalSession.getState().mfaEnrollmentRequired) {
         throw redirect({ to: "/portal/$company/security", params: { company: params.company } });
       }

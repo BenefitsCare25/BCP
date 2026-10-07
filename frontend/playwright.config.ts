@@ -76,6 +76,10 @@ export default defineConfig({
         INSPRO_DATABASE_URL: databaseUrl,
         INSPRO_E2E: "1",
         INSPRO_CORS_ORIGINS: new URL(baseURL).origin,
+        // Every worker shares one 127.0.0.1 bucket, so the production default
+        // (120/minute per client) throttles a fast suite into 429s. Only the
+        // default rises; explicit per-route limits keep their production values.
+        INSPRO_RATE_LIMIT_DEFAULT: "2000/minute",
       },
     },
     {

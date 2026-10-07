@@ -526,9 +526,9 @@ def _password_account(password: str = "Correct-Horse-9!") -> None:
 
 def test_a_finished_member_cannot_sign_in_at_all():
     """Checked at `_issue_member_login`, the ONE choke point every session on
-    this surface passes through — password login, OTP verify, MFA and
-    set-password all end there, so the refusal is written once instead of at
-    four call sites that could drift."""
+    this surface passes through — password login, MFA and set-password all end
+    there, so the refusal is written once instead of at three call sites that
+    could drift."""
     _password_account()
     _set_state(
         status=EMPLOYEE_STATUS_TERMINATED,
@@ -694,7 +694,7 @@ def test_the_batched_map_refuses_an_ambiguous_staff_id_like_the_single_path():
         s.commit()
 
 
-# ── The emailed-code route is the same door ───────────────────────────────────
+# ── Every session-minting route resolves the tenant ───────────────────────────
 
 
 def test_every_route_that_mints_a_member_session_resolves_the_tenant():
@@ -703,10 +703,10 @@ def test_every_route_that_mints_a_member_session_resolves_the_tenant():
     It calls `set_search_path`, and `_issue_member_login` reads `policy_years`,
     `employees` and `claims` — all tenant tables. Unrouted on Postgres every one
     of them resolves against `public`, which holds no tenant rows: the leaver
-    check comes back `unknown` and the route signs in the members the password
-    route refuses. `/verify` was missing it because until the leaver gate these
+    check comes back `unknown` and the route signs in the members the gate
+    should refuse. A route can miss it silently: until the leaver gate these
     routes touched only control tables, which live in `public` everywhere, so
-    nothing noticed.
+    nothing noticed (an earlier sign-in route shipped without it).
 
     Enumerated rather than listed, so a NEW way to mint a session is caught too.
     The routing itself is unobservable here (SQLite has no schemas) and is
@@ -736,56 +736,17 @@ def test_every_route_that_mints_a_member_session_resolves_the_tenant():
     )
 
 
-def test_the_emailed_code_route_refuses_a_request_with_no_tenant():
+@pytest.mark.parametrize(
+    ("path", "body"),
+    [
+        ("/api/v1/portal/auth/login",
+         {"identifier": "leaver@lv.test", "password": "Correct-Horse-9!"}),
+        ("/api/v1/portal/auth/mfa", {"challenge_token": "x", "code": "123456"}),
+        ("/api/v1/portal/auth/set-password",
+         {"token": "x", "password": "Brand-New-Password-9!"}),
+    ],
+)
+def test_a_session_minting_route_refuses_a_request_with_no_tenant(path, body):
     """The behavioural half of the rule above."""
-    res = TestClient(app).post(
-        "/api/v1/portal/auth/verify",
-        json={"email": "leaver@lv.test", "code": "123456"},
-    )
+    res = TestClient(app).post(path, json=body)
     assert res.status_code == 400
-
-
-def test_a_refused_sign_in_still_SPENDS_the_emailed_code():
-    """A code is spent when it MATCHES, not when the sign-in succeeds.
-
-    `_issue_member_login` rolls back on a leaver refusal — it has to, because
-    `member_set_password` reaches it holding a freshly written credential — and
-    that rollback was reverting the consumption too. A correctly-guessed code
-    stayed live for the rest of its TTL, so the refusal was replayable and, if
-    the member's access state moved inside the window, the already-used code
-    would mint a session.
-    """
-    from app.models import MemberOtpCode
-
-    _password_account()
-    _set_state(
-        status=EMPLOYEE_STATUS_TERMINATED,
-        last_day=TODAY - timedelta(days=400), days=10,
-    )
-    api = TestClient(app)
-    try:
-        issued = api.post(
-            "/api/v1/portal/auth/request-code", json={"email": "leaver@lv.test"}
-        )
-        assert issued.status_code == 202, issued.text
-        code = issued.json().get("debug_code")
-        assert code, "dev+mock surfaces the code so local sign-in works"
-
-        def _verify():
-            return api.post(
-                "/api/v1/portal/auth/verify",
-                json={"email": "leaver@lv.test", "code": code},
-                headers={"X-Inspro-Tenant-Slug": SLUG},
-            )
-
-        refused = _verify()
-        assert refused.status_code == 403
-        assert refused.json()["detail"]["code"] == CODE_ACCESS_ENDED
-
-        # 401 (no live code matches), NOT another 403 — a second 403 would mean
-        # the code was still there to be matched.
-        assert _verify().status_code == 401
-    finally:
-        with SessionLocal() as s:
-            s.query(MemberOtpCode).delete()
-            s.commit()

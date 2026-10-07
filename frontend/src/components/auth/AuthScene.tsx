@@ -4,7 +4,7 @@ import { LeafScopeContext } from "@/lib/leaf-scope";
 import { cn } from "@/lib/cn";
 
 /**
- * Shared sign-in shell for both surfaces (broker Entra + member OTP): a clean
+ * Shared sign-in shell for both surfaces (broker Entra + member password): a clean
  * white form column beside a light product-showcase panel. The form content
  * (logo, heading, fields, footer) lives in one column that is centered within
  * the left panel. Type, inputs and buttons are the platform's own, so this

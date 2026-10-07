@@ -11,23 +11,7 @@ class _Base(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
-# ── Portal auth (public OTP flow) ─────────────────────────────────────────────
-
-
-class OtpRequestIn(BaseModel):
-    email: str = Field(min_length=3, max_length=320)
-
-
-class OtpRequestOut(BaseModel):
-    status: str = "sent"
-    # Populated ONLY in dev + mock auth mode so local sign-in works without a
-    # mail server (mirrors the deferred invitation-email posture).
-    debug_code: str | None = None
-
-
-class OtpVerifyIn(BaseModel):
-    email: str = Field(min_length=3, max_length=320)
-    code: str = Field(min_length=4, max_length=12)
+# ── Portal auth (member session) ──────────────────────────────────────────────
 
 
 class PortalMemberOut(_Base):
@@ -37,7 +21,10 @@ class PortalMemberOut(_Base):
     display_name: str | None = None
 
 
-class OtpVerifyOut(BaseModel):
+class MemberSessionOut(BaseModel):
+    """A signed-in member session — what `/login`, `/mfa`, `/set-password` and
+    `/refresh` return once no further challenge is pending."""
+
     token: str
     expires_at: datetime
     member: PortalMemberOut
@@ -153,7 +140,7 @@ class MemberAccountOut(_Base):
     # Deadline on a mailed one-time password that hasn't been used yet.
     invite_expires_at: datetime | None = None
     # Set by invite/resend responses only (None on plain reads): False means
-    # the account exists but the OTP email could not be delivered.
+    # the account exists but the invite email could not be delivered.
     mail_sent: bool | None = None
     # Set once by set-password-link responses — deliver to the member.
     set_password_token: str | None = None

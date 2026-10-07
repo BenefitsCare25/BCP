@@ -2,9 +2,10 @@
 
 All control-plane tables (they live in ``public``): authentication resolves
 *before* a firm schema is known. The broker surface (Entra) and member surface
-(email OTP) do NOT use ``auth_credentials`` — that table backs the HR credential
-login. ``auth_mfa`` / ``auth_sessions`` / ``auth_events`` are surface-agnostic
-(``subject_type`` discriminates user vs member).
+(password stored on ``member_accounts``) do NOT use ``auth_credentials`` — that
+table backs the HR credential login. ``auth_mfa`` / ``auth_sessions`` /
+``auth_events`` are surface-agnostic (``subject_type`` discriminates user vs
+member).
 
 See ``docs/AUTH_DESIGN.md`` §4 for the full rationale.
 """

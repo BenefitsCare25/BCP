@@ -12,9 +12,10 @@ What it does, idempotently:
    `employees.member_account_id` exactly like the broker bulk-invite flow.
 3. Prints the sign-in list.
 
-Sign-in (dev+mock): POST /portal/auth/request-code returns a `debug_code`
-in the response (and the portal sign-in screen shows it) — no real email is
-sent (mail runs in log/mock mode locally).
+Sign-in: the accounts are created WITHOUT a password. Give each one a
+password from the broker side (Member Coverage, or
+`POST /api/v1/member-accounts/{id}/set-password`), then sign in at
+`/portal/<company-slug>/sign-in` with the email (or staff id) and that password.
 
 Usage:
     cd backend && PYTHONPATH=. uv run python scripts/seed_cdl_portal_accounts.py [COUNT]
@@ -135,9 +136,10 @@ def main(count: int) -> int:
         for a in active_accounts:
             print(f"  {a.staff_id:<10} {(a.display_name or ''):<28} {a.email}")
         print(
-            "\nSign in at http://localhost:5173/portal/sign-in — enter an email "
-            "above;\nthe one-time code is returned as `debug_code` (shown on "
-            "screen in dev)."
+            "\nThese accounts have no password yet: set one from Member Coverage "
+            "(or POST /api/v1/member-accounts/{id}/set-password),\nthen sign in "
+            f"at http://localhost:5173/portal/{client.slug or '<company-slug>'}"
+            "/sign-in with the email above and that password."
         )
         return 0
     finally:

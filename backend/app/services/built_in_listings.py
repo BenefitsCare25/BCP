@@ -37,12 +37,11 @@ member ids are what the portal quotes on a claim, and `Dependant Status` is
 what makes a pending self-add visible. Employment Status, Country of Work and
 salary Currency were dropped WITH the incumbent's layout — they are printed on
 the INSURER submission listing, which is the sheet whose question they answer,
-and the upload template still offers them so they can be stated.
+and the flat member-listing upload still reads them so they can be stated.
 
-The upload template (`member_listing_template.py`) carries the SAME leading
-block, so a file exported from the incumbent uploads here untouched and HR
-learns one vocabulary. Both write `Deletion Date` and both mean the roster's
-`termination_date`.
+The upload parser (`roster_parser.EMPLOYEE_COLUMN_MAP` / `DEPENDANT_COLUMN_MAP`)
+reads this SAME leading block, so a file exported from the incumbent uploads
+here untouched. `Deletion Date` is read as the roster's `termination_date`.
 """
 from __future__ import annotations
 

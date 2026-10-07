@@ -179,7 +179,7 @@ def _bold_header(ws: Worksheet) -> None:
 
 
 # Public aliases — these workbook helpers are the shared reports toolkit (also
-# used by claims_register / insurer_listings / member_listing_template). Exposed
+# used by claims_register / insurer_listings / built_in_listings). Exposed
 # without the leading underscore so other report modules don't reach into
 # module-private names.
 naive = _naive
@@ -197,8 +197,8 @@ resolved_last_day = _resolved_last_day
 # treats them as literal text. Applied to every cell in the insurer workbooks.
 #
 # The tuple lives in `roster_parser` because that module owns the READ half
-# (`unescape_formula_guard`): the member-listing template is exported through
-# here and uploaded back through there, so an escape with no matching unescape
+# (`unescape_formula_guard`): our listings are exported through here and
+# uploaded back through there, so an escape with no matching unescape
 # turns "+60186448967" into a phantom change on every upload.
 def safe_cell(value: object) -> object:
     if isinstance(value, str) and value and value[0] in _FORMULA_LEADERS:

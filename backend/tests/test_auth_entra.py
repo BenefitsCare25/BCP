@@ -15,7 +15,7 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
-from app.core.entra import EntraAuthError, role_from_claims, verify_entra_token
+from app.core.entra import EntraAuthError, verify_entra_token
 from app.core.settings import Settings
 
 KID = "test-kid-1"
@@ -68,7 +68,6 @@ def _settings() -> Settings:
         entra_audience=AUDIENCE,
         entra_issuer=ISSUER,
         entra_jwks_url="https://example.test/.well-known/jwks.json",
-        entra_group_role_map={"00000000-aaaa-bbbb-cccc-111111111111": "system_admin"},
     )
 
 
@@ -153,29 +152,6 @@ def test_unknown_kid_rejected(rsa_keypair, jwks) -> None:
     )
     with pytest.raises(EntraAuthError, match="no matching JWK"):
         verify_entra_token(token, _settings(), jwks=jwks)
-
-
-def test_role_from_claims_system_admin_via_roles_claim() -> None:
-    claims = {"oid": "u", "roles": ["system_admin"]}
-    assert role_from_claims(claims, _settings()) == "system_admin"
-
-
-def test_role_from_claims_via_group_map() -> None:
-    claims = {"oid": "u", "groups": ["00000000-aaaa-bbbb-cccc-111111111111"]}
-    assert role_from_claims(claims, _settings()) == "system_admin"
-
-
-def test_role_from_claims_default_low_privilege() -> None:
-    """Fallback is now the lowest-privilege role, not broker_admin —
-    a misconfigured user can sign in but can't mutate data."""
-    claims = {"oid": "u", "groups": []}
-    assert role_from_claims(claims, _settings()) == "broker_viewer"
-
-
-def test_role_from_claims_unknown_role_dropped() -> None:
-    """Unrecognised role strings are not trusted verbatim."""
-    claims = {"oid": "u", "roles": ["root", "superuser"]}
-    assert role_from_claims(claims, _settings()) == "broker_viewer"
 
 
 @pytest.mark.parametrize("overrides", [

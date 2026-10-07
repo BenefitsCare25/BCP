@@ -8,7 +8,7 @@ authentication must resolve *before* a firm schema is known — the account's
 Per-year `Employee` rows bind to an account via `employees.member_account_id`
 (stamped at provisioning; lazily re-stamped by `(policy_year_id, staff_id)`
 match when a new policy year's roster is uploaded). Members authenticate with
-an email OTP — no passwords, no Entra dependency.
+a username + password (optionally TOTP) — no Entra dependency.
 """
 from __future__ import annotations
 
@@ -88,8 +88,11 @@ class MemberAccount(Base, TimestampMixin):
 
 
 class MemberOtpCode(Base, TimestampMixin):
-    """One-time sign-in code. Only the SHA-256 hash is stored; a code is
-    consumed on successful verify or after too many failed attempts."""
+    """Retired emailed sign-in codes (the `request-code` / `verify` flow).
+
+    Nothing writes or reads this table any more. The model stays only so the
+    ORM metadata matches the migrated schema (`CONTROL_TABLES` lists it too);
+    dropping it needs an Alembic migration."""
 
     __tablename__ = "member_otp_codes"
 

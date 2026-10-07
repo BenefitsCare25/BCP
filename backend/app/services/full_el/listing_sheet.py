@@ -75,6 +75,7 @@ def employee_covers(ctx: ElContext, emp: Employee, deps_with_listing: set[str]) 
             assignment=ctx.listed.get((f"E:{emp.id}", product_id)),
             family_group=_family_group(relationships),
             covered_dependants=covered,
+            uw_case=ctx.uw_cases.get((emp.id, product_id)),
         )
     return out
 

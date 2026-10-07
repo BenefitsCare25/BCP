@@ -1599,7 +1599,7 @@ def test_plan_tier_siblings_share_one_validated_cohort_count() -> None:
         assert items[second.id].matched_count == 1
         assert all("equally specific" not in " ".join(item.warnings) for item in items.values())
         with patch(
-            "app.services.eligibility_mapping.build_attribute_catalog",
+            "app.services.eligibility_mapping.confirmation.build_attribute_catalog",
             wraps=build_attribute_catalog,
         ) as catalog_builder:
             batch = CategoryConfirmationBatch(

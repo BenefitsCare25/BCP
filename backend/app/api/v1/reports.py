@@ -48,7 +48,6 @@ from app.services.insurer_listings import (
     configured_insurers_for_year,
 )
 from app.services.insurer_reports import build_benefit_selection_workbook
-from app.services.member_listing_template import build_member_listing_template
 from app.services.placement_slip_export import (
     build_placement_slip_workbook,
     build_quotation_slip_archive,
@@ -321,32 +320,6 @@ def download_benefit_selection_report(
         f"{business_today():%Y%m%d}.xlsx",
         retained,
     )
-
-
-@router.get("/member-listing-template")
-@limiter.limit("20/minute")
-def download_member_listing_template(
-    request: Request,
-    policy_year_id: str,
-    user: CurrentUser = Depends(get_current_user),
-    db: Session = Depends(get_db),
-) -> Response:
-    """Full member-listing upload template (Employees + Dependants sheets).
-
-    Pre-filled with the current roster (unmasked — it round-trips through the
-    upload parser) so it also serves as an update template; audited like every
-    PII export.
-    """
-    py = assert_policy_year_for_user(policy_year_id, user, db)
-    assert_masking_allowed(user, masked=False)
-    wb = build_member_listing_template(db, py)
-    write_audit(
-        db, user, action="export", entity_type="insurer_report",
-        entity_id=policy_year_id,
-        after={"report": "member-listing-template", "masked": False},
-    )
-    db.commit()
-    return _xlsx_response(wb, "member-listing-template.xlsx")
 
 
 @router.get("/placement-slip")

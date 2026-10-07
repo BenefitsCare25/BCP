@@ -189,7 +189,7 @@ def unescape_formula_guard(value: Any) -> Any:
     """Undo `insurer_reports.safe_cell` on the way back in.
 
     Our own exports prefix a value starting with ``= + - @`` with an apostrophe
-    so Excel can't execute it as a formula. The listing template is now
+    so Excel can't execute it as a formula. Exported listings are
     RE-UPLOADED (see `services/adc.py`), so that guard round-trips as data: a
     Malaysian mobile ``+60186448967`` came back as ``'+60186448967``, which the
     diff reported as a change on every upload and would have written the stray
@@ -236,7 +236,7 @@ def _normalize_flag(raw: Any) -> Any:
 def _coerce_attr(attr_id: str, value: Any) -> Any:
     # Undo our own export's formula guard FIRST, so the apostrophe never reaches
     # a normalizer or the stored value. This has to happen on ingest rather than
-    # only in the diff: the listing template is round-tripped now, and hiding
+    # only in the diff: exported listings are round-tripped now, and hiding
     # the artifact from the comparison would still write "'+60186448967" into
     # the roster the first time that row genuinely changes.
     value = unescape_formula_guard(value)
@@ -275,10 +275,9 @@ def _collect_member_ids(
 def _read_sheet(path: Path | str, preferred: str) -> Sheet | None:
     """The sheet named ``preferred`` when the workbook has one, else the first.
 
-    Both downloadable templates are TWO-sheet workbooks (``Employees`` /
-    ``Dependants``) — the member listing (``member_listing_template``) and the
-    ADC movement file — and both roster tabs offer them. Reading sheet 0
-    unconditionally meant a dependant upload of either file parsed the
+    Flat member-listing uploads are TWO-sheet workbooks (``Employees`` /
+    ``Dependants``) and one upload reads both. Reading sheet 0
+    unconditionally meant a dependant upload of such a file parsed the
     *employee* sheet through ``DEPENDANT_COLUMN_MAP``: Staff ID and Employee
     Name resolve on that sheet, so the "no identifying column" guard passes and
     the roster imports one nameless, DOB-less dependant per employee.

@@ -31,20 +31,7 @@ import type { PortalMember } from "@/stores/portalSession";
 import { usePortalSession } from "@/stores/portalSession";
 import { queryClient } from "@/lib/queryClient";
 
-export interface OtpRequestResult {
-  status: string;
-  /** Populated only in local dev (mock auth) so sign-in works without email. */
-  debug_code: string | null;
-}
-
-export interface OtpVerifyResult {
-  token: string;
-  expires_at: string;
-  member: PortalMember;
-  mfa_enrollment_required?: boolean;
-}
-
-function adoptMemberSession(out: OtpVerifyResult): void {
+function adoptMemberSession(out: MemberTokenResult): void {
   void queryClient.cancelQueries({ queryKey: ["portal"] });
   queryClient.removeQueries({ queryKey: ["portal"] });
   usePortalSession.getState().setSession(out.token, out.expires_at, out.member, out.mfa_enrollment_required);
@@ -89,25 +76,6 @@ export interface PortalMe {
   /** True while an enrollment window is open and in-period — drives the
    * "Enrollment open" call-to-action in the portal shell. */
   enrollment_open: boolean;
-}
-
-export function useRequestOtp() {
-  return useMutation({
-    mutationFn: (email: string) =>
-      portalApi.postPublic<OtpRequestResult>("/portal/auth/request-code", {
-        email,
-      }),
-    meta: { localErrorHandling: true },
-  });
-}
-
-export function useVerifyOtp() {
-  return useMutation({
-    mutationFn: (input: { email: string; code: string }) =>
-      portalApi.postPublic<OtpVerifyResult>("/portal/auth/verify", input),
-    onSuccess: adoptMemberSession,
-    meta: { localErrorHandling: true },
-  });
 }
 
 // ── Credential login (username + password) ──

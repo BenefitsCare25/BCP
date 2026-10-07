@@ -3,7 +3,10 @@
 GTL carries an applied reviewed cap on its product terms that disagrees with
 the slip's stated maximum, and reviewed ALB ages to its own cover start. GPA
 is an older confirmed setup without applied rules (its header cap is the
-reviewed one) whose eligibility wording says ANB.
+reviewed one) whose eligibility wording says ANB, billed on accepted SI: FE-1
+has no underwriting case and sits within the free cover limit, FE-2 has a
+decided case accepting less than eligible, FE-3 an open case at its guaranteed
+SI.
 """
 from __future__ import annotations
 
@@ -15,9 +18,11 @@ import pytest
 TEST_DB = Path(__file__).parent / "_test_full_el.db"
 os.environ["INSPRO_DATABASE_URL"] = f"sqlite:///{TEST_DB}"
 
+import re  # noqa: E402
 from datetime import date  # noqa: E402
 
 from openpyxl.workbook import Workbook  # noqa: E402
+from openpyxl.worksheet.worksheet import Worksheet  # noqa: E402
 
 from app.core.auth import DEMO_BROKER_FIRM_ID  # noqa: E402
 from app.db.base import Base  # noqa: E402
@@ -30,6 +35,7 @@ from app.models import (  # noqa: E402
     Product,
     ProductSetup,
     ProductTerm,
+    UnderwritingCase,
 )
 from app.models.policy_year import PolicyYearStatus  # noqa: E402
 from app.models.product_setup import ProductSetupStatus  # noqa: E402
@@ -43,6 +49,8 @@ GPA_PROD = "00000000-0000-0000-0000-0000000f1011"
 GTL_CAT = "00000000-0000-0000-0000-0000000f1020"
 GPA_CAT = "00000000-0000-0000-0000-0000000f1021"
 EMP_ID = "00000000-0000-0000-0000-0000000f1101"
+EMP_DECIDED = "00000000-0000-0000-0000-0000000f1102"
+EMP_PENDING = "00000000-0000-0000-0000-0000000f1103"
 
 
 def _slip_cap(amount: str) -> list[dict]:
@@ -113,18 +121,32 @@ def _setup_db():
             ProductTerm(policy_year_id=PY_ID, product_id=GTL_PROD,
                         coverage_start=date(2034, 3, 1),
                         report_rules={"max_sum_insured": 500000}),
+            ProductTerm(policy_year_id=PY_ID, product_id=GPA_PROD,
+                        free_cover_limit=350000.0),
         ])
-        s.add(Employee(
-            id=EMP_ID, client_id=CLIENT_ID, policy_year_id=PY_ID,
-            staff_id="FE-1", employee_name="Re Viewed",
-            attribute_values={"date_of_birth": "1990-06-15", "salary": "30000"},
-            derived_attribute_values={},
-            matched_categories=[
-                {"category_id": GTL_CAT, "product_code": "GTL", "method": "rule"},
-                {"category_id": GPA_CAT, "product_code": "GPA", "method": "rule"},
-            ],
-            source="csv_import", status="active",
-        ))
+        for emp_id, staff in ((EMP_ID, "FE-1"), (EMP_DECIDED, "FE-2"), (EMP_PENDING, "FE-3")):
+            s.add(Employee(
+                id=emp_id, client_id=CLIENT_ID, policy_year_id=PY_ID,
+                staff_id=staff, employee_name=f"Re Viewed {staff}",
+                attribute_values={"date_of_birth": "1990-06-15", "salary": "30000"},
+                derived_attribute_values={},
+                matched_categories=[
+                    {"category_id": GTL_CAT, "product_code": "GTL", "method": "rule"},
+                    {"category_id": GPA_CAT, "product_code": "GPA", "method": "rule"},
+                ],
+                source="csv_import", status="active",
+            ))
+        s.flush()
+        s.add_all([
+            UnderwritingCase(client_id=CLIENT_ID, policy_year_id=PY_ID, product_id=GPA_PROD,
+                             employee_id=EMP_DECIDED, eligible_si=300000.0,
+                             guaranteed_si=250000.0, accepted_si=280000.0,
+                             status="approved_standard"),
+            UnderwritingCase(client_id=CLIENT_ID, policy_year_id=PY_ID, product_id=GPA_PROD,
+                             employee_id=EMP_PENDING, eligible_si=300000.0,
+                             guaranteed_si=200000.0, accepted_si=200000.0,
+                             status="pending"),
+        ])
         s.commit()
     yield
     engine.dispose()
@@ -184,5 +206,32 @@ def test_summary_and_gaps_carry_the_reviewed_rules() -> None:
     assert gtl[5] == "Headcount basis\nNamed basis above the FCL"
     assert gtl[6] == "SGD"
     gaps = {(r[0], r[1]) for r in wb["Setup & Data Gaps"].iter_rows(min_row=2, values_only=True)}
-    assert ("GPA", "Premium SI basis is Accepted SI") in gaps
+    assert not any("Premium SI basis" in finding for _code, finding in gaps)
     assert not any("not reviewed" in finding for _code, finding in gaps)
+
+
+def _billed_si(ws: Worksheet, premium: str) -> float:
+    """Evaluate the SI operand of a per-$1,000 premium formula."""
+    match = re.fullmatch(r"=\$[A-Z]+\$1\*(?:MIN\(([A-Z]+\d+),([\d.]+)\)|([A-Z]+\d+))", premium)
+    assert match, premium
+    cell, limit, plain = match.groups()
+    eligible = float(ws[cell or plain].value)
+    return min(eligible, float(limit)) if limit else eligible
+
+
+def test_accepted_si_basis_bills_the_underwritten_amount() -> None:
+    wb, blocks, _emp = _build()
+    ws = wb["Employee Listing"]
+    gpa, gtl = blocks["GPA"], blocks["GTL"]
+    rows = {"FE-1": 4, "FE-2": 5, "FE-3": 6}
+    premiums = {staff: ws[f"{gpa['premium']}{row}"].value for staff, row in rows.items()}
+    # Eligible stays the live reviewed cap; the accepted limit wraps it.
+    assert premiums["FE-2"] == f"=${gpa['premium']}$1*MIN({gpa['eligible_si']}5,280000)"
+    billed = {staff: _billed_si(ws, formula) for staff, formula in premiums.items()}
+    assert billed == {
+        "FE-1": 300000,  # no case, within the free cover limit: accepted = eligible
+        "FE-2": 280000,  # decided: the insurer's accepted amount, below eligible
+        "FE-3": 200000,  # open case: in force at its guaranteed SI
+    }
+    # A product on the default Eligible SI basis is unaffected by underwriting.
+    assert "MIN" not in ws[f"{gtl['premium']}4"].value

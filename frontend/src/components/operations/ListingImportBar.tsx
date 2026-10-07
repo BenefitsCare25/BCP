@@ -30,9 +30,8 @@ import type { AdcPreview } from "@/types";
  *
  * That also fixes what the old plain upload did: it resolved each person's
  * identity and then skipped them as a "duplicate", so a broker who filled in
- * salaries or insurer member IDs on the pre-filled template — which
- * `member_listing_template.py` explicitly describes as doubling as an update
- * template — got "0 added · 491 duplicates skipped" and lost every edit.
+ * salaries or insurer member IDs on a downloaded listing got
+ * "0 added · 491 duplicates skipped" and lost every edit.
  *
  * One upload covers both sheets of the file (`Employees` / `Dependants`), so
  * the button is the same action on both tabs and nothing rides along unseen.

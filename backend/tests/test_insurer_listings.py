@@ -1237,39 +1237,32 @@ def test_malformed_setup_answers_do_not_break_reporting(
             s.commit()
 
 
-# ── Member-listing template ──────────────────────────────────────────────────
+# ── Member-listing upload vocabulary ─────────────────────────────────────────
 
 
-def test_member_listing_template_round_trips(client: TestClient) -> None:
-    res = client.get(
-        f"/api/v1/policy-years/{PY_ID}/reports/member-listing-template"
-    )
-    assert res.status_code == 200, res.text
-    wb = load_workbook(BytesIO(res.content))
-    assert wb.sheetnames == ["Employees", "Dependants"]
-    emp_rows = _sheet_rows(res.content, sheet=0)
-    # The employee sheet names the staff id "User ID" and the dependant sheet
-    # "Staff ID" — the incumbent's own asymmetry, kept so their extract uploads
-    # here unedited.
-    fam = next(r for r in emp_rows if r["User ID"] == "IL-1")
-    # Pre-filled with the current roster, UNMASKED (it re-imports).
-    assert fam["Identification No."] == "S1234567D"
-    assert fam["TestSure Member ID"] == "TS-001"
-    assert "Eligible to Sell Leave" in fam
-    dep_rows = _sheet_rows(res.content, sheet=1)
-    assert {r["Dependant Name"] for r in dep_rows} == {"Spo Use", "Chi Ld"}
-    assert "Deletion Date" in dep_rows[0]
-
-    # Every employee header round-trips through the upload parser: every
-    # attribute column maps (the "<Insurer> Member ID" column is handled by
-    # the dynamic member-ID pass, not the alias map). A header that maps to
-    # nothing silently discards whatever HR typed into it.
+def test_member_listing_headers_all_map_on_upload() -> None:
+    # The member-listing template download is gone (the roster tab now hands out
+    # the Full EL), but files in that layout are still uploaded through the
+    # template sync (`/adc/preview`), which a company Employee Listing upload
+    # also falls back to. That layout is the incumbent's employee extract
+    # (`REFERENCE_EMPLOYEE_HEADER`, "User ID" for the staff id) followed by our
+    # intake columns and one "<Insurer> Member ID" per insurer.
+    from app.services.built_in_listings import REFERENCE_EMPLOYEE_HEADER
     from app.services.roster_parser import (
         EMPLOYEE_COLUMN_MAP,
         _build_column_map,
         _member_id_columns,
     )
-    header = list(fam.keys())
+    header = [
+        *REFERENCE_EMPLOYEE_HEADER,
+        "Designation", "Employment Status", "Country of Work", "Currency",
+        "Has Insurance Cover Last Year", "Eligible to Sell Leave",
+        "TestSure Member ID",
+    ]
+
+    # Every attribute column maps (the "<Insurer> Member ID" column is handled
+    # by the dynamic member-ID pass, not the alias map). A header that maps to
+    # nothing silently discards whatever HR typed into it.
     mapped = _build_column_map(header, EMPLOYEE_COLUMN_MAP)
     member_cols = _member_id_columns(header)
     assert len(mapped) + len(member_cols) == len(header)
@@ -1545,13 +1538,15 @@ def test_viewer_unmasked_403_on_all_pii_downloads(viewer_client: TestClient) -> 
     for path in (
         f"/api/v1/policy-years/{PY_ID}/reports/employee-listing?insurer=TestSure&masked=false",
         f"/api/v1/policy-years/{PY_ID}/reports/dependant-listing?insurer=TestSure&masked=false",
-        f"/api/v1/policy-years/{PY_ID}/reports/member-listing-template",
+        f"/api/v1/policy-years/{PY_ID}/reports/workbooks/full-el?masked=false",
     ):
         assert viewer_client.get(path).status_code == 403, path
-    # Masked listing is fine for a viewer.
-    assert viewer_client.get(
-        f"/api/v1/policy-years/{PY_ID}/reports/employee-listing?insurer=TestSure"
-    ).status_code == 200
+    # Masked listings are fine for a viewer.
+    for path in (
+        f"/api/v1/policy-years/{PY_ID}/reports/employee-listing?insurer=TestSure",
+        f"/api/v1/policy-years/{PY_ID}/reports/workbooks/full-el",
+    ):
+        assert viewer_client.get(path).status_code == 200, path
 
 
 def test_dependant_listing_masked_vs_unmasked(client: TestClient) -> None:

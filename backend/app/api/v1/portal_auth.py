@@ -1,18 +1,22 @@
-"""Public employee-portal auth: email OTP request + verify.
+"""Employee-portal auth: password sign-in, MFA, set-password and sessions.
 
 Registered in `main.py` WITHOUT the broker `require_write_access` gate and
-without `get_current_user` — these are the only unauthenticated mutating
-endpoints in the API, so they carry their own abuse guards: per-IP SlowAPI
-limits plus per-account cooldown / hourly caps in `member_otp`.
+without `get_current_user`. The sign-in routes (`/login`, `/mfa`,
+`/set-password`) take no member token, so they carry their own abuse guards:
+per-IP SlowAPI limits, plus the per-account lockout in `core/credentials` on
+the password and TOTP checks. `/refresh` and `/logout` work from the refresh
+cookie behind a same-origin check. The self-service routes
+(`/change-password`, MFA enrolment, `/security-status`) authenticate through
+`get_current_member`.
 
-`request-code` always answers 202 regardless of whether the email matches an
-account (no account enumeration). An email can exist under multiple clients;
-a code is issued per matching account and `verify` disambiguates by which
-account's code matches.
+A member signs in with a username (email, system login id or staff id) and a
+password, then a TOTP step when their company enables portal 2FA and they have
+enrolled. Every route that mints a session resolves the portal tenant
+(`require_portal_tenant`) and ends in `_issue_member_login`, the single choke
+point for the leaver refusal.
 """
 from __future__ import annotations
 
-import hmac
 import logging
 from datetime import UTC, datetime
 
@@ -32,10 +36,8 @@ from app.core.breach_check import is_breached
 from app.core.cookie_auth import require_same_origin
 from app.core.hr_auth import get_auth_policy
 from app.core.portal_auth import (
-    OTP_MAX_ATTEMPTS,
     CurrentMember,
     get_current_member,
-    hash_otp_code,
     issue_member_mfa_challenge_token,
     issue_member_set_password_token,
     issue_member_token,
@@ -50,20 +52,14 @@ from app.core.session_logout import revoke_tab_session
 from app.core.settings import get_settings
 from app.core.tenancy_host import TenantContext
 from app.db.session import get_db
-from app.models import Client, MemberAccount, MemberOtpCode
+from app.models import Client, MemberAccount
 from app.models.auth import SUBJECT_MEMBER
 from app.models.member_account import (
     MEMBER_STATUS_ACTIVE,
     MEMBER_STATUS_DISABLED,
     MEMBER_STATUS_INVITED,
 )
-from app.schemas.portal import (
-    OtpRequestIn,
-    OtpRequestOut,
-    OtpVerifyIn,
-    OtpVerifyOut,
-    PortalMemberOut,
-)
+from app.schemas.portal import MemberSessionOut, PortalMemberOut
 from app.services.member_access import (
     CODE_ACCESS_ENDED,
     Capability,
@@ -71,7 +67,6 @@ from app.services.member_access import (
     refusal,
 )
 from app.services.member_invite import clear_invite_expiry, invite_expired
-from app.services.member_otp import as_utc, can_issue_otp, issue_otp, send_otp
 
 logger = logging.getLogger(__name__)
 
@@ -98,163 +93,6 @@ class MemberChallengeOut(BaseModel):
     challenge_token: str
 
 
-def _accounts_for_email(
-    db: Session, email: str, *, client_id: str | None = None
-) -> list[MemberAccount]:
-    """Non-disabled accounts on this email, optionally within ONE company.
-
-    `request-code` is anonymous and matches across companies (an address can
-    exist under several); `verify` passes `client_id` so the code is redeemed
-    against the company whose portal the member is actually on — see the
-    tenant note on `verify_code`.
-    """
-    conditions = [
-        MemberAccount.email == email,
-        MemberAccount.status != MEMBER_STATUS_DISABLED,
-    ]
-    if client_id is not None:
-        conditions.append(MemberAccount.client_id == client_id)
-    return list(db.execute(select(MemberAccount).where(*conditions)).scalars().all())
-
-
-@router.post(
-    "/request-code",
-    response_model=OtpRequestOut,
-    status_code=status.HTTP_202_ACCEPTED,
-)
-@limiter.limit("5/minute")
-def request_code(
-    request: Request,
-    body: OtpRequestIn,
-    db: Session = Depends(get_db),
-) -> OtpRequestOut:
-    email = body.email.strip().lower()
-    settings = get_settings()
-    debug_code: str | None = None
-
-    for account in _accounts_for_email(db, email):
-        if not can_issue_otp(db, account):
-            logger.info("OTP request throttled for account %s", account.id)
-            continue
-        issued = issue_otp(db, account)
-        db.commit()
-        # The magic link must name the company, or it lands on the pathless
-        # sign-in, sends an empty tenant header and the emailed code cannot be
-        # verified at all. Resolved per ACCOUNT rather than once: this endpoint
-        # is anonymous and matches on email alone, so two accounts sharing an
-        # address can belong to different companies.
-        client = db.get(Client, account.client_id)
-        send_otp(account, issued, client.slug if client else None)
-        if settings.env == "dev" and settings.auth_mode == "mock":
-            debug_code = issued.code
-
-    # Always 202 — identical response whether or not the email exists.
-    return OtpRequestOut(status="sent", debug_code=debug_code)
-
-
-@router.post("/verify")
-@limiter.limit("10/minute")
-def verify_code(
-    request: Request,
-    body: OtpVerifyIn,
-    response: Response,
-    tenant: TenantContext = Depends(require_portal_tenant),
-    db: Session = Depends(get_db),
-) -> OtpVerifyOut | MemberChallengeOut:
-    """Verify an emailed sign-in code.
-
-    A correct code proves control of the mailbox — it is the FIRST factor, not a
-    complete sign-in. It therefore ends in the same three outcomes as
-    `/login`: forced rotation, an MFA challenge, or a session. Returning a token
-    straight from here let a member whose company requires 2FA skip the second
-    factor entirely by choosing the emailed-code route (no `response_model`, so
-    the challenge shapes can be returned like `/login` does).
-
-    **`require_portal_tenant` is load-bearing, exactly as it is on `/login`.**
-    It routes the Postgres `search_path` to the company's firm schema, and
-    `_issue_member_login` below reads `policy_years`, `employees` and `claims` —
-    all TENANT tables. Unrouted, every one of them resolves against `public`,
-    which holds no tenant rows: the leaver check came back `unknown` and this
-    route signed in members the password route refuses. It also scopes the
-    lookup to ONE company, so a code minted for an address that exists under
-    several can only be redeemed on the portal it was mailed for — otherwise the
-    matched account and the routed schema could be different firms'.
-    """
-    email = body.email.strip().lower()
-    code_hash = hash_otp_code(body.code.strip())
-    now = datetime.now(UTC)
-    invalid = HTTPException(
-        status.HTTP_401_UNAUTHORIZED, "Invalid or expired sign-in code."
-    )
-
-    matched: MemberAccount | None = None
-    live_codes: list[tuple[MemberAccount, MemberOtpCode]] = []
-    for account in _accounts_for_email(db, email, client_id=tenant.client_id):
-        rows = db.execute(
-            select(MemberOtpCode)
-            .where(
-                MemberOtpCode.member_account_id == account.id,
-                MemberOtpCode.consumed_at.is_(None),
-            )
-            .order_by(MemberOtpCode.created_at.desc())
-        ).scalars().all()
-        for otp in rows:
-            if (as_utc(otp.expires_at) or now) <= now:
-                continue
-            live_codes.append((account, otp))
-            if hmac.compare_digest(otp.code_hash, code_hash):
-                otp.consumed_at = now
-                matched = account
-                break
-        if matched:
-            break
-
-    if matched is None:
-        # Count the failure against the newest live code so repeated guessing
-        # burns the code out after OTP_MAX_ATTEMPTS.
-        if live_codes:
-            _, newest = live_codes[0]
-            newest.attempts += 1
-            if newest.attempts >= OTP_MAX_ATTEMPTS:
-                newest.consumed_at = now
-            db.commit()
-        raise invalid
-
-    # **Commit the consumption before anything else can undo it.** Marking
-    # `consumed_at` in the session is not enough: `_issue_member_login` rolls
-    # back on a leaver refusal (it has to — `member_set_password` reaches it
-    # holding a written credential), and that rollback reverted the consumption
-    # too, leaving a correctly-guessed code live for the rest of its TTL. With
-    # this commit the code is spent the moment it is matched, so neither
-    # challenge below nor a refusal can replay it.
-    db.commit()
-
-    if CRED.rotation_due(matched):
-        token = issue_member_set_password_token(
-            matched.id, CRED.credential_version(matched)
-        )
-        EV.write_auth_event(
-            db, event_type=EV.EVENT_PASSWORD_RESET_REQUEST, outcome=EV.OUTCOME_SUCCESS,
-            surface="portal", subject_type=SUBJECT_MEMBER, subject_id=matched.id,
-            client_id=matched.client_id, ip=_client_ip(request),
-            subdomain=request.headers.get("host"), detail={"reason": "rotation_due"},
-        )
-        db.commit()
-        return MemberChallengeOut(
-            status="password_reset_required", challenge_token=token
-        )
-
-    policy = get_auth_policy(db, matched.client_id)
-    if policy.mfa_portal_enabled and mfa.has_confirmed(
-        db, SUBJECT_MEMBER, matched.id
-    ):
-        challenge = issue_member_mfa_challenge_token(matched.id, matched.client_id)
-        db.commit()
-        return MemberChallengeOut(challenge_token=challenge)
-
-    return _issue_member_login(db, request, matched, matched.client_id, response=response)
-
-
 # ── Credential login (username + password) ────────────────────────────────────
 _INVALID = HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid credentials.")
 
@@ -265,8 +103,8 @@ _client_ip = client_ip
 
 def _member_out(
     token: str, expires_at: datetime, account: MemberAccount
-) -> OtpVerifyOut:
-    return OtpVerifyOut(
+) -> MemberSessionOut:
+    return MemberSessionOut(
         token=token,
         expires_at=expires_at,
         member=PortalMemberOut.model_validate(account),
@@ -279,10 +117,10 @@ def _issue_member_login(
     account: MemberAccount,
     client_id: str,
     *, response: Response, mfa_verified: bool = False,
-) -> OtpVerifyOut:
+) -> MemberSessionOut:
     # **The one choke point for every session this surface issues** — password
-    # login, OTP verify, MFA and set-password all end here, so the leaver
-    # refusal is checked once rather than at four call sites that could drift.
+    # login, MFA and set-password all end here, so the leaver refusal is
+    # checked once rather than at three call sites that could drift.
     #
     # It runs AFTER the credential has been proved, so it leaks nothing an
     # attacker could enumerate: the person already holds the password. And it
@@ -351,7 +189,7 @@ def member_login(
     response: Response,
     tenant: TenantContext = Depends(require_portal_tenant),
     db: Session = Depends(get_db),
-) -> OtpVerifyOut | MemberChallengeOut:
+) -> MemberSessionOut | MemberChallengeOut:
     account = resolve_member_credential(db, tenant.client_id, body.identifier)
     if account is None or account.password_hash is None:
         PW.dummy_verify(body.password)
@@ -429,7 +267,7 @@ def member_login(
     return _issue_member_login(db, request, account, tenant.client_id, response=response)
 
 
-@router.post("/mfa", response_model=OtpVerifyOut)
+@router.post("/mfa", response_model=MemberSessionOut)
 @limiter.limit("10/minute")
 def member_mfa(
     request: Request,
@@ -437,7 +275,7 @@ def member_mfa(
     response: Response,
     tenant: TenantContext = Depends(require_portal_tenant),
     db: Session = Depends(get_db),
-) -> OtpVerifyOut:
+) -> MemberSessionOut:
     try:
         member_id, cid = verify_member_mfa_challenge_token(body.challenge_token)
     except jwt.InvalidTokenError as exc:
@@ -488,7 +326,7 @@ def member_set_password(
     response: Response,
     tenant: TenantContext = Depends(require_portal_tenant),
     db: Session = Depends(get_db),
-) -> OtpVerifyOut | MemberChallengeOut:
+) -> MemberSessionOut | MemberChallengeOut:
     try:
         member_id, version = verify_member_set_password_token(body.token)
     except jwt.InvalidTokenError as exc:
@@ -689,13 +527,13 @@ def member_security_status(
     }
 
 
-@router.post("/refresh", response_model=OtpVerifyOut)
+@router.post("/refresh", response_model=MemberSessionOut)
 @limiter.limit("30/minute")
 def member_refresh(
     request: Request, response: Response,
     tenant: TenantContext = Depends(require_portal_tenant),
     db: Session = Depends(get_db),
-) -> OtpVerifyOut:
+) -> MemberSessionOut:
     from app.models import AuthSession
 
     require_same_origin(request)

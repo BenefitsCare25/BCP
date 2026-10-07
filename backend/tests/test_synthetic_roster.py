@@ -100,10 +100,10 @@ def test_generator_is_deterministic(tmp_path: Path) -> None:
 
 # ── Sheet selection ─────────────────────────────────────────────────────────
 #
-# Both downloadable templates are two-sheet workbooks (Employees / Dependants)
-# and both roster tabs offer both, so each parser must read ITS OWN sheet.
-# Reading sheet 0 unconditionally made a dependant upload of either template
-# parse the employee sheet through DEPENDANT_COLUMN_MAP — Staff ID and Employee
+# Member-listing uploads are two-sheet workbooks (Employees / Dependants) and
+# one upload reads both, so each parser must read ITS OWN sheet. Reading sheet
+# 0 unconditionally made a dependant upload of such a file parse the employee
+# sheet through DEPENDANT_COLUMN_MAP — Staff ID and Employee
 # Name resolve there, so the "no identifying column" guard passes and every
 # employee imports as a nameless, DOB-less dependant.
 
@@ -125,7 +125,7 @@ def _two_sheet_workbook(path: Path) -> None:
 
 
 def test_each_parser_reads_its_own_sheet(tmp_path: Path) -> None:
-    book = tmp_path / "member-listing-template.xlsx"
+    book = tmp_path / "member-listing.xlsx"
     _two_sheet_workbook(book)
 
     employees = parse_employee_workbook(book)

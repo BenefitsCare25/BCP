@@ -2,23 +2,25 @@
 
 Formulas follow the client's own workbook: ages from the date of birth against
 the reference date in row 1 (a product block uses its reviewed age basis and
-reference date where they differ), sums insured from salary multiples, premiums from
-the rate and the eligible sum insured, GST as a gross-up. Values the slip or
-the listing cannot establish stay blank (and are reported as gaps) rather
-than being guessed.
+reference date where they differ), sums insured from salary multiples,
+premiums from the rate and the eligible (or reviewed accepted) sum insured,
+GST as a gross-up. Values the slip or the listing cannot establish stay blank
+(and are reported as gaps) rather than being guessed.
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from datetime import date
 from typing import Any
 
-from app.models import Dependant, Employee
+from app.models import Dependant, Employee, UnderwritingCase
 from app.models.employee_listing import ListingAssignment
 from app.services.el_workbook import ElBlock
 from app.services.full_el.context import CategoryInfo, ElContext, ProductInfo
 from app.services.insurer_reports import safe_cell
 from app.services.roster_attributes import mask_nric, roster_date
+from app.services.underwriting import report_uw_amounts
 
 DATE_ROLES = {"date_of_birth", "date_of_hire", "last_day_of_service", "mu_letter_member",
               "mu_letter_insurer", "acceptance_date", "retrenchment_start", "retrenchment_end",
@@ -64,6 +66,7 @@ class Cover:
     assignment: ListingAssignment | None
     family_group: str | None
     covered_dependants: list[Dependant]
+    uw_case: UnderwritingCase | None = None
 
 
 def number_text(value: float) -> str:
@@ -267,20 +270,38 @@ def product_value(
         value = recorded.get(role)
         return _date(value) if role in DATE_ROLES else _plain(value)
     if role == "premium":
-        return _premium(cover, letters, row, dependant, rate_cell)
+        return _premium(cover, ctx, letters, row, dependant, rate_cell)
     if role == "premium_gst":
         premium = letters.get("premium")
         if not premium or product.gst_factor is None:
             return None
-        if _premium(cover, letters, row, dependant, rate_cell) is None:
+        if _premium(cover, ctx, letters, row, dependant, rate_cell) is None:
             return None
         return f"={premium}{row}*{number_text(product.gst_factor)}"
     return None
 
 
+def billed_si(cover: Cover, ctx: ElContext, eligible: str) -> str:
+    """The sum insured a per-$1,000 premium is billed on, as a formula operand.
+
+    Eligible SI, unless the product's reviewed premium basis is Accepted SI:
+    then the accepted SI that ``report_uw_amounts`` reports to insurers (a
+    decision's accepted amount, an open case's guaranteed SI, else eligible SI
+    up to the free cover limit). For any eligible amount that equals
+    MIN(eligible, the amount accepted at an unlimited eligible SI), so the
+    eligible SI stays a live formula.
+    """
+    info = cover.info
+    if ctx.products[info.product.code].rules.premium_si_basis != "Accepted SI":
+        return eligible
+    _pending, limit = report_uw_amounts(math.inf, ctx.uw_fcls.get(info.product.id),
+                                        cover.uw_case)
+    return f"MIN({eligible},{number_text(limit)})" if math.isfinite(limit) else eligible
+
+
 def _premium(
-    cover: Cover, letters: dict[str, str], row: int, dependant: Dependant | None,
-    rate_cell: str | None,
+    cover: Cover, ctx: ElContext, letters: dict[str, str], row: int,
+    dependant: Dependant | None, rate_cell: str | None,
 ) -> Any:
     info = cover.info
     if info.rate_basis == "per_1000_si":
@@ -288,7 +309,7 @@ def _premium(
         if not si or dependant is not None or info.rate is None:
             return None
         rate = rate_cell or f"{number_text(info.rate)}/1000"
-        return f"={rate}*{si}{row}"
+        return f"={rate}*{billed_si(cover, ctx, f'{si}{row}')}"
     if info.rate_basis == "tiered":
         if dependant is not None:
             return None

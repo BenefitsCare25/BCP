@@ -31,9 +31,9 @@ os.environ.setdefault(
     "test-portal-secret-0123456789abcdef0123456789abcdef",
 )
 
-# The portal OTP endpoints have tight per-IP limits (5/minute) that a test
-# module exceeds in seconds; per-account cooldowns are covered by their own
-# unit tests, so the SlowAPI layer is switched off suite-wide.
+# The public auth endpoints have tight per-IP limits (5-10/minute) that a test
+# module exceeds in seconds; per-account lockouts are covered by their own
+# tests, so the SlowAPI layer is switched off suite-wide.
 os.environ.setdefault("INSPRO_RATE_LIMIT_ENABLED", "0")
 
 # Shared-host API tests select companies by header and assert company-scoped

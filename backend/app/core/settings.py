@@ -28,12 +28,10 @@ class Settings:
     entra_audience: str
     entra_issuer: str
     entra_jwks_url: str
-    entra_group_role_map: dict[str, str]
-    # ── Employee portal (member OTP auth) ──
+    # ── Employee portal (member auth + outbound mail) ──
     # Defaulted so tests can construct Settings(...) without portal fields;
     # get_settings() always resolves real values (fail-closed in prod).
     portal_jwt_secret: str = ""
-    portal_token_ttl_hours: int = 12
     mail_mode: MailMode = "log"
     frontend_origin: str = "http://localhost:5173"
     # Apex domain for tenant-per-subdomain routing. `{slug}.portal.<base_domain>`
@@ -106,19 +104,6 @@ def _bounded_int(name: str, *, default: int, ceiling: int) -> int:
         logger.warning("%s is not an integer — using %s", name, default)
         return default
     return max(0, min(value, ceiling))
-
-
-def _split_role_map(raw: str) -> dict[str, str]:
-    """Parse `<group_id>:<role>,<group_id>:<role>`."""
-    out: dict[str, str] = {}
-    for pair in raw.split(","):
-        if ":" not in pair:
-            continue
-        gid, role = pair.split(":", 1)
-        gid, role = gid.strip(), role.strip()
-        if gid and role:
-            out[gid] = role
-    return out
 
 
 def _resolve_tenant_mode() -> TenantMode:
@@ -244,8 +229,8 @@ def _resolve_redis_url(env: Env) -> str:
 def _resolve_mail_mode(env: Env) -> MailMode:
     """Resolve mail delivery without exposing credentials in production.
 
-    The `log` mailer writes sign-in OTP codes to the application logs in
-    cleartext — an account-takeover credential for anyone with log access.
+    The `log` mailer writes invite one-time passwords to the application logs
+    in cleartext — an account-takeover credential for anyone with log access.
     It remains useful in dev/staging. In prod, both an explicit `disabled` and
     the legacy `log` value resolve to a mailer that rejects delivery without
     logging the message. Treating legacy `log` this way keeps a rolling deploy
@@ -345,13 +330,7 @@ def get_settings() -> Settings:
         entra_audience=audience,
         entra_issuer=issuer,
         entra_jwks_url=jwks_url,
-        entra_group_role_map=_split_role_map(
-            os.environ.get("INSPRO_ENTRA_GROUP_ROLE_MAP", "")
-        ),
         portal_jwt_secret=_resolve_portal_jwt_secret(env),
-        portal_token_ttl_hours=int(
-            os.environ.get("INSPRO_PORTAL_TOKEN_TTL_HOURS", "12")
-        ),
         mail_mode=_resolve_mail_mode(env),
         frontend_origin=os.environ.get(
             "INSPRO_FRONTEND_ORIGIN", "http://localhost:5173"

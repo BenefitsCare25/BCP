@@ -34,6 +34,7 @@ from app.services.el_report_rules import (
 from app.services.el_workbook import ElLayout
 from app.services.eligibility_mapping import category_signature
 from app.services.full_el.layout import default_layout, layout_from_json
+from app.services.underwriting import CaseMap, free_cover_limits, load_cases
 
 _MULTIPLE = re.compile(r"(\d+(?:\.\d+)?)\s*x\b", re.IGNORECASE)
 
@@ -83,6 +84,9 @@ class ElContext:
     reference_date: date
     listing_source: str | None
     gaps: list[tuple[str, str, str]] = field(default_factory=list)
+    # Underwriting state, loaded only when a product bills on accepted SI.
+    uw_cases: CaseMap = field(default_factory=dict)  # (subject_id, product_id)
+    uw_fcls: dict[str, float] = field(default_factory=dict)  # product_id -> FCL
 
 
 def _gst_factor(term: ProductTerm | None, answers: dict[str, Any]) -> float | None:
@@ -195,6 +199,7 @@ def load_context(
         ).scalars()
     }
     age_bases = {i.rules.age_basis for i in infos.values() if i.rules.age_basis}
+    accepted_basis = any(i.rules.premium_si_basis == "Accepted SI" for i in infos.values())
     return ElContext(
         year=year, client=client, layout=layout, block_products=block_products,
         products=infos, categories=cat_infos, employees=employees, dependants=dependants,
@@ -203,6 +208,8 @@ def load_context(
         reference_date=year.start_date,
         listing_source=profile.source_filename if profile else None,
         gaps=gaps,
+        uw_cases=load_cases(db, year.id) if accepted_basis else {},
+        uw_fcls=free_cover_limits(db, year.id) if accepted_basis else {},
     )
 
 
@@ -216,10 +223,6 @@ def _rule_gaps(info: ProductInfo, slip_cap: float | None) -> list[tuple[str, str
     if rules.age_reference == "Product cover start" and info.period[0] is None:
         gaps.append((code, "Product cover start unknown",
                      "Ages use the benefit-year start; set the cover start on the product terms."))
-    if rules.premium_si_basis == "Accepted SI":
-        gaps.append((code, "Premium SI basis is Accepted SI",
-                     "Premiums are calculated on the eligible SI; adjust members whose "
-                     "accepted SI is lower."))
     return gaps
 
 
