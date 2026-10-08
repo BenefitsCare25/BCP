@@ -21,6 +21,9 @@ from app.core.clock import today as business_today
 from app.core.storage import (
     DOCUMENT_SUFFIXES,
     MAX_DOCUMENT_BYTES,
+    StorageScopeError,
+    assert_key_in_scope,
+    company_firm_id,
     document_path,
     get_storage,
 )
@@ -78,6 +81,7 @@ from app.services.claim_intake import (
     assert_doctor_name_valid,
     assert_documents_satisfy_slots,
     assert_intake_valid,
+    assert_referral_owned,
     benefit_row_for_scope,
     claim_profile_for,
     normalize_invoice_number,
@@ -123,6 +127,25 @@ def track_pending_blob(db: Session, path: str) -> None:
     session listeners above). For callers that write storage directly rather
     than through ``attach_document``."""
     db.info.setdefault(_PENDING_BLOBS_KEY, set()).add(path)
+
+
+def assert_document_scope(key: str, broker_firm_id: str, client_id: str) -> None:
+    """`assert_key_in_scope` for a download, logging a refusal.
+
+    Callers pass the RESOURCE's company and its firm (``company_firm_id``) and
+    answer ``StorageScopeError`` as "not found". A key filed anywhere else means
+    its row was copied between tenants, tampered with or mis-written, and this
+    log line is then the only record of it.
+    """
+    try:
+        assert_key_in_scope(key, broker_firm_id, client_id)
+    except StorageScopeError:
+        logger.error(
+            "Refusing a stored key outside its firm and company: %s",
+            key,
+            extra={"error_code": "storage_scope_violation"},
+        )
+        raise
 
 
 def lock_claim_for_mutation(db: Session, claim: Claim) -> Claim:
@@ -771,18 +794,24 @@ async def attach_document(
     issued_on: date | None = None,
 ) -> StoredDocument:
     """Persist an uploaded document to retained storage + metadata row.
-    Does NOT commit — the caller owns the transaction."""
+    Does NOT commit — the caller owns the transaction.
+
+    The blob is filed under the firm that owns ``client_id``, whoever uploads.
+    ``broker_firm_id`` is the caller's firm (None for a firm-less system admin)
+    and is only checked against it: a disagreement is a tenancy fault.
+    """
     from app.db.base import new_uuid
 
+    firm_id = company_firm_id(db, client_id)
+    if broker_firm_id is not None and broker_firm_id != firm_id:
+        raise RuntimeError("Document owner belongs to a different broker firm")
     doc_id = new_uuid()
     async with saved_upload(
         file, set(DOCUMENT_SUFFIXES), max_bytes=MAX_DOCUMENT_BYTES
     ) as tmp_path:
         await asyncio.to_thread(scan_quarantined_document, tmp_path)
         suffix = Path(file.filename or "").suffix.lower()
-        path = document_path(
-            broker_firm_id, client_id, entity_type, entity_id, doc_id, suffix
-        )
+        path = document_path(firm_id, client_id, entity_type, entity_id, doc_id, suffix)
         with tmp_path.open("rb") as stream:
             head = stream.read(16)
             mime_type = _sniff_mime(head, suffix)
@@ -822,7 +851,12 @@ def delete_documents(db: Session, entity_type: str, entity_id: str) -> None:
 
 
 def retry_pending_document_deletes(db: Session, *, limit: int = 100) -> int:
-    """Retry retained blob deletions and remove metadata only on success."""
+    """Retry retained blob deletions and remove metadata only on success.
+
+    Only a key filed under the document's own firm and company is deleted. Any
+    other key keeps its row, with the refusal as ``delete_error``, rather than
+    removing bytes another tenant may own.
+    """
     docs = list(
         db.execute(
             select(StoredDocument)
@@ -834,6 +868,9 @@ def retry_pending_document_deletes(db: Session, *, limit: int = 100) -> int:
     deleted = 0
     for doc in docs:
         try:
+            assert_key_in_scope(
+                doc.storage_path, company_firm_id(db, doc.client_id), doc.client_id
+            )
             get_storage().delete(doc.storage_path)
         except Exception as exc:
             doc.delete_error = str(exc)[:255]
@@ -1380,6 +1417,10 @@ def validate_claim_facts(
             admission_date=claim.admission_date,
             discharge_date=claim.discharge_date,
         )
+    else:
+        # Whose referral letter a claim points at is a fact about the claim,
+        # not the form: a LOG case must not name another member's letter.
+        assert_referral_owned(db, employee, claim.referral_document_id)
     # **Re-asking "is this member covered for this?" is ADMITTING the claim, and
     # an amendment that does not touch what the claim draws on is not
     # re-admitting it.**

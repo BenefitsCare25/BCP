@@ -12,7 +12,7 @@ email.
 """
 from __future__ import annotations
 
-from sqlalchemy import Boolean, ForeignKey, String, UniqueConstraint, false
+from sqlalchemy import Boolean, ForeignKey, Index, String, UniqueConstraint, false, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampMixin, new_uuid
@@ -24,13 +24,37 @@ USER_STATUS_DISABLED = "disabled"
 
 class User(Base, TimestampMixin):
     __tablename__ = "users"
+    __table_args__ = (
+        # Unique per broker firm, not platform-wide: when a client company moves
+        # to another broker at renewal, its HR people are onboarded again by the
+        # new broker while the old broker keeps its records. Firm-less platform
+        # admins are unique among themselves.
+        Index("uq_users_firm_email", "broker_firm_id", "email", unique=True),
+        Index(
+            "uq_users_platform_email",
+            "email",
+            unique=True,
+            postgresql_where=text("broker_firm_id IS NULL"),
+            sqlite_where=text("broker_firm_id IS NULL"),
+        ),
+        Index("uq_users_entra_identity", "external_tid", "external_id", unique=True),
+        Index(
+            "uq_users_legacy_external_id",
+            "external_id",
+            unique=True,
+            postgresql_where=text("external_tid IS NULL"),
+            sqlite_where=text("external_tid IS NULL"),
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
     # Entra `oid` (object id). NULL until an invited user first signs in.
-    external_id: Mapped[str | None] = mapped_column(
-        String(255), nullable=True, unique=True, index=True
-    )
-    email: Mapped[str] = mapped_column(String(320), nullable=False, unique=True, index=True)
+    external_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    # Entra directory (tenant) id of `external_id`. An object id is only unique
+    # within its directory, so the binding key is (`external_tid`, `external_id`).
+    # NULL on rows bound before multi-directory sign-in (the platform directory).
+    external_tid: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    email: Mapped[str] = mapped_column(String(320), nullable=False, index=True)
     display_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     # NULL only for system_admin (cross-firm operator).
     broker_firm_id: Mapped[str | None] = mapped_column(

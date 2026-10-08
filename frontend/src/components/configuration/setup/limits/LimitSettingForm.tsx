@@ -1,4 +1,4 @@
-import { SystemAdminOnly } from "@/components/auth/SystemAdminOnly";
+import { FirmOwnerOnly } from "@/components/auth/FirmOwnerOnly";
 import { useState, type ReactNode } from "react";
 import { Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -115,9 +115,9 @@ export function LimitSettingForm({
       </Button>
       {needsScope && <span className="text-xs text-warn">Select a claim type to allow drawdown</span>}
       {onRemove && (
-        <SystemAdminOnly><Button type="button" size="sm" variant="ghost" className="ml-auto text-error hover:text-error" onClick={onRemove}>
+        <FirmOwnerOnly><Button type="button" size="sm" variant="ghost" className="ml-auto text-error hover:text-error" onClick={onRemove}>
           <Trash2 className="size-3.5" aria-hidden /> Remove
-        </Button></SystemAdminOnly>
+        </Button></FirmOwnerOnly>
       )}
     </>
   );

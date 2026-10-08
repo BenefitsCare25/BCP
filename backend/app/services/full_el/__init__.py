@@ -10,6 +10,7 @@ from openpyxl import Workbook
 from sqlalchemy.orm import Session
 
 from app.models import BrokerFirm, PolicyYear
+from app.services.brand import DEFAULT_BRAND, resolve_brand
 from app.services.full_el.context import load_context
 from app.services.full_el.listing_sheet import write_listing
 from app.services.full_el.sheets import (
@@ -21,6 +22,7 @@ from app.services.full_el.sheets import (
     write_summary,
     write_system_category,
 )
+from app.services.report_workbooks import SYSTEM_CATEGORY_SHEET, branded_title
 
 
 def build_full_el(
@@ -35,7 +37,8 @@ def build_full_el(
     write_summary(summary, ctx)
     firm = db.get(BrokerFirm, ctx.client.broker_firm_id) if ctx.client.broker_firm_id else None
     write_declaration(wb.create_sheet("Declaration - Please Read"), ctx, firm)
-    system = wb.create_sheet("Inspro Use - System Category")
+    brand = resolve_brand(db, firm.id) if firm is not None else DEFAULT_BRAND
+    system = wb.create_sheet(branded_title(SYSTEM_CATEGORY_SHEET, brand.short_name))
     if not write_system_category(system, ctx):
         wb.remove(system)
     write_headcount(wb.create_sheet("Headcount Summary"), ctx, stats["last_row"])

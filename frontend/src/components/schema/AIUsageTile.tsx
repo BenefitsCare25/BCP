@@ -22,6 +22,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { formatError } from "@/lib/errors";
+import { isBrokerAdminRole } from "@/lib/roles";
 
 type BreakerState = "closed" | "half_open" | "open";
 
@@ -49,7 +50,7 @@ export function AIUsageTile() {
   // The per-tenant budget PUT is tenant-admin only; system_admin edits the
   // selected company here and manages fleet-wide caps on the platform card.
   const canEditBudget =
-    me?.role === "broker_admin" || me?.role === "system_admin";
+    isBrokerAdminRole(me?.role);
 
   if (!status) return null;
   if (!status.configured) {

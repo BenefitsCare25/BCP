@@ -63,5 +63,7 @@ export function useRetryEnrollmentEmail(id: string) {
   return useMutation({
     mutationFn: (eventId: string) => api.post<EnrollmentEvent>(`/enrollments/${id}/events/${eventId}/retry-email`, {}),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["enrollment-events", id] }),
+    // The activity list toasts the refusal itself (e.g. no active web address).
+    meta: { localErrorHandling: true },
   });
 }

@@ -5,6 +5,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.services.brand import DEFAULT_EMAIL_SENDER_NAME, DEFAULT_SUPPORT_EMAIL
+
 Scope = Literal["firm", "company"]
 Audience = Literal["employee", "hr"]
 Purpose = Literal["general", "invitation", "password_reset"]
@@ -35,8 +37,10 @@ class RevisionIn(BaseModel):
 
 class BrandingContent(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    sender_display_name: str = Field(default="Inspro Benefits Portal", max_length=120)
-    support_email: str = Field(default="helpdesk@inspro.com.sg", max_length=320)
+    # Built-in values; the firm's resolved brand replaces them where branding
+    # is unsaved (`services/email_template_store.branding_defaults`).
+    sender_display_name: str = Field(default=DEFAULT_EMAIL_SENDER_NAME, max_length=120)
+    support_email: str = Field(default=DEFAULT_SUPPORT_EMAIL, max_length=320)
     footer: str = Field(default="", max_length=1000)
     logo_url: str = Field(default="", max_length=2000)
 

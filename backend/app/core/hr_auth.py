@@ -14,7 +14,8 @@ The resolved principal is the SAME `CurrentUser` the broker surface uses, so HR
 requests inherit every existing tenant/RBAC dep (`load_employee`, `user_owns`, …)
 for free. The tenant (`client_id`) is baked into the token AND must match the
 subdomain the request arrived on (defence against replaying a token across
-tenants).
+tenants), and the company's broker firm must be the one the host belongs to
+(`tenant_resolution`), so a session never crosses brokers.
 """
 from __future__ import annotations
 
@@ -40,12 +41,14 @@ from app.core.tenancy_host import (
     resolve_host_info,
     resolve_tenant_context,
 )
+from app.core.tenant_resolution import refuse_unserved_surface, request_firm
 from app.db.session import get_db
 from app.db.tenancy import set_search_path
 from app.models.auth import SUBJECT_USER
+from app.models.platform import DOMAIN_SURFACE_CLIENT
 
 if TYPE_CHECKING:
-    from app.models import AuthCredential, User
+    from app.models import AuthCredential, Client, User
 
 _JWT_ALGORITHM = "HS256"
 _TOKEN_TYPE_HR = "hr"
@@ -103,13 +106,13 @@ def issue_hr_access_token(
     return token, expires_at
 
 
-def _decode_hr_access_token(token: str) -> dict[str, Any]:
+def _decode_hr_access_token(token: str, *, verify_exp: bool = True) -> dict[str, Any]:
     settings = get_settings()
     claims = jwt.decode(
         token,
         _derive_key(settings, _HR_KEY_LABEL),
         algorithms=[_JWT_ALGORITHM],
-        options={"require": ["sub", "exp"]},
+        options={"require": ["sub", "exp"], "verify_exp": verify_exp},
     )
     if claims.get("typ") != _TOKEN_TYPE_HR:
         raise jwt.InvalidTokenError("wrong token type")
@@ -117,9 +120,13 @@ def _decode_hr_access_token(token: str) -> dict[str, Any]:
 
 
 # ── Set-password / reset token (stateless, single-use via version stamp) ───────
-def issue_set_password_token(user_id: str, version: int) -> str:
+def issue_set_password_token(
+    user_id: str, version: int, *, issued_at: datetime | None = None,
+) -> str:
+    """The bare token. Links a person is given come from
+    `issue_set_password_link`, which also cancels earlier links."""
     settings = get_settings()
-    now = datetime.now(UTC)
+    now = issued_at or datetime.now(UTC)
     return jwt.encode(
         {
             "sub": user_id,
@@ -133,9 +140,24 @@ def issue_set_password_token(user_id: str, version: int) -> str:
     )
 
 
-def verify_set_password_token(token: str) -> tuple[str, int]:
-    """Return (user_id, version) or raise. `version` must equal the credential's
-    current stamp at redeem time — that makes the token single-use."""
+def issue_set_password_link(cred: AuthCredential) -> str:
+    """Mint the token for a NEW set-password link and cancel every earlier one.
+
+    Stamps `password_token_issued_at` with the token's issue time, so links
+    issued before it are refused. Every path that hands an HR user a link uses
+    this rather than the bare issuer. Caller commits.
+    """
+    return issue_set_password_token(
+        cred.user_id, credential_version(cred),
+        issued_at=_credentials.stamp_password_token(cred),
+    )
+
+
+def verify_set_password_token(token: str) -> _credentials.SetPasswordClaim:
+    """Return the token's claim or raise. `version` must equal the credential's
+    current stamp at redeem time — that makes the token single-use — and
+    `issued_at` must not predate the newest link
+    (`credentials.password_token_current`)."""
     settings = get_settings()
     claims = jwt.decode(
         token,
@@ -145,7 +167,9 @@ def verify_set_password_token(token: str) -> tuple[str, int]:
     )
     if claims.get("typ") != _TOKEN_TYPE_SET_PW:
         raise jwt.InvalidTokenError("wrong token type")
-    return str(claims["sub"]), int(claims.get("v", 0))
+    return _credentials.SetPasswordClaim(
+        str(claims["sub"]), int(claims.get("v", 0)), int(claims.get("iat", 0)),
+    )
 
 
 # ── MFA challenge token (bridges login step 1 → TOTP step 2) ───────────────────
@@ -242,8 +266,10 @@ def consume_recovery_code(db: Session, user_id: str, code: str) -> bool:
     return mfa.consume_recovery_code(db, SUBJECT_USER, user_id, code)
 
 
-def start_user_mfa_enrollment(db: Session, user_id: str, account: str) -> tuple[str, str]:
-    return mfa.start_enrollment(db, SUBJECT_USER, user_id, account)
+def start_user_mfa_enrollment(
+    db: Session, user_id: str, account: str, issuer: str | None = None
+) -> tuple[str, str]:
+    return mfa.start_enrollment(db, SUBJECT_USER, user_id, account, issuer)
 
 
 def confirm_user_mfa_enrollment(db: Session, user_id: str, code: str) -> list[str] | None:
@@ -336,9 +362,13 @@ def require_hr_tenant(
 
     Normally the `{slug}.hr.<base>` subdomain. On a single-host deployment
     (`INSPRO_TENANT_MODE=header`) or in non-prod, an `X-Inspro-Tenant-Slug`
-    header names the tenant instead — see `resolve_host_info`."""
+    header names the tenant instead — see `resolve_host_info`. The alias is
+    looked up within the broker firm the host belongs to; a host that does
+    not serve the client portals answers 404."""
+    firm = request_firm(request)
+    refuse_unserved_surface(firm, DOMAIN_SURFACE_CLIENT)
     host_info = resolve_host_info(request, SURFACE_HR, x_inspro_tenant_slug)
-    ctx = resolve_tenant_context(host_info, db)
+    ctx = resolve_tenant_context(host_info, db, firm)
     if ctx is None or ctx.surface != SURFACE_HR:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
@@ -359,9 +389,24 @@ def optional_hr_tenant(
     Crucially it pins the header surface to HR, so resolution checks
     `hr_enabled` rather than `portal_enabled`.
     """
+    firm = request_firm(request)
+    refuse_unserved_surface(firm, DOMAIN_SURFACE_CLIENT)
     return resolve_tenant_context(
-        resolve_host_info(request, SURFACE_HR, x_inspro_tenant_slug), db
+        resolve_host_info(request, SURFACE_HR, x_inspro_tenant_slug), db, firm
     )
+
+
+def require_hr_enabled(client: Client) -> None:
+    """403 `hr_disabled` when the company's HR portal switch is off.
+
+    Checked on every authenticated HR request, not only at sign-in: the switch
+    has to stop what live sessions can do, not just new sign-ins.
+    """
+    if not client.hr_enabled:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, {
+            "code": "hr_disabled",
+            "message": "HR portal access for this company is switched off.",
+        })
 
 
 # ── Refresh cookie ─────────────────────────────────────────────────────────────
@@ -400,11 +445,11 @@ def clear_refresh_cookie(response: Response, client_id: str | None = None) -> No
 def get_current_hr_user(
     request: Request,
     authorization: str | None = Header(default=None),
-    tenant: TenantContext | None = Depends(optional_hr_tenant),
+    x_inspro_tenant_slug: str | None = Header(default=None),
     db: Session = Depends(get_db),
 ) -> CurrentUser:
     from app.core import sessions as SESS
-    from app.models import User, UserClientAccess
+    from app.models import Client, User, UserClientAccess
     from app.models.auth import SUBJECT_USER
     from app.models.user import USER_STATUS_ACTIVE
 
@@ -413,6 +458,8 @@ def get_current_hr_user(
         "Not authenticated",
         headers={"WWW-Authenticate": "Bearer"},
     )
+    firm = request_firm(request)
+    refuse_unserved_surface(firm, DOMAIN_SURFACE_CLIENT)
     if not authorization or not authorization.startswith("Bearer "):
         raise unauthorized
     token = authorization.removeprefix("Bearer ").strip()
@@ -432,11 +479,19 @@ def get_current_hr_user(
     )).scalar_one_or_none()
     if grant is None:
         raise unauthorized
+    client = db.get(Client, str(client_id))
+    if client is None:
+        raise unauthorized
+    # A session belongs to its company's broker: on another broker's host that
+    # company does not exist. Checked before the session is touched.
+    if firm is not None and client.broker_firm_id != firm.firm_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Unknown tenant.")
     policy = get_auth_policy(db, str(client_id))
     session = SESS.validate_access_session(
         db, str(claims.get("sid", "")), subject_type=SUBJECT_USER,
         subject_id=user.id, client_id=str(client_id), idle_minutes=policy.session_idle_minutes,
     )
+    require_hr_enabled(client)
     if policy.mfa_hr_required and not session.mfa_verified:
         if user_has_confirmed_mfa(db, user.id):
             SESS.revoke_family(db, session.family_id)
@@ -453,6 +508,9 @@ def get_current_hr_user(
             })
     # Token must belong to the tenant the request arrived on. When there's no
     # subdomain context (dev/localhost direct), the token's own cid governs.
+    # Resolved only after the kill switch: tenant resolution 404s a switched-off
+    # company's slug, which would answer a live session before it was told why.
+    tenant = optional_hr_tenant(request, db, x_inspro_tenant_slug)
     if tenant is not None and tenant.client_id != client_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Unknown tenant.")
 

@@ -51,6 +51,11 @@ export interface MemberAccount {
    *  choose their own password on the portal. */
   set_password_token?: string | null;
   tenant_slug?: string | null;
+  /** The broker's address for employee links; null when it has none yet. */
+  client_origin?: string | null;
+  /** Whether the member has a confirmed authenticator. Absent on older
+   *  backends — treat undefined as unknown, not as "not enrolled". */
+  mfa_enrolled?: boolean;
 }
 
 export interface MemberAccountListResult {
@@ -193,6 +198,20 @@ export function useSetMemberPassword() {
       void qc.invalidateQueries({ queryKey: ["member-accounts"] });
       // Every one of these moves a member between rollout buckets.
       void qc.invalidateQueries({ queryKey: ["portal-rollout"] });
+    },
+    meta: { localErrorHandling: true },
+  });
+}
+
+/** Remove a member's authenticator and recovery codes (lost phone). They set
+ *  up two-factor again; required at next sign-in if the company says so. */
+export function useResetMemberMfa() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (accountId: string) =>
+      api.post<void>(`/member-accounts/${accountId}/mfa/reset`, {}),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["member-accounts"] });
     },
     meta: { localErrorHandling: true },
   });

@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { formatError } from "@/lib/errors";
 import { employeeMappingChoices, mappingPlanDescription } from "@/lib/employeeMappingChoices";
+import { isFirmOwnerRole } from "@/lib/roles";
 import type { CategoryGroup, Employee } from "@/types";
 
 export function EmployeeMappingEditor({ employee, groups, actionContainer, disabled, onDirtyChange }: {
@@ -97,7 +98,7 @@ export function EmployeeMappingEditor({ employee, groups, actionContainer, disab
             const planDescription = mappingPlanDescription(category);
             const choiceLabel = `${category.display_name}${plan != null && plan !== "" ? ` · Plan ${String(plan)}` : ""}`;
             // A broker may replace a category. Removing saved product coverage requires an administrator.
-            const canUncheck = me?.role === "system_admin" || !baseline.has(category.id);
+            const canUncheck = isFirmOwnerRole(me?.role) || !baseline.has(category.id);
             return <label key={category.id} className="flex clear-both items-start gap-2 py-1 text-sm">
               <input type="checkbox" className="mt-1 accent-primary" checked={selected.has(category.id)}
                 aria-label={choiceLabel}

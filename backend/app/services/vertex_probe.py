@@ -137,6 +137,11 @@ def probe_vertex(
     except RuntimeError as exc:
         # e.g. google-genai not installed, or credential build failure.
         error = f"Vertex client could not start: {exc.__class__.__name__}."
+    except ValueError as exc:
+        # A key refused before any request is sent (not JSON, missing fields,
+        # a token endpoint that is not Google's): the message says what to fix.
+        # Bounded to the `last_validation_error` column it is stored in.
+        error = str(exc)[:512]
     except Exception as exc:
         logger.error(
             "Unexpected error during Vertex test",

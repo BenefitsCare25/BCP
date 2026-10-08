@@ -26,7 +26,7 @@ from app.core.auth import CurrentUser, get_current_user
 from app.core.deps import (
     assert_policy_year_for_user,
     load_employee,
-    require_client_id,
+    policy_year_company,
     tenant_or_global,
 )
 from app.core.optimistic_lock import assert_not_stale
@@ -204,15 +204,17 @@ def employee_coverage_report(
 ) -> Response:
     """Employee listing with resolved insurance + flex coverage (.xlsx).
 
-    One row per active employee, NRIC masked. Audited because it emits PII.
+    One row per active employee, NRIC masked. Audited because it emits PII —
+    filed under the YEAR's company, whichever one the actor has selected.
     """
-    assert_policy_year_for_user(policy_year_id, user, db)
+    py = assert_policy_year_for_user(policy_year_id, user, db)
     wb = build_employee_report_workbook(db, policy_year_id)
     buf = BytesIO()
     wb.save(buf)
     write_audit(
         db, user, action="export", entity_type="employee_coverage_report",
         entity_id=policy_year_id, after={"policy_year_id": policy_year_id},
+        client_id=py.client_id,
     )
     db.commit()
     return Response(
@@ -280,6 +282,10 @@ def update_employee(
     derived attributes are recomputed so downstream views stay consistent. The
     match assignment is left untouched — run matching to re-evaluate.
     """
+    # The edit is the employee's company's, so a stale selection is refused
+    # rather than stamping another company onto the audit row.
+    py = assert_policy_year_for_user(e.policy_year_id, user, db)
+    policy_year_company(py, user)
     if payload.expected_updated_at is not None:
         db.refresh(e, with_for_update=True)
         assert_not_stale(
@@ -318,9 +324,7 @@ def update_employee(
     out = EmployeeOut.model_validate(e)
     out.matched_plans = _hydrate_plans([e], db, e.policy_year_id).get(e.id, [])
     out.roster_fields = employee_roster_fields(db, e)
-    py = db.get(PolicyYear, e.policy_year_id)
-    if py:
-        out.unmatched_product_codes = sorted(build_coverage_gaps(db, py).missing(e))
+    out.unmatched_product_codes = sorted(build_coverage_gaps(db, py).missing(e))
     return out
 
 
@@ -410,8 +414,7 @@ def bulk_delete_employees(
     claims, or active coverage overrides, so a broker can't silently wipe that
     data — e.g. by clearing the roster before re-uploading it.
     """
-    client_id = require_client_id(user)
-    assert_policy_year_for_user(policy_year_id, user, db)
+    client_id = policy_year_company(assert_policy_year_for_user(policy_year_id, user, db), user)
     rows = list(
         db.execute(
             select(Employee).where(
@@ -496,16 +499,10 @@ async def upload_employees(
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> UploadResult:
-    client_id = require_client_id(user)
-    py = assert_policy_year_for_user(policy_year_id, user, db)
     # Invariant: an employee's client must own the policy year it's loaded into.
-    # Holds for tenant users by construction; this guards the system_admin path,
-    # where user_owns bypasses the cross-client check above.
-    if py.client_id != client_id:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            "Policy year belongs to a different client than the active one.",
-        )
+    # Holds for tenant users by construction; `policy_year_company` guards the
+    # system_admin path, where user_owns bypasses the cross-client check.
+    client_id = policy_year_company(assert_policy_year_for_user(policy_year_id, user, db), user)
 
     async with saved_upload(file, WORKBOOK_SUFFIXES) as tmp_path:
         records = parse_employee_workbook(tmp_path)

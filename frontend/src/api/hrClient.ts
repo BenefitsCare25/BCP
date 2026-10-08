@@ -7,14 +7,27 @@
  * - `credentials: "include"` so the host-only refresh cookie rides along.
  * - On 401, transparently tries ONE silent refresh (the whole point of a short
  *   access token); if that fails, clears the session and returns to sign-in.
+ * - A 403 `hr_disabled` (the company's HR access was switched off) ends the
+ *   session the same way and tells the sign-in page why.
  */
-import { errorCode, errorFromText } from "@/lib/errors";
+import { errorCode, errorFromText, uploadRefusal } from "@/lib/errors";
 import { currentHrTenantSlug, hrPath } from "@/lib/tenant";
 import { withSessionRefreshLock } from "@/lib/sessionRefresh";
+import {
+  isSignedOut,
+  rememberSessionEndNotice,
+  sessionEndingRefusal,
+  sessionEndQuery,
+} from "@/lib/surfaceSession";
 import { useHrSession } from "@/stores/hrSession";
+import { useNotifications } from "@/stores/notifications";
 import { queryClient } from "@/lib/queryClient";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "/api/v1";
+const SIGN_IN_PATH = "/hr/sign-in";
+
+/** Refusals that end the HR session outright rather than one action. */
+const SESSION_ENDING_CODES: ReadonlySet<string> = new Set(["hr_disabled"]);
 
 export class HrUnauthorizedError extends Error {
   constructor(message = "HR session expired") {
@@ -32,16 +45,71 @@ function authHeader(): Record<string, string> {
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
-function handleUnauthorized(): never {
+/** Forget this tab's HR identity: token, cached HR data and the alerts raised
+ *  under it. Server-side revocation is the caller's business. */
+export function clearLocalHrSession(): void {
   useHrSession.getState().clearSession();
   const predicate = (query: { queryKey: readonly unknown[] }) =>
     query.queryKey[0] === "hr" || query.queryKey[0] === "hr-me";
   void queryClient.cancelQueries({ predicate });
   queryClient.removeQueries({ predicate });
-  if (window.location.pathname !== "/hr/sign-in") {
-    window.location.assign(hrPath("/hr/sign-in"));
+  useNotifications.getState().clear();
+}
+
+/** The sign-in address a session-ending refusal already sent this tab to. A
+ *  401 handled in the same moment — the request whose refresh met that refusal
+ *  — must send it there too: the bare sign-in page it used to assign replaced
+ *  the navigation and dropped `?ended=disabled`, the only explanation left
+ *  when tab storage is blocked. */
+let sessionEndTarget: string | null = null;
+
+/** For the route guard, whose own redirect after a failed refresh would
+ *  otherwise race the same navigation. */
+export function hrSessionEndTarget(): string | null {
+  return sessionEndTarget;
+}
+
+function handleUnauthorized(): never {
+  clearLocalHrSession();
+  if (window.location.pathname !== SIGN_IN_PATH) {
+    window.location.assign(sessionEndTarget ?? hrPath(SIGN_IN_PATH));
   }
   throw new HrUnauthorizedError();
+}
+
+/** The company's HR access is off: end the session and show the server's
+ *  sentence on sign-in. No redirect when sign-in is already showing — its own
+ *  guard refreshes, and a refusal there must not reload the page forever. */
+function endDisabledSession(message: string): void {
+  clearLocalHrSession();
+  rememberSessionEndNotice("hr", "disabled", message);
+  if (window.location.pathname !== SIGN_IN_PATH) {
+    sessionEndTarget = hrPath(`${SIGN_IN_PATH}?${sessionEndQuery("disabled")}`);
+    window.location.assign(sessionEndTarget);
+  }
+}
+
+/** Every non-OK, non-401 HR response becomes an error here. `upload` marks a
+ *  multipart body, whose size and scanner refusals get their own sentence. */
+async function rejected(res: Response, upload = false): Promise<never> {
+  const text = await res.text();
+  if (res.status === 403) {
+    const refusal = sessionEndingRefusal(text, SESSION_ENDING_CODES);
+    if (refusal) {
+      endDisabledSession(refusal.message);
+      throw new HrUnauthorizedError("HR portal access is switched off");
+    }
+  }
+  if (upload) {
+    const refusal = uploadRefusal(res.status, text, res.headers.get("Retry-After"));
+    if (refusal) throw refusal;
+  }
+  const error = errorFromText(res.status, text, res.statusText);
+  if (errorCode(error) === "mfa_enrollment_required") {
+    useHrSession.setState({ mfaEnrollmentRequired: true });
+    if (window.location.pathname !== "/hr/security") window.location.assign(hrPath("/hr/security"));
+  }
+  throw error;
 }
 
 let refreshInFlight: Promise<boolean> | null = null;
@@ -50,8 +118,12 @@ let refreshInFlight: Promise<boolean> | null = null;
  * cookie. Exported so the router guard can refresh on navigation (not just the
  * API layer on a 401), otherwise an expired 10-min access token bounces the
  * user to sign-in despite a valid 12h session. Concurrent callers de-dupe onto
- * a single in-flight request. */
+ * a single in-flight request.
+ *
+ * Never after an explicit sign-out in this tab: the cookie may by then belong
+ * to whoever signed in at this company in another tab. */
 export async function refreshHrSession(): Promise<boolean> {
+  if (isSignedOut("hr")) return false;
   if (!refreshInFlight) {
     const expected = useHrSession.getState().me;
     refreshInFlight = withSessionRefreshLock("hr", currentHrTenantSlug(), async () => {
@@ -61,7 +133,13 @@ export async function refreshHrSession(): Promise<boolean> {
           credentials: "include",
           headers: tenantHeader(),
         });
-        if (!res.ok) return false;
+        if (!res.ok) {
+          if (res.status === 403) {
+            const refusal = sessionEndingRefusal(await res.text(), SESSION_ENDING_CODES);
+            if (refusal) endDisabledSession(refusal.message);
+          }
+          return false;
+        }
         const data = (await res.json()) as {
           access_token: string;
           expires_at: string;
@@ -135,14 +213,7 @@ async function request<T>(
     }
     return handleUnauthorized();
   }
-  if (!res.ok) {
-    const error = errorFromText(res.status, await res.text(), res.statusText);
-    if (errorCode(error) === "mfa_enrollment_required") {
-      useHrSession.setState({ mfaEnrollmentRequired: true });
-      if (window.location.pathname !== "/hr/security") window.location.assign(hrPath("/hr/security"));
-    }
-    throw error;
-  }
+  if (!res.ok) return rejected(res, init.body instanceof FormData);
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
 }
@@ -181,9 +252,7 @@ export const hrApi = {
       }
       return handleUnauthorized();
     }
-    if (!res.ok) {
-      throw errorFromText(res.status, await res.text(), res.statusText);
-    }
+    if (!res.ok) return rejected(res);
     return res;
   },
   /** Public auth call (login / mfa / set-password): a 401/4xx is surfaced to
@@ -207,6 +276,11 @@ export const hrApi = {
       credentials: "include",
       headers: { ...tenantHeader(), ...authHeader() },
     });
-    if (!res.ok) throw errorFromText(res.status, await res.text(), res.statusText);
+    if (res.ok) return;
+    const text = await res.text();
+    // Switching HR access off already ended every session at this company;
+    // only this tab's local state is left to clear.
+    if (res.status === 403 && sessionEndingRefusal(text, SESSION_ENDING_CODES)) return;
+    throw errorFromText(res.status, text, res.statusText);
   },
 };

@@ -1,8 +1,11 @@
 import type { ReactNode } from "react";
 import { useMe } from "@/api/hooks";
+import { isSystemAdminRole } from "@/lib/roles";
 
-/** Broker portal actions that delete or clear saved data are platform-admin only. */
+/** Platform-only UI: the shared AI provider, platform credentials and limits,
+ *  AI policy library writes and the platform console. Firm-owner actions
+ *  (users, removal of saved data) use `FirmOwnerOnly` instead. */
 export function SystemAdminOnly({ children }: { children: ReactNode }) {
   const { data: me } = useMe();
-  return me?.role === "system_admin" ? <>{children}</> : null;
+  return isSystemAdminRole(me?.role) ? <>{children}</> : null;
 }

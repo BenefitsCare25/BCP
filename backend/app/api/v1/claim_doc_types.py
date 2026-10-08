@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 
 from app.core.audit import write_audit
 from app.core.auth import CurrentUser, get_current_user
-from app.core.deps import require_claim_configuration, require_client_id
+from app.core.deps import require_claim_configuration, require_client_id, require_firm_owner
 from app.core.optimistic_lock import assert_collection_not_stale, assert_not_stale
 from app.db.session import get_db
 from app.models import ClaimDocType
@@ -372,10 +372,14 @@ def delete_claim_doc_type(
 @router.post("/reset", response_model=list[ClaimDocTypeOut])
 def reset_claim_doc_types(
     body: ResetClaimDocTypesIn,
-    user: CurrentUser = Depends(get_current_user),
+    user: CurrentUser = Depends(require_firm_owner),
     db: Session = Depends(get_db),
 ) -> list[ClaimDocTypeOut]:
-    """Discard the client's customisations and restore the seeded defaults."""
+    """Discard the client's customisations and restore the seeded defaults.
+
+    A destructive reset of saved data, so firm owners only (`firm_admin`,
+    `system_admin`; AGENTS.md).
+    """
     client_id = require_client_id(user)
     existing = client_doc_type_rows(db, client_id)
     assert_collection_not_stale(

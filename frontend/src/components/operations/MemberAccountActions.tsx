@@ -23,7 +23,7 @@
  * own mailbox; the only thing this panel can reveal is a set-password LINK,
  * which grants nothing on its own and is single-use.
  */
-import { useState } from "react";
+import { useId, useState } from "react";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -37,6 +37,7 @@ import {
   Send,
   ShieldCheck,
   ShieldOff,
+  Smartphone,
 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -45,13 +46,15 @@ import {
   useMemberPasswordSetupLink,
   useRegenerateMemberLoginId,
   useResendMemberInvite,
+  useResetMemberMfa,
   useSetMemberAccountStatus,
   useSetMemberPassword,
   type MemberAccount,
 } from "@/api/memberAccounts";
-import { formatError } from "@/lib/errors";
+import { formatError, isFirmOriginUnavailable, sendErrorMessage } from "@/lib/errors";
 import { useMe } from "@/api/hooks";
 import { fmtDay, parseServerDate } from "@/lib/format";
+import { setPasswordLinkPath } from "@/lib/setPasswordToken";
 import { tenantSurfaceUrl } from "@/lib/tenant";
 import { cn } from "@/lib/cn";
 import { AlertDialog } from "@/components/ui/alert-dialog";
@@ -350,7 +353,7 @@ function LinkReveal({
  *  answering — and for an email-less member the system login id IS the answer. */
 function SignInDetails({ account }: { account: MemberAccount }) {
   const regenerate = useRegenerateMemberLoginId();
-  const url = tenantSurfaceUrl("portal", account.tenant_slug, "/portal/sign-in");
+  const url = tenantSurfaceUrl("portal", account.tenant_slug, "/portal/sign-in", account.client_origin);
   return (
     <div className="space-y-1.5 border-t border-border pt-2.5">
       <div className="flex items-center justify-between gap-2">
@@ -410,6 +413,7 @@ function AccountPanel({
   const setStatus = useSetMemberAccountStatus();
   const makeLink = useMemberPasswordSetupLink();
   const setPassword = useSetMemberPassword();
+  const resetMfa = useResetMemberMfa();
 
   const [emailOverride, setEmailOverride] = useState("");
   const [needsEmail, setNeedsEmail] = useState(false);
@@ -419,6 +423,8 @@ function AccountPanel({
   const [passwordError, setPasswordError] = useState<string | null>(null);
   const [confirmDisable, setConfirmDisable] = useState(false);
   const [confirmResend, setConfirmResend] = useState(false);
+  const [confirmMfaReset, setConfirmMfaReset] = useState(false);
+  const passwordHelpId = useId();
 
   const badge = PHASE_BADGE[phase];
   // **A member in run-off can still SIGN IN** — that is what the run-off is
@@ -448,7 +454,8 @@ function AccountPanel({
       });
       if (created.set_password_token) {
         setLink(tenantSurfaceUrl("portal", created.tenant_slug,
-          `/portal/set-password?token=${encodeURIComponent(created.set_password_token)}`));
+          setPasswordLinkPath("/portal/set-password", created.set_password_token),
+          created.client_origin));
       }
       if (!created.email) {
         toast.success(
@@ -464,7 +471,7 @@ function AccountPanel({
       setNeedsEmail(false);
       setEmailOverride("");
     } catch (err) {
-      const message = formatError(err);
+      const message = sendErrorMessage(err);
       if (message.toLowerCase().includes("no email") || message.toLowerCase().includes("shared")) setNeedsEmail(true);
       toast.error(message);
     }
@@ -482,7 +489,8 @@ function AccountPanel({
         toast.success(`New one-time password sent to ${res.email}`);
       }
     } catch (err) {
-      toast.error(formatError(err));
+      if (isFirmOriginUnavailable(err)) setConfirmResend(false);
+      toast.error(sendErrorMessage(err));
     }
   };
 
@@ -496,12 +504,13 @@ function AccountPanel({
           tenantSurfaceUrl(
             "portal",
             res.tenant_slug,
-            `/portal/set-password?token=${encodeURIComponent(res.set_password_token)}`,
+            setPasswordLinkPath("/portal/set-password", res.set_password_token),
+            res.client_origin,
           ),
         );
       }
     } catch (err) {
-      toast.error(formatError(err));
+      toast.error(sendErrorMessage(err));
     }
   };
 
@@ -519,7 +528,9 @@ function AccountPanel({
     setPasswordError(null);
     try {
       await setPassword.mutateAsync({ accountId: account!.id, password });
-      toast.success("Password set — tell them to change it after signing in");
+      toast.success(
+        "Temporary password set — they'll choose their own when they first sign in with it",
+      );
       setShowSet(false);
       setPasswordValue("");
     } catch (err) {
@@ -533,6 +544,16 @@ function AccountPanel({
       toast.success(
         next === "disabled" ? "Portal access disabled" : "Portal access re-enabled",
       );
+    } catch (err) {
+      toast.error(formatError(err));
+    }
+  };
+
+  const doResetMfa = async () => {
+    try {
+      await resetMfa.mutateAsync(account!.id);
+      toast.success("Authenticator reset");
+      setConfirmMfaReset(false);
     } catch (err) {
       toast.error(formatError(err));
     }
@@ -597,6 +618,23 @@ function AccountPanel({
             <>
               {account?.email && resendButton("Reset password", "outline")}
               {linkButton("Set-password link", "outline")}
+              {/* Nothing to reset without a confirmed authenticator. Older
+                  backends omit the flag, and then it stays on offer. */}
+              {account?.mfa_enrolled !== false && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={resetMfa.isPending}
+                  onClick={() => setConfirmMfaReset(true)}
+                >
+                  {resetMfa.isPending ? (
+                    <Loader2 className="size-4 animate-spin" />
+                  ) : (
+                    <Smartphone className="size-4" aria-hidden />
+                  )}
+                  Reset authenticator
+                </Button>
+              )}
             </>
           )}
           {account && phase !== "disabled" && (
@@ -649,31 +687,37 @@ function AccountPanel({
                   setPasswordError(null);
                 }}
               >
-                Set a password manually instead
+                Set a temporary password instead
               </button>
             ) : (
               <div className="space-y-1.5">
-                {/* Deliberately secondary: doing this means YOU know their
-                 * password, which the invite and link flows both avoid. It
-                 * stays available for the member who can use neither. */}
-                <p className="text-xs text-muted-foreground">
-                  You'll have to tell them this password, so prefer a
-                  set-password link where you can.
+                {/* Deliberately secondary: you hand this password over, which
+                 * the invite and link flows both avoid. The server makes it
+                 * a handover — their first sign-in with it goes straight to
+                 * choosing their own — so you never know a password they keep.
+                 * It stays available for the member who can use neither. */}
+                <p id={passwordHelpId} className="text-xs text-muted-foreground">
+                  This is a one-time handover: when they first sign in with it,
+                  they must choose their own password. You'll still have to
+                  tell them this one, so prefer a set-password link where you
+                  can.
                 </p>
                 <Input
                   type="password"
                   autoComplete="new-password"
+                  aria-label="Temporary password"
+                  aria-describedby={passwordHelpId}
                   placeholder={
                     minLength > 0
-                      ? `New password (min ${minLength} characters)`
-                      : "New password"
+                      ? `Temporary password (min ${minLength} characters)`
+                      : "Temporary password"
                   }
                   value={password}
                   onChange={(e) => setPasswordValue(e.target.value)}
                   className="h-8"
                 />
                 {passwordError && (
-                  <p className="text-xs text-error">{passwordError}</p>
+                  <p role="alert" className="text-xs text-error">{passwordError}</p>
                 )}
                 <div className="flex gap-2">
                   <Button
@@ -686,7 +730,7 @@ function AccountPanel({
                     {setPassword.isPending && (
                       <Loader2 className="size-4 animate-spin" />
                     )}
-                    Save password
+                    Set temporary password
                   </Button>
                   <Button
                     size="sm"
@@ -764,6 +808,26 @@ function AccountPanel({
                 setConfirmDisable(false),
               );
             }}
+          />
+          <AlertDialog
+            open={confirmMfaReset}
+            onOpenChange={setConfirmMfaReset}
+            title="Reset their authenticator?"
+            description={
+              <>
+                The authenticator app and recovery codes for{" "}
+                <strong>
+                  {account.email ?? account.system_login_id ?? account.staff_id}
+                </strong>{" "}
+                stop working immediately. They'll have to set up two-factor
+                authentication again — at their next sign-in, if the company
+                requires it. Confirm who you're speaking to before you do this.
+              </>
+            }
+            confirmLabel="Reset authenticator"
+            confirmVariant="destructive"
+            loading={resetMfa.isPending}
+            onConfirm={() => void doResetMfa()}
           />
         </>
       )}

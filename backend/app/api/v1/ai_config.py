@@ -2,10 +2,15 @@
 
 Gated to tenant admins. `system_admin` configures the selected active client;
 fleet-wide platform credentials live in ``platform_ai_settings.py``.
+
+Replacing or deleting a company's key purges that company's cached AI results
+(`ai_cache.purge_client`): cache keys name the credential source but not the
+key, so results computed under the old key would otherwise keep being served.
 """
 from __future__ import annotations
 
 import json
+import logging
 from datetime import UTC, datetime
 from typing import Any
 
@@ -30,13 +35,33 @@ from app.schemas.api import (
     AIConfigTestResult,
     AIConfigUpsert,
 )
+from app.services import ai_cache
 from app.services.vertex_probe import probe_vertex, project_id_from_service_account
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/ai-config", tags=["ai-config"])
 
 
 def _mask_for_fingerprint(fp: str) -> str:
     return "••••" + fp[-4:]
+
+
+def _purge_company_cache(client_id: str) -> None:
+    """Drop the company's cached AI results after its key changed or went.
+
+    Runs after the commit, so the key change stands either way. An unreachable
+    Redis makes the purge raise; that is logged rather than failing a change
+    that has already been made, and the 24-hour TTL bounds what survives.
+    """
+    try:
+        ai_cache.purge_client(client_id)
+    except Exception:
+        logger.warning(
+            "Could not purge the AI cache for client %s after its key changed",
+            client_id,
+            exc_info=True,
+        )
 
 
 @router.get("", responses={204: {"description": "No BYOK configured"}})
@@ -148,6 +173,8 @@ def put_ai_config(
         after=after,
     )
     db.commit()
+    if before is not None:
+        _purge_company_cache(client_id)
     db.refresh(row)
     return AIConfigOut.model_validate(row)
 
@@ -181,6 +208,7 @@ def delete_ai_config(
         before=snapshot,
     )
     db.commit()
+    _purge_company_cache(client_id)
 
 
 @router.post("/test", response_model=AIConfigTestResult)

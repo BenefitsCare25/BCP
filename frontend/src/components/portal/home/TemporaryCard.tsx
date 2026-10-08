@@ -1,4 +1,6 @@
 import { Shield } from "lucide-react";
+import { BrandLogo } from "@/components/brand/BrandLogo";
+import { useBrand } from "@/components/brand/BrandProvider";
 
 /** Stand-in until the insurer supplies card artwork. It is marked "Preview"
  *  and never imitates an insurer's design — but it DOES carry the member's
@@ -14,14 +16,15 @@ export function TemporaryCard({
   companyName: string;
   memberId?: { insurer: string | null; id: string } | null;
 }) {
+  const brand = useBrand();
   const label = memberId
     ? `Temporary card preview for ${memberName || "member"}, ${memberId.insurer ?? "insurer"} member ID ${memberId.id}`
-    : "Temporary Inspro card preview; not an issued panel card";
+    : `Temporary ${brand.product_name} card preview; not an issued panel card`;
   return (
     <div className="portal-hero-card-wrap">
       <div className="portal-temporary-card" role="img" aria-label={label}>
         <div className="portal-temporary-card-top">
-          <img src="/inspro-logo-header.png" alt="" aria-hidden="true" />
+          <BrandLogo variant="header" decorative />
           <Shield size={44} strokeWidth={1.1} aria-hidden="true" />
         </div>
         <div className="portal-temporary-card-bottom">

@@ -7,15 +7,19 @@ guarded by `last_used_step`. All functions leave the commit to the caller.
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import AuthMfa
+from app.models import AuthMfa, AuthSession
 
 logger = logging.getLogger(__name__)
+
+# Starting enrolment binds a new second factor to the account, so a session
+# whose sign-in is older than this must confirm the password first.
+ENROLMENT_REAUTH_WINDOW = timedelta(minutes=10)
 
 
 def _row(db: Session, subject_type: str, subject_id: str) -> AuthMfa | None:
@@ -79,9 +83,10 @@ def consume_recovery_code(
 
 
 def start_enrollment(
-    db: Session, subject_type: str, subject_id: str, account: str
+    db: Session, subject_type: str, subject_id: str, account: str, issuer: str | None = None
 ) -> tuple[str, str]:
     """Create/replace an UNCONFIRMED secret. Returns (secret, otpauth_uri).
+    `issuer` is the brand name the authenticator app shows for the account.
     409 if already confirmed (disable first). Caller commits."""
     from app.core.crypto import encrypt_secret
     from app.core.totp import generate_secret, provisioning_uri
@@ -104,7 +109,7 @@ def start_enrollment(
         row.totp_secret_enc = enc
         row.last_used_step = None
         row.recovery_codes = None
-    return secret, provisioning_uri(secret, account)
+    return secret, provisioning_uri(secret, account, issuer)
 
 
 def confirm_enrollment(
@@ -129,3 +134,35 @@ def disable(db: Session, subject_type: str, subject_id: str) -> None:
     row = _row(db, subject_type, subject_id)
     if row is not None:
         db.delete(row)
+
+
+def signed_in_recently(
+    db: Session, session_id: str, now: datetime | None = None
+) -> bool:
+    """Whether the session's sign-in falls inside `ENROLMENT_REAUTH_WINDOW`.
+
+    Measured from the family's ROOT row — the sign-in itself, where any second
+    factor was verified. Refresh issues a new row every few minutes, so the
+    live row's `issued_at` only says when the token was last rotated, not when
+    the person last proved who they are.
+    """
+    current = db.get(AuthSession, session_id)
+    if current is None:
+        return False
+    root = db.execute(select(AuthSession).where(
+        AuthSession.family_id == current.family_id, AuthSession.parent_id.is_(None),
+    )).scalar_one_or_none()
+    if root is None:
+        return False
+    signed_in = root.issued_at
+    if signed_in.tzinfo is None:
+        signed_in = signed_in.replace(tzinfo=UTC)
+    return signed_in > (now or datetime.now(UTC)) - ENROLMENT_REAUTH_WINDOW
+
+
+def reauth_required() -> HTTPException:
+    """403 for an enrolment start that needs the password confirmed first."""
+    return HTTPException(status.HTTP_403_FORBIDDEN, {
+        "code": "reauth_required",
+        "message": "Confirm your password to set up two-factor.",
+    })

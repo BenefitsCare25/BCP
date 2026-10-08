@@ -2,7 +2,9 @@
 
 Covers the status-vocabulary mapping, in-period leaver inclusion (pre-period
 leavers excluded), the leave columns, masked/unmasked NRIC gating (viewer
-403), and the export audit trail.
+403), and the export audit trail. The same masking rule is checked on the other
+broker surfaces that print identification numbers: the enrolment-form summary
+and the underwriting queue.
 """
 from __future__ import annotations
 
@@ -32,11 +34,16 @@ from app.models import (  # noqa: E402
     EnrollmentWindow,
     LeaveElection,
     PolicyYear,
+    Product,
+    UnderwritingCase,
+    UnderwritingReview,
     User,
 )
 from app.models.enrollment import EnrollmentStatus  # noqa: E402
+from app.models.enrollment_form import EnrollmentFormSubmission  # noqa: E402
 from app.models.enrollment_window import WindowStatus  # noqa: E402
 from app.models.policy_year import PolicyYearStatus  # noqa: E402
+from app.services import insurer_reports, xlsx_safe  # noqa: E402
 
 CLIENT_ID = "00000000-0000-0000-0000-00000012e000"
 PY_ID = "00000000-0000-0000-0000-00000012e001"
@@ -303,3 +310,156 @@ def test_pinned_window_id_overrides_latest(client: TestClient) -> None:
     # In the OLD window Cara confirmed and Alice never enrolled.
     assert rows["IR-3"]["Status"] == "Processed"
     assert rows["IR-1"]["Status"] == "Not Started"
+
+
+def test_report_toolkit_reexports_the_shared_formula_guard() -> None:
+    """Report modules import the guard from `insurer_reports`; it must stay the
+    one implementation in `xlsx_safe`, not a drifting copy."""
+    assert insurer_reports.safe_cell is xlsx_safe.safe_cell
+    assert insurer_reports.append_safe is xlsx_safe.append_safe
+    for leader in ("=", "+", "-", "@"):
+        assert xlsx_safe.safe_cell(f"{leader}1+1") == f"'{leader}1+1"
+    assert xlsx_safe.safe_cell("Alice") == "Alice"
+    assert xlsx_safe.safe_cell(-5) == -5
+
+
+# ── Other broker surfaces that print an identification number ────────────────
+
+FORM_ID = "00000000-0000-0000-0000-00000012e301"
+REVIEW_ID = "00000000-0000-0000-0000-00000012e401"
+FORMS_XLSX = f"/api/v1/policy-years/{PY_ID}/enrollment-forms/export.xlsx"
+UW_QUEUE = f"/api/v1/policy-years/{PY_ID}/underwriting/cases"
+
+
+@pytest.fixture(scope="module")
+def _form_and_review() -> None:
+    with SessionLocal() as s:
+        s.add(EnrollmentFormSubmission(
+            id=FORM_ID, client_id=CLIENT_ID, policy_year_id=PY_ID, window_id=WINDOW_NEW,
+            employee_id=EMP_CONFIRMED, reference_no="EF-2033-00001",
+            snapshot={
+                "particulars": {"id_no": "S1234567D", "email": "=HYPERLINK(\"x\")"},
+                "dependants": [{"relationship": "Child", "name": "Al", "id_no": "T1234567J"}],
+            },
+        ))
+        s.add(UnderwritingReview(
+            id=REVIEW_ID, client_id=CLIENT_ID, policy_year_id=PY_ID,
+            insurer="AIA", employee_id=EMP_CONFIRMED,
+        ))
+        s.commit()
+
+
+def _form_rows(res, sheet: str) -> list[dict]:
+    assert res.status_code == 200, res.text
+    data = list(load_workbook(BytesIO(res.content))[sheet].iter_rows(values_only=True))
+    return [dict(zip(data[0], r, strict=False)) for r in data[1:]]
+
+
+@pytest.mark.usefixtures("_form_and_review")
+def test_enrolment_form_summary_is_masked_unless_asked(client: TestClient) -> None:
+    (masked,) = _form_rows(client.get(FORMS_XLSX), "Enrolment forms")
+    (dependant,) = _form_rows(client.get(FORMS_XLSX), "Family members")
+    (unmasked,) = _form_rows(client.get(f"{FORMS_XLSX}?masked=false"), "Enrolment forms")
+
+    assert masked["NRIC / FIN"] == "S******7D"
+    assert dependant["NRIC / BC / FIN"] == "T******7J"
+    assert unmasked["NRIC / FIN"] == "S1234567D"
+    # Member-typed particulars cannot become a live formula in the summary.
+    assert masked["Email"] == "'=HYPERLINK(\"x\")"
+    with SessionLocal() as s:
+        audited = s.query(AuditLog).filter(
+            AuditLog.action == "enrollment_form.export_xlsx", AuditLog.entity_id == PY_ID
+        ).all()
+    assert {(r.after["masked"], r.after["forms"], r.after["family_members"]) for r in audited} \
+        == {(True, 1, 1), (False, 1, 1)}
+
+
+@pytest.mark.usefixtures("_form_and_review")
+def test_viewer_enrolment_form_summary_is_always_masked(viewer_client: TestClient) -> None:
+    assert viewer_client.get(f"{FORMS_XLSX}?masked=false").status_code == 403
+    (row,) = _form_rows(viewer_client.get(FORMS_XLSX), "Enrolment forms")
+    assert row["NRIC / FIN"] == "S******7D"
+
+
+def _queue_identification(c: TestClient) -> str | None:
+    res = c.get(UW_QUEUE)
+    assert res.status_code == 200, res.text
+    (review,) = [i for i in res.json()["items"] if i["id"] == REVIEW_ID]
+    return review["identification_no"]
+
+
+@pytest.mark.usefixtures("_form_and_review")
+def test_underwriting_queue_masks_identification_for_viewers(
+    viewer_client: TestClient,
+) -> None:
+    assert _queue_identification(viewer_client) == "S******7D"
+
+
+@pytest.mark.usefixtures("_form_and_review")
+def test_underwriting_queue_shows_identification_to_writers(client: TestClient) -> None:
+    assert _queue_identification(client) == "S1234567D"
+
+
+ORPHAN_CASE = "00000000-0000-0000-0000-00000012e402"
+FORMS_ZIP = f"/api/v1/policy-years/{PY_ID}/enrollment-forms/export.zip"
+
+
+@pytest.fixture
+def _orphan_case():
+    """A case written before the insurer-grouped model: it has no review yet."""
+    with SessionLocal() as s:
+        product = s.query(Product).first()
+        assert product is not None
+        s.add(UnderwritingCase(
+            id=ORPHAN_CASE, client_id=CLIENT_ID, policy_year_id=PY_ID,
+            product_id=product.id, employee_id=EMP_PROGRESS,
+            eligible_si=500_000.0, accepted_si=300_000.0,
+        ))
+        s.commit()
+    yield
+    with SessionLocal() as s:
+        case = s.get(UnderwritingCase, ORPHAN_CASE)
+        review = s.get(UnderwritingReview, case.review_id) if case and case.review_id else None
+        for row in (case, review):
+            if row is not None:
+                s.delete(row)
+        s.commit()
+
+
+def _orphan_review_id() -> str | None:
+    with SessionLocal() as s:
+        case = s.get(UnderwritingCase, ORPHAN_CASE)
+        assert case is not None
+        return case.review_id
+
+
+@pytest.mark.usefixtures("_orphan_case")
+def test_a_viewer_reading_the_queue_writes_nothing(client: TestClient) -> None:
+    """Opening the queue adopts pre-review-model cases, which writes. A
+    read-only role's read must not; the next write-capable view adopts them."""
+    with SessionLocal() as s:
+        reviews_before = s.query(UnderwritingReview).count()
+    app.dependency_overrides[get_current_user] = lambda: _user("broker_viewer")
+    assert client.get(UW_QUEUE).status_code == 200
+    assert _orphan_review_id() is None
+    with SessionLocal() as s:
+        assert s.query(UnderwritingReview).count() == reviews_before
+
+    app.dependency_overrides[get_current_user] = _user
+    assert client.get(UW_QUEUE).status_code == 200
+    assert _orphan_review_id() is not None
+
+
+@pytest.mark.usefixtures("_form_and_review")
+def test_bulk_signed_forms_are_for_write_capable_roles(client: TestClient) -> None:
+    """The ZIP is every matching signed form unredacted — a signed PDF has no
+    masked form. A viewer keeps the masked summary and the single-form view."""
+    app.dependency_overrides[get_current_user] = lambda: _user("broker_viewer")
+    assert client.get(FORMS_ZIP).status_code == 403
+    assert client.get(FORMS_XLSX).status_code == 200
+    # Reaches the form (which has no file yet) rather than being refused.
+    assert client.get(f"/api/v1/enrollment-forms/{FORM_ID}/pdf").status_code == 404
+
+    app.dependency_overrides[get_current_user] = _user
+    # Past the role gate: nothing matching has a file to put in the archive.
+    assert client.get(FORMS_ZIP).status_code == 404

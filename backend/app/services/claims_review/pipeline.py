@@ -21,6 +21,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.storage import company_firm_id
 from app.db.session import SessionLocal
 from app.db.tenancy import set_search_path
 from app.models import Claim, ClaimAIReview, ClaimReviewJob, Employee, StoredDocument
@@ -37,10 +38,11 @@ from app.models.claim_ai_review import (
     REVIEW_VERDICT_CLEAN,
     REVIEW_VERDICT_FLAGGED,
 )
-from app.models.stored_document import STORAGE_AVAILABLE
+from app.models.stored_document import DOC_ENTITY_REFERRAL, STORAGE_AVAILABLE
 from app.services import ai_gateway
 from app.services.ai_extractor import AINotConfiguredError
 from app.services.claim_document_setups import definitions_for_claim
+from app.services.claim_intake import person_employee_ids
 from app.services.claim_review_configs import (
     claim_key_for,
     resolve_review_config,
@@ -69,7 +71,57 @@ class ReviewOwnershipLost(RuntimeError):
 
 
 class ReviewDeadlineExceeded(RuntimeError):
-    """The durable review exceeded its configured end-to-end deadline."""
+    """The durable review exceeded its processing deadline or maximum age."""
+
+
+def _env_seconds(name: str, default: int) -> int:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise RuntimeError(f"{name} must be a whole number of seconds") from exc
+    if value <= 0:
+        raise RuntimeError(f"{name} must be positive")
+    return value
+
+
+def review_deadline_seconds() -> int:
+    """Processing budget of ONE attempt, counted from the lease that started it."""
+    return _env_seconds("INSPRO_REVIEW_DEADLINE_SECONDS", 1200)
+
+
+def review_max_age_seconds() -> int:
+    """Absolute ceiling on a job's life, counted from when it was (re)queued."""
+    return _env_seconds("INSPRO_REVIEW_MAX_AGE_SECONDS", 24 * 60 * 60)
+
+
+def _aware(value: datetime) -> datetime:
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value
+
+
+def review_age_exceeded(job: ClaimReviewJob, now: datetime) -> bool:
+    return (now - _aware(job.created_at)).total_seconds() >= review_max_age_seconds()
+
+
+def review_deadline_reason(job: ClaimReviewJob, now: datetime) -> str | None:
+    """Why ``job`` may not keep running, or None while it is inside both budgets.
+
+    The processing deadline counts from the current attempt's lease
+    (``started_at``, reset by every lease), so time spent queued — behind
+    another firm's backlog or in retry backoff — never eats into it. The age
+    ceiling counts from enqueue and is what still retires a job that keeps
+    being retried or re-leased.
+    """
+    started = job.started_at
+    if started is not None and (now - _aware(started)).total_seconds() >= (
+        review_deadline_seconds()
+    ):
+        return "Claim review exceeded its processing deadline"
+    if review_age_exceeded(job, now):
+        return "Claim review exceeded its maximum age"
+    return None
 
 
 def _apply_call_metadata(review: ClaimAIReview, calls: list[dict[str, Any]]) -> None:
@@ -229,6 +281,29 @@ def run_review(claim_id: str, review_id: str, broker_firm_id: str | None) -> Non
         db.close()
 
 
+def _assert_job_linkage(
+    db: Session, job: ClaimReviewJob, claim: Claim, review: ClaimAIReview
+) -> None:
+    """The job, its claim and its review must name the same company and claim.
+
+    The job is a public control row; the claim and review are looked up by id
+    in the firm schema it routes to. A job whose identifiers disagree with the
+    rows it found (corrupted or forged) must never review — or write a verdict
+    onto — a claim of another company or firm.
+    """
+    if (
+        claim.client_id != job.client_id
+        or review.claim_id != job.claim_id
+        or review.client_id != job.client_id
+        or company_firm_id(db, claim.client_id) != job.broker_firm_id
+    ):
+        logger.error(
+            "Claim-review job does not match its claim and review",
+            extra={"job_id": job.id, "error_code": "review_job_linkage_mismatch"},
+        )
+        raise ReviewOwnershipLost("Job no longer matches its claim and review")
+
+
 def execute_leased_review(job_id: str, lease_owner: str) -> None:
     """Execute one job and raise failures to the worker's retry classifier."""
     with SessionLocal() as db:
@@ -244,6 +319,7 @@ def execute_leased_review(job_id: str, lease_owner: str) -> None:
         claim = db.get(Claim, job.claim_id, with_for_update=True)
         if review is None or claim is None:
             raise ReviewOwnershipLost("Claim or review no longer exists")
+        _assert_job_linkage(db, job, claim, review)
         if review.superseded or claim.revision != job.claim_revision:
             raise ReviewOwnershipLost("Review no longer owns the claim revision")
         if review.status == REVIEW_STATUS_COMPLETE:
@@ -297,15 +373,10 @@ def _checkpoint(
         ):
             db.rollback()
             raise ReviewOwnershipLost("Review lease or claim revision is no longer current")
-        deadline = int(os.environ.get("INSPRO_REVIEW_DEADLINE_SECONDS", "1200"))
-        created_at = (
-            job.created_at.replace(tzinfo=UTC)
-            if job.created_at.tzinfo is None
-            else job.created_at
-        )
-        if (now - created_at).total_seconds() >= deadline:
+        reason = review_deadline_reason(job, now)
+        if reason is not None:
             db.rollback()
-            raise ReviewDeadlineExceeded("Claim review exceeded its overall deadline")
+            raise ReviewDeadlineExceeded(reason)
         job.stage = stage
         job.heartbeat_at = now
     db.refresh(claim, with_for_update=True)
@@ -412,6 +483,34 @@ def _compare_verify_and_finalize(
     db.commit()
 
 
+def _referral_for_review(db: Session, claim: Claim) -> StoredDocument | None:
+    """The claim's referral letter, only if it is the claimant's own.
+
+    A referral is member-level (``entity_type="referral"``), stamped with an
+    ``Employee`` row of the same person — possibly last year's — so ownership
+    is the company plus the person, not merely the id the claim carries. A
+    letter that fails it is left out (and logged), never reviewed as evidence.
+    """
+    if not claim.referral_document_id:
+        return None
+    referral = db.get(StoredDocument, claim.referral_document_id)
+    if referral is None or referral.storage_state != STORAGE_AVAILABLE:
+        return None
+    employee = db.get(Employee, claim.employee_id)
+    if (
+        employee is None
+        or referral.client_id != claim.client_id
+        or referral.entity_type != DOC_ENTITY_REFERRAL
+        or referral.entity_id not in person_employee_ids(db, employee)
+    ):
+        logger.error(
+            "Referral document does not belong to the claimant; excluded from AI review",
+            extra={"claim_id": claim.id, "error_code": "referral_ownership_mismatch"},
+        )
+        return None
+    return referral
+
+
 def _extract_stage(
     db: Session,
     claim: Claim,
@@ -427,10 +526,9 @@ def _extract_stage(
     list[dict[str, Any]],
 ]:
     docs = claim_documents(db, claim)
-    if claim.referral_document_id:
-        referral = db.get(StoredDocument, claim.referral_document_id)
-        if referral is not None and referral.storage_state == STORAGE_AVAILABLE:
-            docs.append(referral)
+    referral = _referral_for_review(db, claim)
+    if referral is not None:
+        docs.append(referral)
     review.progress_total = len(docs)
     review.progress_current = len(review.extractions or [])
     _checkpoint(

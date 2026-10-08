@@ -47,7 +47,13 @@ from app.core.portal_auth import (
     CurrentMember,
 )
 from app.core.rate_limit import limiter
-from app.core.storage import DOCUMENT_SUFFIXES, MAX_DOCUMENT_BYTES, get_storage
+from app.core.storage import (
+    DOCUMENT_SUFFIXES,
+    MAX_DOCUMENT_BYTES,
+    StorageScopeError,
+    company_firm_id,
+    get_storage,
+)
 from app.core.uploads import saved_upload
 from app.db.session import get_db
 from app.models import Claim, ClaimFormDraft, Employee, PolicyYear, StoredDocument
@@ -136,6 +142,7 @@ from app.services.claims import (
     amendment_summary,
     apply_claim_amendment,
     assert_claim_revision,
+    assert_document_scope,
     assert_member_may_amend,
     attach_document,
     audit_cells,
@@ -1039,7 +1046,12 @@ def download_my_claim_document(
     ):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Document not found")
     try:
+        assert_document_scope(
+            doc.storage_path, company_firm_id(db, claim.client_id), claim.client_id
+        )
         content = get_storage().read(doc.storage_path)
+    except StorageScopeError:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Document not found") from None
     except FileNotFoundError:
         raise HTTPException(
             status.HTTP_404_NOT_FOUND,

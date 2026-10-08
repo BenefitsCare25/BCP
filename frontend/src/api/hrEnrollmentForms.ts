@@ -7,6 +7,21 @@ import {
   registerQuery,
 } from "@/api/enrollmentForms";
 import { downloadResponseAsFile } from "@/lib/download";
+import { ApiError, errorStatus } from "@/lib/errors";
+
+/** The bulk exports allow five downloads a minute. The limiter answers with a
+ *  body that has no `detail` (`{"error": "Rate limit exceeded: …"}`), which the
+ *  error toast used to print verbatim. */
+const TOO_MANY_DOWNLOADS = "Too many downloads — try again in a minute.";
+
+async function hrDownload(path: string): Promise<Response> {
+  try {
+    return await hrApi.downloadResponse(path);
+  } catch (error) {
+    if (errorStatus(error) === 429) throw new ApiError(TOO_MANY_DOWNLOADS, 429);
+    throw error;
+  }
+}
 
 export interface HrFormWindow {
   id: string;
@@ -34,12 +49,14 @@ export function useHrForms(filters: RegisterFilters) {
 }
 
 export async function downloadHrFormPdf(item: { id: string; reference_no: string }) {
-  const res = await hrApi.downloadResponse(`/hr/enrollment-forms/${item.id}/pdf`);
+  const res = await hrDownload(`/hr/enrollment-forms/${item.id}/pdf`);
   await downloadResponseAsFile(res, `Enrolment form ${item.reference_no}.pdf`);
 }
 
+/** The Excel summary is always masked for HR; the PDF ZIP is refused for
+ *  every role but client_admin. */
 export async function exportHrForms(filters: RegisterFilters, kind: "zip" | "xlsx") {
-  const res = await hrApi.downloadResponse(
+  const res = await hrDownload(
     `/hr/enrollment-forms/export.${kind}${registerQuery({ ...filters, source: "" }, false)}`,
   );
   await downloadResponseAsFile(res, `Enrolment forms.${kind}`);

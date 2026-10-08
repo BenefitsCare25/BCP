@@ -33,7 +33,7 @@ from app.core.portal_auth import (
 )
 from app.core.rate_limit import limiter
 from app.core.request_context import client_ip, user_agent
-from app.core.storage import get_storage
+from app.core.storage import StorageScopeError, company_firm_id, get_storage
 from app.db.session import get_db
 from app.models import Employee, Enrollment, EnrollmentWindow, StoredDocument
 from app.models.enrollment import EnrollmentStatus
@@ -52,6 +52,7 @@ from app.schemas.enrollment_forms import (
     FormSubmissionSummary,
     MemberFormContextOut,
 )
+from app.services.claims import assert_document_scope
 from app.services.enrollment_elections import (
     apply_elections,
     apply_leave,
@@ -382,8 +383,11 @@ def download_form_document(
     ):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Document not found")
     try:
+        assert_document_scope(
+            doc.storage_path, company_firm_id(db, employee.client_id), employee.client_id
+        )
         content = get_storage().read(doc.storage_path)
-    except FileNotFoundError:
+    except (FileNotFoundError, StorageScopeError):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Document not found") from None
     write_member_audit(
         db, member, action="enrollment_form.document_download",

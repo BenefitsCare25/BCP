@@ -5,7 +5,9 @@ import os
 from pathlib import Path
 from unittest.mock import patch
 
+import httpx
 import pytest
+from anthropic import InternalServerError
 
 TEST_DB = Path(__file__).parent / "_test_ai_gateway_claims.db"
 os.environ["INSPRO_DATABASE_URL"] = f"sqlite:///{TEST_DB}"
@@ -202,16 +204,45 @@ def test_provider_failure_trips_breaker() -> None:
     db = SessionLocal()
     try:
         breaker = ai_breaker.get_breaker()
+        request = httpx.Request("POST", "http://vertex.test/")
+        outage = InternalServerError(
+            "provider down", response=httpx.Response(503, request=request), body=None
+        )
         with patch(
             "app.services.ai_gateway.extract_claim_document_via_ai",
-            side_effect=RuntimeError("provider down"),
+            side_effect=outage,
         ):
             for i in range(breaker.threshold):
-                with pytest.raises(RuntimeError):
+                with pytest.raises(InternalServerError):
                     extract_claim_document(
                         db, client_id=DEMO_CLIENT_ID, policy_year_id=None,
                         sha256=f"{i:063d}f", blocks=BLOCKS, file_name="r.pdf",
                     )
         assert breaker.state == "open"
+    finally:
+        db.close()
+
+
+def test_claim_cache_entries_are_filed_under_the_company() -> None:
+    """Every entry carries its tenant scope, so a company's extracted claim
+    data is attributable and `purge_client` removes it at once."""
+    db = SessionLocal()
+    try:
+        with patch(
+            "app.services.ai_gateway.extract_claim_document_via_ai",
+            return_value=_extract_payload(),
+        ) as m:
+            extract_claim_document(
+                db, client_id=DEMO_CLIENT_ID, policy_year_id=None,
+                sha256="e" * 64, blocks=BLOCKS, file_name="r.pdf",
+            )
+            assert ai_cache.purge_client(DEMO_CLIENT_ID) == 1
+            again = extract_claim_document(
+                db, client_id=DEMO_CLIENT_ID, policy_year_id=None,
+                sha256="e" * 64, blocks=BLOCKS, file_name="r.pdf",
+            )
+        assert m.call_count == 2  # purged: the second call is live again
+        assert again.cache_hit is False
+        db.rollback()
     finally:
         db.close()

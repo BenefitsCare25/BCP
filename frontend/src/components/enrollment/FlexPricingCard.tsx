@@ -1,4 +1,4 @@
-import { SystemAdminOnly } from "@/components/auth/SystemAdminOnly";
+import { FirmOwnerOnly } from "@/components/auth/FirmOwnerOnly";
 import { useEffect, useRef, useState } from "react";
 import { Link } from "@tanstack/react-router";
 import {
@@ -1059,7 +1059,7 @@ export function UnifiedDependantEnrollment({
         </SelectContent>
       </Select>
       {editable && (
-        <SystemAdminOnly><Button
+        <FirmOwnerOnly><Button
           variant="ghost"
           size="icon-sm"
           onClick={() => editor.removeDepCoverage(product.product_id, tier.key)}
@@ -1067,7 +1067,7 @@ export function UnifiedDependantEnrollment({
           title="Remove dependant cover"
         >
           <Trash2 className="size-3.5" aria-hidden="true" />
-        </Button></SystemAdminOnly>
+        </Button></FirmOwnerOnly>
       )}
     </div>
   );

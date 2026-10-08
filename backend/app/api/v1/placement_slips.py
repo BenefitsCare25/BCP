@@ -34,6 +34,7 @@ from app.core.deps import (
     assert_policy_year_editable,
     assert_policy_year_for_user,
     load_placement_slip,
+    policy_year_company,
     require_client_id,
     tenant_or_global,
 )
@@ -473,10 +474,10 @@ async def parse_upload(
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> ParseResult:
-    client_id = require_client_id(user)
     policy_year = assert_policy_year_editable(
         assert_policy_year_for_user(policy_year_id, user, db)
     )
+    client_id = policy_year_company(policy_year, user)
 
     async with saved_upload(file, WORKBOOK_SUFFIXES) as tmp_path:
         slip_row = PlacementSlipRow(

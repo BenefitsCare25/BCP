@@ -15,7 +15,12 @@ from sqlalchemy.orm import Session
 
 from app.core.audit import write_audit
 from app.core.auth import CurrentUser, get_current_user
-from app.core.deps import assert_policy_year_for_user, load_employee, require_client_id
+from app.core.deps import (
+    assert_policy_year_for_user,
+    is_firm_owner,
+    load_employee,
+    policy_year_company,
+)
 from app.core.optimistic_lock import assert_not_stale
 from app.core.pagination import MAX_LIMIT
 from app.core.rate_limit import limiter
@@ -163,8 +168,7 @@ def run_matching(
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> MatchRunResult:
-    client_id = require_client_id(user)
-    assert_policy_year_for_user(policy_year_id, user, db)
+    client_id = policy_year_company(assert_policy_year_for_user(policy_year_id, user, db), user)
 
     # Refresh the slip-derived rules first, exactly as a roster upload does.
     # Matching alone replays whatever rules were compiled at the last upload,
@@ -253,9 +257,9 @@ def _bulk_override(
         cat.product_id for match in employee.matched_categories or []
         if (cat := db.get(Category, match.get("category_id"))) is not None
     }
-    if user.role != "system_admin" and existing_products - {c.product_id for c in categories}:
+    if not is_firm_owner(user) and existing_products - {c.product_id for c in categories}:
         raise HTTPException(status.HTTP_403_FORBIDDEN,
-                            "Removing saved product mappings requires system_admin role.")
+                            "Removing saved product mappings requires a firm administrator.")
 
     entries: list[dict[str, Any]] = []
     for cat in categories:
@@ -335,9 +339,9 @@ def override_match(
         if (category.plan_assignments or {}).get("member_scope") == "dependant":
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT,
                                 "Dependant-only categories cannot be assigned to an employee.")
-    elif user.role != "system_admin":
+    elif not is_firm_owner(user):
         raise HTTPException(status.HTTP_403_FORBIDDEN,
-                            "Removing saved product mappings requires system_admin role.")
+                            "Removing saved product mappings requires a firm administrator.")
 
     before = {
         "matched_category_id": employee.matched_category_id,

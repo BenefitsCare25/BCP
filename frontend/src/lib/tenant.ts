@@ -281,15 +281,20 @@ export function tenantSurfaceUrl(
   surface: Surface,
   slug: string | null | undefined,
   path: string,
+  /** The broker's client-facing address from the API (`client_origin`).
+   *  Preferred over this page's own origin: a broker may be on a staff-only
+   *  host where the HR and employee portals don't exist. */
+  clientOrigin?: string | null,
 ): string {
-  if (isHeaderMode()) {
+  if (isHeaderMode() || clientOrigin) {
+    const origin = clientOrigin || window.location.origin;
     if (surface === "portal") {
       const subpath = path.startsWith(PORTAL_BASE)
         ? path.slice(PORTAL_BASE.length)
         : path;
-      return new URL(portalPath(slug, subpath), window.location.origin).toString();
+      return new URL(portalPath(slug, subpath), origin).toString();
     }
-    const url = new URL(path, window.location.origin);
+    const url = new URL(path, origin);
     if (slug) url.searchParams.set(TENANT_QUERY_PARAM, slug);
     return url.toString();
   }

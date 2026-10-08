@@ -78,7 +78,7 @@ def test_versions_publish_and_files_survive_new_requests(ctx):
         ))
 
 
-@pytest.mark.parametrize("role", ["broker_admin", "broker_viewer"])
+@pytest.mark.parametrize("role", ["firm_admin", "broker_admin", "broker_viewer"])
 def test_brokers_read_published_versions_but_cannot_modify_or_see_drafts(ctx, role):
     client, identity, _ = ctx
     draft = upload(client).json()

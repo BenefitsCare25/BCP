@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
@@ -35,6 +37,7 @@ REAL_KEY = json.dumps(
         "project_id": "inspro-test",
         "private_key": "-----BEGIN PRIVATE KEY-----\nAAA\n-----END PRIVATE KEY-----\n",
         "client_email": "svc@inspro-test.iam.gserviceaccount.com",
+        "token_uri": "https://oauth2.googleapis.com/token",
     }
 )
 OTHER_KEY = json.dumps(
@@ -43,8 +46,14 @@ OTHER_KEY = json.dumps(
         "project_id": "inspro-test-b",
         "private_key": "-----BEGIN PRIVATE KEY-----\nBBB\n-----END PRIVATE KEY-----\n",
         "client_email": "svc@inspro-test-b.iam.gserviceaccount.com",
+        "token_uri": "https://oauth2.googleapis.com/token",
+        "universe_domain": "googleapis.com",
     }
 )
+
+
+def _key_with(**overrides: str) -> str:
+    return json.dumps({**json.loads(REAL_KEY), **overrides})
 
 
 def _admin_a() -> CurrentUser:
@@ -367,6 +376,245 @@ def test_audit_log_never_contains_raw_key(client_as_admin_a: AsUser) -> None:
             assert (r.after or {}).get("key_masked", "").endswith(fp[-4:])
     finally:
         db.close()
+
+
+@pytest.mark.parametrize(
+    ("override", "message"),
+    [
+        ({"token_uri": "http://169.254.169.254/computeMetadata/v1/token"}, "token_uri"),
+        ({"token_uri": "https://oauth2.googleapis.com.evil.example/token"}, "token_uri"),
+        ({"universe_domain": "evil.example"}, "universe_domain"),
+    ],
+)
+def test_service_account_endpoints_are_pinned_to_google(
+    client_as_admin_a: AsUser, override: dict[str, str], message: str
+) -> None:
+    """google-auth posts the token request to the key's own token_uri, so a
+    crafted key would make the server call any URL (SSRF). Both the save and
+    the draft test refuse it before anything is stored or sent."""
+    saved = client_as_admin_a.put(
+        "/api/v1/ai-config",
+        json={
+            "provider": "vertex",
+            "endpoint": "asia-southeast1",
+            "api_key": _key_with(**override),
+        },
+    )
+    assert saved.status_code == 422
+    assert message in saved.text
+
+    with patch("app.api.v1.ai_config.probe_vertex") as probe:
+        drafted = client_as_admin_a.post(
+            "/api/v1/ai-config/test", json={"api_key": _key_with(**override)}
+        )
+    assert drafted.status_code == 422
+    assert message in drafted.text
+    probe.assert_not_called()
+    with SessionLocal() as db:
+        assert db.query(ClientAIConfig).count() == 0
+
+
+def test_key_without_token_uri_is_refused(client_as_admin_a: AsUser) -> None:
+    key = json.loads(REAL_KEY)
+    key.pop("token_uri")
+    res = client_as_admin_a.put(
+        "/api/v1/ai-config", json={"provider": "vertex", "api_key": json.dumps(key)}
+    )
+    assert res.status_code == 422
+    assert "token_uri" in res.text
+
+
+@pytest.fixture
+def _env_and_platform_would_resolve(monkeypatch: pytest.MonkeyPatch):
+    """Make the fallbacks available, so a None result proves no fallback ran."""
+    monkeypatch.setenv("INSPRO_AI_PROVIDER", "vertex")
+    monkeypatch.setenv("VERTEX_PROJECT", "env-project")
+    monkeypatch.setenv("INSPRO_AI_CONFIG_VALIDATED", "true")
+
+
+def _store_byok(**fields: object) -> None:
+    from app.core.ai_config import pack_vertex_secret
+    from app.core.crypto import encrypt_secret
+    from app.core.crypto import fingerprint as _fp
+
+    values: dict[str, object] = {
+        "client_id": DEMO_CLIENT_ID,
+        "provider": "vertex",
+        "endpoint": "asia-southeast1",
+        "model": "gemini-2.5-flash",
+        "encrypted_api_key": encrypt_secret(pack_vertex_secret("proj-x", REAL_KEY)),
+        "key_fingerprint": _fp(REAL_KEY),
+    }
+    values.update(fields)
+    with SessionLocal() as db:
+        db.add(ClientAIConfig(**values))
+        db.commit()
+
+
+@pytest.mark.parametrize(
+    "row",
+    [
+        {"encrypted_api_key": b"not-a-fernet-token"},  # cannot be decrypted
+        {"provider": "bedrock"},  # legacy / unsupported provider
+    ],
+)
+def test_unusable_byok_never_falls_back(_env_and_platform_would_resolve, row) -> None:
+    """A company that brought its own key must not silently run on the shared
+    one: AI is off for that company (claims go to manual review) instead."""
+    from app.core.ai_config import load_ai_config
+    from app.services.ai_extractor import AINotConfiguredError
+    from app.services.ai_gateway import _require_ai_config
+
+    _store_byok(**row)
+    with SessionLocal() as db:
+        assert load_ai_config(db, DEMO_CLIENT_ID) is None
+        with pytest.raises(AINotConfiguredError):
+            _require_ai_config(db, DEMO_CLIENT_ID)
+        # A company with no BYOK row still falls back as before.
+        other = load_ai_config(db, CLIENT_B_ID)
+        assert other is not None and other.source == "env"
+
+
+@pytest.fixture
+def _production(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Resolve the environment as production for the AI configuration guards.
+    They read the cached settings, and a full production configuration (Entra,
+    secrets) is not what these tests are about."""
+    from app.core import ai_config
+    from app.core.settings import get_settings
+
+    production = replace(get_settings(), env="prod")
+    monkeypatch.setattr(ai_config, "get_settings", lambda: production)
+
+
+def test_review_queue_fails_closed_on_an_unvalidated_key_in_production(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The queue reads the resolved environment, so every spelling the settings
+    accept for production ("prod", "production") arms the gate."""
+    from app.core.settings import get_settings
+    from app.services.claims_review import queue
+
+    _store_byok(validation_status="unvalidated")
+    with SessionLocal() as db:
+        assert queue.configuration_ready(db, DEMO_CLIENT_ID) is True  # dev: no Vertex needed
+        production = replace(get_settings(), env="prod")
+        monkeypatch.setattr(queue, "get_settings", lambda: production)
+        assert queue.configuration_ready(db, DEMO_CLIENT_ID) is False
+
+
+@pytest.mark.usefixtures("_production")
+def test_inactive_byok_in_production_never_falls_back(_env_and_platform_would_resolve) -> None:
+    from app.core.ai_config import load_ai_config
+
+    _store_byok(validation_status="invalid")
+    with SessionLocal() as db:
+        assert load_ai_config(db, DEMO_CLIENT_ID) is None
+        fallback = load_ai_config(db, CLIENT_B_ID)
+        assert fallback is not None and fallback.source == "env"
+
+
+def test_a_refused_stored_key_says_why(client_as_admin_a: AsUser) -> None:
+    """A key saved before the endpoint check is refused when its credentials are
+    built; the test button reports that reason, not "Unexpected probe error"."""
+    from app.core.ai_config import pack_vertex_secret
+    from app.core.crypto import encrypt_secret
+
+    foreign = _key_with(token_uri="http://169.254.169.254/computeMetadata/v1/token")
+    _store_byok(encrypted_api_key=encrypt_secret(pack_vertex_secret("proj-x", foreign)))
+
+    res = client_as_admin_a.post("/api/v1/ai-config/test")
+    assert res.status_code == 200, res.text
+    assert res.json()["ok"] is False
+    assert "token_uri must be https://oauth2.googleapis.com/token" in res.json()["error"]
+    with SessionLocal() as db:
+        row = db.query(ClientAIConfig).filter_by(client_id=DEMO_CLIENT_ID).one()
+        assert row.validation_status == "invalid"
+        assert "token_uri" in (row.last_validation_error or "")
+
+
+# ── The company's cache and breaker follow its own key ────────────────────────
+
+
+def _cached_result(client_id: str) -> str:
+    from app.services import ai_cache
+
+    key = ai_cache.make_key(
+        "test-v1", "gemini-2.5-flash", {"input": "same"}, scope=ai_cache.cache_scope(client_id)
+    )
+    ai_cache.get_cache().set(key, {"result": client_id})
+    return key
+
+
+def test_replacing_or_deleting_a_key_purges_the_companys_ai_cache(
+    client_as_admin_a: AsUser, system_admin_request
+) -> None:
+    """Cache keys name the credential source but not the key, so results
+    computed under a replaced or deleted key would otherwise keep being served."""
+    from app.services import ai_cache
+
+    ai_cache.reset_cache_for_tests()
+    put = {"provider": "vertex", "api_key": REAL_KEY}
+    assert client_as_admin_a.put("/api/v1/ai-config", json=put).status_code == 200
+    mine, theirs = _cached_result(DEMO_CLIENT_ID), _cached_result(CLIENT_B_ID)
+
+    replaced = client_as_admin_a.put(
+        "/api/v1/ai-config", json={"provider": "vertex", "api_key": OTHER_KEY}
+    )
+    assert replaced.status_code == 200, replaced.text
+    assert not ai_cache.is_warm(mine)
+    assert ai_cache.is_warm(theirs)
+
+    mine = _cached_result(DEMO_CLIENT_ID)
+    assert system_admin_request(client_as_admin_a, "DELETE", "/api/v1/ai-config").status_code == 204
+    assert not ai_cache.is_warm(mine)
+    assert ai_cache.is_warm(theirs)
+
+
+def test_an_unreachable_cache_does_not_undo_the_key_change(
+    client_as_admin_a: AsUser,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from app.core.crypto import fingerprint
+    from app.services import ai_cache
+
+    put = {"provider": "vertex", "api_key": REAL_KEY}
+    assert client_as_admin_a.put("/api/v1/ai-config", json=put).status_code == 200
+
+    def unreachable(client_id: str) -> int:
+        raise RuntimeError("Redis is unavailable; shared AI cache entries were not purged.")
+
+    monkeypatch.setattr(ai_cache, "purge_client", unreachable)
+    with caplog.at_level(logging.WARNING, logger="app.api.v1.ai_config"):
+        res = client_as_admin_a.put(
+            "/api/v1/ai-config", json={"provider": "vertex", "api_key": OTHER_KEY}
+        )
+    assert res.status_code == 200, res.text
+    assert res.json()["key_fingerprint"] == fingerprint(OTHER_KEY)
+    assert any("Could not purge the AI cache" in r.getMessage() for r in caplog.records)
+
+
+def test_ai_status_reports_the_breaker_the_company_counts_against(
+    client_as_admin_a: AsUser, client_as_admin_b: AsUser
+) -> None:
+    """A company on its own key has its own breaker; showing it the platform
+    key's would read "closed" while every one of its calls fails fast."""
+    from app.services import ai_breaker
+
+    ai_breaker.reset_breaker_for_tests()
+    _store_byok()
+    company = ai_breaker.get_breaker(ai_breaker.breaker_scope("byok", DEMO_CLIENT_ID))
+    for _ in range(company.threshold):
+        company.record_failure()
+    try:
+        mine = client_as_admin_a.get("/api/v1/system/ai-status").json()
+        assert (mine["source"], mine["breaker_state"]) == ("byok", "open")
+        assert client_as_admin_b.get("/api/v1/system/ai-status").json()["breaker_state"] == (
+            "closed"
+        )
+    finally:
+        ai_breaker.reset_breaker_for_tests()
 
 
 def test_load_ai_config_byok_takes_precedence() -> None:

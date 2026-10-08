@@ -17,7 +17,13 @@ from datetime import UTC, datetime
 from functools import lru_cache
 from typing import Any
 
-from anthropic import AuthenticationError, PermissionDeniedError, RateLimitError
+from anthropic import (
+    APIConnectionError,
+    APIStatusError,
+    AuthenticationError,
+    PermissionDeniedError,
+    RateLimitError,
+)
 from sqlalchemy import and_, func, select
 from sqlalchemy.orm import Session
 
@@ -25,8 +31,8 @@ from app.core.ai_config import AIConfig, load_ai_config
 from app.models import AISpendLog, Client, PlatformAIUsage
 from app.schemas.api import AttributeSchemaOut
 from app.schemas.rule import RuleEnvelope
-from app.services.ai_breaker import CircuitOpenError, get_breaker
-from app.services.ai_cache import get_cache, make_key
+from app.services.ai_breaker import CircuitBreaker, CircuitOpenError, breaker_scope, get_breaker
+from app.services.ai_cache import cache_scope, get_cache, make_key
 from app.services.ai_extractor import (
     AINotConfiguredError,
     AIParseError,
@@ -48,6 +54,8 @@ from app.services.platform_ai_settings import (
     PlatformAILimits,
     resolve_platform_ai_limits,
 )
+from app.services.roster_profiler import ai_column_payload, ai_restricted_keys
+from app.services.vertex_gemini import CredentialRefreshError
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +75,9 @@ def _env_float(name: str, default: float) -> float:
 # format that the server converts to JSONLogic. This invalidates cached v3
 # responses that the structural validator correctly rejected.
 PROMPT_VERSION = "rule_generation/v6"
-DERIVATION_PROMPT_VERSION = "roster_derivation/v1"
+# v2: columns carry an inferred type, and values only for allowlisted
+# categorical, non-personal columns (roster_profiler.ai_column_payload).
+DERIVATION_PROMPT_VERSION = "roster_derivation/v2"
 RECOMMEND_PROMPT_VERSION = "schema_recommend/v1"
 # v2: categories carry financial fields (rates / SI / tiers / earnings) so an
 # AI-rescued sheet auto-populates like the deterministic path. The version is
@@ -555,6 +565,96 @@ def _record_provider_metric(
     )
 
 
+def _cache_key(
+    prompt_version: str, cfg: AIConfig, client_id: str | None, payload: dict[str, Any]
+) -> str:
+    """Tenant-scoped cache key (``ai_cache.cache_scope``).
+
+    The credential source is hashed in as well, so a result computed on a
+    company's own key and one computed on the platform key never answer for
+    each other: switching source starts from an empty cache.
+    """
+    return make_key(
+        prompt_version,
+        cfg.model,
+        {**payload, "credential_source": cfg.source},
+        scope=cache_scope(client_id),
+    )
+
+
+def _is_provider_failure(exc: BaseException) -> bool:
+    """Does ``exc`` show the PROVIDER failing — the only thing a breaker counts?
+
+    Yes: 5xx, timeouts, unreachable endpoints. No: an input 400, a model not
+    enabled for the project (404), a malformed key or configuration, refused
+    credentials, a token refresh, or our own bugs — each fails identically on
+    every retry and says nothing about the provider's health.
+    """
+    if isinstance(exc, CredentialRefreshError):
+        return False
+    if isinstance(exc, APIStatusError):
+        return exc.status_code >= 500
+    return isinstance(exc, (APIConnectionError, TimeoutError, ConnectionError))
+
+
+def _on_call_failure(
+    exc: BaseException,
+    *,
+    cfg: AIConfig,
+    operation: str,
+    started: float,
+    client_id: str,
+    breaker: CircuitBreaker,
+) -> None:
+    """The SINGLE source of truth for what a failed gateway call means.
+
+    Only a provider failure counts against the breaker, and the breaker is the
+    call's own credential source's (``breaker_scope``): a busy worker pool, a
+    tenant's bad BYOK key or a rejected request must never open the circuit for
+    every company.
+    """
+    if isinstance(exc, (CircuitOpenError, AINotConfiguredError)):
+        return
+    if isinstance(exc, AICapacityError):
+        # Our own pool was saturated: nothing reached the provider.
+        _record_provider_metric(cfg, operation, started, "capacity")
+        return
+    if isinstance(exc, AIParseError):
+        _record_provider_metric(cfg, operation, started, "parse_failure")
+        # Our parser bug — don't trip the breaker; re-raise so the caller 502s.
+        logger.error(
+            "AI response parse failure (does not trip breaker)",
+            extra={
+                "error_code": "AIParseError",
+                "operation": operation,
+                # AIParseError messages are application-authored shape reasons,
+                # never provider payloads or claim content.
+                "parse_reason": str(exc),
+            },
+        )
+        return
+    if isinstance(exc, (AuthenticationError, PermissionDeniedError, CredentialRefreshError)):
+        _record_provider_metric(cfg, operation, started, "auth_failure")
+        logger.warning("AI provider credentials could not be used for client %s", client_id)
+        return
+    if isinstance(exc, RateLimitError):
+        _record_provider_metric(cfg, operation, started, "throttled")
+        # Provider throttling (HTTP 429) is transient backpressure, not an
+        # outage — the caller degrades, but tripping the breaker here would take
+        # every AI feature down for the whole cooldown on a low-quota account.
+        logger.warning("AI provider throttled request for client %s (429)", client_id)
+        return
+    if _is_provider_failure(exc):
+        _record_provider_metric(cfg, operation, started, "provider_error")
+        breaker.record_failure()
+        return
+    _record_provider_metric(cfg, operation, started, "request_error")
+    logger.warning(
+        "AI request failed without a provider fault (does not trip breaker)",
+        extra={"error_code": type(exc).__name__, "operation": operation},
+    )
+
+
 def _run_cached_ai_call[ResultT](
     db: Session,
     *,
@@ -570,10 +670,10 @@ def _run_cached_ai_call[ResultT](
 
     ``on_hit(cached_payload)`` rebuilds the result on a cache hit. ``invoke()``
     performs the live provider call and returns ``(cache_payload, metadata,
-    live_result)``. The exception ladder below is the SINGLE source of truth for
-    which faults trip the circuit breaker (genuine provider/network outages) and
-    which don't — credential/config errors and our own parse bugs must not, or a
-    single tenant's bad BYOK key would trip the global breaker for everyone.
+    live_result)``. ``_on_call_failure`` decides which faults count against the
+    breaker of this call's credential source (genuine provider/network outages)
+    and which don't — capacity waits, credential/config errors and our own
+    parse bugs must not.
     """
     cache = get_cache()
     cached = cache.get(cache_key)
@@ -593,7 +693,7 @@ def _run_cached_ai_call[ResultT](
     limits = resolve_platform_ai_limits(db)
     _check_budget(db, client_id, limits)
 
-    breaker = get_breaker()
+    breaker = get_breaker(breaker_scope(cfg.source, client_id))
     breaker.before_call()
     provider_started = time.monotonic()
     try:
@@ -603,40 +703,15 @@ def _run_cached_ai_call[ResultT](
         # after `_AI_SLOT_WAIT_SECONDS` rather than pinning resources forever.
         with _slot(limits.max_concurrent_calls, db):
             payload, metadata, result = invoke()
-    except CircuitOpenError:
-        raise
-    except AINotConfiguredError:
-        raise
-    except AIParseError as exc:
-        _record_provider_metric(cfg, operation, provider_started, "parse_failure")
-        # Our parser bug — don't trip the breaker; re-raise so the caller 502s.
-        logger.error(
-            "AI response parse failure (does not trip breaker)",
-            extra={
-                "error_code": "AIParseError",
-                "operation": operation,
-                # AIParseError messages are application-authored shape reasons,
-                # never provider payloads or claim content.
-                "parse_reason": str(exc),
-            },
+    except Exception as exc:
+        _on_call_failure(
+            exc,
+            cfg=cfg,
+            operation=operation,
+            started=provider_started,
+            client_id=client_id,
+            breaker=breaker,
         )
-        raise
-    except (AuthenticationError, PermissionDeniedError):
-        _record_provider_metric(cfg, operation, provider_started, "auth_failure")
-        logger.warning("AI provider rejected credentials for client %s", client_id)
-        raise
-    except RateLimitError:
-        _record_provider_metric(cfg, operation, provider_started, "throttled")
-        # Provider throttling (HTTP 429) is transient backpressure, not an
-        # outage — re-raise so the caller degrades, but DON'T trip the breaker.
-        # Tripping it here would take every AI feature down for the whole
-        # cooldown on a low-quota account that throttles intermittently.
-        logger.warning("AI provider throttled request for client %s (429)", client_id)
-        raise
-    except Exception:
-        _record_provider_metric(cfg, operation, provider_started, "provider_error")
-        # Genuine provider/network failure — trip the breaker.
-        breaker.record_failure()
         raise
     breaker.record_success()
     _record_provider_metric(cfg, operation, provider_started, "succeeded")
@@ -671,9 +746,10 @@ def generate_rule_for_category(
             "BYOK key (service-account JSON) on the AI provider settings page."
         )
 
-    cache_key = make_key(
+    cache_key = _cache_key(
         PROMPT_VERSION,
-        cfg.model,
+        cfg,
+        client_id,
         {
             "description": description.strip(),
             "schema": [
@@ -737,14 +813,24 @@ def propose_derivation_for_roster(
             "BYOK key (service-account JSON) on the AI provider settings page."
         )
 
-    cache_key = make_key(
+    # Only the allowlisted view of the roster may reach the provider: values
+    # solely for categorical, non-personal columns the company has not kept
+    # from AI. The cache key fingerprints exactly what is sent.
+    columns = ai_column_payload(columns, ai_restricted_keys(db, client_id))
+    cache_key = _cache_key(
         DERIVATION_PROMPT_VERSION,
-        cfg.model,
+        cfg,
+        client_id,
         {
-            # Cache on the column fingerprint (key + samples) and target set so
-            # re-profiling an identical roster shape is free.
+            # Re-profiling an identical roster shape is free.
             "columns": [
-                {"key": c["key"], "samples": sorted(c.get("samples", []))}
+                {
+                    "key": c["key"],
+                    "type": c["inferred_type"],
+                    "distinct": c["distinct_count"],
+                    "total": c["total"],
+                    "samples": sorted(c["samples"]),
+                }
                 for c in sorted(columns, key=lambda c: c["key"])
             ],
             "targets": sorted(t.attribute_id for t in targets),
@@ -796,9 +882,10 @@ def recommend_schema_for_slip(
             "BYOK key (service-account JSON) on the AI provider settings page."
         )
 
-    cache_key = make_key(
+    cache_key = _cache_key(
         RECOMMEND_PROMPT_VERSION,
-        cfg.model,
+        cfg,
+        client_id,
         {
             "categories": sorted(set(category_descriptions)),
             # Fingerprint everything the prompt actually sends, not just the
@@ -872,9 +959,10 @@ def extract_flex_scheme(
             "BYOK key (service-account JSON) on the AI provider settings page."
         )
 
-    cache_key = make_key(
+    cache_key = _cache_key(
         FLEX_EXTRACT_PROMPT_VERSION,
-        cfg.model,
+        cfg,
+        client_id,
         # Digest the FULL text (not a prefix) plus a per-image content hash so an
         # identical document is free, but documents that diverge anywhere — even
         # past the first pages — never collide onto the same cached scheme.
@@ -929,9 +1017,10 @@ def extract_product_structure_for_slip(
             "BYOK key (service-account JSON) on the AI provider settings page."
         )
 
-    cache_key = make_key(
+    cache_key = _cache_key(
         SLIP_EXTRACT_PROMPT_VERSION,
-        cfg.model,
+        cfg,
+        client_id,
         # Key on the exact text the model receives (truncated/rendered), not the
         # raw grid — otherwise rows/cols beyond the prompt window force cache
         # misses for an identical request.
@@ -987,9 +1076,10 @@ def extract_claim_document(
     resubmitted receipt (same bytes) is a guaranteed cache hit.
     """
     cfg = _require_ai_config(db, client_id)
-    cache_key = make_key(
+    cache_key = _cache_key(
         CLAIM_EXTRACT_PROMPT_VERSION,
-        cfg.model,
+        cfg,
+        client_id,
         {"client_id": client_id, "provider": cfg.provider, "sha256": sha256},
     )
 
@@ -1036,9 +1126,10 @@ def review_claim(
     prompt = build_claim_review_prompt(
         claim_fields, documents, field_maps, ai_rules, required_documents
     )
-    cache_key = make_key(
+    cache_key = _cache_key(
         CLAIM_REVIEW_PROMPT_VERSION,
-        cfg.model,
+        cfg,
+        client_id,
         {
             "client_id": client_id,
             "provider": cfg.provider,
@@ -1086,9 +1177,10 @@ def verify_claim_concern(
     per claim even when two claims share a receipt hash + question text.
     """
     cfg = _require_ai_config(db, client_id)
-    cache_key = make_key(
+    cache_key = _cache_key(
         CLAIM_VERIFY_PROMPT_VERSION,
-        cfg.model,
+        cfg,
+        client_id,
         {
             "client_id": client_id,
             "provider": cfg.provider,

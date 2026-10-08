@@ -1,4 +1,5 @@
 import {
+  Activity,
   BarChart3,
   Boxes,
   Briefcase,
@@ -6,10 +7,14 @@ import {
   CalendarCheck,
   ClipboardCheck,
   Cog,
+  Globe,
+  Landmark,
   Layers,
   ReceiptText,
   Scale,
+  ScrollText,
   Settings2,
+  ShieldCheck,
   SlidersHorizontal,
   Sparkles,
   Stethoscope,
@@ -130,7 +135,7 @@ export const COMPANY_NAV: NavGroup[] = [
 ];
 
 // Firm-wide (all companies). Access & Companies is broker-admin gated in the
-// Sidebar; Schema & Reference is visible to everyone.
+// Sidebar and top bar; Schema & Reference is visible to everyone.
 export const FIRM_NAV: NavGroup = {
   label: "Firm",
   icon: Layers,
@@ -147,6 +152,21 @@ export const FIRM_NAV: NavGroup = {
       icon: Building2,
       adminOnly: true,
     },
+  ],
+};
+
+// The platform console: every broker firm on the platform. Shown only when
+// `/me` reports `platform_console` (a system_admin on a platform host); the
+// pages gate on the same flag.
+export const PLATFORM_NAV: NavGroup = {
+  label: "Platform",
+  icon: Globe,
+  key: "platform",
+  items: [
+    { label: "Broker firms", to: "/platform/firms", icon: Landmark },
+    { label: "Activity", to: "/platform/activity", icon: Activity },
+    { label: "Firm access", to: "/platform/access", icon: ShieldCheck },
+    { label: "Audit trail", to: "/platform/audit", icon: ScrollText },
   ],
 };
 

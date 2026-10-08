@@ -16,12 +16,14 @@ export interface HrAccount {
   hr_login_id: string | null;
   mfa_enrolled: boolean;
   last_login_at: string | null;
+  tenant_slug?: string | null;
+  /** The broker's address for HR links; null when it has none yet. */
+  client_origin?: string | null;
 }
 
 export interface HrAccountCreated extends HrAccount {
   /** Single-use set-password token — shown once; deliver to the HR admin. */
   set_password_token: string;
-  tenant_slug?: string | null;
 }
 
 export type LoginSource = "email" | "system_id" | "staff_id";
@@ -79,6 +81,18 @@ export function useRegenerateHrLoginId(clientId: string | null) {
     mutationFn: (userId: string) =>
       api.post<HrAccount>(`/hr-admin/accounts/${userId}/regenerate-login-id`, {}),
     onSuccess: () => qc.invalidateQueries({ queryKey: accountsKey(clientId ?? "") }),
+  });
+}
+
+/** Remove an HR user's authenticator and recovery codes (lost phone). They
+ *  set up two-factor again; required at next sign-in if the company says so. */
+export function useResetHrMfa(clientId: string | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (userId: string) =>
+      api.post<void>(`/hr-admin/accounts/${userId}/mfa/reset`, {}),
+    onSuccess: () => qc.invalidateQueries({ queryKey: accountsKey(clientId ?? "") }),
+    meta: { localErrorHandling: true },
   });
 }
 

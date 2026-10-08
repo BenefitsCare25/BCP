@@ -15,7 +15,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.core.storage import get_storage
+from app.core.storage import assert_key_in_scope, company_firm_id, get_storage
 from app.models import Claim, StoredDocument
 from app.services import ai_gateway
 from app.services.claims_review.field_maps import VISION_FIELDS
@@ -65,6 +65,7 @@ def run_vision_checks(
     (per-claim-type field maps); None keeps the in-code defaults."""
     fields = VISION_FIELDS if vision_fields is None else vision_fields
     storage = get_storage()
+    scope_firm_id = company_firm_id(db, claim.client_id)
     updated = [dict(c) for c in field_comparisons]
     vision_checks: list[dict[str, Any]] = []
     call_metadata: list[dict[str, Any]] = []
@@ -91,6 +92,8 @@ def run_vision_checks(
         for doc in docs:
             if calls >= MAX_VISION_CHECKS:
                 break
+            # Out-of-scope keys fail the review rather than counting as unreadable.
+            assert_key_in_scope(doc.storage_path, scope_firm_id, claim.client_id)
             try:
                 raw = storage.read(doc.storage_path)
                 blocks = vision_blocks_for_document(raw, Path(doc.storage_path).suffix)

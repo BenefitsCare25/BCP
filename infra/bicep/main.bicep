@@ -17,6 +17,8 @@
 // - Application Insights + Log Analytics workspace
 // - Diagnostic settings shipping logs/metrics to the LAW
 // - HTTP 5xx alert against App Insights
+// - Optional (deployFrontDoor): Azure Front Door Premium with WAF, broker
+//   custom domains and an origin lock — see docs/FRONT_DOOR_RUNBOOK.md
 
 targetScope = 'resourceGroup'
 
@@ -70,8 +72,11 @@ param entraTenantId string
 @description('Entra client ID for the API app registration.')
 param entraClientId string
 
-@description('CORS origins (comma-separated).')
+@description('CORS origins (comma-separated). In prod every entry must be an https origin; the app refuses to start on a wildcard, plaintext or localhost entry.')
 param corsOrigins string
+
+@description('Public https origin of the portal, used for links in outbound mail (INSPRO_FRONTEND_ORIGIN), e.g. https://portal.example.com. Leave empty for the web app\'s default host, https://<siteName>.azurewebsites.net. In prod the app refuses to start on a missing, non-https or localhost origin.')
+param frontendOrigin string = ''
 
 @description('Exact trusted reverse-proxy peers for Uvicorn. Never use a wildcard on a public listener.')
 param forwardedAllowIps string = '127.0.0.1'
@@ -142,11 +147,45 @@ param reviewWorkerDbMaxOverflow int = 2
 @description('Integrate the web app with the VNet so it reaches Postgres over the private endpoint. Setting this to false stops NEW deployments wiring the subnet, but does not tear down existing integration — for a rollback run `az webapp vnet-integration remove` as well, which reverts the app to the public path.')
 param enableVnetIntegration bool = true
 
+@description('Hosts that serve the platform owner\'s firm and the master-admin console (INSPRO_PLATFORM_HOSTS, comma-separated, no scheme). Leave empty to keep the app default: the INSPRO_FRONTEND_ORIGIN host.')
+param platformHosts string = ''
+
+@description('Run the web app and worker as the least-privilege database login (Key Vault secret database-url-app, role inspro_app: no DDL) and leave new firm schemas to the migration job (INSPRO_RUNTIME_PROVISIONING=false). Turn on only after docs/DATABASE_ROLES_RUNBOOK.md has been applied and verified; off keeps the current connection.')
+param useRestrictedDbRole bool = false
+
+// ── Azure Front Door (opt-in; docs/FRONT_DOOR_RUNBOOK.md) ──────────────────
+// Three switches, flipped one deployment at a time in this order. Each later
+// switch is ignored while deployFrontDoor is false.
+@description('Provision Front Door Premium (profile, endpoint, WAF, rule set, routes, customer domains) in front of the web app. Off: no Front Door resource exists and the site is unchanged.')
+param deployFrontDoor bool = false
+
+@description('Set INSPRO_FRONT_DOOR_ID on the web app. The app then refuses requests without this profile\'s X-Azure-FDID (except /health and /readiness) and takes the public host from X-Inspro-Edge-Host. Turn on only after the edge hostname has been verified.')
+param frontDoorRequireEdge bool = false
+
+@description('Lock the web app\'s main site to this Front Door profile: allow service tag AzureFrontDoor.Backend with X-Azure-FDID equal to the profile ID, deny everything else. The SCM site keeps its own (open) rules. Turn on last.')
+param frontDoorOriginLock bool = false
+
+@description('WAF mode. Detection (default) logs rule matches without blocking, for the first rollout while false positives on uploads and JSON bodies are tuned out; switch to Prevention once the WAF logs are clean.')
+@allowed(['Detection', 'Prevention'])
+param frontDoorWafMode string = 'Detection'
+
+@description('Hostnames served through Front Door, each with the firm that owns it: [{ "hostname": "benefits.acme.com", "firmSlug": "acme" }]. Each gets a Front Door-managed certificate (TLS 1.2 minimum) and is bound to the routes and the WAF. Onboard with infra/scripts/onboard_domain.py.')
+param frontDoorCustomDomains array = []
+
 @description('Primary notification email for production alerts (optional).')
 param alertEmail string = ''
 
 @description('Additional notification emails. Production declares its named responders here to avoid duplicate delivery through forwarding aliases.')
 param additionalAlertEmails array = []
+
+@minValue(30)
+@maxValue(730)
+@description('Log Analytics retention in days. 90 meets the 90-day security/audit log requirement in docs/PRODUCTION_RESILIENCE_RUNBOOK.md. Retention beyond the free period (31 days for most tables) is billed per GB-month of retained data, which at this volume is small next to ingestion.')
+param logAnalyticsRetentionDays int = 90
+
+@minValue(-1)
+@description('Log Analytics daily ingestion cap in GB (-1 = no cap). A cost backstop against a runaway log loop: 2 GB/day bounds ingestion at roughly 60 GB a month. Once the cap is reached, ingestion stops until the daily reset, so the rest of that day\'s logs, Application Insights telemetry and log-based alerts are lost. Keep it well above normal daily volume (see the Usage table).')
+param logAnalyticsDailyQuotaGb int = 2
 
 @description('Portal mail delivery mode. Keep disabled until a verified STARTTLS SMTP sender is configured.')
 @allowed(['disabled', 'log', 'smtp'])
@@ -171,6 +210,10 @@ param smtpPassword string = ''
 var prefix = 'inspro-${env}'
 var isProd = env == 'prod'
 var appName = empty(siteName) ? '${prefix}-api' : siteName
+// Derived from the site name, not `webapp.properties.defaultHostName`: the
+// origin is one of the site's own app settings, and a resource cannot read its
+// own runtime properties while it is being declared.
+var effectiveFrontendOrigin = empty(frontendOrigin) ? 'https://${appName}.azurewebsites.net' : frontendOrigin
 var effectivePostgresName = empty(postgresServerName) ? '${prefix}-pg' : postgresServerName
 var acrName = split(acrLoginServer, '.')[0]
 var alertRecipients = concat(empty(alertEmail) ? [] : [alertEmail], additionalAlertEmails)
@@ -186,7 +229,10 @@ resource law 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
   location: location
   properties: {
     sku: { name: 'PerGB2018' }
-    retentionInDays: 30
+    retentionInDays: logAnalyticsRetentionDays
+    workspaceCapping: {
+      dailyQuotaGb: logAnalyticsDailyQuotaGb
+    }
   }
 }
 
@@ -442,6 +488,24 @@ resource plan 'Microsoft.Web/serverfarms@2024-04-01' = {
   properties: { reserved: true }
 }
 
+// ── Azure Front Door (opt-in) ───────────────────────────────────────────────
+// The origin is the site's default hostname, derived from its name like
+// `effectiveFrontendOrigin`: the site's own settings and access restrictions
+// carry this profile's ID, so the profile must not depend on the site.
+module frontDoor 'modules/frontdoor.bicep' = if (deployFrontDoor) {
+  name: 'front-door-${env}'
+  params: {
+    prefix: prefix
+    originHostName: '${appName}.azurewebsites.net'
+    wafMode: frontDoorWafMode
+    customDomains: frontDoorCustomDomains
+    logAnalyticsWorkspaceId: law.id
+  }
+}
+
+var requireEdge = deployFrontDoor && frontDoorRequireEdge
+var lockOrigin = deployFrontDoor && frontDoorOriginLock
+
 // App settings: explicit secrets reference Key Vault by URI so the
 // managed-identity Secret User role grant below makes them readable at
 // runtime. Plain values stay inline.
@@ -459,15 +523,20 @@ var commonAppSettings = [
   // fails audience-or-issuer validation, which surfaces as an infinite
   // sign-in redirect loop (401 -> client.ts calls signIn() -> repeat).
   { name: 'INSPRO_ENTRA_AUDIENCE', value: entraClientId }
-  { name: 'INSPRO_ENTRA_ISSUER', value: '${environment().authentication.loginEndpoint}${entraTenantId}/v2.0' }
-  { name: 'INSPRO_ENTRA_JWKS_URL', value: '${environment().authentication.loginEndpoint}${entraTenantId}/discovery/v2.0/keys' }
+  // No INSPRO_ENTRA_ISSUER / INSPRO_ENTRA_JWKS_URL: tokens are validated
+  // against each broker firm's own directory at login.microsoftonline.com
+  // (app/core/entra.py), and settings.py refuses any value other than the
+  // platform directory's public-cloud defaults.
   { name: 'INSPRO_CORS_ORIGINS', value: corsOrigins }
+  // Both apps build member links: the API in invites and sign-in mail, the
+  // worker in the claim-update notifications it delivers.
+  { name: 'INSPRO_FRONTEND_ORIGIN', value: effectiveFrontendOrigin }
   { name: 'FORWARDED_ALLOW_IPS', value: forwardedAllowIps }
   // Tenant routing. On a single host the Host header can't name a tenant, so
   // the SPA sends X-Inspro-Tenant-Slug instead — see app/core/tenancy_host.py.
   { name: 'INSPRO_TENANT_MODE', value: tenantMode }
   { name: 'INSPRO_BASE_DOMAIN', value: baseDomain }
-  { name: 'INSPRO_DATABASE_URL', value: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=database-url)' }
+  { name: 'INSPRO_DATABASE_URL', value: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=${useRestrictedDbRole ? 'database-url-app' : 'database-url'})' }
   { name: 'INSPRO_DB_CONNECT_TIMEOUT', value: '5' }
   { name: 'INSPRO_DB_POOL_TIMEOUT', value: '5' }
   { name: 'INSPRO_PORTAL_JWT_SECRET', value: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=portal-jwt-secret)' }
@@ -491,7 +560,25 @@ var commonAppSettings = [
 var redisAppSettings = deployRedis ? [
   { name: 'INSPRO_REDIS_URL', value: '@Microsoft.KeyVault(VaultName=${kv.name};SecretName=redis-url)' }
 ] : []
-var webAppSettings = concat(commonAppSettings, redisAppSettings, [
+
+// White-label routing settings, appended only when set so that a deployment
+// with the defaults writes exactly the settings it wrote before.
+// Firm schemas are created by the migration job once the app cannot run DDL.
+var dbRoleSettings = useRestrictedDbRole ? [
+  { name: 'INSPRO_RUNTIME_PROVISIONING', value: 'false' }
+] : []
+
+var platformHostSettings = empty(platformHosts) ? [] : [
+  { name: 'INSPRO_PLATFORM_HOSTS', value: platformHosts }
+]
+// Web app only: the worker serves no routed traffic. ARM evaluates only the
+// chosen branch of a condition, so the module output is read only when the
+// module is deployed.
+var edgeAppSettings = requireEdge ? [
+  { name: 'INSPRO_FRONT_DOOR_ID', value: frontDoor!.outputs.frontDoorId }
+] : []
+
+var webAppSettings = concat(commonAppSettings, dbRoleSettings, platformHostSettings, redisAppSettings, edgeAppSettings, [
   { name: 'WEBSITES_PORT', value: '8000' }
   { name: 'WEB_CONCURRENCY', value: string(webConcurrency) }
   // The API pool is per Gunicorn process; change it with WEB_CONCURRENCY.
@@ -511,6 +598,38 @@ var siteConfig = {
   // readiness is monitored separately by the Singapore synthetic probe.
   healthCheckPath: '/health'
   appSettings: webAppSettings
+}
+
+// Origin lock. The service tag alone admits every Front Door profile on Azure,
+// anyone's; the X-Azure-FDID header filter is what limits it to ours
+// (https://learn.microsoft.com/azure/app-service/app-service-ip-restrictions#restrict-access-to-a-specific-azure-front-door-instance).
+// Default action Deny is explicit: with no rules App Service allows everyone.
+// The SCM (Kudu) site keeps its own rules, unchanged: deployments and log
+// tooling use it, and `scmIpSecurityRestrictionsUseMain: true` would close it.
+//
+// Without Front Door nothing is written, exactly as before. With Front Door but
+// no lock the rules are reset to allow-all, so turning the lock off again is a
+// parameter flip rather than a manual cleanup.
+var originAccessConfig = !deployFrontDoor ? {} : lockOrigin ? {
+  ipSecurityRestrictionsDefaultAction: 'Deny'
+  ipSecurityRestrictions: [
+    {
+      name: 'front-door-only'
+      description: 'This Front Door profile only'
+      priority: 100
+      action: 'Allow'
+      tag: 'ServiceTag'
+      ipAddress: 'AzureFrontDoor.Backend'
+      headers: {
+        'x-azure-fdid': [frontDoor!.outputs.frontDoorId]
+      }
+    }
+  ]
+  scmIpSecurityRestrictionsUseMain: false
+} : {
+  ipSecurityRestrictionsDefaultAction: 'Allow'
+  ipSecurityRestrictions: []
+  scmIpSecurityRestrictionsUseMain: false
 }
 
 resource webapp 'Microsoft.Web/sites@2024-04-01' = {
@@ -534,7 +653,7 @@ resource webapp 'Microsoft.Web/sites@2024-04-01' = {
     // Private DNS still resolves without it: an integrated app inherits the
     // VNet's DNS configuration, and the zone is linked to that VNet.
     virtualNetworkSubnetId: enableVnetIntegration ? privateNetworking.outputs.appSubnetId : null
-    siteConfig: union(siteConfig, { alwaysOn: isProd })
+    siteConfig: union(siteConfig, { alwaysOn: isProd }, originAccessConfig)
   }
   // The Redis secret name is a literal in `redisAppSettings`, so Bicep infers
   // no dependency on it. Without this the app is created while Redis is still
@@ -547,7 +666,7 @@ resource webapp 'Microsoft.Web/sites@2024-04-01' = {
 
 // Dedicated durable claim-review executor. It shares the image and private
 // dependencies but has an independent process lifetime from Gunicorn.
-var workerAppSettings = concat(commonAppSettings, redisAppSettings, [
+var workerAppSettings = concat(commonAppSettings, dbRoleSettings, platformHostSettings, redisAppSettings, [
   { name: 'WEBSITES_PORT', value: '8081' }
   { name: 'PORT', value: '8081' }
   { name: 'WEB_CONCURRENCY', value: '1' }
@@ -815,6 +934,11 @@ resource reviewWorkerHealthAlert 'Microsoft.Insights/metricAlerts@2018-03-01' = 
   }
 }
 
+// Once the origin is locked to Front Door the default hostname answers 403 to
+// the availability probes, so they go through the edge instead. /health and
+// /readiness need no firm, so the endpoint hostname is enough.
+var publicProbeHost = lockOrigin ? frontDoor!.outputs.endpointHostName : '${appName}.azurewebsites.net'
+
 resource portalLivenessTest 'Microsoft.Insights/webtests@2022-06-15' = if (hasAlertRecipients) {
   name: '${prefix}-portal-liveness-sg'
   location: location
@@ -834,7 +958,7 @@ resource portalLivenessTest 'Microsoft.Insights/webtests@2022-06-15' = if (hasAl
       { Id: 'apac-sg-sin-azr' }
     ]
     Request: {
-      RequestUrl: 'https://${appName}.azurewebsites.net/health'
+      RequestUrl: 'https://${publicProbeHost}/health'
       HttpVerb: 'GET'
       FollowRedirects: true
       ParseDependentRequests: false
@@ -866,7 +990,7 @@ resource portalReadinessTest 'Microsoft.Insights/webtests@2022-06-15' = if (hasA
       { Id: 'apac-sg-sin-azr' }
     ]
     Request: {
-      RequestUrl: 'https://${appName}.azurewebsites.net/readiness'
+      RequestUrl: 'https://${publicProbeHost}/readiness'
       HttpVerb: 'GET'
       FollowRedirects: true
       ParseDependentRequests: false
@@ -1032,9 +1156,16 @@ resource reviewFailureAlert 'Microsoft.Insights/scheduledQueryRules@2023-12-01' 
   }
 }
 
+// Outputs are kept in the resource group's deployment history and printed by
+// any `az deployment` call that does not suppress its result, so they must
+// never carry a secret or a connection string (the App Insights connection
+// string used to be one). Read such values from the resource itself.
 output appServiceUrl string = 'https://${webapp.properties.defaultHostName}'
 output reviewWorkerUrl string = 'https://${reviewWorker.properties.defaultHostName}'
 output postgresFqdn string = postgres.properties.fullyQualifiedDomainName
 output redisHost string = deployRedis ? '${redis!.name}.${location}.redis.azure.net' : ''
 output keyVaultName string = kv.name
-output appInsightsConnectionString string = appInsights.properties.ConnectionString
+// Not secrets: the Front Door ID is sent to the origin on every request, and
+// the endpoint hostname is what brokers put in their CNAME records.
+output frontDoorId string = deployFrontDoor ? frontDoor!.outputs.frontDoorId : ''
+output frontDoorEndpointHostName string = deployFrontDoor ? frontDoor!.outputs.endpointHostName : ''

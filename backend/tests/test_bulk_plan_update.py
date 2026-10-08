@@ -685,6 +685,11 @@ def _preview(client: TestClient, **body):
     )
 
 
+def _undo(system_admin_request, client: TestClient, batch_id: str):
+    """Undo overwrites current coverage, so it is a system_admin action."""
+    return system_admin_request(client, "POST", f"/api/v1/bulk-plan-updates/{batch_id}/undo")
+
+
 def test_revert_to_default_deletes_the_override(client: TestClient) -> None:
     """Reverting is its own action, not "set the plan the cohort happens to use".
 
@@ -986,7 +991,9 @@ def test_history_lists_and_details_a_batch(client: TestClient) -> None:
     assert detail["rows_total"] == 2 and detail["rows_truncated"] is False
 
 
-def test_undo_restores_the_previous_coverage(client: TestClient) -> None:
+def test_undo_restores_the_previous_coverage(
+    client: TestClient, system_admin_request
+) -> None:
     with SessionLocal() as s:
         s.add(EmployeePlanOverride(
             employee_id=EMP1, policy_year_id=PY_ID, client_id=CLIENT_ID,
@@ -1001,7 +1008,7 @@ def test_undo_restores_the_previous_coverage(client: TestClient) -> None:
         acknowledge=["enrollment_confirmed"],
     ).json()
 
-    res = client.post(f"/api/v1/bulk-plan-updates/{applied['id']}/undo")
+    res = _undo(system_admin_request, client, applied["id"])
     assert res.status_code == 200, res.text
     assert res.json()["counts"]["applied"] == 2
     with SessionLocal() as s:
@@ -1021,7 +1028,9 @@ def test_undo_restores_the_previous_coverage(client: TestClient) -> None:
     assert next(b for b in listing if b["id"] == applied["id"])["undone_by"]
 
 
-def test_undo_skips_a_pair_somebody_moved_since(client: TestClient) -> None:
+def test_undo_skips_a_pair_somebody_moved_since(
+    client: TestClient, system_admin_request
+) -> None:
     applied = _apply(
         client,
         changes=[{"product_code": "MED", "action": "set_plan", "target_plan_code": "GOLD"}],
@@ -1032,7 +1041,7 @@ def test_undo_skips_a_pair_somebody_moved_since(client: TestClient) -> None:
         ov.plan_code = "BRONZE"
         s.commit()
 
-    body = client.post(f"/api/v1/bulk-plan-updates/{applied['id']}/undo").json()
+    body = _undo(system_admin_request, client, applied["id"]).json()
     assert body["counts"] == {"applied": 1, "skipped": 1, "error": 0}
     assert body["superseded"][0]["staff_id"] == "D-2"
     with SessionLocal() as s:
@@ -1041,28 +1050,44 @@ def test_undo_skips_a_pair_somebody_moved_since(client: TestClient) -> None:
         assert ovs[(EMP2, PROD_ID)].plan_code == "BRONZE"  # left alone
 
 
-def test_a_batch_can_only_be_undone_once(client: TestClient) -> None:
+def test_a_batch_can_only_be_undone_once(client: TestClient, system_admin_request) -> None:
     applied = _apply(
         client,
         changes=[{"product_code": "MED", "action": "set_plan", "target_plan_code": "GOLD"}],
         query={"employee_ids": [EMP1]},
     ).json()
-    assert client.post(f"/api/v1/bulk-plan-updates/{applied['id']}/undo").status_code == 200
-    again = client.post(f"/api/v1/bulk-plan-updates/{applied['id']}/undo")
+    assert _undo(system_admin_request, client, applied["id"]).status_code == 200
+    again = _undo(system_admin_request, client, applied["id"])
     assert again.status_code == 409
     assert again.json()["detail"]["code"] == "already_undone"
 
 
-def test_an_undo_cannot_itself_be_undone(client: TestClient) -> None:
+def test_an_undo_cannot_itself_be_undone(client: TestClient, system_admin_request) -> None:
     applied = _apply(
         client,
         changes=[{"product_code": "MED", "action": "set_plan", "target_plan_code": "GOLD"}],
         query={"employee_ids": [EMP1]},
     ).json()
-    undo = client.post(f"/api/v1/bulk-plan-updates/{applied['id']}/undo").json()
-    res = client.post(f"/api/v1/bulk-plan-updates/{undo['id']}/undo")
+    undo = _undo(system_admin_request, client, applied["id"]).json()
+    res = _undo(system_admin_request, client, undo["id"])
     assert res.status_code == 409
     assert res.json()["detail"]["code"] == "cannot_undo_an_undo"
+
+
+def test_undo_is_refused_to_a_broker_admin(client: TestClient) -> None:
+    """Undo overwrites members' current coverage — a destructive reset that
+    AGENTS.md reserves for system_admin. A refusal must leave the batch's
+    coverage in place and record no undo batch."""
+    applied = _apply(
+        client,
+        changes=[{"product_code": "MED", "action": "set_plan", "target_plan_code": "GOLD"}],
+        query={"employee_ids": [EMP1]},
+    ).json()
+    res = client.post(f"/api/v1/bulk-plan-updates/{applied['id']}/undo")
+    assert res.status_code == 403, res.text
+    with SessionLocal() as s:
+        assert load_overrides(s, PY_ID, [EMP1])[(EMP1, PROD_ID)].plan_code == "GOLD"
+        assert s.query(BulkPlanUpdate).filter(BulkPlanUpdate.undo_of.is_not(None)).count() == 0
 
 
 def test_a_product_with_no_cover_figure_is_not_reported_unresolved(
@@ -1160,7 +1185,9 @@ def test_a_request_id_is_scoped_to_the_benefit_year(client: TestClient) -> None:
     assert other.json()["detail"]["code"] == "request_id_reused"
 
 
-def test_a_batch_reports_what_undo_cannot_put_back(client: TestClient, monkeypatch) -> None:
+def test_a_batch_reports_what_undo_cannot_put_back(
+    client: TestClient, monkeypatch, system_admin_request
+) -> None:
     """`restore` is one entry per written (member, PRODUCT) pair, so a
     multi-product batch over a big roster exceeds the storage cap. An
     unreported cap has the confirm dialog promise the whole batch while the
@@ -1178,7 +1205,7 @@ def test_a_batch_reports_what_undo_cannot_put_back(client: TestClient, monkeypat
     assert row["restorable"] == 1 and row["not_restorable"] == 1
 
     # And the undo really does only restore the one it recorded.
-    undo = client.post(f"/api/v1/bulk-plan-updates/{applied['id']}/undo").json()
+    undo = _undo(system_admin_request, client, applied["id"]).json()
     assert undo["counts"]["applied"] == 1
     with SessionLocal() as s:
         assert len(load_overrides(s, PY_ID, [EMP1, EMP2])) == 1

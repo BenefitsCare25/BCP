@@ -54,6 +54,15 @@ infra/
 **/.env
 **/.env.*
 
-# The persistent SQLite launcher is for the local workspace only.
+# Developer-only tooling stays out of the production image: the persistent
+# SQLite launcher, and scripts that seed demo identities or delete operational
+# rows (each also refuses to run unless INSPRO_ENV=dev with a SQLite database).
+# seed_demo.py must ship: app startup (app/core/drift_checks.py) and
+# seed_firm_library.py import its catalogs, and its seed() carries the same
+# guard. tests/test_release_guards.py pins both lists.
 backend/scripts/local_dev.py
+backend/scripts/dev.ps1
+backend/scripts/reset_data.py
+backend/scripts/seed_claims_demo.py
+backend/scripts/seed_cdl_portal_accounts.py
 backend/scripts/seed_portal_ui_review.py

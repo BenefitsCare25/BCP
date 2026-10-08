@@ -1,5 +1,6 @@
-import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { api } from "@/api/client";
+import { keepPreviousInScope } from "@/lib/scopedPlaceholder";
 import { useSession } from "@/stores/session";
 import type { CoverageLimits } from "@/types";
 
@@ -41,7 +42,9 @@ export function useCoverageLimits(
       ),
     enabled: Boolean(policyYearId),
     // A preview re-queries as the broker types; keep the last answer on screen
-    // instead of flashing an empty state between keystrokes.
-    placeholderData: preview ? keepPreviousData : undefined,
+    // instead of flashing an empty state between keystrokes — but never across
+    // a company or benefit-year switch, where it would show the previous
+    // company's crossings under the new company's name.
+    ...(preview ? keepPreviousInScope(cid, policyYearId) : {}),
   });
 }

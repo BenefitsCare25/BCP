@@ -54,7 +54,7 @@ def test_redacts_credentials_in_migration_output():
     )
 
 
-@pytest.mark.parametrize("locked,returncode,stages", [(False, 0, 0), (True, 1, 1), (True, 0, 2)])
+@pytest.mark.parametrize("locked,returncode,stages", [(False, 0, 0), (True, 1, 1), (True, 0, 3)])
 def test_migration_is_serialized_and_fail_closed(monkeypatch, capsys, locked, returncode, stages):
     for key, value in {
         "INSPRO_GIT_SHA": "a" * 40,
@@ -90,8 +90,9 @@ def test_migration_is_serialized_and_fail_closed(monkeypatch, capsys, locked, re
     assert run.call_count == stages
     if stages:
         assert run.call_args_list[0].args[0][2:] == ["alembic", "upgrade", "head"]
-    if stages == 2:
+    if stages == 3:
         assert run.call_args_list[1].args[0][2:] == ["scripts.provision_tenants"]
+        assert run.call_args_list[2].args[0][2:] == ["scripts.check_schema_drift"]
     assert lock.execute.call_count == int(locked)
     engine.dispose.assert_called_once()
     assert "sensitive" not in capsys.readouterr().out

@@ -13,7 +13,7 @@ from app.core.auth import CurrentUser, get_current_user
 from app.core.deps import (
     assert_policy_year_editable,
     load_policy_year,
-    require_client_id,
+    policy_year_company,
     tenant_or_global,
 )
 from app.core.rate_limit import limiter
@@ -73,7 +73,7 @@ def propose_eligibility_mappings(
     summary = auto_map_policy_year(
         db,
         policy_year_id=py.id,
-        client_id=require_client_id(user),
+        client_id=policy_year_company(py, user),
     )
     match_summary = match_policy_year(db, py.id, user) if summary.employee_count else None
     write_audit(
@@ -119,7 +119,7 @@ def ai_create_missing_category(
     """
 
     assert_policy_year_editable(py)
-    client_id = require_client_id(user)
+    client_id = policy_year_company(py, user)
     plan = db.execute(
         select(Plan)
         .where(Plan.id == payload.plan_id, Plan.policy_year_id == py.id)

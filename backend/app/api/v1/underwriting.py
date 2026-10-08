@@ -17,7 +17,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.audit import write_audit
-from app.core.auth import CurrentUser, get_current_user
+from app.core.auth import ROLE_BROKER_VIEWER, CurrentUser, get_current_user
 from app.core.clock import today as business_today
 from app.core.deps import _deny_cross_tenant, assert_policy_year_for_user, user_owns
 from app.core.rate_limit import limiter
@@ -44,6 +44,7 @@ from app.services.roster_attributes import (
     NAME_KEYS,
     REL_KEYS,
     first_value,
+    mask_nric,
 )
 from app.services.underwriting import (
     adopt_orphan_cases,
@@ -151,6 +152,8 @@ def _review_out(
     products: dict[str, Product],
     employees: dict[str, Employee],
     dependants: dict[str, Dependant],
+    *,
+    masked: bool,
 ) -> UnderwritingReviewOut:
     if review.employee_id:
         emp = employees.get(review.employee_id)
@@ -183,14 +186,14 @@ def _review_out(
         subject_name=subject_name,
         relationship=relationship,
         staff_id=staff_id,
-        identification_no=ident,
+        identification_no=(mask_nric(ident) or None) if masked else ident,
         status=review.status,
         requirements=review.requirements,
         cases=[_case_out(c, products) for c in lines_sorted],
     )
 
 
-def _queue(db: Session, policy_year_id: str) -> UnderwritingQueueOut:
+def _queue(db: Session, policy_year_id: str, *, masked: bool) -> UnderwritingQueueOut:
     reviews = list(
         db.execute(
             select(UnderwritingReview)
@@ -234,7 +237,9 @@ def _queue(db: Session, policy_year_id: str) -> UnderwritingQueueOut:
     } if emp_ids else {}
 
     items = [
-        _review_out(r, lines_by_review.get(r.id, []), products, employees, dependants)
+        _review_out(
+            r, lines_by_review.get(r.id, []), products, employees, dependants, masked=masked
+        )
         for r in reviews
     ]
     # Open reviews first, then insurer / member name for a stable scan order.
@@ -263,13 +268,17 @@ def list_underwriting_cases(
     db: Session = Depends(get_db),
 ) -> UnderwritingQueueOut:
     assert_policy_year_for_user(policy_year_id, user, db)
+    read_only = user.role == ROLE_BROKER_VIEWER
     # Lazily adopt pre-review-model rows (same shape as the portal enrollment
     # GET materializing a missing Enrollment). Without it, cases written before
     # the insurer-grouped model stay invisible — and undecidable — until some
-    # unrelated action happens to run a full sync. No-op once done.
-    if adopt_orphan_cases(db, policy_year_id):
+    # unrelated action happens to run a full sync. No-op once done. Only for a
+    # role that may write: a viewer's read must never write, and the next
+    # write-capable view (or the refresh) adopts the rows instead.
+    if not read_only and adopt_orphan_cases(db, policy_year_id):
         db.commit()
-    return _queue(db, policy_year_id)
+    # Read-only viewers get the masked identifier every report gives them.
+    return _queue(db, policy_year_id, masked=read_only)
 
 
 @router.post(
@@ -482,4 +491,5 @@ def _reload_review_out(db: Session, review: UnderwritingReview) -> UnderwritingR
                 emp = db.get(Employee, dep.employee_id)
                 if emp:
                     employees[emp.id] = emp
-    return _review_out(review, lines, products, employees, dependants)
+    # Only the write endpoints reload a review, and viewers cannot write.
+    return _review_out(review, lines, products, employees, dependants, masked=False)

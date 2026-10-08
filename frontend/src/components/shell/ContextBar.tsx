@@ -14,6 +14,8 @@ import { defaultPolicyYear, formatPolicyRange } from "@/lib/policy-year";
 import { useSession } from "@/stores/session";
 import { requestSetupContextChange } from "@/stores/setupNavigation";
 import { isAISharedTab, isCompanyPath, isPlatformPath } from "./nav";
+import { useCompanyGroups } from "./companyGroups";
+import { CompanySelectItems } from "./CompanySelectItems";
 
 /**
  * The scope controls inside the TopBar. Company-scoped pages show which company
@@ -56,6 +58,7 @@ function CompanyContext({ companyOnly = false }: { companyOnly?: boolean }) {
   const qc = useQueryClient();
 
   const clients = me?.accessible_clients ?? [];
+  const { grouped, firmNameFor } = useCompanyGroups();
   // Under the hard gate, "chosen" == activeClientId only — no server-default
   // fallback (that would show a company the user never picked). The stale/unset
   // self-heal + single-company auto-enter live in AppShell.useActiveClientSync.
@@ -119,15 +122,17 @@ function CompanyContext({ companyOnly = false }: { companyOnly?: boolean }) {
                 <SelectValue placeholder="Select company" />
               </SelectTrigger>
               <SelectContent>
-                {clients.map((c) => (
-                  <SelectItem key={c.id} value={c.id}>
-                    {c.name}
-                  </SelectItem>
-                ))}
+                <CompanySelectItems />
               </SelectContent>
             </Select>
           ) : (
             <span className="font-medium text-foreground">{activeName}</span>
+          )}
+          {/* Whose data this is, when the companies span several brokers. */}
+          {grouped && firmNameFor(selected) && (
+            <span className="hidden max-w-48 truncate text-xs text-muted-foreground md:inline">
+              {firmNameFor(selected)}
+            </span>
           )}
         </div>
         {!companyOnly && <div className="flex items-center gap-2">

@@ -11,6 +11,7 @@ client avoids polluting other modules' seed assertions.
 """
 from __future__ import annotations
 
+import json
 import os
 from datetime import date
 from pathlib import Path
@@ -56,6 +57,7 @@ CLIENT_C_ID = "00000000-0000-0000-0000-0000000000c1"
 PY_MAIN = "00000000-0000-0000-0000-0000000000c2"
 PY_ROSTER = "00000000-0000-0000-0000-0000000000c3"
 PY_EMPTY = "00000000-0000-0000-0000-0000000000c4"
+PY_PRIVACY = "00000000-0000-0000-0000-0000000000c5"
 # (raw_description, sheet) — sheet doubles as the detected product code.
 _CATS = [
     ("Thailand 11 to 15 Single", "GXP"),
@@ -71,6 +73,30 @@ def _user_c() -> CurrentUser:
         client_id=CLIENT_C_ID,
         role="broker_admin",
     )
+
+
+def _privacy_roster() -> list[dict[str, str]]:
+    """A roster mixing category columns with personal data the AI must not see."""
+    return [
+        {
+            "category": "Thailand 11 to 15 Single" if i % 2 else "18 and above Married",
+            "department": ("Finance", "Operations", "Sales")[i % 3],
+            "grade": f"M{i % 4}",
+            "employment_type": "Full-time" if i % 5 else "Contract",
+            "entity": "Acme Pte Ltd" if i % 2 else "Acme Holdings",
+            "job_level": str(i % 3 + 1),
+            "date_of_birth": f"1990-01-{i + 10:02d}",
+            "salary": f"{4200 + i * 75}",
+            "bank_account_no": f"012-34567-{i:03d}",
+            "remarks": f"Transferred from the Penang office in March, see HR note {i}",
+            "full_name": f"Member Number {i}",
+        }
+        for i in range(12)
+    ]
+
+
+# Raw personal values from `_privacy_roster` — none may reach the provider.
+_PERSONAL_VALUES = ("1990-01-1", "4200", "012-34567", "Penang", "Member Number")
 
 
 def _seed_slip_and_categories(db, policy_year_id: str) -> None:
@@ -114,7 +140,9 @@ def _setup_db():
         db.add(Client(id=CLIENT_C_ID, name="Client C (test)",
                        broker_firm_id=DEMO_BROKER_FIRM_ID))
         db.flush()
-        for py_id, year in ((PY_MAIN, 2026), (PY_ROSTER, 2027), (PY_EMPTY, 2028)):
+        for py_id, year in (
+            (PY_MAIN, 2026), (PY_ROSTER, 2027), (PY_EMPTY, 2028), (PY_PRIVACY, 2029)
+        ):
             db.add(PolicyYear(
                 id=py_id, client_id=CLIENT_C_ID, year=year,
                 start_date=date(year, 1, 1), end_date=date(year, 12, 31),
@@ -123,10 +151,17 @@ def _setup_db():
         db.flush()
         _seed_slip_and_categories(db, PY_MAIN)
         _seed_slip_and_categories(db, PY_ROSTER)
+        _seed_slip_and_categories(db, PY_PRIVACY)
         for i, desc in enumerate(["Thailand 11 to 15 Single", "18 and above"]):
             db.add(Employee(
                 client_id=CLIENT_C_ID, policy_year_id=PY_ROSTER, staff_id=f"R-{i}",
                 employee_name=f"Emp {i}", attribute_values={"category": desc, "pass": "WP"},
+                derived_attribute_values={},
+            ))
+        for i, values in enumerate(_privacy_roster()):
+            db.add(Employee(
+                client_id=CLIENT_C_ID, policy_year_id=PY_PRIVACY, staff_id=f"P-{i}",
+                employee_name=f"Member Number {i}", attribute_values=values,
                 derived_attribute_values={},
             ))
         db.commit()
@@ -134,7 +169,7 @@ def _setup_db():
     # The whole suite shares one SQLite engine, so scrub every row this module
     # created — otherwise other modules' unscoped queries (e.g. a global
     # `select(Category)`) would pick up our client-C data.
-    py_ids = [PY_MAIN, PY_ROSTER, PY_EMPTY]
+    py_ids = [PY_MAIN, PY_ROSTER, PY_EMPTY, PY_PRIVACY]
     with SessionLocal() as db:
         db.query(AuditLog).filter(AuditLog.client_id == CLIENT_C_ID).delete(
             synchronize_session=False)
@@ -273,6 +308,120 @@ def test_recommend_with_roster_proposes_derivation(client: TestClient) -> None:
     assert any(s["output"] == 11 for s in jg["samples"])
 
 
+def test_roster_profile_allowlists_only_categorical_non_personal_values() -> None:
+    from app.services.roster_profiler import ai_column_payload, profile_roster
+
+    profile = profile_roster(_privacy_roster())
+    by_key = {c.key: c for c in profile.columns}
+    payload = {c["key"]: c for c in ai_column_payload(
+        {"key": c.key, "samples": list(c.samples), "distinct_count": c.distinct_count,
+         "total": c.total, "inferred_type": c.inferred_type, "shareable": c.shareable}
+        for c in profile.columns
+    )}
+
+    # Category-like vocabularies keep their values: rule quality depends on them.
+    for key in ("category", "department", "grade", "employment_type", "entity"):
+        assert by_key[key].shareable is True, key
+        assert payload[key]["samples"], key
+    # Personal, numeric, date and free-text columns go as name/type/count only.
+    for key in ("date_of_birth", "salary", "bank_account_no", "remarks", "full_name",
+                "job_level"):
+        assert by_key[key].shareable is False, key
+        assert payload[key]["samples"] == [], key
+    assert payload["date_of_birth"]["inferred_type"] == "date"
+    assert payload["salary"]["inferred_type"] == "integer"
+    assert payload["job_level"]["inferred_type"] == "integer"
+    assert payload["remarks"]["inferred_type"] == "text"
+    assert payload["salary"]["distinct_count"] == 12
+    # The in-process samples stay complete for validating proposed rules.
+    assert by_key["salary"].samples
+
+
+def test_column_values_are_withheld_for_identifier_shaped_data() -> None:
+    from app.services.roster_profiler import column_shareable
+
+    def shareable(key: str, values: list[str], total: int = 20) -> bool:
+        return column_shareable(key, values, distinct_count=len(values), total=total)
+
+    assert shareable("cost_centre", ["CC North", "CC South"])
+    assert not shareable("cost_centre", ["CC North", "CC South"], total=2)  # unique per row
+    assert not shareable("ref", ["S1234567D", "T7654321A"])  # NRIC-shaped
+    assert not shareable("contact", ["Finance"])  # personal column name
+    assert not shareable("misc", ["a@b.example", "Finance"])  # an email
+    assert not shareable("misc", ["9123 4567", "Finance"])  # a phone number
+    assert not shareable("misc", ["15 Jan 1990", "Finance"])  # a date
+    assert not shareable("misc", ["$4,200.00", "Finance"])  # an amount
+    assert not shareable("misc", [f"value {i}" for i in range(31)], total=200)  # too many
+    assert not column_shareable(
+        "department", ["Finance"], distinct_count=1, total=5, restricted_keys={"department"}
+    )
+
+
+def test_roster_derivation_sends_no_personal_values(client: TestClient) -> None:
+    from app.services.ai_extractor import _build_derivation_prompt
+
+    with patch(
+        "app.services.ai_gateway.recommend_schema_via_ai",
+        return_value=_mock_recommendation(),
+    ), patch(
+        "app.services.ai_gateway.propose_derivation_rules_via_ai",
+        return_value=_mock_derivations(),
+    ) as proposer:
+        res = client.post(f"/api/v1/policy-years/{PY_PRIVACY}/recommend-config")
+    assert res.status_code == 200, res.text
+    columns, targets = proposer.call_args.args[0], proposer.call_args.args[1]
+    sent = json.dumps(columns) + _build_derivation_prompt(columns, targets)
+    for value in _PERSONAL_VALUES:
+        assert value not in sent, value
+    by_key = {c["key"]: c for c in columns}
+    assert set(by_key["department"]["samples"]) == {"Finance", "Operations", "Sales"}
+    assert by_key["salary"] == {
+        "key": "salary", "inferred_type": "integer", "distinct_count": 12, "total": 12,
+        "samples": [],
+    }
+    # Local validation still runs on the full in-process samples.
+    job_band = {a["attribute_id"]: a for a in res.json()["attributes"]}["job_band"]
+    assert job_band["valid"] is True
+
+
+def test_attributes_kept_from_ai_withhold_their_values(client: TestClient) -> None:
+    """The "Share values with AI" switch and the PII flag both hold for roster
+    profiling, not just eligibility suggestions."""
+    with SessionLocal() as db:
+        db.add_all([
+            EmployeeAttributeSchema(
+                client_id=CLIENT_C_ID, attribute_id="department", display_name="Department",
+                data_type="string", allow_ai_values=False,
+            ),
+            EmployeeAttributeSchema(
+                client_id=CLIENT_C_ID, attribute_id="entity", display_name="Entity",
+                data_type="string", is_pii=True, allow_ai_values=True,
+            ),
+        ])
+        db.commit()
+    try:
+        with patch(
+            "app.services.ai_gateway.recommend_schema_via_ai",
+            return_value=_mock_recommendation(),
+        ), patch(
+            "app.services.ai_gateway.propose_derivation_rules_via_ai",
+            return_value=_mock_derivations(),
+        ) as proposer:
+            res = client.post(f"/api/v1/policy-years/{PY_PRIVACY}/recommend-config")
+        assert res.status_code == 200, res.text
+        by_key = {c["key"]: c for c in proposer.call_args.args[0]}
+        assert by_key["department"]["samples"] == []
+        assert by_key["entity"]["samples"] == []
+        assert by_key["grade"]["samples"]
+    finally:
+        with SessionLocal() as db:
+            db.query(EmployeeAttributeSchema).filter(
+                EmployeeAttributeSchema.client_id == CLIENT_C_ID,
+                EmployeeAttributeSchema.attribute_id.in_(["department", "entity"]),
+            ).delete(synchronize_session=False)
+            db.commit()
+
+
 def test_recommend_no_categories_400(client: TestClient) -> None:
     res = client.post(f"/api/v1/policy-years/{PY_EMPTY}/recommend-config")
     assert res.status_code == 400
@@ -346,6 +495,77 @@ def test_apply_config_rejects_bad_regex(client: TestClient) -> None:
         }], "products": [], "rerun_matching": False},
     )
     assert res.status_code == 422
+
+
+@pytest.mark.parametrize(
+    "rule",
+    [
+        {"op": "regex_extract", "source": "category", "pattern": r"(\w+\s?)+$"},
+        {"op": "regex_case", "source": "category",
+         "cases": [{"pattern": r"^(a|aa)+$", "value": "x"}]},
+        {"op": "regex_extract", "source": "category", "pattern": "a" * 201},
+    ],
+)
+def test_apply_config_refuses_patterns_the_engine_would_refuse(
+    client: TestClient, rule: dict
+) -> None:
+    """Store-time ReDoS check: a pattern that can backtrack catastrophically on
+    a roster value is refused before it is saved, not when derivation runs."""
+    res = client.post(
+        f"/api/v1/policy-years/{PY_MAIN}/apply-config",
+        json={"attributes": [{
+            "attribute_id": "test_redos", "display_name": "ReDoS", "data_type": "string",
+            "derivation_rule": rule,
+        }], "products": [], "rerun_matching": False},
+    )
+    assert res.status_code == 422
+    assert res.json()["detail"].startswith("'test_redos': ")
+    with SessionLocal() as db:
+        assert db.execute(
+            select(EmployeeAttributeSchema).where(
+                EmployeeAttributeSchema.attribute_id == "test_redos"
+            )
+        ).first() is None
+
+
+def test_ai_proposed_redos_pattern_is_never_offered_as_valid() -> None:
+    from app.api.v1.recommendations import _validate_proposal
+
+    valid, matches, samples, warning = _validate_proposal(
+        {"op": "regex_extract", "source": "category", "pattern": r"(\d+)+x"},
+        "category",
+        ["Thailand 11 to 15 Single"],
+    )
+    assert (valid, matches, samples) == (False, 0, [])
+    assert warning is not None and "repeats a group" in warning
+
+
+def test_derivation_columns_carry_the_profilers_verdict() -> None:
+    """The AI boundary re-applies the allowlist, but only over what it is handed:
+    without `inferred_type` / `shareable` it re-inferred both from the capped
+    samples, and a high-cardinality column — whose samples are dropped — went
+    out typed "unknown"."""
+    from app.api.v1 import recommendations
+    from app.services.roster_profiler import ai_column_payload
+
+    rows = [{"employee_ref": str(100_000 + i), "grade": f"M{i % 3}"} for i in range(250)]
+    sent: dict = {}
+
+    def proposer(db, **kwargs):
+        sent.update(kwargs)
+        raise recommendations.AINotConfiguredError("stop after capturing the payload")
+
+    with patch.object(recommendations, "propose_derivation_for_roster", proposer):
+        recommendations._attach_derivations(
+            None, client_id=CLIENT_C_ID, policy_year_id=PY_ROSTER,
+            attr_recs=[], employee_rows=rows,
+        )
+    columns = {c["key"]: c for c in sent["columns"]}
+    assert columns["employee_ref"]["inferred_type"] == "integer"
+    assert columns["employee_ref"]["shareable"] is False
+    assert columns["grade"]["shareable"] is True
+    (ref,) = ai_column_payload([columns["employee_ref"]])
+    assert (ref["inferred_type"], ref["samples"]) == ("integer", [])
 
 
 def test_apply_config_enum_without_values_422(client: TestClient) -> None:

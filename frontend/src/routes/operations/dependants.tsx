@@ -1,4 +1,4 @@
-import { SystemAdminOnly } from "@/components/auth/SystemAdminOnly";
+import { FirmOwnerOnly } from "@/components/auth/FirmOwnerOnly";
 import { useEffect, useMemo, useState } from "react";
 import { Check, Link2, Loader2, Save, Sparkles, Trash2, Unlink } from "lucide-react";
 import {
@@ -332,7 +332,7 @@ export function DependantsPage() {
             {dependantsTotal.toLocaleString()} active dependant
             {dependantsTotal === 1 ? "" : "s"} on file
           </p>
-          <SystemAdminOnly><Button
+          <FirmOwnerOnly><Button
             variant="outline"
             size="sm"
             disabled={!total}
@@ -340,7 +340,7 @@ export function DependantsPage() {
             className="shrink-0 text-error hover:text-error"
           >
             <Trash2 className="size-4" /> Clear all
-          </Button></SystemAdminOnly>
+          </Button></FirmOwnerOnly>
         </CardHeader>
         <CardContent className="space-y-4">
           <DependantFilterBar
@@ -435,7 +435,7 @@ export function DependantsPage() {
         </CardContent>
       </Card>
 
-      <SystemAdminOnly><AlertDialog
+      <FirmOwnerOnly><AlertDialog
         open={showDeleteAll}
         onOpenChange={setShowDeleteAll}
         title="Clear all dependants?"
@@ -469,9 +469,9 @@ export function DependantsPage() {
             toast.error(formatError(e));
           }
         }}
-      /></SystemAdminOnly>
+      /></FirmOwnerOnly>
 
-      <SystemAdminOnly><AlertDialog
+      <FirmOwnerOnly><AlertDialog
         open={deleteRisk !== null}
         onOpenChange={(o) => !o && setDeleteRisk(null)}
         title="Member-submitted dependants will be lost"
@@ -498,7 +498,7 @@ export function DependantsPage() {
             toast.error(formatError(e));
           }
         }}
-      /></SystemAdminOnly>
+      /></FirmOwnerOnly>
 
       <Sheet
         open={!!selectedId}
@@ -529,7 +529,7 @@ export function DependantsPage() {
                       <Badge variant="error">Unlinked</Badge>
                     )}
                     {selected.employee_id && (
-                      <SystemAdminOnly><Button
+                      <FirmOwnerOnly><Button
                         size="sm"
                         variant="outline"
                         disabled={updateDependant.isPending}
@@ -551,7 +551,7 @@ export function DependantsPage() {
                         }}
                       >
                         <Unlink className="size-4" /> Unlink
-                      </Button></SystemAdminOnly>
+                      </Button></FirmOwnerOnly>
                     )}
                   </div>
                   {/* Show roster-sourced hints when unlinked */}

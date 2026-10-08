@@ -17,6 +17,10 @@ Delivery is reported truthfully: `send_member_invite` returns False on any mail
 fault, and only a True result may stamp `invite_sent_at` — the column the bulk
 send targets on. A failed send therefore stays NULL and is retried by the next
 run, while a delivered one is never re-sent.
+
+Links point at the company's own broker (`portal_sign_in_url`), and a broker
+with no web address yet gets no mail at all: callers resolve the link BEFORE
+issuing a credential and stop on `FirmOriginUnavailable`.
 """
 from __future__ import annotations
 
@@ -25,11 +29,15 @@ import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
+from sqlalchemy.orm import Session
+
 from app.core import passwords as PW
 from app.core.mailer import get_mailer
 from app.core.settings import get_settings
-from app.core.tenancy_host import SURFACE_PORTAL
-from app.models import MemberAccount
+from app.core.tenant_resolution import public_origin
+from app.models import Client, MemberAccount
+from app.models.platform import DOMAIN_SURFACE_CLIENT
+from app.services.brand import Brand
 
 logger = logging.getLogger(__name__)
 
@@ -135,25 +143,28 @@ def issue_invite_credential(
     return password
 
 
-def portal_sign_in_url(slug: str | None) -> str:
-    """Absolute portal sign-in URL for one tenant.
+def portal_sign_in_url(db: Session, client: Client) -> str:
+    """Absolute portal sign-in URL for one company, on its broker's own address.
 
-    The tenant must be IN the link. On the single-host deployment the portal
-    cannot resolve a company from the URL alone, and a member arriving without
-    it is told their details weren't recognised — indistinguishable from a wrong
-    password, on the one screen where that misdiagnosis is most expensive.
+    The origin is the broker firm's client-facing address
+    (`tenant_resolution.public_origin`): its own domain, its neutral fallback
+    address, or — for the platform owner's firm — the platform origin. Raises
+    `FirmOriginUnavailable` when the firm has none; the caller must not send.
 
-    Single-host puts it in the PATH (`/portal/cdl/sign-in`) rather than the old
+    The company must be IN the link. The host names only the broker, and a
+    member arriving without the company is told their details weren't
+    recognised — indistinguishable from a wrong password, on the one screen
+    where that misdiagnosis is most expensive.
+
+    It goes in the PATH (`/portal/cdl/sign-in`) rather than the old
     `?company=cdl`, so the address a member is emailed is the same one they keep
     using — a query param that the app strips on arrival left them holding a
     link that worked once and then named no company. The old form still resolves
     (`captureTenantSlugFromUrl` promotes it into the path), which it must:
     unopened invites are live credentials for `INVITE_TTL_DAYS`.
     """
-    settings = get_settings()
-    if settings.tenant_mode == "subdomain" and slug:
-        return f"https://{slug}.{SURFACE_PORTAL}.{settings.base_domain}/portal/sign-in"
-    origin = settings.frontend_origin.rstrip("/")
+    origin = public_origin(db, client.broker_firm_id, DOMAIN_SURFACE_CLIENT)
+    slug = client.slug
     return f"{origin}/portal/{slug}/sign-in" if slug else f"{origin}/portal/sign-in"
 
 
@@ -202,10 +213,17 @@ def login_username(account: MemberAccount, source: str | None = None) -> str:
 def send_member_invite(
     account: MemberAccount,
     password: str,
-    slug: str | None,
+    sign_in_url: str,
     login_source: str | None = None,
+    *,
+    brand: Brand | None = None,
 ) -> bool:
-    """Deliver the invite. Mail faults are logged, never raised.
+    """Deliver the invite, sent as the company's `brand`. Mail faults are
+    logged, never raised.
+
+    `sign_in_url` is the company's `portal_sign_in_url`, resolved by the caller
+    before it issued `password` — a broker with no address must stop the send
+    before any credential changes.
 
     True ONLY when the mailer accepted the message — the caller may stamp
     `invite_sent_at` on True and must not on False, which is what keeps a mail
@@ -214,11 +232,11 @@ def send_member_invite(
     if not account.email:
         return False
     try:
-        get_mailer().send_member_invite(
+        get_mailer(brand).send_member_invite(
             account.email,
             login_username(account, login_source),
             password,
-            portal_sign_in_url(slug),
+            sign_in_url,
         )
         return True
     except Exception:

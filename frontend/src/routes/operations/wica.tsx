@@ -10,13 +10,14 @@ import { Input } from "@/components/ui/input";
 import { Choice, Failure, Field, Loading, dateLabel, today } from "@/components/wica/shared";
 import { DocumentEditor } from "@/components/wica/DocumentEditor";
 import { PackRow } from "@/components/wica/PackRow";
+import { isBrokerStaffRole } from "@/lib/roles";
 import "@/components/wica/wica.css";
 
 export function WicaPage() {
   const clientId = useSession(s => s.activeClientId);
   const { data: me, isPending } = useMe();
   if (isPending) return <Loading />;
-  if (!me || !["broker_admin", "broker_viewer", "system_admin"].includes(me.role)) return <p role="alert">Broker access required.</p>;
+  if (!me || !isBrokerStaffRole(me.role)) return <p role="alert">Broker access required.</p>;
   return clientId ? <WicaCompany key={clientId} clientId={clientId} editable={me.role !== "broker_viewer"} /> : <p className="text-sm text-muted-foreground">Select a company.</p>;
 }
 

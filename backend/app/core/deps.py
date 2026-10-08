@@ -3,7 +3,9 @@
 Two patterns: `Depends(load_X)` for path-parameter IDs, `assert_*_for_user`
 for query/form IDs. Both return 404 on cross-tenant access (not 403) so the
 API doesn't leak resource existence. `system_admin` bypasses the filter; the
-cross-tenant access is recorded via `AuditLog.cross_tenant_access`.
+cross-tenant access is recorded via `AuditLog.cross_tenant_access`. Its reach
+is still bounded by firm: the request is routed to the active company's firm
+schema, and that company must be one it may access (`app.core.identity`).
 """
 
 from __future__ import annotations
@@ -16,7 +18,17 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.elements import ColumnElement
 
-from app.core.auth import ROLE_SYSTEM_ADMIN, CurrentUser, get_current_user
+from app.core.auth import (
+    FIRM_OWNER_ROLES,
+    READ_ONLY_METHODS,
+    ROLE_FIRM_ADMIN,
+    ROLE_SYSTEM_ADMIN,
+    CurrentUser,
+    client_selection_required,
+    client_selection_stale,
+    get_current_user,
+)
+from app.core.identity import platform_access_level
 from app.db.session import get_db
 from app.models import (
     BulkPlanUpdate,
@@ -35,9 +47,82 @@ from app.models import (
 )
 
 logger = logging.getLogger(__name__)
-_READ_ONLY_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
-_CLAIMS_ROLES = frozenset({"broker_admin", "broker_viewer", ROLE_SYSTEM_ADMIN})
+_CLAIMS_ROLES = frozenset({"broker_admin", "broker_viewer", ROLE_FIRM_ADMIN, ROLE_SYSTEM_ADMIN})
+# Firm administration roles: broker_admin powers, plus firm_admin and the
+# platform master admin (through the selected company's firm).
+_ADMIN_ROLES = frozenset({"broker_admin", ROLE_FIRM_ADMIN, ROLE_SYSTEM_ADMIN})
 _POLICY_YEAR_HEADER = "X-Inspro-Policy-Year-ID"
+# Surfaces whose writes do not act on the selected company's firm, so a master
+# admin's `read` grant on that firm does not make them read-only
+# (`require_write_access`): platform-wide settings and the AI policy library,
+# and the consoles that name their target firm and check access to it
+# themselves (platform console; admin console users, invitations, companies).
+_FIRM_INDEPENDENT_PATHS = (
+    "/api/v1/platform/",
+    "/api/v1/platform-ai-settings",
+    "/api/v1/ai-policies",
+    "/api/v1/admin/",
+)
+
+
+def platform_access_read_only() -> HTTPException:
+    """403 for a master admin's write in a firm it reaches through a read grant."""
+    return HTTPException(
+        status.HTTP_403_FORBIDDEN,
+        {
+            "code": "platform_access_read_only",
+            "message": "Your access to this broker is read-only.",
+        },
+    )
+
+
+def is_firm_owner(user: CurrentUser) -> bool:
+    """Firm admins (own firm) and the platform master admin.
+
+    Gates users and invitations, and every saved-data Remove, Delete, Clear
+    all, Unlink or destructive reset (AGENTS.md "Broker portal permissions").
+    """
+    return user.role in FIRM_OWNER_ROLES
+
+
+def require_firm_owner(
+    user: CurrentUser = Depends(get_current_user),
+) -> CurrentUser:
+    if not is_firm_owner(user):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Requires a firm administrator (firm_admin or system_admin role).",
+        )
+    return user
+
+
+def assert_platform_firm_access(
+    db: Session, user: CurrentUser, firm_id: str, *, write: bool, not_found: str
+) -> None:
+    """Confine a master admin's direct reach into a firm to its access model.
+
+    A no-op for firm roles, whose firm boundary is enforced by the caller. A
+    system_admin needs standing access (the platform owner's firm) or an active
+    grant on ``firm_id``; without one the firm's records are a 404, like any
+    other firm's. A `read` grant refuses changes with
+    `platform_access_read_only`.
+    """
+    if user.role != ROLE_SYSTEM_ADMIN:
+        return
+    level = platform_access_level(db, user.user_id, firm_id)
+    if level is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, not_found)
+    if write and level == "read":
+        raise platform_access_read_only()
+
+
+def _refuse_read_only_grant(request: Request, user: CurrentUser) -> None:
+    if (
+        user.platform_access == "read"
+        and request.method.upper() not in READ_ONLY_METHODS
+        and not request.url.path.startswith(_FIRM_INDEPENDENT_PATHS)
+    ):
+        raise platform_access_read_only()
 
 
 def _deny_cross_tenant(user: CurrentUser, resource: str, resource_id: str) -> HTTPException:
@@ -59,11 +144,29 @@ def _deny_cross_tenant(user: CurrentUser, resource: str, resource_id: str) -> HT
 
 def require_client_id(user: CurrentUser) -> str:
     if not user.client_id:
+        if user.role == ROLE_SYSTEM_ADMIN:
+            # A platform admin is never defaulted into a company for a write
+            # (see `_build_current_user`); it must choose one explicitly.
+            raise client_selection_required()
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
             "User has no active client",
         )
     return user.client_id
+
+
+def policy_year_company(py: PolicyYear, user: CurrentUser) -> str:
+    """The company a policy-year-scoped write belongs to: the year's own.
+
+    The active company comes from the `X-Inspro-Client` header while the year
+    comes from the path or body, and `system_admin` passes `user_owns` for
+    every company, so a stale tab could stamp company A onto company B's year
+    (members, catalog rows, AI spend). Refuse the mismatch with the
+    stale-selection 409 rather than guess which of the two was meant.
+    """
+    if py.client_id != require_client_id(user):
+        raise client_selection_stale()
+    return py.client_id
 
 
 def _assert_selected_policy_year(
@@ -91,17 +194,22 @@ def require_write_access(
     request: Request,
     user: CurrentUser = Depends(get_current_user),
 ) -> CurrentUser:
-    """Keep viewers read-only and reserve record deletion for system admins."""
-    if request.method.upper() == "DELETE" and user.role != ROLE_SYSTEM_ADMIN:
+    """Keep viewers read-only and reserve record deletion for firm owners.
+
+    A master admin reaching the selected company's firm through a `read` grant
+    is read-only too, except on surfaces that do not act on that firm.
+    """
+    if request.method.upper() == "DELETE" and not is_firm_owner(user):
         raise HTTPException(
             status.HTTP_403_FORBIDDEN,
-            "Removing or clearing saved data requires system_admin role.",
+            "Removing or clearing saved data requires a firm administrator.",
         )
-    if user.role == "broker_viewer" and request.method.upper() not in _READ_ONLY_METHODS:
+    if user.role == "broker_viewer" and request.method.upper() not in READ_ONLY_METHODS:
         raise HTTPException(
             status.HTTP_403_FORBIDDEN,
             "The broker_viewer role is read-only.",
         )
+    _refuse_read_only_grant(request, user)
     return user
 
 
@@ -120,11 +228,12 @@ def require_claim_access(
             status.HTTP_403_FORBIDDEN,
             "Claims access requires a broker claims role.",
         )
-    if user.role == "broker_viewer" and request.method.upper() not in _READ_ONLY_METHODS:
+    if user.role == "broker_viewer" and request.method.upper() not in READ_ONLY_METHODS:
         raise HTTPException(
             status.HTTP_403_FORBIDDEN,
             "The broker_viewer role is read-only.",
         )
+    _refuse_read_only_grant(request, user)
     return user
 
 
@@ -132,10 +241,10 @@ def require_claim_configuration(
     user: CurrentUser = Depends(get_current_user),
 ) -> CurrentUser:
     """Restrict claim-review and document-registry configuration to admins."""
-    if user.role not in ("broker_admin", ROLE_SYSTEM_ADMIN):
+    if user.role not in _ADMIN_ROLES:
         raise HTTPException(
             status.HTTP_403_FORBIDDEN,
-            "Claim configuration requires broker_admin or system_admin role.",
+            "Claim configuration requires broker_admin, firm_admin or system_admin role.",
         )
     return user
 
@@ -145,13 +254,14 @@ def require_broker_admin(
 ) -> CurrentUser:
     """Gate for tenant-level admin surfaces (BYOK config, billing, etc).
 
-    A `system_admin` operates through the selected active client, so it has the
-    same tenant-admin powers as `broker_admin` plus the platform-only surfaces.
+    `firm_admin` holds every `broker_admin` power. A `system_admin` operates
+    through the selected active client, so it has the same tenant-admin powers
+    plus the platform-only surfaces.
     """
-    if user.role not in ("broker_admin", ROLE_SYSTEM_ADMIN):
+    if user.role not in _ADMIN_ROLES:
         raise HTTPException(
             status.HTTP_403_FORBIDDEN,
-            "Requires broker_admin or system_admin role.",
+            "Requires broker_admin, firm_admin or system_admin role.",
         )
     return user
 
@@ -173,14 +283,15 @@ def require_firm_admin(
 ) -> CurrentUser:
     """Gate for company administration within a broker firm.
 
-    `broker_admin` manages their own firm; `system_admin` may manage any firm
-    but must name the target firm explicitly in the request.
-    Users and invitations use the stricter `require_system_admin` dependency.
+    `broker_admin` and `firm_admin` manage their own firm; `system_admin`
+    names the target firm in the request and needs access to it
+    (`assert_platform_firm_access`). Users and invitations use the stricter
+    `require_firm_owner` dependency.
     """
-    if user.role not in ("broker_admin", ROLE_SYSTEM_ADMIN):
+    if user.role not in _ADMIN_ROLES:
         raise HTTPException(
             status.HTTP_403_FORBIDDEN,
-            "Requires broker_admin or system_admin role.",
+            "Requires broker_admin, firm_admin or system_admin role.",
         )
     return user
 
@@ -196,8 +307,13 @@ def can_write_global(user: CurrentUser) -> bool:
 
     Firm-library rows (client_id NULL) apply to every company, so writing them
     is a firm-admin act — mirrors the edit gate in `load_editable_global`.
+    A system_admin reaches a firm's library only through the selected company's
+    firm; with no company selected the write would land in `public`, so it is
+    refused with `client_selection_required` instead.
     """
-    return user.role in (ROLE_SYSTEM_ADMIN, "broker_admin")
+    if user.role == ROLE_SYSTEM_ADMIN and not user.client_id:
+        raise client_selection_required()
+    return user.role in _ADMIN_ROLES
 
 
 def tenant_or_global(column: Any, client_id: str | None) -> ColumnElement[bool]:

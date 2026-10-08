@@ -1,22 +1,26 @@
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { Copy, KeyRound, Loader2, Plus, RefreshCw } from "lucide-react";
+import { Copy, KeyRound, Loader2, Plus, RefreshCw, ShieldOff } from "lucide-react";
 import {
   useCreateHrAccount,
   useHrAccounts,
   useHrAuthPolicy,
   useRegenerateHrLoginId,
+  useResetHrMfa,
   useResetHrPassword,
   useSetHrAccountEnabled,
   useUpdateHrAuthPolicy,
+  type HrAccount,
   type HrAccountCreated,
   type HrAuthPolicy,
   type LoginSource,
 } from "@/api/hrAdmin";
 import { useMe } from "@/api/hooks";
 import { PortalRolloutCard } from "@/components/settings/PortalRolloutCard";
-import { formatError } from "@/lib/errors";
+import { formatError, sendErrorMessage } from "@/lib/errors";
+import { setPasswordLinkPath } from "@/lib/setPasswordToken";
 import { tenantSurfaceUrl } from "@/lib/tenant";
+import { AlertDialog } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -37,11 +41,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { InfoHint } from "@/components/ui/tooltip";
-
-const ROLE_LABEL: Record<string, string> = {
-  client_admin: "HR Administrator",
-  client_hr: "HR Officer",
-};
+import { roleLabel } from "@/lib/roles";
 
 const LOGIN_SOURCES: { value: LoginSource; label: string }[] = [
   { value: "email", label: "Email address" },
@@ -58,14 +58,19 @@ function StatusBadge({ status }: { status: string }) {
 }
 
 /** One-time reveal of a set-password link after create/reset. */
-function SetPasswordReveal({ token, tenantSlug }: { token: string; tenantSlug?: string | null }) {
+function SetPasswordReveal({ token, tenantSlug, clientOrigin }: {
+  token: string;
+  tenantSlug?: string | null;
+  clientOrigin?: string | null;
+}) {
   // ABSOLUTE url: the HR surface lives on `{slug}.hr.<base>`, not on the broker
   // host this page is served from, so a bare path is unclickable once pasted
   // into an email — and the token is revealed only once.
   const link = tenantSurfaceUrl(
     "hr",
     tenantSlug,
-    `/hr/set-password?token=${encodeURIComponent(token)}`,
+    setPasswordLinkPath("/hr/set-password", token),
+    clientOrigin,
   );
   const copy = async () => {
     try {
@@ -321,11 +326,13 @@ function AccountsCard({ clientId }: { clientId: string }) {
   const reset = useResetHrPassword(clientId);
   const regen = useRegenerateHrLoginId(clientId);
   const setEnabled = useSetHrAccountEnabled(clientId);
+  const resetMfa = useResetHrMfa(clientId);
 
   const [email, setEmail] = useState("");
   const [name, setName] = useState("");
   const [role, setRole] = useState("client_hr");
   const [reveal, setReveal] = useState<HrAccountCreated | null>(null);
+  const [mfaResetTarget, setMfaResetTarget] = useState<HrAccount | null>(null);
 
   const onCreate = async () => {
     const e = email.trim().toLowerCase();
@@ -344,7 +351,7 @@ function AccountsCard({ clientId }: { clientId: string }) {
       setName("");
       toast.success("HR account created");
     } catch (err) {
-      toast.error(formatError(err));
+      toast.error(sendErrorMessage(err));
     }
   };
 
@@ -354,7 +361,7 @@ function AccountsCard({ clientId }: { clientId: string }) {
       setReveal(out);
       toast.success("New set-password link generated");
     } catch (err) {
-      toast.error(formatError(err));
+      toast.error(sendErrorMessage(err));
     }
   };
 
@@ -371,6 +378,17 @@ function AccountsCard({ clientId }: { clientId: string }) {
     try {
       await setEnabled.mutateAsync({ userId, enabled });
       toast.success(enabled ? "Account enabled" : "Account disabled");
+    } catch (err) {
+      toast.error(formatError(err));
+    }
+  };
+
+  const onResetMfa = async () => {
+    if (!mfaResetTarget) return;
+    try {
+      await resetMfa.mutateAsync(mfaResetTarget.user_id);
+      toast.success(`Authenticator reset for ${mfaResetTarget.email}`);
+      setMfaResetTarget(null);
     } catch (err) {
       toast.error(formatError(err));
     }
@@ -427,6 +445,7 @@ function AccountsCard({ clientId }: { clientId: string }) {
           <SetPasswordReveal
             token={reveal.set_password_token}
             tenantSlug={reveal.tenant_slug}
+            clientOrigin={reveal.client_origin}
           />
         )}
 
@@ -463,7 +482,7 @@ function AccountsCard({ clientId }: { clientId: string }) {
                       )}
                     </TableCell>
                     <TableCell className="text-sm text-muted-foreground">
-                      {ROLE_LABEL[a.role] ?? a.role}
+                      {roleLabel(a.role)}
                     </TableCell>
                     <TableCell>
                       <code className="text-xs">{a.hr_login_id ?? "—"}</code>
@@ -498,6 +517,18 @@ function AccountsCard({ clientId }: { clientId: string }) {
                         >
                           <RefreshCw className="size-3.5" />
                         </Button>
+                        {a.mfa_enrolled && (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            title="Reset authenticator"
+                            aria-label={`Reset authenticator for ${a.email}`}
+                            onClick={() => setMfaResetTarget(a)}
+                            disabled={resetMfa.isPending}
+                          >
+                            <ShieldOff className="size-3.5" />
+                          </Button>
+                        )}
                         <Button
                           size="sm"
                           variant={a.status === "disabled" ? "outline" : "ghost"}
@@ -516,6 +547,23 @@ function AccountsCard({ clientId }: { clientId: string }) {
             </Table>
           </div>
         )}
+        <AlertDialog
+          open={mfaResetTarget !== null}
+          onOpenChange={(open) => !open && setMfaResetTarget(null)}
+          title="Reset authenticator?"
+          description={
+            <>
+              <strong>{mfaResetTarget?.email}</strong>'s authenticator app and
+              recovery codes stop working immediately. They'll have to set up
+              two-factor authentication again — at their next sign-in, if the
+              company requires it. Confirm who you're speaking to before you
+              do this.
+            </>
+          }
+          confirmLabel="Reset authenticator"
+          loading={resetMfa.isPending}
+          onConfirm={onResetMfa}
+        />
       </CardContent>
     </Card>
   );

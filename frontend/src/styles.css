@@ -10,6 +10,8 @@
 @import "./styles/leaf.css";
 @import "./styles/portal-clay.css";
 @import "./styles/portal-ui.css";
+/* White-label brand tokens; a custom brand re-derives the brand colours. */
+@import "./styles/brand.css";
 
 @theme {
   /* Red & white theme. Neutrals carry a faint warm tint so they harmonize with
@@ -74,7 +76,9 @@
 
   /* Brand red, deepened for immersive surfaces (the sign-in scene). Derived
      from --color-primary (#c11a2b); used only where a rich branded panel is
-     intended, never for data screens. */
+     intended, never for data screens. Primary, ring, accent, sidebar-active
+     and this ramp are the brand-coloured tokens: a custom firm brand
+     re-derives them in styles/brand.css. */
   --color-brand-200: #f4a6ad;
   --color-brand-500: #d21f31;
   --color-brand-600: #b5182a;

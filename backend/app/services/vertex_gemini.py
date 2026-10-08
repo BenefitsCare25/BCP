@@ -15,10 +15,11 @@ Two translations live here and nowhere else:
    ``anthropic.types.ToolUseBlock`` (so callers' ``isinstance(b, ToolUseBlock)``
    + ``.input`` keep working); token counts → a ``.usage`` shim.
 
-Provider errors are re-raised as the Anthropic exception types the gateway's
-breaker ladder already special-cases (429 → ``RateLimitError``; 401/403 →
-``AuthenticationError`` / ``PermissionDeniedError``) so a throttled or
-mis-credentialed tenant doesn't trip the global circuit breaker.
+Provider, network and token failures are re-raised as the Anthropic exception
+types the gateway's breaker ladder and the worker's retry classifier understand
+(see ``_translate_error`` / ``_translate_transport_error``), so a throttled,
+mis-credentialed or mis-configured tenant never trips the circuit breaker while
+a genuine Vertex outage (5xx, timeout, unreachable) still does.
 
 The ``google-genai`` / ``google-auth`` imports are lazy — the module only loads
 them when a vertex config is actually used, mirroring the bedrock extra.
@@ -26,19 +27,24 @@ them when a vertex config is actually used, mirroring the bedrock extra.
 from __future__ import annotations
 
 import base64
-import json
 from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
 from anthropic import (
+    APIConnectionError,
+    APIStatusError,
+    APITimeoutError,
     AuthenticationError,
+    BadRequestError,
+    InternalServerError,
+    NotFoundError,
     PermissionDeniedError,
     RateLimitError,
 )
 from anthropic.types import ToolUseBlock
 
-from app.core.ai_config import AIConfig
+from app.core.ai_config import AIConfig, parse_service_account
 
 # Google uses this request header to select the capacity pool.  Keeping the
 # mapping next to client construction ensures every Vertex call (validation,
@@ -181,33 +187,86 @@ def _thinking_config(types_mod: Any, model: str, level: str) -> Any | None:
 # ── Error translation ─────────────────────────────────────────────────────────
 
 
-def _translate_error(exc: Exception, code: int | None) -> Exception:
-    """Map a google-genai APIError to the anthropic type the gateway expects.
+class CredentialRefreshError(APIConnectionError):
+    """Google's token service failed transiently while refreshing credentials.
 
-    Only 429 / 401 / 403 need special handling (the breaker ladder). Anything
-    else is returned unchanged so the gateway trips the breaker on a genuine
-    provider/network fault.
+    Retryable (it subclasses ``APIConnectionError``) but deliberately NOT a
+    provider outage for the circuit breaker: it concerns one credential's token
+    exchange, not Vertex itself.
     """
+
+
+# Status codes whose anthropic type tells the gateway and worker what to do:
+# 429 retries without tripping the breaker; 400/401/403/404 are the caller's
+# fault (bad input, refused key, model not enabled in this project/region) and
+# neither retry nor trip it. 5xx is a provider fault and does both.
+_STATUS_ERRORS: dict[int, type[APIStatusError]] = {
+    400: BadRequestError,
+    401: AuthenticationError,
+    403: PermissionDeniedError,
+    404: NotFoundError,
+    429: RateLimitError,
+}
+
+
+def _vertex_request() -> httpx.Request:
+    return httpx.Request("POST", "https://aiplatform.googleapis.com")
+
+
+def _translate_error(exc: Exception, code: int | None) -> Exception:
+    """Map a google-genai APIError to the anthropic type the gateway expects."""
     if code is None:
         return exc
-    request = httpx.Request("POST", "https://aiplatform.googleapis.com")
-    response = httpx.Response(code, request=request)
-    message = str(exc)
-    if code == 429:
-        return RateLimitError(message, response=response, body=None)
-    if code == 401:
-        return AuthenticationError(message, response=response, body=None)
-    if code == 403:
-        return PermissionDeniedError(message, response=response, body=None)
-    return exc
+    request = _vertex_request()
+    if code == 408:
+        return APITimeoutError(request=request)
+    error_type = _STATUS_ERRORS.get(code)
+    if error_type is None:
+        error_type = InternalServerError if code >= 500 else APIStatusError
+    return error_type(str(exc), response=httpx.Response(code, request=request), body=None)
+
+
+def _translate_transport_error(exc: Exception) -> Exception | None:
+    """Network and google-auth token failures on the anthropic types, else None.
+
+    An unreachable Vertex or token endpoint is a provider outage. A refused
+    token exchange (``invalid_grant``: a revoked, deleted or mistyped key) is
+    that tenant's credential and must never count against the provider.
+    """
+    request = _vertex_request()
+    if isinstance(exc, httpx.TimeoutException):
+        return APITimeoutError(request=request)
+    if isinstance(exc, httpx.TransportError):
+        return APIConnectionError(message="Vertex AI could not be reached.", request=request)
+    try:
+        from google.auth import exceptions as auth_errors
+    except ImportError:  # pragma: no cover - google-auth ships with google-genai
+        return None
+    if isinstance(exc, auth_errors.TransportError):
+        return APIConnectionError(message="Google token service unreachable.", request=request)
+    if isinstance(exc, auth_errors.RefreshError):
+        if exc.retryable:
+            return CredentialRefreshError(
+                message="Google token service failed temporarily.", request=request
+            )
+        return AuthenticationError(
+            "Google refused the service-account credentials.",
+            response=httpx.Response(401, request=request),
+            body=None,
+        )
+    return None
 
 
 # ── The client ────────────────────────────────────────────────────────────────
 
 
 def _build_credentials(service_account_json: str, auth_mod: Any) -> Any:
-    """google-auth service-account credentials from a stored BYOK key string."""
-    info = json.loads(service_account_json)
+    """google-auth service-account credentials from a stored BYOK key string.
+
+    The key's endpoints are checked BEFORE google-auth sees it: the credentials
+    it builds send the token request to the key's own ``token_uri``.
+    """
+    info = parse_service_account(service_account_json)
     return auth_mod.Credentials.from_service_account_info(info, scopes=_OAUTH_SCOPES)
 
 
@@ -284,6 +343,11 @@ class _Messages:
             )
         except self.errors_mod.APIError as exc:
             raise _translate_error(exc, getattr(exc, "code", None)) from exc
+        except Exception as exc:
+            translated = _translate_transport_error(exc)
+            if translated is None:
+                raise
+            raise translated from exc
 
         return _synth_response(response, forced_name)
 

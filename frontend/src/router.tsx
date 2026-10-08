@@ -8,11 +8,14 @@ import {
   redirect,
 } from "@tanstack/react-router";
 import { AppShell } from "@/components/shell/AppShell";
+import { BrandProvider } from "@/components/brand/BrandProvider";
 import {
   GlobalErrorComponent,
   NotFoundComponent,
 } from "@/components/shell/ErrorBoundary";
-import { ENTRA_ENABLED, clearLocalSession, getActiveAccount } from "@/auth/msal";
+import { clearLocalSession, getActiveAccount } from "@/auth/msal";
+import { clearBrokerInvite } from "@/auth/brokerInvite";
+import { brokerAuthEnabled } from "@/auth/staffSignIn";
 import { useBrokerSession } from "@/stores/brokerSession";
 import { DENIED_SEARCH, NoAccessError, SIGN_IN_PATH } from "@/api/client";
 import { ensureMe } from "@/api/me";
@@ -23,8 +26,8 @@ import type { SetupSearch } from "@/lib/setupLink";
 import { activateNotificationClaimContext, notificationClaimId } from "@/lib/claimNotificationLink";
 import { HrShell } from "@/components/hr/HrShell";
 import { hasValidHrSession, useHrSession } from "@/stores/hrSession";
-import { refreshHrSession } from "@/api/hrClient";
-import { refreshPortalSession } from "@/api/portalClient";
+import { hrSessionEndTarget, refreshHrSession } from "@/api/hrClient";
+import { portalSessionEndTarget, refreshPortalSession } from "@/api/portalClient";
 
 // Each page is split into its own chunk; the initial bundle ships only the
 // shell + router + the heavy infra (MSAL, react-query, tanstack-router).
@@ -76,6 +79,30 @@ const EnrollmentPage = lazyRouteComponent(
 const AdminPage = lazyRouteComponent(
   () => import("@/routes/admin/index"),
   "AdminPage",
+);
+const PlatformLayout = lazyRouteComponent(
+  () => import("@/routes/platform/layout"),
+  "PlatformLayout",
+);
+const PlatformFirmsPage = lazyRouteComponent(
+  () => import("@/routes/platform/firms"),
+  "PlatformFirmsPage",
+);
+const PlatformFirmDetailPage = lazyRouteComponent(
+  () => import("@/routes/platform/firm-detail"),
+  "PlatformFirmDetailPage",
+);
+const PlatformActivityPage = lazyRouteComponent(
+  () => import("@/routes/platform/activity"),
+  "PlatformActivityPage",
+);
+const PlatformAccessPage = lazyRouteComponent(
+  () => import("@/routes/platform/access"),
+  "PlatformAccessPage",
+);
+const PlatformAuditPage = lazyRouteComponent(
+  () => import("@/routes/platform/audit"),
+  "PlatformAuditPage",
 );
 const AuthCallbackPage = lazyRouteComponent(
   () => import("@/routes/auth/callback"),
@@ -180,7 +207,11 @@ const CompanyDashboardPage = lazyRouteComponent(
 const PUBLIC_PATHS = new Set(["/auth/callback", SIGN_IN_PATH]);
 
 const rootRoute = createRootRoute({
-  component: () => <Outlet />,
+  component: () => (
+    <BrandProvider>
+      <Outlet />
+    </BrandProvider>
+  ),
 });
 
 const authCallbackRoute = createRoute({
@@ -193,7 +224,7 @@ const brokerSecurityRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/broker/security",
   beforeLoad: () => {
-    if (ENTRA_ENABLED && getActiveAccount() === null) throw redirect({ to: "/sign-in" });
+    if (brokerAuthEnabled() && getActiveAccount() === null) throw redirect({ to: "/sign-in" });
   },
   component: lazyRouteComponent(() => import("@/routes/auth/security"), "BrokerSecurityPage"),
 });
@@ -207,7 +238,10 @@ const signInRoute = createRoute({
     // makes a redirect loop structurally impossible.
     if ((search as { denied?: unknown }).denied) return;
     // If we're already signed in, skip the render flash and go straight home.
-    if (ENTRA_ENABLED && getActiveAccount() !== null) {
+    // An invitation opened while signed in is dropped, so it can never ride
+    // along with a later sign-in to a different account in this tab.
+    if (brokerAuthEnabled() && getActiveAccount() !== null) {
+      clearBrokerInvite();
       throw redirect({ to: "/" });
     }
   },
@@ -265,8 +299,9 @@ const portalSetPasswordRoute = createRoute({
  * runs at boot, before the router) and otherwise falls back to the remembered
  * slug. With neither, there is genuinely nothing to resolve — the member is
  * sent to the pathless sign-in, which asks which company they belong to. Search
- * params are carried through: `/portal/set-password?token=…` is one of these,
- * and dropping the token would strand a member on a dead form. */
+ * params and the fragment are carried through: `/portal/set-password#token=…`
+ * (and the older `?token=…`) is one of these, and dropping the token would
+ * strand a member on a dead form. */
 function portalLegacyRedirect(path: string, subpath: string) {
   return createRoute({
     getParentRoute: () => rootRoute,
@@ -282,6 +317,7 @@ function portalLegacyRedirect(path: string, subpath: string) {
         to: `/portal/$company${subpath}` as "/portal/$company",
         params: { company },
         search,
+        hash: true,
       });
     },
     // Reached only with no resolvable company. Sign-in asks for one; every
@@ -378,6 +414,10 @@ const hrLayoutRoute = createRoute({
     // token has expired, try a silent refresh against the cookie BEFORE bouncing
     // to sign-in — otherwise navigation forces a full re-login every 10 minutes.
     if (!hasValidHrSession() && !(await refreshHrSession())) {
+      // A refresh refused because HR access was switched off has already sent
+      // the tab to sign-in with that reason; follow it, not the bare page.
+      const ended = hrSessionEndTarget();
+      if (ended) throw redirect({ href: ended, reloadDocument: true });
       throw redirect({ to: "/hr/sign-in" });
     }
     if (useHrSession.getState().mfaEnrollmentRequired && location.pathname !== "/hr/security") {
@@ -419,6 +459,10 @@ const portalLayoutRoute = createRoute({
   id: "portal-shell",
   beforeLoad: async ({ params, location }) => {
     if (!hasValidPortalSession() && !(await refreshPortalSession())) {
+      // A refresh refused because access ended or the portal was switched off
+      // has already sent the tab to sign-in with that reason; follow it.
+      const ended = portalSessionEndTarget();
+      if (ended) throw redirect({ href: ended, reloadDocument: true });
       // Back to THIS company's sign-in, not the pathless one — an expired
       // session must not cost the member the company their link named.
       const company = (params as { company?: string }).company;
@@ -564,7 +608,7 @@ const appLayoutRoute = createRoute({
   getParentRoute: () => rootRoute,
   id: "app-shell",
   beforeLoad: async ({ location }) => {
-    if (!ENTRA_ENABLED) return;
+    if (!brokerAuthEnabled()) return;
     if (PUBLIC_PATHS.has(location.pathname)) return;
     if (getActiveAccount() === null) {
       throw redirect({
@@ -868,15 +912,65 @@ const firmAIMemberJourneyRoute = createRoute({
   path: "/ai-oversight/member-journey",
   beforeLoad: () => { throw redirect({ to: "/settings/ai", search: { tab: "usage" } }); },
 });
-const platformAIOversightRoute = createRoute({
+// ── Platform console ─────────────────────────────────────────────────────────
+// The master admin's console over every broker firm. The layout renders the
+// pages only when `/me.platform_console` is true; the old AI oversight URLs
+// below redirect in `beforeLoad`, before the layout renders, so they keep
+// working for everyone.
+const platformLayoutRoute = createRoute({
   getParentRoute: () => appLayoutRoute,
-  path: "/platform/ai-oversight",
+  path: "/platform",
+  component: PlatformLayout,
+});
+
+const platformIndexRoute = createRoute({
+  getParentRoute: () => platformLayoutRoute,
+  path: "/",
+  beforeLoad: () => {
+    throw redirect({ to: "/platform/firms" });
+  },
+  component: () => null,
+});
+
+const platformFirmsRoute = createRoute({
+  getParentRoute: () => platformLayoutRoute,
+  path: "/firms",
+  component: PlatformFirmsPage,
+});
+
+const platformFirmDetailRoute = createRoute({
+  getParentRoute: () => platformLayoutRoute,
+  path: "/firms/$firmId",
+  component: PlatformFirmDetailPage,
+});
+
+const platformActivityRoute = createRoute({
+  getParentRoute: () => platformLayoutRoute,
+  path: "/activity",
+  component: PlatformActivityPage,
+});
+
+const platformAccessRoute = createRoute({
+  getParentRoute: () => platformLayoutRoute,
+  path: "/access",
+  component: PlatformAccessPage,
+});
+
+const platformAuditRoute = createRoute({
+  getParentRoute: () => platformLayoutRoute,
+  path: "/audit",
+  component: PlatformAuditPage,
+});
+
+const platformAIOversightRoute = createRoute({
+  getParentRoute: () => platformLayoutRoute,
+  path: "/ai-oversight",
   validateSearch: (search: Record<string, unknown>): { tab?: string } => ({ tab: typeof search.tab === "string" ? search.tab : undefined }),
   beforeLoad: () => { throw redirect({ to: "/settings/ai", search: { tab: "provider" } }); },
 });
 const platformAIReleaseRoute = createRoute({
-  getParentRoute: () => appLayoutRoute,
-  path: "/platform/ai-oversight/releases/claim-review-v3",
+  getParentRoute: () => platformLayoutRoute,
+  path: "/ai-oversight/releases/claim-review-v3",
   beforeLoad: () => { throw redirect({ to: "/settings/ai", search: { tab: "provider" } }); },
 });
 
@@ -920,8 +1014,16 @@ const routeTree = rootRoute.addChildren([
     indexRoute,
     homeRoute,
     dashboardRoute,
-    platformAIOversightRoute,
-    platformAIReleaseRoute,
+    platformLayoutRoute.addChildren([
+      platformIndexRoute,
+      platformFirmsRoute,
+      platformFirmDetailRoute,
+      platformActivityRoute,
+      platformAccessRoute,
+      platformAuditRoute,
+      platformAIOversightRoute,
+      platformAIReleaseRoute,
+    ]),
     crLayoutRoute.addChildren([
       crIndexRoute,
       crCompanyBenefitsRoute,

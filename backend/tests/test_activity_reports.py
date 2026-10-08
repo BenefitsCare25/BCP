@@ -312,6 +312,21 @@ def test_portal_activity_is_audited(client):
     assert any(a.get("start") and a.get("end") for a in pulled)
 
 
+def test_portal_activity_labels_an_authenticator_reset(client):
+    """An admin removing a member's authenticator is a security event of its
+    own, and the report names it rather than printing the raw type."""
+    from app.core import auth_events as EV
+
+    with SessionLocal() as s:
+        s.add(_event(ACC_ACTIVE, NOW - timedelta(hours=6), event_type=EV.EVENT_MFA_RESET,
+                     detail={"actor_user_id": USER_ID, "sessions_revoked": 1}))
+        s.commit()
+    header, rows = _sheet(_get(client, "portal-activity"))
+    resets = [r for r in rows if r[header.index("Activity")] == "Authenticator Reset"]
+    assert len(resets) == 1
+    assert resets[0][header.index("Employee Name")] == "Amy Active"
+
+
 # ── Company activity ─────────────────────────────────────────────────────────
 
 def test_company_activity_lists_audit_rows_and_resolves_actors(client):
@@ -333,6 +348,27 @@ def test_company_activity_excludes_other_clients(client):
     )
     # The other client's row is a `delete` on `employee`; nothing here is.
     assert not any(r[4] == "Employee" for r in rows)
+
+
+def test_company_activity_leaves_out_platform_records(client):
+    """Firm users, invitations and the firm itself are not company data, even
+    when an older row was stamped with the company the actor had selected. The
+    activity feed hides them from the company; so does this export."""
+    from app.core.audit import PLATFORM_ENTITY_TYPES
+
+    with SessionLocal() as s:
+        s.add_all([
+            AuditLog(client_id=CLIENT_ID, user_id=USER_ID, actor_type="user",
+                     action="update", entity_type=entity_type,
+                     entity_id=f"platform-{entity_type}",
+                     created_at=NOW - timedelta(hours=3))
+            for entity_type in sorted(PLATFORM_ENTITY_TYPES)
+        ])
+        s.commit()
+    header, rows = _sheet(_get(client, "company-activity"))
+    record_ids = {r[header.index("Record ID")] for r in rows}
+    assert not {rid for rid in record_ids if str(rid).startswith("platform-")}
+    assert PY_ID in record_ids  # the company's own rows are still there
 
 
 # ── Portal access ────────────────────────────────────────────────────────────

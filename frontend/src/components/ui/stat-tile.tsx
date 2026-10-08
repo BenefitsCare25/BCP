@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { cn } from "@/lib/cn";
 
@@ -14,9 +15,11 @@ interface Props {
   value: number | string;
   variant?: Variant;
   formatNumber?: boolean;
+  /** A muted line under the value (a breakdown or comparison). */
+  caption?: ReactNode;
 }
 
-export function StatTile({ label, value, variant, formatNumber = false }: Props) {
+export function StatTile({ label, value, variant, formatNumber = false, caption }: Props) {
   const display =
     formatNumber && typeof value === "number" ? value.toLocaleString() : value;
   return (
@@ -33,6 +36,7 @@ export function StatTile({ label, value, variant, formatNumber = false }: Props)
         >
           {display}
         </div>
+        {caption && <div className="mt-0.5 text-xs text-muted-foreground">{caption}</div>}
       </CardContent>
     </Card>
   );

@@ -99,6 +99,32 @@ def _provision_emailless(api: TestClient) -> dict:
     return res.json()
 
 
+HANDOVER_PW = "Hand0ver-Pass-77!"
+
+
+def _broker_set_then_sign_in(api: TestClient, account_id: str, password: str) -> str:
+    """Broker hands over a password; the member's first sign-in must replace it
+    (here with `password`) before a session exists. Returns the member token."""
+    res = api.post(
+        f"/api/v1/member-accounts/{account_id}/set-password",
+        json={"password": HANDOVER_PW},
+    )
+    assert res.status_code == 200, res.text
+    login = api.post(
+        "/api/v1/portal/auth/login",
+        json={"identifier": "S-900", "password": HANDOVER_PW},
+        headers=_tenant(),
+    ).json()
+    assert login["status"] == "password_reset_required"
+    own = api.post(
+        "/api/v1/portal/auth/set-password",
+        json={"token": login["challenge_token"], "password": password},
+        headers=_tenant(),
+    )
+    assert own.status_code == 200, own.text
+    return own.json()["token"]
+
+
 def test_emailless_member_set_password_then_login(api: TestClient):
     acct = _provision_emailless(api)
     assert acct["email"] is None
@@ -146,9 +172,17 @@ def test_emailless_member_set_password_then_login(api: TestClient):
 
 
 def test_broker_direct_set_password(api: TestClient):
+    """A broker-set password is a handover, not the member's own: the next
+    sign-in must move to set-password even with NO rotation policy, and the
+    security trail names the broker who set it."""
+    from app.core.auth import DEMO_USER_ID
+    from app.models import AuthEvent
+
     # The member was provisioned in the previous test; the broker resets the
     # password directly (the email-less path).
     account_id = api.get("/api/v1/member-accounts").json()["items"][0]["id"]
+    with SessionLocal() as s:
+        assert s.get(ClientAuthPolicy, DEMO_CLIENT_ID).password_rotation_days is None
     res = api.post(
         f"/api/v1/member-accounts/{account_id}/set-password",
         json={"password": "Nn6@rT3k$Ws2Yc"},
@@ -160,6 +194,19 @@ def test_broker_direct_set_password(api: TestClient):
         headers=_tenant(),
     )
     assert login.status_code == 200
+    assert login.json()["status"] == "password_reset_required"
+    assert login.json()["challenge_token"]
+    with SessionLocal() as s:
+        events = (
+            s.query(AuthEvent)
+            .filter(AuthEvent.subject_id == account_id,
+                    AuthEvent.event_type == "password_reset_request")
+            .all()
+        )
+    broker_set = [e for e in events if e.detail and e.detail.get("reason") == "broker_set"]
+    assert len(broker_set) == 1
+    assert broker_set[0].detail["actor_user_id"] == DEMO_USER_ID
+    assert broker_set[0].client_id == DEMO_CLIENT_ID
 
 
 def test_wrong_password_lockout(api: TestClient):
@@ -189,19 +236,11 @@ def test_portal_mfa_enrol_and_login(api: TestClient):
         s.get(ClientAuthPolicy, DEMO_CLIENT_ID).mfa_portal_enabled = True
         s.commit()
 
-    # Fresh password (previous test locked/rotated it) via broker direct-set.
+    # Fresh password (previous test locked/rotated it) via broker direct-set,
+    # which the member's first sign-in replaces with their own.
     lst = api.get("/api/v1/member-accounts").json()
     account_id = lst["items"][0]["id"]
-    api.post(
-        f"/api/v1/member-accounts/{account_id}/set-password",
-        json={"password": STRONG_PW},
-    )
-    login = api.post(
-        "/api/v1/portal/auth/login",
-        json={"identifier": "S-900", "password": STRONG_PW},
-        headers=_tenant(),
-    )
-    token = login.json()["token"]
+    token = _broker_set_then_sign_in(api, account_id, STRONG_PW)
     auth = {"Authorization": f"Bearer {token}", **_tenant()}
 
     start = api.post("/api/v1/portal/auth/mfa/enroll/start", headers=auth)
@@ -245,16 +284,7 @@ def test_password_change_evicts_existing_member_tokens(api: TestClient):
     with SessionLocal() as s:
         s.get(ClientAuthPolicy, DEMO_CLIENT_ID).mfa_portal_enabled = False
         s.commit()
-    api.post(
-        f"/api/v1/member-accounts/{account_id}/set-password",
-        json={"password": STRONG_PW},
-    )
-    login = api.post(
-        "/api/v1/portal/auth/login",
-        json={"identifier": "S-900", "password": STRONG_PW},
-        headers=_tenant(),
-    )
-    token = login.json()["token"]
+    token = _broker_set_then_sign_in(api, account_id, STRONG_PW)
     auth = {"Authorization": f"Bearer {token}", **_tenant()}
     assert api.get("/api/v1/portal/me", headers=auth).status_code == 200
 

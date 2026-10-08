@@ -3,17 +3,29 @@ from datetime import UTC, datetime, timedelta
 
 import jwt
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 from starlette.requests import Request
 
+from app.core import credentials as CRED
 from app.core import passwords as PW
+from app.core import sessions as SESS
 from app.core import totp as T
 from app.core.auth import DEMO_CLIENT_ID
 from app.core.rate_limit import _key_func, limiter
 from app.core.settings import get_settings
 from app.db.session import SessionLocal
 from app.main import app
-from app.models import AuthSession, Client, ClientAuthPolicy, MemberAccount
+from app.models import (
+    AuthCredential,
+    AuthEvent,
+    AuthSession,
+    Client,
+    ClientAuthPolicy,
+    MemberAccount,
+    User,
+)
 from scripts.seed_demo import seed
 
 PASSWORD = "Zx9!qL2m@Vw8Tr"
@@ -293,7 +305,11 @@ def test_new_required_policy_reauthenticates_existing_enrolled_sessions(api, sur
     api.put(f"/api/v1/hr-admin/clients/{DEMO_CLIENT_ID}/auth-policy", json={
         f"mfa_{surface}_required": True,
     })
-    assert api.post(f"/api/v1/{surface}/auth/refresh", headers=TENANT).status_code == 401
+    refused = api.post(f"/api/v1/{surface}/auth/refresh", headers=TENANT)
+    assert refused.status_code == 401
+    # The family is revoked on the way out, so its cookie goes too: replayed,
+    # it would be filed as token reuse.
+    assert _clears_refresh_cookie(refused, surface)
 
 
 def test_employee_password_change_revokes_refresh(api):
@@ -313,7 +329,7 @@ def test_resend_invite_revokes_before_delivery_and_preserves_password_on_failure
     out = member(api, f"member-resend-{str(delivered).lower()}")
     headers = {**TENANT, "Authorization": f"Bearer {out['token']}"}
 
-    def send(*args):
+    def send(*args, **_):
         # Even a refresh during the mail-delivery window must fail.
         assert api.post("/api/v1/portal/auth/refresh", headers=TENANT).status_code == 401
         assert api.get("/api/v1/portal/auth/security-status", headers=headers).status_code == 401
@@ -333,6 +349,55 @@ def test_resend_invite_revokes_before_delivery_and_preserves_password_on_failure
 def test_cookie_auth_rejects_malformed_origin(api, surface):
     response = api.post(f"/api/v1/{surface}/auth/refresh", headers={**TENANT, "Origin": "https://["})
     assert response.status_code == 403
+
+
+def _origin_check(host: str, origin: str, *, scheme: str = "http", **extra: str) -> int:
+    """Status `require_same_origin` gives a request to `host` from `origin`."""
+    from app.core.cookie_auth import require_same_origin
+
+    headers = [(b"host", host.encode()), (b"origin", origin.encode())] + [
+        (name.replace("_", "-").encode(), value.encode()) for name, value in extra.items()
+    ]
+    request = Request({
+        "type": "http", "scheme": scheme, "method": "POST", "path": "/api/v1/portal/auth/refresh",
+        "query_string": b"", "headers": headers, "server": (host, 80),
+    })
+    try:
+        require_same_origin(request)
+    except HTTPException as exc:
+        return exc.status_code
+    return 200
+
+
+def test_cookie_auth_accepts_each_firm_domain_without_listing_it(monkeypatch):
+    """Every broker serves the SPA from its own domain; the page's own host is
+    same-origin without an `INSPRO_CORS_ORIGINS` entry per domain."""
+    from dataclasses import replace
+
+    from app.core import cookie_auth
+
+    assert "https://benefits.brokera.test" not in get_settings().cors_origins
+    assert _origin_check("benefits.brokera.test", "http://benefits.brokera.test") == 200
+    # TLS ended at the edge: the app sees http for a page served over https.
+    assert _origin_check("benefits.brokera.test", "https://benefits.brokera.test") == 200
+    assert _origin_check("benefits.brokera.test:443", "https://benefits.brokera.test") == 200
+    assert _origin_check("benefits.brokera.test", "https://benefits.brokerb.test") == 403
+
+    prod = replace(get_settings(), env="prod", cors_origins=("https://platform.example",))
+    monkeypatch.setattr(cookie_auth, "get_settings", lambda: prod)
+    assert _origin_check("benefits.brokera.test", "https://benefits.brokera.test") == 200
+    assert _origin_check("platform.example.internal", "https://platform.example") == 200
+    # A plaintext page on the same name is not the site in production.
+    assert _origin_check("benefits.brokera.test", "http://benefits.brokera.test") == 403
+
+
+def test_cookie_auth_never_trusts_a_forwarded_host():
+    """Only the Host header counts — rewritten behind Front Door from the
+    edge-set header the client cannot choose. A forwarded host is client input."""
+    assert _origin_check(
+        "benefits.brokera.test", "https://attacker.example",
+        x_forwarded_host="attacker.example", forwarded="host=attacker.example",
+    ) == 403
 
 
 def test_passive_poll_and_refresh_preserve_idle_deadline(api):
@@ -422,3 +487,347 @@ def test_login_rate_limit_cannot_be_reset_by_headers(api, monkeypatch):
         assert statuses[10] == 429
     finally:
         limiter.reset()
+
+
+# ── Increment 1 hardening ──────────────────────────────────────────────────────
+def _access(surface, result):
+    return result["token" if surface == "portal" else "access_token"]
+
+
+def _subject_id(surface, result):
+    return result["member"]["id"] if surface == "portal" else result["me"]["user_id"]
+
+
+def _failed_attempts(surface, result):
+    with SessionLocal() as db:
+        if surface == "portal":
+            return db.get(MemberAccount, _subject_id(surface, result)).failed_attempts
+        return db.execute(select(AuthCredential).where(
+            AuthCredential.user_id == _subject_id(surface, result),
+        )).scalar_one().failed_attempts
+
+
+def _refresh_with(surface, client_id, token):
+    """Present `token` as this surface's refresh cookie for `client_id`, from a
+    browser that holds nothing else."""
+    probe = TestClient(app)
+    probe.cookies.set(f"inspro_{surface}_refresh_{client_id}", token,
+                      domain="testserver.local", path=f"/api/v1/{surface}/auth")
+    return probe.post(f"/api/v1/{surface}/auth/refresh", headers=TENANT)
+
+
+def _unspent(token):
+    with SessionLocal() as db:
+        row = db.execute(select(AuthSession).where(
+            AuthSession.refresh_hash == SESS.hash_refresh(token),
+        )).scalar_one()
+        return row.rotated_at is None and row.revoked_at is None
+
+
+def _set_demo_flag(flag, value):
+    with SessionLocal() as db:
+        setattr(db.get(Client, DEMO_CLIENT_ID), flag, value)
+        db.commit()
+
+
+@pytest.mark.parametrize("surface", ["portal", "hr"])
+def test_credential_401_is_a_fresh_exception_per_raise(api, surface):
+    """A module-level HTTPException re-raised on every failed sign-in grew its
+    traceback with each raise, keeping every request's frames and locals —
+    plaintext passwords included — alive for the life of the process."""
+    from app.api.v1 import hr_auth, portal_auth
+
+    module = portal_auth if surface == "portal" else hr_auth
+    first, second = module._invalid(), module._invalid()
+    assert first is not second
+    assert (first.status_code, first.detail) == (401, "Invalid credentials.")
+    assert [name for name, value in vars(module).items() if isinstance(value, HTTPException)] == []
+    for _ in range(2):
+        response = api.post(f"/api/v1/{surface}/auth/login", headers=TENANT, json={
+            "identifier": "nobody@example.test", "password": "Wrong-Password-1!",
+        })
+        assert response.status_code == 401
+        assert response.json() == {"detail": "Invalid credentials."}
+
+
+@pytest.mark.parametrize("surface", ["portal", "hr"])
+def test_refresh_refuses_another_surfaces_token_without_spending_it(api, surface):
+    """Rotation spends a token, so the surface check must come first: HR refresh
+    used to rotate an employee's token before refusing it, signing the employee
+    out and later revoking their family as a replay."""
+    other = "hr" if surface == "portal" else "portal"
+    (member if other == "portal" else hr)(api, f"{other}-cross-surface-refresh")
+    token = api.cookies.get(f"inspro_{other}_refresh_{DEMO_CLIENT_ID}")
+    assert _refresh_with(surface, DEMO_CLIENT_ID, token).status_code == 401
+    assert _unspent(token)
+    assert api.post(f"/api/v1/{other}/auth/refresh", headers=TENANT).status_code == 200
+
+
+@pytest.mark.parametrize("surface", ["portal", "hr"])
+def test_refresh_refuses_another_companys_token_without_spending_it(api, surface):
+    slug = f"refresh-other-{surface}"
+    with SessionLocal() as db:
+        other = Client(
+            name=slug, slug=slug,
+            broker_firm_id=db.get(Client, DEMO_CLIENT_ID).broker_firm_id,
+        )
+        db.add(other)
+        db.flush()
+        other_id = other.id
+        db.add(ClientAuthPolicy(client_id=other_id, breach_check_enabled=False))
+        db.commit()
+    (member if surface == "portal" else hr)(api, f"{surface}-other-company-refresh", other_id, slug)
+    token = api.cookies.get(f"inspro_{surface}_refresh_{other_id}")
+    assert _refresh_with(surface, DEMO_CLIENT_ID, token).status_code == 401
+    assert _unspent(token)
+    assert api.post(f"/api/v1/{surface}/auth/refresh", headers={
+        "X-Inspro-Tenant-Slug": slug,
+    }).status_code == 200
+
+
+def test_failure_count_increments_from_the_database_not_a_stale_row(api):
+    """Attempts that each loaded the row at count N each wrote N+1, so a burst
+    of parallel guesses counted once. The increment now happens in SQL."""
+    member(api, "member-atomic-count")
+    with SessionLocal() as stale_db, SessionLocal() as other_db:
+        stale = stale_db.execute(select(MemberAccount).where(
+            MemberAccount.staff_id == "member-atomic-count",
+        )).scalar_one()
+        assert stale.failed_attempts == 0
+        assert CRED.register_failure(other_db, other_db.get(MemberAccount, stale.id)) == 1
+        other_db.commit()
+        # `stale` still holds 0 in memory; the next failure counts from the stored 1.
+        assert CRED.register_failure(stale_db, stale) == 2
+        stale_db.commit()
+        assert stale.failed_attempts == 2
+    with SessionLocal() as db:
+        assert db.get(MemberAccount, stale.id).failed_attempts == 2
+
+
+@pytest.mark.parametrize("surface", ["portal", "hr"])
+def test_password_reverification_counts_failures_and_honours_lockout(api, surface):
+    """A session holder guessing at "confirm your password" is guessing the
+    password: each miss counts toward the sign-in lockout, and a locked account
+    is refused without a check."""
+    name = f"{surface}-reverify-lockout"
+    result = (member if surface == "portal" else hr)(api, name)
+    headers = {**TENANT, "Authorization": f"Bearer {_access(surface, result)}"}
+    disable = f"/api/v1/{surface}/auth/mfa/disable"
+    for _ in range(5):
+        assert api.post(disable, headers=headers, json={
+            "password": "Wrong-Password-1!",
+        }).status_code == 401
+    assert _failed_attempts(surface, result) == 5
+    # Locked: the right password is refused unchecked, here and at sign-in.
+    assert api.post(disable, headers=headers, json={"password": PASSWORD}).status_code == 423
+    assert api.post(f"/api/v1/{surface}/auth/login", headers=TENANT, json={
+        "identifier": f"{name}@example.test", "password": PASSWORD,
+    }).status_code == 423
+    with SessionLocal() as db:
+        failures = db.query(AuthEvent).filter(
+            AuthEvent.subject_id == _subject_id(surface, result),
+            AuthEvent.event_type == "login_fail",
+        ).all()
+    assert [event.detail for event in failures] == [
+        {"reason": "reauth_failed", "action": "mfa_disable"},
+    ] * 5
+
+
+def test_member_change_password_counts_a_wrong_current_password(api):
+    result = member(api, "member-change-reverify")
+    response = api.post("/api/v1/portal/auth/change-password", headers={
+        **TENANT, "Authorization": f"Bearer {result['token']}",
+    }, json={"current_password": "Wrong-Password-1!", "new_password": "Rp4#kT7n$Bs1Yc"})
+    assert response.status_code == 401
+    assert _failed_attempts("portal", result) == 1
+
+
+@pytest.mark.parametrize("surface", ["portal", "hr"])
+def test_switching_a_surface_off_refuses_its_live_sessions(api, surface):
+    """The company switch used to stop only new sign-ins (tenant resolution);
+    a session already open kept working until it expired."""
+    result = (member if surface == "portal" else hr)(api, f"{surface}-kill-switch")
+    bearer = {"Authorization": f"Bearer {_access(surface, result)}"}
+    target = f"/api/v1/{surface}/auth/" + ("security-status" if surface == "portal" else "me")
+    assert api.get(target, headers={**TENANT, **bearer}).status_code == 200
+    _set_demo_flag(f"{surface}_enabled", False)
+    try:
+        # With the company header and without it (the token's company governs).
+        for headers in ({**TENANT, **bearer}, bearer):
+            response = api.get(target, headers=headers)
+            assert response.status_code == 403, response.text
+            assert response.json()["detail"]["code"] == f"{surface}_disabled"
+    finally:
+        _set_demo_flag(f"{surface}_enabled", True)
+    assert api.get(target, headers={**TENANT, **bearer}).status_code == 200
+
+
+@pytest.mark.parametrize("surface", ["portal", "hr"])
+def test_enrolment_start_needs_a_recent_sign_in_or_the_password(api, surface):
+    """Binding an authenticator to an account is a takeover step, so a session
+    left open must re-prove the password. Straight after sign-in (mandatory
+    setup) nothing more is asked."""
+    api.put(f"/api/v1/hr-admin/clients/{DEMO_CLIENT_ID}/auth-policy", json={
+        f"mfa_{surface}_enabled": True,
+    })
+    result = (member if surface == "portal" else hr)(api, f"{surface}-enrol-reauth")
+    token = _access(surface, result)
+    start = f"/api/v1/{surface}/auth/mfa/enroll/start"
+    fresh = api.post(start, headers={**TENANT, "Authorization": f"Bearer {token}"})
+    assert fresh.status_code == 200, fresh.text
+    sid = jwt.decode(token, options={"verify_signature": False})["sid"]
+    with SessionLocal() as db:
+        db.get(AuthSession, sid).issued_at = datetime.now(UTC) - timedelta(minutes=11)
+        db.commit()
+    # A refresh rotates the token but is not a sign-in: the session stays stale.
+    refreshed = api.post(f"/api/v1/{surface}/auth/refresh", headers=TENANT)
+    assert refreshed.status_code == 200, refreshed.text
+    headers = {**TENANT, "Authorization": f"Bearer {_access(surface, refreshed.json())}"}
+    for body in (None, {}, {"current_password": "Wrong-Password-1!"}):
+        response = api.post(start, headers=headers, json=body)
+        assert response.status_code == 403, response.text
+        assert response.json()["detail"] == {
+            "code": "reauth_required",
+            "message": "Confirm your password to set up two-factor.",
+        }
+    assert _failed_attempts(surface, result) == 1  # only the wrong password counts
+    confirmed = api.post(start, headers=headers, json={"current_password": PASSWORD})
+    assert confirmed.status_code == 200, confirmed.text
+    assert confirmed.json()["secret"]
+
+
+# ── Refresh refusals drop the cookie; a lapsing access token is not a 500 ─────
+def _clears_refresh_cookie(response, surface, client_id=DEMO_CLIENT_ID):
+    """Whether `response` tells the browser to drop this surface's refresh
+    cookie for `client_id`: Max-Age=0 on the cookie's own name and path."""
+    name = f"inspro_{surface}_refresh_{client_id}"
+    return any(
+        header.startswith(f"{name}=") and "Max-Age=0" in header
+        and f"Path=/api/v1/{surface}/auth" in header
+        for header in response.headers.get_list("set-cookie")
+    )
+
+
+@pytest.mark.parametrize(("surface", "detail"), [
+    ("portal", "Session ended. Sign in again."), ("hr", "Session expired."),
+])
+def test_an_ended_refresh_session_deletes_its_cookie(api, surface, detail):
+    """The refusal cleared the cookie on the injected `Response` and then
+    raised, and FastAPI drops those headers, so the dead cookie stayed in the
+    browser and was replayed by every later refresh."""
+    (member if surface == "portal" else hr)(api, f"{surface}-idle-cookie")
+    cookie_name = f"inspro_{surface}_refresh_{DEMO_CLIENT_ID}"
+    with SessionLocal() as db:
+        db.execute(select(AuthSession).where(
+            AuthSession.refresh_hash == SESS.hash_refresh(api.cookies.get(cookie_name)),
+        )).scalar_one().last_seen_at = datetime.now(UTC) - timedelta(hours=1)
+        db.commit()
+    response = api.post(f"/api/v1/{surface}/auth/refresh", headers=TENANT)
+    assert response.status_code == 401
+    assert response.json() == {"detail": detail}
+    assert _clears_refresh_cookie(response, surface)
+    assert api.cookies.get(cookie_name) is None
+
+
+@pytest.mark.parametrize(("surface", "detail"), [
+    ("portal", "Session ended. Sign in again."), ("hr", "Session revoked. Sign in again."),
+])
+def test_a_replayed_refresh_token_is_recorded_and_its_cookie_deleted(api, surface, detail):
+    """Replaying a rotated-out token revokes the family. Both surfaces now say
+    so in the auth trail (the portal recorded nothing) and drop the cookie."""
+    result = (member if surface == "portal" else hr)(api, f"{surface}-replayed-refresh")
+    cookie_name = f"inspro_{surface}_refresh_{DEMO_CLIENT_ID}"
+    spent = api.cookies.get(cookie_name)
+    assert api.post(f"/api/v1/{surface}/auth/refresh", headers=TENANT).status_code == 200
+    api.cookies.set(cookie_name, spent, domain="testserver.local", path=f"/api/v1/{surface}/auth")
+    response = api.post(f"/api/v1/{surface}/auth/refresh", headers=TENANT)
+    assert response.status_code == 401
+    assert response.json() == {"detail": detail}
+    assert _clears_refresh_cookie(response, surface)
+    assert api.cookies.get(cookie_name) is None
+    with SessionLocal() as db:
+        events = db.query(AuthEvent).filter(
+            AuthEvent.event_type == "token_reuse_detected",
+            AuthEvent.subject_id == _subject_id(surface, result),
+        ).all()
+        assert [(event.surface, event.client_id, event.outcome) for event in events] == [
+            (surface, DEMO_CLIENT_ID, "blocked"),
+        ]
+
+
+@pytest.mark.parametrize("surface", ["portal", "hr"])
+def test_a_refresh_refused_for_a_disabled_account_deletes_its_cookie(api, surface):
+    """The family is revoked on the way to the refusal, so the cookie is dead."""
+    result = (member if surface == "portal" else hr)(api, f"{surface}-disabled-refresh")
+    with SessionLocal() as db:
+        model = MemberAccount if surface == "portal" else User
+        db.get(model, _subject_id(surface, result)).status = "disabled"
+        db.commit()
+    response = api.post(f"/api/v1/{surface}/auth/refresh", headers=TENANT)
+    assert response.status_code == 401
+    assert response.json() == {"detail": "Invalid credentials."}
+    assert _clears_refresh_cookie(response, surface)
+    assert api.cookies.get(f"inspro_{surface}_refresh_{DEMO_CLIENT_ID}") is None
+
+
+def _lapsed(surface, token):
+    """`token` re-signed with an expiry in the past: what the handler holds
+    when the token lapses after the auth dependency accepted it."""
+    from app.core import hr_auth as HR
+
+    claims = jwt.decode(token, options={"verify_signature": False})
+    claims["exp"] = int((datetime.now(UTC) - timedelta(seconds=1)).timestamp())
+    key = (HR._derive_key(get_settings(), HR._HR_KEY_LABEL)
+           if surface == "hr" else get_settings().portal_jwt_secret)
+    return jwt.encode(claims, key, algorithm="HS256")
+
+
+def _accepted_principal(surface, result, name):
+    """The auth dependency, and the principal it returned for this sign-in."""
+    from app.core import hr_auth as HR
+    from app.core.auth import CurrentUser
+    from app.core.portal_auth import CurrentMember, get_current_member
+
+    subject = _subject_id(surface, result)
+    if surface == "portal":
+        return get_current_member, CurrentMember(
+            member_account_id=subject, client_id=DEMO_CLIENT_ID, broker_firm_id=None,
+            email=f"{name}@example.test", staff_id=name,
+        )
+    with SessionLocal() as db:
+        firm_id = db.get(User, subject).broker_firm_id
+    return HR.get_current_hr_user, CurrentUser(
+        user_id=subject, broker_firm_id=firm_id, client_id=DEMO_CLIENT_ID,
+        role="client_hr", email=f"{name}@example.test",
+    )
+
+
+@pytest.mark.parametrize("surface", ["portal", "hr"])
+def test_an_access_token_lapsing_after_its_dependency_is_not_a_server_error(api, surface):
+    """`_session_id` decodes the bearer a second time. With the expiry enforced
+    there, a token that lapsed between the dependency and the handler raised
+    ExpiredSignatureError: a 500 from enrolment and security-status."""
+    api.put(f"/api/v1/hr-admin/clients/{DEMO_CLIENT_ID}/auth-policy", json={
+        f"mfa_{surface}_enabled": True,
+    })
+    name = f"{surface}-lapsed-access"
+    result = (member if surface == "portal" else hr)(api, name)
+    dependency, principal = _accepted_principal(surface, result, name)
+    headers = {**TENANT, "Authorization": f"Bearer {_lapsed(surface, _access(surface, result))}"}
+    app.dependency_overrides[dependency] = lambda: principal
+    try:
+        start = api.post(f"/api/v1/{surface}/auth/mfa/enroll/start", headers=headers, json={})
+        assert start.status_code == 200, start.text
+        confirm = api.post(f"/api/v1/{surface}/auth/mfa/enroll/confirm", headers=headers, json={
+            "code": T._hotp(start.json()["secret"], T.current_step()),
+        })
+        assert confirm.status_code == 200, confirm.text
+        if surface == "portal":
+            status = api.get("/api/v1/portal/auth/security-status", headers=headers)
+            assert status.status_code == 200, status.text
+            assert status.json()["mfa_status"] == "confirmed"
+    finally:
+        app.dependency_overrides.pop(dependency, None)
+    sid = jwt.decode(_access(surface, result), options={"verify_signature": False})["sid"]
+    with SessionLocal() as db:
+        assert db.get(AuthSession, sid).mfa_verified is True

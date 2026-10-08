@@ -93,8 +93,10 @@ def _sqlite_pragmas(dbapi_connection: Any, _connection_record: Any) -> None:
 def _reset_search_path(dbapi_connection: Any, _connection_record: Any) -> None:
     """Reset the per-tenant search_path when a Postgres connection returns to
     the pool, so a later request can never inherit a previous request's firm
-    schema. Tenant routing (`set_search_path`) re-establishes it per request;
-    this is the belt-and-braces reset. No-op on SQLite."""
+    schema. Tenant routing (`set_search_path`) uses transaction-scoped
+    `SET LOCAL` and re-establishes it per transaction; this belt-and-braces
+    reset also covers code that sets a session-level path (migrations,
+    scripts). No-op on SQLite."""
     if _is_sqlite_connection(dbapi_connection):
         return
     try:

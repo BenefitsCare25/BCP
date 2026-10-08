@@ -28,8 +28,38 @@ pytestmark = pytest.mark.skipif(
 
 FIRM_A = "11111111-1111-1111-1111-111111111111"
 FIRM_B = "22222222-2222-2222-2222-222222222222"
+# Schema altered by the sync test only, so it never disturbs the others.
+FIRM_SYNC = "33333333-3333-3333-3333-333333333333"
 CLI_A = "1111aaaa-1111-1111-1111-111111111111"
 CLI_B = "2222bbbb-2222-2222-2222-222222222222"
+
+
+def insert_base_firm(db, firm_id: str, name: str) -> None:
+    """Insert a broker firm using only the columns every schema revision has.
+
+    Migration tests pin the database to an older revision and then seed it;
+    the ORM model carries today's columns (slug, status, ...), so an ORM insert
+    fails there. Shared by the other *_pg modules.
+    """
+    db.execute(
+        text(
+            "INSERT INTO broker_firms (id, name, created_at, updated_at) "
+            "VALUES (:id, :name, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+        ),
+        {"id": firm_id, "name": name},
+    )
+
+
+def insert_base_client(db, client_id: str, firm_id: str, name: str) -> None:
+    """Insert a company using only the columns every schema revision has (see
+    `insert_base_firm`); the rest take their server defaults."""
+    db.execute(
+        text(
+            "INSERT INTO clients (id, name, broker_firm_id, created_at, updated_at) "
+            "VALUES (:id, :name, :firm, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+        ),
+        {"id": client_id, "name": name, "firm": firm_id},
+    )
 
 
 @pytest.fixture(scope="module")
@@ -45,12 +75,12 @@ def pg_engine():
 
     # Clean slate for the firms under test.
     with engine.begin() as c:
-        for fid in (FIRM_A, FIRM_B):
+        for fid in (FIRM_A, FIRM_B, FIRM_SYNC):
             c.execute(text(f'DROP SCHEMA IF EXISTS "{schema_for_firm(fid)}" CASCADE'))
     Base.metadata.create_all(engine)  # control + (public) tenant tables
     yield engine
     with engine.begin() as c:
-        for fid in (FIRM_A, FIRM_B):
+        for fid in (FIRM_A, FIRM_B, FIRM_SYNC):
             c.execute(text(f'DROP SCHEMA IF EXISTS "{schema_for_firm(fid)}" CASCADE'))
     engine.dispose()
 
@@ -148,8 +178,9 @@ def test_two_firms_are_physically_isolated(pg_engine) -> None:
 def test_set_search_path_resets_to_public(pg_engine) -> None:
     """A None firm resets the path to public so pooled connections don't leak
     a previous tenant's schema."""
-    from app.db.tenancy import schema_for_firm, set_search_path
+    from app.db.tenancy import provision_firm_schema, schema_for_firm, set_search_path
 
+    provision_firm_schema(pg_engine, FIRM_A)
     Session = sessionmaker(bind=pg_engine)
     with Session() as s:
         set_search_path(s, FIRM_A)
@@ -409,3 +440,219 @@ def test_the_portal_sign_in_gate_reads_the_FIRM_schema(pg_engine) -> None:
         assert c.execute(
             text(f'SELECT count(*) FROM "{sa}".employees WHERE staff_id = \'PG-1\'')
         ).scalar() == 1
+
+
+def test_firm_creation_commits_row_and_schema_together(pg_engine) -> None:
+    """`create_firm` (platform console) provisions on the request's own connection.
+
+    Regression: it flushed the firm row, then provisioned through a SECOND
+    connection. Tenant tables that reference broker_firms need a SHARE ROW
+    EXCLUSIVE lock, which waited forever on the first connection's uncommitted
+    INSERT, so the request hung. Every connection here runs with
+    `lock_timeout = 5s`, so a regression fails fast instead of hanging the suite.
+    """
+    from app.api.v1.platform import FirmCreate, create_firm
+    from app.core.auth import CurrentUser
+    from app.db.tenancy import provision_firm_schema, schema_for_firm
+    from app.models import BrokerFirm
+
+    engine = create_engine(PG_URL, connect_args={"options": "-c lock_timeout=5s"})
+    Session = sessionmaker(bind=engine, expire_on_commit=False)
+    admin = CurrentUser(
+        user_id="pg-firm-admin", broker_firm_id=None, client_id=None, role="system_admin"
+    )
+    created: list[str] = []
+
+    def state(firm_id: str) -> tuple[bool, int]:
+        with engine.connect() as c:
+            schema = c.execute(
+                text("SELECT to_regnamespace(:s)"), {"s": schema_for_firm(firm_id)}
+            ).scalar()
+            rows = c.execute(
+                text("SELECT count(*) FROM broker_firms WHERE id = :id"), {"id": firm_id}
+            ).scalar()
+        return schema is not None, rows
+
+    try:
+        with Session() as s:
+            out = create_firm(FirmCreate(name="Same-transaction firm"), admin, s)
+        created.append(out.id)
+        assert state(out.id) == (True, 1)
+
+        # The same path rolled back leaves neither the row nor the schema.
+        with Session() as s:
+            firm = BrokerFirm(name="Rolled-back firm")
+            s.add(firm)
+            s.flush()
+            provision_firm_schema(s.connection(), firm.id)
+            rolled_back = firm.id
+            s.rollback()
+        assert state(rolled_back) == (False, 0)
+    finally:
+        with engine.begin() as c:
+            for firm_id in created:
+                c.execute(text(f'DROP SCHEMA IF EXISTS "{schema_for_firm(firm_id)}" CASCADE'))
+                c.execute(text("DELETE FROM audit_log WHERE entity_id = :id"), {"id": firm_id})
+                c.execute(text("DELETE FROM broker_firms WHERE id = :id"), {"id": firm_id})
+        engine.dispose()
+
+
+def test_routing_to_a_missing_firm_schema_fails_closed(pg_engine) -> None:
+    """Postgres silently skips a missing schema in search_path, so routing to
+    one used to send the firm's reads and writes to `public`."""
+    from fastapi import HTTPException
+
+    from app.db.tenancy import provision_firm_schema, schema_for_firm, set_search_path
+
+    missing = "44444444-4444-4444-4444-444444444444"
+    schema = schema_for_firm(missing)
+    with pg_engine.begin() as c:
+        c.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
+    Session = sessionmaker(bind=pg_engine)
+    try:
+        with Session() as s:
+            set_search_path(s, None)
+            with pytest.raises(HTTPException) as exc:
+                set_search_path(s, missing)
+            assert exc.value.status_code == 503
+            assert exc.value.detail["code"] == "tenant_unavailable"
+            assert schema not in s.execute(text("SHOW search_path")).scalar()
+
+        # A miss is not remembered: once provisioned, the firm routes at once.
+        provision_firm_schema(pg_engine, missing)
+        with Session() as s:
+            set_search_path(s, missing)
+            assert schema in s.execute(text("SHOW search_path")).scalar()
+    finally:
+        with pg_engine.begin() as c:
+            c.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
+
+
+def test_tenant_routing_is_transaction_scoped(pg_engine) -> None:
+    """`SET LOCAL`: the firm path ends with its transaction, so the server
+    connection (pooled here, or shared behind PgBouncer transaction pooling)
+    never carries one request's firm into the next transaction."""
+    from sqlalchemy.orm import Session as OrmSession
+
+    from app.db.tenancy import provision_firm_schema, schema_for_firm, set_search_path
+
+    provision_firm_schema(pg_engine, FIRM_A)
+    with pg_engine.connect() as conn:
+        s = OrmSession(bind=conn)
+        try:
+            set_search_path(s, FIRM_A)
+            assert schema_for_firm(FIRM_A) in s.execute(text("SHOW search_path")).scalar()
+            s.commit()
+            assert schema_for_firm(FIRM_A) not in conn.exec_driver_sql(
+                "SHOW search_path"
+            ).scalar()
+        finally:
+            s.close()
+
+
+def test_sync_adds_not_null_columns_without_server_default_as_nullable(pg_engine) -> None:
+    """Only a server default back-fills existing rows. A Python-side `default=`
+    used to count as one, emitting `ADD COLUMN ... NOT NULL` with no DEFAULT,
+    which fails on any populated table."""
+    from app.db.tenancy import (
+        provision_firm_schema,
+        schema_for_firm,
+        set_search_path,
+        sync_firm_schema,
+    )
+    from app.models import AuditLog
+
+    provision_firm_schema(pg_engine, FIRM_SYNC)
+    schema = schema_for_firm(FIRM_SYNC)
+    with sessionmaker(bind=pg_engine)() as s:
+        set_search_path(s, FIRM_SYNC)
+        s.add(AuditLog(client_id=CLI_A, action="sync.probe", entity_type="probe",
+                       entity_id="sync-probe", cross_tenant_access=False))
+        s.commit()
+    # cross_tenant_access: NOT NULL with a Python default only.
+    # created_at: NOT NULL with a server default.
+    with pg_engine.begin() as c:
+        c.execute(text(
+            f'ALTER TABLE "{schema}".audit_log '
+            "DROP COLUMN cross_tenant_access, DROP COLUMN created_at"
+        ))
+
+    sync_firm_schema(pg_engine, FIRM_SYNC)
+
+    with pg_engine.connect() as c:
+        columns = {
+            name: (nullable, default)
+            for name, nullable, default in c.execute(
+                text(
+                    "SELECT column_name, is_nullable, column_default "
+                    "FROM information_schema.columns WHERE table_schema = :s "
+                    "AND table_name = 'audit_log' "
+                    "AND column_name IN ('cross_tenant_access', 'created_at')"
+                ),
+                {"s": schema},
+            )
+        }
+        assert columns["cross_tenant_access"][0] == "YES"
+        assert columns["created_at"][0] == "NO" and columns["created_at"][1]
+        assert c.execute(
+            text(f'SELECT count(*) FROM "{schema}".audit_log WHERE created_at IS NULL')
+        ).scalar() == 0
+
+
+def test_host_firm_picks_the_alias_and_routes_its_schema(pg_engine) -> None:
+    """Two brokers may each have an "acme": the host's firm decides which one a
+    portal request is for, and that firm's schema is what the request reads.
+    Link origins still come from the `public` control tables on a session
+    already routed to the firm."""
+    from app.core.tenancy_host import SURFACE_PORTAL, HostInfo, resolve_tenant_context
+    from app.core.tenant_resolution import FirmContext, public_origin
+    from app.db.tenancy import provision_firm_schema, set_search_path
+    from app.models import BrokerFirm, Client, PolicyYear
+    from app.models.platform import TenantDomain
+    from app.models.policy_year import PolicyYearStatus
+
+    acme_a, acme_b = "1111acme-1111-1111-1111-111111111111", "2222acme-2222-2222-2222-222222222222"
+    Session = sessionmaker(bind=pg_engine, expire_on_commit=False)
+    with Session() as s:
+        for fid, name in ((FIRM_A, "Firm A"), (FIRM_B, "Firm B")):
+            if s.get(BrokerFirm, fid) is None:
+                s.add(BrokerFirm(id=fid, name=name))
+        s.flush()
+        for cid, fid in ((acme_a, FIRM_A), (acme_b, FIRM_B)):
+            if s.get(Client, cid) is None:
+                s.add(Client(id=cid, name="Acme", broker_firm_id=fid, slug="pg-acme"))
+        s.add(TenantDomain(broker_firm_id=FIRM_B, hostname="pg-portal.brokerb.test",
+                           surface="client", is_primary=True, status="active"))
+        s.commit()
+    for fid in (FIRM_A, FIRM_B):
+        provision_firm_schema(pg_engine, fid)
+    for fid, cid in ((FIRM_A, acme_a), (FIRM_B, acme_b)):
+        with Session() as s:
+            set_search_path(s, fid)
+            s.add(PolicyYear(client_id=cid, year=2051, start_date=date(2051, 1, 1),
+                             end_date=date(2051, 12, 31), status=PolicyYearStatus.draft))
+            s.commit()
+
+    host_b = FirmContext(
+        firm_id=FIRM_B, firm_slug=None, surface="client", is_platform_host=False,
+        database_key="default", status="active", host="pg-portal.brokerb.test",
+    )
+    try:
+        with Session() as s:
+            tenant = resolve_tenant_context(HostInfo(SURFACE_PORTAL, "pg-acme"), s, host_b)
+            assert tenant is not None and tenant.client_id == acme_b
+            set_search_path(s, tenant.broker_firm_id)
+            assert s.execute(
+                text("SELECT client_id FROM policy_years WHERE year = 2051")
+            ).scalars().all() == [acme_b]
+            assert public_origin(s, FIRM_B, "client") == "https://pg-portal.brokerb.test"
+    finally:
+        for fid in (FIRM_A, FIRM_B):
+            with Session() as s:
+                set_search_path(s, fid)
+                s.execute(text("DELETE FROM policy_years WHERE year = 2051"))
+                s.commit()
+        with Session() as s:
+            s.execute(text("DELETE FROM tenant_domains WHERE hostname = 'pg-portal.brokerb.test'"))
+            s.execute(text("DELETE FROM clients WHERE id IN (:a, :b)"), {"a": acme_a, "b": acme_b})
+            s.commit()

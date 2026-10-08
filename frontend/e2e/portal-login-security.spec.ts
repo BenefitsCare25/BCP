@@ -88,6 +88,8 @@ for (const role of ["portal", "hr"] as const) {
       if (url.pathname.endsWith("/auth/refresh")) await route.fulfill({ json: session });
       else if (url.pathname.endsWith("/auth/me")) await route.fulfill({ json: me });
       else if (url.pathname.endsWith("/auth/security-status")) await route.fulfill({ json: { mfa_available: true, mfa_required: true, mfa_status: "none", mfa_enrollment_required: true } });
+      // The site's brand is public (read before anyone signs in), not business data.
+      else if (url.pathname.endsWith("/public/site")) await route.fulfill({ json: {} });
       else {
         businessCalls.push(url.pathname);
         await route.fulfill({ status: 403, json: { detail: "Complete setup." } });

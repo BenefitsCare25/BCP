@@ -33,8 +33,9 @@ from datetime import UTC, date, datetime, timedelta
 from sqlalchemy import delete, select
 
 from app.core.auth import DEMO_BROKER_FIRM_ID, DEMO_CLIENT_ID
+from app.core.settings import assert_local_dev_database
 from app.core.storage import document_path, get_storage
-from app.db.session import SessionLocal
+from app.db.session import DATABASE_URL, SessionLocal
 from app.db.tenancy import set_search_path
 from app.models import (
     Category,
@@ -328,6 +329,7 @@ def _add_claim(
 
 
 def seed_claims_demo() -> None:
+    assert_local_dev_database(DATABASE_URL, tool="scripts/seed_claims_demo.py")
     db = SessionLocal()
     try:
         set_search_path(db, DEMO_BROKER_FIRM_ID)

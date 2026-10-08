@@ -35,6 +35,7 @@ import { useMe, usePolicyYears } from "@/api/hooks";
 import { useSession } from "@/stores/session";
 import { ServicerActivity } from "@/components/claims/ServicerActivity";
 import type { PolicyYear } from "@/types";
+import { isBrokerAdminRole, isFirmOwnerRole } from "@/lib/roles";
 
 // Reports Center — every downloadable/reviewable report, grouped by the team
 // that owns it (the same four-team split the sidebar uses). Reports are
@@ -578,7 +579,7 @@ function ClaimsReports({ year }: { year: PolicyYear }) {
 /* ── IT / Firm — audit, spend & access ───────────────────────────────── */
 function ItReports({ year }: { year: PolicyYear | null }) {
   const { data: me } = useMe();
-  const canAdmin = me?.role === "broker_admin" || me?.role === "system_admin";
+  const canAdmin = isBrokerAdminRole(me?.role);
   const rows: ReportRow[] = [
     {
       icon: ScrollText,
@@ -604,9 +605,9 @@ function ItReports({ year }: { year: PolicyYear | null }) {
       icon: UserCog,
       title: "Access & Companies",
       description:
-        me?.role === "system_admin"
+        isFirmOwnerRole(me?.role)
           ? "Manage companies, users, roles and access across the firm."
-          : "Manage companies across your firm. User administration requires a system administrator.",
+          : "Manage companies across your firm. User administration requires a firm administrator.",
       format: "Interactive",
       action: <OpenLink to="/firm/access" label="Open access admin" />,
     });

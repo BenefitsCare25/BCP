@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import os
 import subprocess
+import threading
 import warnings
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,10 @@ logger = logging.getLogger(__name__)
 
 MAX_IMAGE_PIXELS = 40_000_000
 MAX_PDF_PAGES = 50
+# How long an upload waits for a free scanner before it is told to retry.
+SCAN_SLOT_WAIT_SECONDS = 10.0
+_DEFAULT_SCAN_CONCURRENCY = 2
+_MAX_SCAN_CONCURRENCY = 16
 _PDF_ACTIVE_KEYS = {
     "/AA",
     "/EmbeddedFiles",
@@ -25,6 +30,25 @@ _PDF_ACTIVE_KEYS = {
     "/OpenAction",
     "/RichMedia",
 }
+
+
+def _scan_concurrency() -> int:
+    """Concurrent scanner processes per app process (`INSPRO_SCAN_CONCURRENCY`)."""
+    raw = os.environ.get("INSPRO_SCAN_CONCURRENCY", "").strip()
+    try:
+        value = int(raw) if raw else _DEFAULT_SCAN_CONCURRENCY
+    except ValueError:
+        logger.warning(
+            "INSPRO_SCAN_CONCURRENCY is not an integer — using %s", _DEFAULT_SCAN_CONCURRENCY
+        )
+        return _DEFAULT_SCAN_CONCURRENCY
+    return max(1, min(value, _MAX_SCAN_CONCURRENCY))
+
+
+# Process-wide: every upload path scans from a worker thread, and each scan is a
+# separate `clamscan` process loading its own signature database, so unbounded
+# parallel uploads would exhaust memory rather than queue.
+_SCAN_SLOTS = threading.BoundedSemaphore(_scan_concurrency())
 
 
 def _unsafe(message: str) -> HTTPException:
@@ -118,6 +142,16 @@ def _malware_scan(path: Path) -> None:
                 },
             )
         return
+    if not _SCAN_SLOTS.acquire(timeout=SCAN_SLOT_WAIT_SECONDS):
+        logger.warning("Document scanner busy; upload refused after waiting for a slot")
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "document_scanner_busy",
+                "message": "The document scanner is busy. Try again shortly.",
+            },
+            headers={"Retry-After": str(int(SCAN_SLOT_WAIT_SECONDS))},
+        )
     try:
         result = subprocess.run(
             [executable, "--no-summary", "--infected", os.fspath(path)],
@@ -137,6 +171,10 @@ def _malware_scan(path: Path) -> None:
                 },
             ) from exc
         return
+    finally:
+        # `subprocess.run` reaps (or, on timeout, kills) the scanner before
+        # returning, so the slot is only freed once the process is gone.
+        _SCAN_SLOTS.release()
     if result.returncode == 1:
         logger.warning("Rejected malware-positive claim upload")
         raise _unsafe("The document did not pass the security scan.")

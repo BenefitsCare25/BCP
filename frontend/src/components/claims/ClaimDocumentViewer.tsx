@@ -1,4 +1,4 @@
-import { SystemAdminOnly } from "@/components/auth/SystemAdminOnly";
+import { FirmOwnerOnly } from "@/components/auth/FirmOwnerOnly";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/client";
@@ -237,10 +237,10 @@ export function ClaimDocumentViewer({
             }}
           />
           <Button type="button" size="sm" variant="outline" disabled={documentBusy} onClick={() => replacementInput.current?.click()}>Add correction / replacement</Button>
-          <SystemAdminOnly><Button type="button" size="sm" variant="outline" disabled={documentBusy || !selected.removal_allowed || revision == null} onClick={() => setConfirmRemoval(true)}>Remove attachment</Button></SystemAdminOnly>
+          <FirmOwnerOnly><Button type="button" size="sm" variant="outline" disabled={documentBusy || !selected.removal_allowed || revision == null} onClick={() => setConfirmRemoval(true)}>Remove attachment</Button></FirmOwnerOnly>
         </div>}
       </div>}
-      <SystemAdminOnly><AlertDialog open={confirmRemoval} onOpenChange={setConfirmRemoval} title="Remove attachment?" description={`Remove ${selected?.file_name ?? "this document"}? The file will be deleted; its removal remains in the audit history.`} confirmLabel="Remove attachment" loading={documentBusy} onConfirm={async () => {
+      <FirmOwnerOnly><AlertDialog open={confirmRemoval} onOpenChange={setConfirmRemoval} title="Remove attachment?" description={`Remove ${selected?.file_name ?? "this document"}? The file will be deleted; its removal remains in the audit history.`} confirmLabel="Remove attachment" loading={documentBusy} onConfirm={async () => {
         if (!selected || revision == null) return;
         setDocumentBusy(true);
         try {
@@ -250,7 +250,7 @@ export function ClaimDocumentViewer({
           toast.success("Attachment removed. Audit history retained.");
         } catch (error) { toast.error(formatError(error)); await refresh(); }
         finally { setDocumentBusy(false); }
-      }} /></SystemAdminOnly>
+      }} /></FirmOwnerOnly>
       <div
         id="claim-document-preview"
         role="tabpanel"

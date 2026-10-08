@@ -18,7 +18,10 @@ from app.core.telemetry import configure_telemetry
 configure_telemetry()
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.middleware import SlowAPIMiddleware
 from starlette.concurrency import run_in_threadpool
@@ -30,6 +33,7 @@ from app.api.v1 import (
     ai_policies,
     ai_spend,
     audit_log,
+    brand,
     broker_auth,
     bulk_plan_updates,
     categories,
@@ -52,6 +56,7 @@ from app.api.v1 import (
     enrollment_windows,
     enrollments,
     entity_aliases,
+    firm,
     flex_pricing,
     flex_schemes,
     hr_admin,
@@ -69,6 +74,8 @@ from app.api.v1 import (
     placement_slips,
     plan_overrides,
     plans,
+    platform,
+    platform_activity,
     platform_ai_settings,
     policy_years,
     portal,
@@ -82,6 +89,7 @@ from app.api.v1 import (
     portal_preview,
     product_setups,
     product_terms,
+    public,
     recommendations,
     report_versions,
     reports,
@@ -98,9 +106,11 @@ from app.core import drift_checks
 from app.core.deps import require_write_access
 from app.core.rate_limit import RateLimitExceeded, limiter
 from app.core.request_context import RequestIDMiddleware, install_log_filter
-from app.core.security_headers import SecurityHeadersMiddleware
+from app.core.security_headers import SecurityHeadersMiddleware, apply_security_headers
 from app.core.spa import mount_spa
 from app.core.tenancy_host import TenantMiddleware
+from app.core.tenant_resolution import FirmResolutionMiddleware
+from app.core.uploads import RequestSizeLimitMiddleware
 
 logger = logging.getLogger(__name__)
 
@@ -140,18 +150,55 @@ def _check_dependencies(redis_url: str | None) -> dict[str, str]:
     return {"status": "ready", "database": "ok", "redis": redis_state}
 
 
-def _allowed_origins() -> list[str]:
-    raw = os.environ.get(
-        "INSPRO_CORS_ORIGINS",
-        "http://localhost:5173,http://127.0.0.1:5173",
-    )
-    return [o.strip() for o in raw.split(",") if o.strip()]
-
-
 def _handle_rate_limit(request: Request, exc: Exception) -> Response:
     if not isinstance(exc, RateLimitExceeded):
         raise exc
     return _rate_limit_exceeded_handler(request, exc)
+
+
+# What a validation error quotes back from the request: `input` is the value
+# submitted for the failing field — for a model-level check, the whole body —
+# and `ctx` can quote it too.
+_ECHOED_ERROR_KEYS = frozenset({"input", "ctx"})
+
+
+async def _handle_validation_error(request: Request, exc: Exception) -> Response:
+    """FastAPI's 422, without the submitted values.
+
+    The default handler echoes each failing field's input, so a rejected
+    credential (`/ai-config`, `/platform-ai-settings/credentials`) came back
+    with its private key in the response body — and from there in browser
+    tooling and any proxy that logs responses. Same status and shape; every
+    error keeps its `type`, `loc` and `msg`.
+    """
+    if not isinstance(exc, RequestValidationError):
+        raise exc
+    errors = [
+        {key: value for key, value in error.items() if key not in _ECHOED_ERROR_KEYS}
+        for error in exc.errors()
+    ]
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        content={"detail": jsonable_encoder(errors)},
+    )
+
+
+async def _handle_unhandled_error(request: Request, exc: Exception) -> Response:
+    """A generic 500 that still carries the security headers.
+
+    Starlette answers an unhandled exception in `ServerErrorMiddleware`, which
+    sits outside every middleware added here, so `SecurityHeadersMiddleware`
+    never sees that response. The body never carries the exception text.
+    """
+    logger.error(
+        "Unhandled error on %s %s", request.method, request.url.path, exc_info=exc
+    )
+    return apply_security_headers(
+        JSONResponse(
+            {"detail": "Internal server error."},
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+    )
 
 
 def create_app() -> FastAPI:
@@ -179,16 +226,27 @@ def create_app() -> FastAPI:
         openapi_url="/openapi.json" if docs_enabled else None,
     )
 
-    # Starlette runs middleware in reverse-add order; RequestIDMiddleware
-    # (added last) runs first on the inbound path so downstream logging /
-    # auditing can read the correlation ID.
+    # Starlette runs middleware in reverse-add order. SecurityHeadersMiddleware
+    # (added last) wraps everything, so the 429s, CORS preflights and 413s the
+    # other layers answer with carry the headers too; RequestIDMiddleware runs
+    # next on the inbound path so downstream logging / auditing can read the
+    # correlation ID and caller. CORSMiddleware sits outside SlowAPIMiddleware
+    # so a default-limit 429 still carries the CORS grant — without it the
+    # browser reports a CORS failure instead of the rate limit.
+    # RequestSizeLimitMiddleware (added first) sits innermost: it only has to
+    # run before the body is parsed, and its 413s still pass through CORS. An
+    # unhandled exception is answered outside all of them, by
+    # `_handle_unhandled_error`.
     app.state.limiter = limiter
     app.add_exception_handler(RateLimitExceeded, _handle_rate_limit)
+    app.add_exception_handler(RequestValidationError, _handle_validation_error)
+    app.add_exception_handler(Exception, _handle_unhandled_error)
 
-    app.add_middleware(SecurityHeadersMiddleware)
+    app.add_middleware(RequestSizeLimitMiddleware)
+    app.add_middleware(SlowAPIMiddleware)
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=_allowed_origins(),
+        allow_origins=list(settings.cors_origins),
         allow_credentials=True,
         allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=[
@@ -203,9 +261,12 @@ def create_app() -> FastAPI:
         expose_headers=["X-Request-ID", "Content-Disposition", "X-FactFind-Notes"],
         max_age=600,
     )
-    app.add_middleware(SlowAPIMiddleware)
     app.add_middleware(TenantMiddleware, base_domain=settings.base_domain)
+    # Outside TenantMiddleware: resolves the broker firm from the public host
+    # (rewriting the host behind Front Door) before anything parses it.
+    app.add_middleware(FirmResolutionMiddleware)
     app.add_middleware(RequestIDMiddleware)
+    app.add_middleware(SecurityHeadersMiddleware)
 
     api_prefix = "/api/v1"
     # Preview/review are POST reads; this router enforces read/write broker roles itself.
@@ -270,6 +331,13 @@ def create_app() -> FastAPI:
         session.router,
         admin.router,
         hr_admin.router,
+        # Platform console (master admin, platform hosts only) and firm console.
+        platform.router,
+        platform_activity.router,
+        firm.router,
+        # Brand settings (firm console) and sender verification (platform console).
+        brand.router,
+        brand.platform_router,
     )
     for api_router in api_routers:
         app.include_router(
@@ -295,6 +363,9 @@ def create_app() -> FastAPI:
     # router-level `get_current_member` dependency.
     app.include_router(portal_auth.router, prefix=api_prefix)
     app.include_router(broker_auth.router, prefix=api_prefix)
+    # Unauthenticated site information (the host's firm and its staff sign-in
+    # methods), needed before anyone can sign in.
+    app.include_router(public.router, prefix=api_prefix)
     # HR credential-login surface — public auth, its own tenant + lockout guards
     # (mirrors portal_auth: registered OUTSIDE the broker require_write_access gate).
     app.include_router(hr_auth.router, prefix=api_prefix)

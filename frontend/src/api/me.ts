@@ -5,6 +5,17 @@ import { useSession } from "@/stores/session";
 export interface AccessibleClient {
   id: string;
   name: string;
+  /** The company's broker firm, when the API reports it. A platform admin's
+   *  companies can span several firms (standing access plus access grants). */
+  broker_firm_id?: string | null;
+  firm_name?: string | null;
+}
+
+export interface MeFirm {
+  id: string;
+  name: string;
+  slug: string;
+  is_platform_owner: boolean;
 }
 
 export interface MeResponse {
@@ -15,6 +26,12 @@ export interface MeResponse {
   broker_firm_id: string | null;
   active_client_id: string | null;
   accessible_clients: AccessibleClient[];
+  /** The firm this session acts in, or null. Optional until every API version
+   *  serves it; treat a missing value as null. */
+  firm?: MeFirm | null;
+  /** True only for a system_admin on a platform host: the platform console is
+   *  available. Missing means false. */
+  platform_console?: boolean;
 }
 
 /** Keyed by the active client so a switch refetches /me (active_client_id +

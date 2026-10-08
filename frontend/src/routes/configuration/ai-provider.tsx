@@ -1,3 +1,4 @@
+import { FirmOwnerOnly } from "@/components/auth/FirmOwnerOnly";
 import { SystemAdminOnly } from "@/components/auth/SystemAdminOnly";
 import { useState } from "react";
 import {
@@ -31,6 +32,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { formatError } from "@/lib/errors";
+import { isBrokerAdminRole } from "@/lib/roles";
 import { AIUsageTile } from "@/components/schema/AIUsageTile";
 import { PlatformAILimitsCard } from "@/components/configuration/PlatformAILimitsCard";
 import { PlatformAIProviderCard } from "@/components/configuration/PlatformAIProviderCard";
@@ -42,8 +44,7 @@ import {
 
 export function AIProviderPage() {
   const { data: me, isPending: meLoading } = useMe();
-  const isSystemAdmin = me?.role === "system_admin";
-  const canAdmin = me?.role === "broker_admin" || isSystemAdmin;
+  const canAdmin = isBrokerAdminRole(me?.role);
   // Wait for the active identity before loading tenant-scoped AI config, so a
   // hard reload does not fetch before the active client header is available.
   const configQuery = useAIConfig(!meLoading && canAdmin);
@@ -179,12 +180,10 @@ export function AIProviderPage() {
 
       <AIUsageTile />
 
-      {isSystemAdmin && (
-        <>
-          <PlatformAIProviderCard />
-          <PlatformAILimitsCard />
-        </>
-      )}
+      <SystemAdminOnly>
+        <PlatformAIProviderCard />
+        <PlatformAILimitsCard />
+      </SystemAdminOnly>
 
       <Card>
         <CardHeader>
@@ -285,7 +284,7 @@ export function AIProviderPage() {
                   )}
                   Test stored key
                 </Button>
-                <SystemAdminOnly><Button
+                <FirmOwnerOnly><Button
                   variant="outline"
                   size="sm"
                   className="text-error hover:text-error"
@@ -293,7 +292,7 @@ export function AIProviderPage() {
                   disabled={remove.isPending}
                 >
                   <Trash2 className="size-3.5" /> Clear key
-                </Button></SystemAdminOnly>
+                </Button></FirmOwnerOnly>
               </>
             )}
             <Button onClick={() => setOpen(true)}>
@@ -311,7 +310,7 @@ export function AIProviderPage() {
         </CardContent>
       </Card>
 
-      <SystemAdminOnly><AlertDialog
+      <FirmOwnerOnly><AlertDialog
         open={confirmClear}
         onOpenChange={setConfirmClear}
         title="Clear this company's AI key?"
@@ -333,7 +332,7 @@ export function AIProviderPage() {
             toast.error(formatError(err));
           }
         }}
-      /></SystemAdminOnly>
+      /></FirmOwnerOnly>
     </div>
   );
 }

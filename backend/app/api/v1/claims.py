@@ -39,7 +39,7 @@ from app.core.deps import (
 from app.core.downloads import attachment_header
 from app.core.pagination import MAX_LIMIT
 from app.core.rate_limit import limiter
-from app.core.storage import get_storage
+from app.core.storage import StorageScopeError, company_firm_id, get_storage
 from app.db.session import get_db
 from app.models import (
     Claim,
@@ -140,6 +140,7 @@ from app.services.claims import (
     apply_claim_amendment,
     assert_amendment_reason,
     assert_claim_revision,
+    assert_document_scope,
     assert_transition,
     attach_document,
     audit_cells,
@@ -226,6 +227,12 @@ def _latest_reviews(
         )
     ).scalars()
     return {review.claim_id: review for review in rows}
+
+
+def _can_mutate(user: CurrentUser) -> bool:
+    """Whether the UI should offer claim actions: not to viewers, and not to a
+    master admin on a read-only access grant (the API refuses those writes)."""
+    return user.role != "broker_viewer" and user.platform_access != "read"
 
 
 def _allowed_actions(claim: Claim, *, can_mutate: bool) -> list[str]:
@@ -405,7 +412,7 @@ def list_claims(
                 doc_dates=doc_dates,
                 reviews=reviews,
                 policy_years=policy_years,
-                can_mutate=user.role != "broker_viewer",
+                can_mutate=_can_mutate(user),
             )
             for claim, employee in rows
         ],
@@ -536,7 +543,7 @@ def get_claim(
         db,
         claim,
         employee,
-        can_mutate=user.role != "broker_viewer",
+        can_mutate=_can_mutate(user),
     )
     # The remaining limit for this claim's bucket, shown ahead of the decision
     # (the approve endpoint still enforces it). Detail-only — utilization is
@@ -551,6 +558,7 @@ def get_claim(
         "claim",
         claim.id,
         employee_id=claim.employee_id,
+        client_id=claim.client_id,
     )
     db.commit()
     return out
@@ -1308,6 +1316,7 @@ def list_claim_messages(
         "claim",
         claim.id,
         employee_id=claim.employee_id,
+        client_id=claim.client_id,
     )
     db.commit()
     return messages
@@ -1380,6 +1389,7 @@ def get_claim_review(
         "claim_ai_review",
         review.id,
         employee_id=claim.employee_id,
+        client_id=claim.client_id,
     )
     db.commit()
     return out
@@ -1404,8 +1414,6 @@ def rerun_claim_review(
     assert_transition(claim, CLAIM_STATUS_AI_REVIEW_PENDING)
 
     before = {"status": claim.status}
-    if not user.broker_firm_id:
-        raise HTTPException(status.HTTP_409_CONFLICT, "Claim tenant is not configured.")
     queued = enqueue_claim_review(
         db, claim, user.broker_firm_id, supersede=True
     )
@@ -1455,7 +1463,12 @@ def download_claim_document(
     ):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Document not found")
     try:
+        assert_document_scope(
+            doc.storage_path, company_firm_id(db, claim.client_id), claim.client_id
+        )
         content = get_storage().read(doc.storage_path)
+    except StorageScopeError:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Document not found") from None
     except FileNotFoundError:
         raise HTTPException(
             status.HTTP_404_NOT_FOUND, "Document bytes are no longer available"
@@ -1468,6 +1481,7 @@ def download_claim_document(
         "stored_document",
         doc.id,
         employee_id=claim.employee_id,
+        client_id=claim.client_id,
     )
     db.commit()
     return Response(

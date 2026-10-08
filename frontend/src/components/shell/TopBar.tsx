@@ -2,6 +2,7 @@ import { Link, useRouterState } from "@tanstack/react-router";
 import { Menu } from "lucide-react";
 import { useMe } from "@/api/hooks";
 import { cn } from "@/lib/cn";
+import { isBrokerAdminRole } from "@/lib/roles";
 import { AccountMenu } from "./AccountMenu";
 import { ContextBar } from "./ContextBar";
 import { NotificationBell } from "./NotificationBell";
@@ -21,7 +22,7 @@ export function TopBar({
 
   // Firm-wide surfaces live in the top bar as icon shortcuts (not the sidebar,
   // which is company-scoped). Access & Companies stays broker-admin gated.
-  const canAdmin = me?.role === "broker_admin" || me?.role === "system_admin";
+  const canAdmin = isBrokerAdminRole(me?.role);
   const firmItems = FIRM_NAV.items.filter((item) =>
     !item.adminOnly || canAdmin,
   );

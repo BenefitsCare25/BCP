@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
@@ -43,12 +44,12 @@ def _system_admin() -> CurrentUser:
     )
 
 
-def _broker_admin() -> CurrentUser:
+def _broker_admin(role: str = "broker_admin") -> CurrentUser:
     return CurrentUser(
         user_id="66666666-6666-6666-6666-666666666666",
         broker_firm_id=DEMO_BROKER_FIRM_ID,
         client_id=DEMO_CLIENT_ID,
-        role="broker_admin",
+        role=role,  # type: ignore[arg-type]
     )
 
 
@@ -104,8 +105,10 @@ def test_get_and_put_roundtrip_as_system_admin() -> None:
     assert _limits(client.get("/api/v1/platform-ai-settings").json()) == body
 
 
-def test_broker_admin_forbidden() -> None:
-    app.dependency_overrides[get_current_user] = _broker_admin
+@pytest.mark.parametrize("role", ["broker_admin", "firm_admin"])
+def test_broker_admin_forbidden(role: str) -> None:
+    """Platform AI settings are platform-only, even for a firm's own admins."""
+    app.dependency_overrides[get_current_user] = lambda: _broker_admin(role)
     client = TestClient(app)
     assert client.get("/api/v1/platform-ai-settings").status_code == 403
     assert (
@@ -137,12 +140,14 @@ def test_put_rejects_negative_values() -> None:
 
 # ── Platform credentials (the default key every company runs on) ──────────────
 
+GOOGLE_TOKEN_URI = "https://oauth2.googleapis.com/token"
 PLATFORM_KEY = json.dumps(
     {
         "type": "service_account",
         "project_id": "inspro-platform",
         "private_key": "-----BEGIN PRIVATE KEY-----\nPPP\n-----END PRIVATE KEY-----\n",
         "client_email": "svc@inspro-platform.iam.gserviceaccount.com",
+        "token_uri": GOOGLE_TOKEN_URI,
     }
 )
 BYOK_KEY = json.dumps(
@@ -151,8 +156,13 @@ BYOK_KEY = json.dumps(
         "project_id": "inspro-tenant",
         "private_key": "-----BEGIN PRIVATE KEY-----\nTTT\n-----END PRIVATE KEY-----\n",
         "client_email": "svc@inspro-tenant.iam.gserviceaccount.com",
+        "token_uri": GOOGLE_TOKEN_URI,
     }
 )
+
+
+def _platform_key_with(**overrides: str) -> str:
+    return json.dumps({**json.loads(PLATFORM_KEY), **overrides})
 
 
 def _put_platform_key(client: TestClient, **overrides) -> dict:
@@ -254,6 +264,7 @@ def test_credentials_reject_malformed_key() -> None:
             "project_id": "",
             "private_key": "-----BEGIN PRIVATE KEY-----\nX\n-----END PRIVATE KEY-----\n",
             "client_email": "svc@x.iam.gserviceaccount.com",
+            "token_uri": GOOGLE_TOKEN_URI,
         }
     )
     r = client.put(
@@ -263,11 +274,72 @@ def test_credentials_reject_malformed_key() -> None:
     assert r.status_code == 400
 
 
-def test_credentials_reject_non_sg_region_in_prod(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize(
+    ("override", "message"),
+    [
+        ({"token_uri": "http://169.254.169.254/computeMetadata/v1/token"}, "token_uri"),
+        ({"token_uri": "https://oauth2.googleapis.com.evil.example/token"}, "token_uri"),
+        ({"universe_domain": "evil.example"}, "universe_domain"),
+    ],
+)
+def test_platform_key_endpoints_are_pinned_to_google(
+    override: dict[str, str], message: str
 ) -> None:
+    """The fleet-wide key gets the company key's SSRF guard: google-auth posts
+    the token request to the key's own token_uri. Both the save and the draft
+    test refuse a foreign endpoint before anything is stored or sent — and the
+    422 does not hand the private key back."""
+    app.dependency_overrides[get_current_user] = _system_admin
+    client = TestClient(app)
+    client.delete("/api/v1/platform-ai-settings/credentials")
+    foreign = _platform_key_with(**override)
+
+    saved = client.put(
+        "/api/v1/platform-ai-settings/credentials", json={"service_account_json": foreign}
+    )
+    with patch("app.api.v1.platform_ai_settings.probe_vertex") as probe:
+        drafted = client.post(
+            "/api/v1/platform-ai-settings/credentials/test",
+            json={"service_account_json": foreign},
+        )
+
+    for res in (saved, drafted):
+        assert res.status_code == 422
+        assert message in res.text
+        assert "PRIVATE KEY" not in res.text
+    probe.assert_not_called()
+    with SessionLocal() as db:
+        row = db.get(PlatformAISetting, SINGLETON_ID)
+        assert row is None or row.encrypted_service_account is None
+
+
+def test_platform_key_without_token_uri_is_refused() -> None:
+    app.dependency_overrides[get_current_user] = _system_admin
+    key = json.loads(PLATFORM_KEY)
+    key.pop("token_uri")
+    r = TestClient(app).put(
+        "/api/v1/platform-ai-settings/credentials",
+        json={"service_account_json": json.dumps(key)},
+    )
+    assert r.status_code == 422
+    assert "token_uri" in r.text
+
+
+@pytest.fixture
+def _production(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Resolve the environment as production for the AI configuration guards.
+    They read the cached settings, and a full production configuration (Entra,
+    secrets) is not what these tests are about."""
+    from app.core import ai_config
+    from app.core.settings import get_settings
+
+    production = replace(get_settings(), env="prod")
+    monkeypatch.setattr(ai_config, "get_settings", lambda: production)
+
+
+@pytest.mark.usefixtures("_production")
+def test_credentials_reject_non_sg_region_in_prod() -> None:
     """Residency guard: claim PII must stay in Singapore. Dev only warns."""
-    monkeypatch.setenv("INSPRO_ENV", "prod")
     app.dependency_overrides[get_current_user] = _system_admin
     client = TestClient(app)
     r = client.put(
@@ -278,8 +350,9 @@ def test_credentials_reject_non_sg_region_in_prod(
     assert "asia-southeast1" in r.json()["detail"]
 
 
-def test_credentials_forbidden_for_broker_admin() -> None:
-    app.dependency_overrides[get_current_user] = _broker_admin
+@pytest.mark.parametrize("role", ["broker_admin", "firm_admin"])
+def test_credentials_forbidden_for_broker_admin(role: str) -> None:
+    app.dependency_overrides[get_current_user] = lambda: _broker_admin(role)
     client = TestClient(app)
     assert (
         client.put(

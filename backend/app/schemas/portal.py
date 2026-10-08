@@ -161,6 +161,13 @@ class MemberAccountOut(_Base):
     # different host, so a bare path would be unclickable when pasted into an
     # email — and the token is shown only once.
     tenant_slug: str | None = None
+    # The company's broker address for HR/employee links (`https://host`), so
+    # links are built on the client host, not the broker's own (which may be a
+    # staff-only host). None when the broker has no address yet.
+    client_origin: str | None = None
+    # A CONFIRMED authenticator is on the account, so "Reset authenticator" has
+    # something to remove. Resolved by the broker member-account endpoints.
+    mfa_enrolled: bool = False
 
 
 class MemberAccountList(BaseModel):
@@ -248,8 +255,8 @@ class PortalRolloutOut(BaseModel):
 
     employees_total: int
     invite_pending: int
-    invited: int          # invite delivered, not signed in yet
-    signed_in: int        # has used the portal (or has a password set)
+    invited: int          # holds a credential (invite or broker handover), not signed in yet
+    signed_in: int        # has signed in: using the portal (`last_sign_in_at` set)
     no_email: int         # provisioned, but nowhere to send
     # Roster rows whose email (or staff id) already belongs to another employee.
     # Not provisioned at all: an account is unique per client on both, and

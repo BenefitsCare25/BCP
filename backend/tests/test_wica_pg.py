@@ -13,6 +13,7 @@ import sys
 import threading
 import time
 from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
 
@@ -28,7 +29,8 @@ from app.core.auth import CurrentUser, get_current_user
 from app.db.session import get_db
 from app.db.tenancy import provision_firm_schema, schema_for_firm, set_search_path
 from app.main import app
-from app.models import BrokerFirm, Client, WicaIncident
+from app.models import WicaIncident
+from tests.test_schema_isolation_pg import insert_base_client, insert_base_firm
 
 BACKEND = Path(__file__).parents[1]
 TABLES = ("wica_packs", "wica_documents", "wica_incidents", "wica_periods", "wica_settings")
@@ -122,14 +124,11 @@ def pg(pg_url):
     clients = [str(uuid4()), str(uuid4())]
     sessions = sessionmaker(engine, expire_on_commit=False)
     with sessions() as db:
-        db.add_all([BrokerFirm(id=f, name="WICA CI firm") for f in firms])
+        for f in firms:
+            insert_base_firm(db, f, "WICA CI firm")
         db.flush()
-        db.add_all(
-            [
-                Client(id=c, broker_firm_id=f, name="WICA CI company")
-                for c, f in zip(clients, firms, strict=True)
-            ]
-        )
+        for c, f in zip(clients, firms, strict=True):
+            insert_base_client(db, c, f, "WICA CI company")
         db.commit()
     # Model-based provisioning represents an existing firm; remove ONLY its
     # known-empty WICA tables to recreate the state before this additive release.
@@ -264,6 +263,15 @@ def test_same_worker_upload_contention_and_company_retention(pg, monkeypatch, tm
             assert response.json()["revision"] == 2
             response = await client.delete(f"/api/v1/admin/clients/{clients[0]}")
             assert response.status_code == 403, response.text
+            # The master admin has standing access to the platform owner's firm
+            # only; make the first firm the owner for the rest of this test.
+            with sessions() as db:
+                db.execute(sa.text("UPDATE broker_firms SET is_platform_owner = false"))
+                db.execute(
+                    sa.text("UPDATE broker_firms SET is_platform_owner = true WHERE id = :f"),
+                    {"f": firms[0]},
+                )
+                db.commit()
             app.dependency_overrides[get_current_user] = lambda: replace(
                 user, role="system_admin"
             )
@@ -277,6 +285,21 @@ def test_same_worker_upload_contention_and_company_retention(pg, monkeypatch, tm
                 from app.models import WicaSettings
 
                 db.add(WicaSettings(client_id=clients[1], enabled=False))
+                db.commit()
+            # Another firm needs a time-limited write grant (the access model).
+            with sessions() as db:
+                from app.models import PlatformAccessGrant, User
+
+                db.add(User(
+                    id="wica-ci-admin", email="wica-ci-admin@test.invalid",
+                    role="system_admin", status="active",
+                ))
+                db.flush()
+                db.add(PlatformAccessGrant(
+                    user_id="wica-ci-admin", broker_firm_id=firms[1], scope="write",
+                    reason="WICA CI cross-firm company deletion",
+                    expires_at=datetime.now(UTC) + timedelta(hours=1),
+                ))
                 db.commit()
             app.dependency_overrides[get_current_user] = lambda: CurrentUser(
                 user_id="wica-ci-admin",

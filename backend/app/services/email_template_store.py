@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.models.email_template import EmailBranding, EmailTemplate, EmailTemplateVersion
 from app.schemas.email_templates import BrandingContent, TemplateContent
+from app.services.brand import resolve_brand
 from app.services.email_template_content import starters
 
 
@@ -135,6 +136,27 @@ def save_draft(
     return row
 
 
+def branding_defaults(db: Session, firm_id: str, client_id: str | None) -> dict[str, Any]:
+    """Built-in branding content: the resolved brand's sender name and support
+    address, for any field saved branding leaves unset."""
+    brand = resolve_brand(db, firm_id, client_id)
+    return BrandingContent(
+        sender_display_name=brand.email_sender_name, support_email=brand.support_email
+    ).model_dump()
+
+
+def with_brand_defaults(
+    db: Session, firm_id: str, client_id: str | None, content: BrandingContent
+) -> BrandingContent:
+    """Fill the fields a save request omitted from the resolved brand rather
+    than the schema's built-in values."""
+    unset = set(BrandingContent.model_fields) - content.model_fields_set
+    if not unset:
+        return content
+    defaults = branding_defaults(db, firm_id, client_id)
+    return content.model_copy(update={name: defaults[name] for name in unset})
+
+
 def branding_out(db: Session, firm_id: str, client_id: str | None) -> dict[str, Any]:
     rows = list(
         db.scalars(
@@ -146,8 +168,11 @@ def branding_out(db: Session, firm_id: str, client_id: str | None) -> dict[str, 
     )
     exact = next((row for row in rows if row.scope_key == (client_id or "firm")), None)
     row = exact or next((item for item in rows if item.scope_key == "firm"), None)
+    content = branding_defaults(db, firm_id, client_id)
+    if row:
+        content.update({k: v for k, v in (row.content or {}).items() if v not in (None, "")})
     return {
-        "content": row.content if row else BrandingContent().model_dump(),
+        "content": content,
         "revision": exact.revision if exact else 0,
         "source": ("company" if row.client_id else "firm") if row else "builtin",
         "has_override": exact is not None,

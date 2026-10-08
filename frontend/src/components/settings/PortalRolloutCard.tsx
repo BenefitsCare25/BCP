@@ -19,7 +19,7 @@ import {
   useBulkInviteMembers,
   usePortalRollout,
 } from "@/api/memberAccounts";
-import { formatError } from "@/lib/errors";
+import { formatError, isFirmOriginUnavailable, sendErrorMessage } from "@/lib/errors";
 import { useSession } from "@/stores/session";
 import { useMe } from "@/api/hooks";
 import { AlertDialog } from "@/components/ui/alert-dialog";
@@ -122,7 +122,10 @@ export function PortalRolloutCard({ policyYearId: suppliedYear, readOnly = false
       }
       toast.success(`Queued ${res.queued.toLocaleString()} invitation${res.queued === 1 ? "" : "s"}.`);
     } catch (err) {
-      toast.error(formatError(err));
+      // No web address means no invite can carry a working link; the
+      // confirmation is closed rather than left inviting a futile retry.
+      if (isFirmOriginUnavailable(err)) setConfirm(false);
+      toast.error(sendErrorMessage(err));
     }
   };
 

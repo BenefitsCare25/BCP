@@ -5,7 +5,10 @@ removed). Three resolution sources, in priority order:
 
 1. Per-tenant BYOK row in ``client_ai_configs`` (when ``db`` + ``client_id``
    are passed) — an optional per-company OVERRIDE, encrypted at rest and
-   decrypted just-in-time.
+   decrypted just-in-time. A company that has a row uses ONLY that row: when it
+   cannot be used (not activated in production, undecryptable, malformed,
+   unsupported provider) AI is unavailable for that company — its claims go to
+   manual review — rather than silently running on the platform key.
 2. The PLATFORM key on the ``platform_ai_settings`` singleton (when ``db`` is
    passed) — the global default every company runs on, set by a system admin
    in the UI. This is the normal way AI is configured.
@@ -22,10 +25,16 @@ from __future__ import annotations
 import json
 import logging
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Literal, Protocol
+from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 from sqlalchemy.orm import Session
+
+from app.core.settings import get_settings
+
+if TYPE_CHECKING:
+    from app.models.client_ai_config import ClientAIConfig
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +50,13 @@ DEFAULT_VERTEX_MODEL = "gemini-3.5-flash"
 DEFAULT_VERTEX_CAPACITY_MODE = "standard_paygo"
 VERTEX_CAPACITY_MODES = frozenset({"standard_paygo", "provisioned_throughput"})
 APPROVED_VERTEX_LOCATIONS = frozenset({"asia-southeast1"})
+
+# google-auth posts the signed token request to the key's OWN ``token_uri`` and
+# derives API hosts from ``universe_domain``, so a crafted key would make the
+# server send requests wherever it says (SSRF). Only Google's public endpoints
+# are accepted, at save time and again before credentials are built.
+GOOGLE_TOKEN_URI = "https://oauth2.googleapis.com/token"
+GOOGLE_UNIVERSE_DOMAIN = "googleapis.com"
 
 
 @dataclass(frozen=True)
@@ -59,7 +75,9 @@ class AIConfig:
 
 
 def _prod_env() -> bool:
-    return os.environ.get("INSPRO_ENV", "dev").strip().lower() in ("prod", "production")
+    # The resolved environment, so every spelling the settings accept
+    # ("prod", "production") arms the same guards they do.
+    return get_settings().env == "prod"
 
 
 def assert_vertex_residency(location: str) -> None:
@@ -117,6 +135,36 @@ def assert_vertex_location_writable(location: str) -> str:
             f"{DEFAULT_VERTEX_LOCATION}."
         )
     return loc
+
+
+def assert_service_account_endpoints(info: Mapping[str, Any]) -> None:
+    """Refuse a service-account key whose token endpoint is not Google's.
+
+    Raises ValueError, which the credential schemas surface as a 422 and the
+    Vertex adapter raises before any credential object (or request) exists.
+    """
+    if info.get("token_uri") != GOOGLE_TOKEN_URI:
+        raise ValueError(
+            f"The service-account key's token_uri must be {GOOGLE_TOKEN_URI}. "
+            "Paste the key exactly as downloaded from Google Cloud."
+        )
+    universe = info.get("universe_domain")
+    if universe is not None and universe != GOOGLE_UNIVERSE_DOMAIN:
+        raise ValueError(
+            f"The service-account key's universe_domain must be {GOOGLE_UNIVERSE_DOMAIN}."
+        )
+
+
+def parse_service_account(service_account_json: str) -> dict[str, Any]:
+    """Decode a service-account key and check its endpoints. Raises ValueError."""
+    try:
+        info = json.loads(service_account_json)
+    except (ValueError, TypeError) as exc:
+        raise ValueError("The service-account key is not valid JSON.") from exc
+    if not isinstance(info, dict):
+        raise ValueError("The service-account key must be a JSON object.")
+    assert_service_account_endpoints(info)
+    return info
 
 
 def _load_vertex_from_env() -> AIConfig | None:
@@ -193,9 +241,10 @@ def _vertex_from_secret(
     Shared by the BYOK row and the platform singleton — both store the location
     + Gemini model alongside a ``pack_vertex_secret`` blob ({project_id,
     service_account}). ``api_key`` carries the service-account JSON string; the
-    adapter builds google-auth credentials from it. A malformed row falls
-    through to the next source rather than 500-ing the AI surface; ``label``
-    only identifies it in the log.
+    adapter builds google-auth credentials from it. A malformed row resolves to
+    None (logged) rather than 500-ing the AI surface — ``load_ai_config``
+    decides whether a later source may then be used; ``label`` only identifies
+    it in the log.
     """
     resolved_location = (location or "").strip() or DEFAULT_VERTEX_LOCATION
     resolved_model = (model or "").strip() or DEFAULT_VERTEX_MODEL
@@ -222,8 +271,7 @@ def _vertex_from_secret(
         # and every AI path for EVERY company, since the platform key is
         # fleet-wide. Returning None keeps it fail-closed and degradable.
         logger.exception(
-            "Vertex credentials for %s use non-resident location %r — refusing "
-            "them and falling through to the next AI source",
+            "Vertex credentials for %s use non-resident location %r — refusing them",
             label,
             resolved_location,
         )
@@ -246,7 +294,7 @@ def _decrypt_or_none(blob: bytes, label: str) -> str | None:
     Expected failures only: missing/rotated master key (MasterKeyError), corrupt
     ciphertext (InvalidToken), non-UTF8 plaintext (UnicodeDecodeError ⊂
     ValueError). A programming error (AttributeError/TypeError) must NOT be
-    swallowed as "fall through to the next source" — let it surface.
+    swallowed as an unusable credential — let it surface.
     """
     from cryptography.fernet import InvalidToken
 
@@ -255,32 +303,31 @@ def _decrypt_or_none(blob: bytes, label: str) -> str | None:
     try:
         return decrypt_secret(blob)
     except (MasterKeyError, InvalidToken, ValueError) as exc:
-        logger.exception(
-            "Decrypt failed for %s — falling through to the next AI source: %s",
-            label,
-            exc,
-        )
+        logger.exception("Decrypt failed for %s — refusing that credential: %s", label, exc)
         return None
 
 
-def _load_byok(db: Session, client_id: str) -> AIConfig | None:
-    """Return the tenant's BYOK override, or ``None`` if no row / decrypt fails.
-
-    Decrypt failures are logged but not raised — falling through to the
-    platform key is safer than 500-ing the whole AI surface when one tenant's
-    row is corrupt.
-    """
-    # Imported lazily so the auth-mode boot path doesn't need SQLAlchemy.
+def _byok_row(db: Session, client_id: str) -> ClientAIConfig | None:
+    # Imported lazily so the auth-mode boot path doesn't need the models.
     from app.models.client_ai_config import ClientAIConfig
 
-    row = db.query(ClientAIConfig).filter(ClientAIConfig.client_id == client_id).one_or_none()
-    if row is None:
-        return None
+    return (
+        db.query(ClientAIConfig).filter(ClientAIConfig.client_id == client_id).one_or_none()
+    )
+
+
+def _byok_from_row(row: ClientAIConfig, client_id: str) -> AIConfig | None:
+    """The company's own credential, or ``None`` when its row cannot be used.
+
+    Never raises for a bad row: one company's corrupt key must not 500 the AI
+    surface. ``load_ai_config`` turns ``None`` into "AI unavailable for this
+    company" — never into the platform key.
+    """
     if row.provider != "vertex":
         # Unrecognised / legacy provider (bedrock, anthropic, azure_foundry) —
-        # don't guess; fall through rather than treat it as vertex.
+        # don't guess and don't treat it as vertex.
         logger.warning(
-            "BYOK row for client %s has unsupported provider %r — ignoring",
+            "BYOK row for client %s has unsupported provider %r",
             client_id,
             row.provider,
         )
@@ -374,11 +421,24 @@ def load_ai_config(
     With ``db`` + ``client_id``, the tenant's BYOK override wins. With ``db``
     alone (background jobs without a tenant), the platform key is consulted.
     Without a session at all, only env can resolve.
+
+    The platform key and env are fallbacks only for a company with NO BYOK
+    row. A company that brought its own key chose where its data is processed
+    and billed; when that row is unusable the answer is ``None`` (callers raise
+    ``AINotConfiguredError`` and claims go to manual review), never someone
+    else's credential.
     """
     if db is not None:
         if client_id:
-            byok = _load_byok(db, client_id)
-            if byok is not None:
+            row = _byok_row(db, client_id)
+            if row is not None:
+                byok = _byok_from_row(row, client_id)
+                if byok is None:
+                    logger.warning(
+                        "BYOK credential for client %s is unusable; AI stays off for "
+                        "this company instead of falling back to the platform key",
+                        client_id,
+                    )
                 return byok
         platform = _load_platform(db)
         if platform is not None:

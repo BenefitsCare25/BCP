@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session
 
 from app.core.audit import write_audit
 from app.core.auth import CurrentUser, get_current_user
-from app.core.deps import assert_policy_year_editable, load_policy_year
+from app.core.deps import assert_policy_year_editable, load_policy_year, policy_year_company
 from app.db.session import get_db
 from app.models import PolicyYear, Product, ProductTerm
 from app.schemas.api import ProductTermOut, ProductTermUpdate
@@ -83,60 +83,61 @@ def list_product_terms(
     # A freshly-added client product has no plans/categories yet, so it isn't in
     # `resolve_terms`. Surface it with its stored override when one exists (set
     # before any plans were configured), else a default (policy-year span) row
-    # so its tab can set a period the moment it's created.
-    if user.client_id:
-        added = [
-            cp
-            for cp in db.execute(
-                select(Product).where(Product.client_id == user.client_id)
-            ).scalars()
-            if cp.id not in seen
-        ]
-        added_terms = {
-            t.product_id: t
-            for t in db.execute(
-                select(ProductTerm).where(
-                    ProductTerm.policy_year_id == py.id,
-                    ProductTerm.product_id.in_([cp.id for cp in added]),
-                )
-            ).scalars()
-        } if added else {}
-        for cp in added:
-            t = added_terms.get(cp.id)
-            start, end, is_default = term_window(
-                t.coverage_start if t else None, t.coverage_end if t else None, py
+    # so its tab can set a period the moment it's created. The catalog is the
+    # YEAR's company's, never another company's picked from a stale selection.
+    client_id = policy_year_company(py, user)
+    added = [
+        cp
+        for cp in db.execute(
+            select(Product).where(Product.client_id == client_id)
+        ).scalars()
+        if cp.id not in seen
+    ]
+    added_terms = {
+        t.product_id: t
+        for t in db.execute(
+            select(ProductTerm).where(
+                ProductTerm.policy_year_id == py.id,
+                ProductTerm.product_id.in_([cp.id for cp in added]),
             )
-            items.append(
-                ProductTermOut(
-                    product_id=cp.id,
-                    code=cp.code,
-                    display_name=cp.display_name,
-                    coverage_start=start,
-                    coverage_end=end,
-                    is_default=is_default,
-                    line=cp.line,
-                    gst_included=t.gst_included if t else None,
-                    gst_rate=t.gst_rate if t else None,
-                    free_cover_limit=(
-                        t.free_cover_limit if t and uses_life_thresholds(cp) else None
-                    ),
-                    nel_age_limit=(
-                        t.nel_age_limit if t and uses_life_thresholds(cp) else None
-                    ),
-                    underwriting_required=(
-                        bool(t.underwriting_required)
-                        if t and cp.line in ("medical", "general")
-                        else False
-                    ),
-                    policy_number=t.policy_number if t else None,
-                    policy_number_mappings=(
-                        assignment_models(t.policy_number_mappings) if t else None
-                    ),
-                    is_inpatient=is_inpatient_product(cp.code),
-                    pre_hosp_days=t.pre_hosp_days if t else None,
-                    post_hosp_days=t.post_hosp_days if t else None,
-                )
+        ).scalars()
+    } if added else {}
+    for cp in added:
+        t = added_terms.get(cp.id)
+        start, end, is_default = term_window(
+            t.coverage_start if t else None, t.coverage_end if t else None, py
+        )
+        items.append(
+            ProductTermOut(
+                product_id=cp.id,
+                code=cp.code,
+                display_name=cp.display_name,
+                coverage_start=start,
+                coverage_end=end,
+                is_default=is_default,
+                line=cp.line,
+                gst_included=t.gst_included if t else None,
+                gst_rate=t.gst_rate if t else None,
+                free_cover_limit=(
+                    t.free_cover_limit if t and uses_life_thresholds(cp) else None
+                ),
+                nel_age_limit=(
+                    t.nel_age_limit if t and uses_life_thresholds(cp) else None
+                ),
+                underwriting_required=(
+                    bool(t.underwriting_required)
+                    if t and cp.line in ("medical", "general")
+                    else False
+                ),
+                policy_number=t.policy_number if t else None,
+                policy_number_mappings=(
+                    assignment_models(t.policy_number_mappings) if t else None
+                ),
+                is_inpatient=is_inpatient_product(cp.code),
+                pre_hosp_days=t.pre_hosp_days if t else None,
+                post_hosp_days=t.post_hosp_days if t else None,
             )
+        )
     items.sort(key=lambda x: (x.code, x.display_name))
     return items
 

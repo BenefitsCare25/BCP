@@ -16,8 +16,8 @@ from app.core.deps import (
     assert_policy_year_editable,
     assert_policy_year_for_user,
     load_plan,
+    policy_year_company,
     require_broker_admin,
-    require_client_id,
     tenant_or_global,
 )
 from app.core.pagination import MAX_LIMIT
@@ -282,7 +282,7 @@ def create_plan(
 ) -> PlanOut:
     py = assert_policy_year_for_user(body.policy_year_id, user, db)
     assert_policy_year_editable(py)
-    client_id = require_client_id(user)
+    client_id = policy_year_company(py, user)
     product = db.execute(
         select(Product).where(
             Product.id == body.product_id,

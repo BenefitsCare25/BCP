@@ -34,6 +34,8 @@ from app.schemas.panel import (
     ClinicTypeFacet,
 )
 from app.services.excel_reader import open_workbook
+from app.services.roster_parser import unescape_formula_guard
+from app.services.xlsx_safe import append_safe
 
 # Canonical column order for exports — mirrors the import format so a
 # downloaded list re-uploads unchanged.
@@ -139,7 +141,9 @@ def _norm_header(value: Any) -> str:
 def _clean(value: Any) -> str | None:
     if value is None:
         return None
-    text = _WS_RE.sub(" ", str(value)).strip()
+    # Undo the export's formula guard so a downloaded list re-uploads unchanged
+    # (a "+65 ..." phone number comes back as "'+65 ...").
+    text = _WS_RE.sub(" ", str(unescape_formula_guard(value))).strip()
     return text or None
 
 
@@ -282,14 +286,16 @@ def replace_listing_clinics(
 
 
 def export_listing_workbook(clinics: list[PanelClinic]) -> bytes:
-    """Serialize clinics back to the canonical import format (round-trips)."""
+    """Serialize clinics back to the canonical import format (round-trips:
+    `_clean` strips the formula guard `append_safe` adds)."""
     wb = OpenpyxlWorkbook()
     ws = wb.active
     ws.title = "Clinics"
-    ws.append(EXPORT_HEADERS)
+    append_safe(ws, EXPORT_HEADERS)
     for c in clinics:
         hours = c.hours or {}
-        ws.append(
+        append_safe(
+            ws,
             [
                 c.code,
                 c.name,
@@ -310,7 +316,7 @@ def export_listing_workbook(clinics: list[PanelClinic]) -> bytes:
                 c.latitude,
                 c.longitude,
                 c.google_map_url,
-            ]
+            ],
         )
     buf = BytesIO()
     wb.save(buf)

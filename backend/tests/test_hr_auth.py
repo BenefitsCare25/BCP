@@ -18,7 +18,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 from app.api.v1.hr_auth import _company_name  # noqa: E402
 from app.core import totp as T  # noqa: E402
-from app.core.auth import DEMO_CLIENT_ID  # noqa: E402
+from app.core.auth import DEMO_BROKER_FIRM_ID, DEMO_CLIENT_ID, DEMO_USER_ID  # noqa: E402
 from app.db.base import Base  # noqa: E402
 from app.db.session import SessionLocal, engine  # noqa: E402
 from app.main import app  # noqa: E402
@@ -222,6 +222,11 @@ def test_refresh_and_reuse_detection(api: TestClient):
         cookies={cookie_name: old_refresh},
     )
     assert reuse.status_code == 401
+    # Filed against the replayed session's own subject and company.
+    rows = _events("token_reuse_detected", acct["user_id"])
+    assert len(rows) == 1
+    assert rows[0].client_id == DEMO_CLIENT_ID
+    assert rows[0].subject_type == "user"
 
 
 # ── Cross-tenant defense ───────────────────────────────────────────────────────
@@ -232,13 +237,14 @@ def test_login_rejected_on_other_tenant_subdomain(api: TestClient):
         json={"token": acct["set_password_token"], "password": STRONG_PW},
         headers=_tenant(),
     )
-    # Demo HR creds presented on Client B's subdomain → no grant there → 401.
+    # Client B belongs to another broker firm, so on the demo firm's host its
+    # alias names no company at all → 404, before any credential is checked.
     res = api.post(
         "/api/v1/hr/auth/login",
         json={"identifier": "hr.iso@democo.test", "password": STRONG_PW},
         headers=_tenant(BETA_SLUG),
     )
-    assert res.status_code == 401
+    assert (res.status_code, res.json()["detail"]) == (404, "Unknown tenant.")
 
 
 def test_access_token_rejected_across_tenant(api: TestClient):
@@ -631,3 +637,288 @@ def test_admin_password_reset_is_recorded_with_its_actor(api: TestClient):
     assert rows[0].detail["reason"] == "admin_reset"
     assert rows[0].detail["actor_user_id"]
 
+
+# ── Link supersession and authenticator reset ──────────────────────────────────
+@pytest.mark.parametrize("reissued", [False, True])
+def test_a_reissued_set_password_link_cancels_the_earlier_one(api: TestClient, reissued: bool):
+    """Each reset used to leave every earlier link redeemable until it expired,
+    so an old link in a forwarded email could still set the password."""
+    from datetime import UTC, datetime, timedelta
+
+    from app.core import hr_auth as HR
+    from app.models import AuthCredential
+
+    acct = _provision_hr(api, f"hr.relink{int(reissued)}@democo.test")
+    user_id = acct["user_id"]
+    # A link handed out a minute ago through the same path (stamp + token).
+    earlier = datetime.now(UTC) - timedelta(minutes=1)
+    with SessionLocal() as s:
+        cred = s.query(AuthCredential).filter(AuthCredential.user_id == user_id).one()
+        cred.password_token_issued_at = earlier
+        version = HR.credential_version(cred)
+        s.commit()
+    first = HR.issue_set_password_token(user_id, version, issued_at=earlier)
+
+    def redeem(token: str):
+        return api.post(
+            "/api/v1/hr/auth/set-password",
+            json={"token": token, "password": STRONG_PW},
+            headers=_tenant(),
+        )
+
+    if not reissued:
+        assert redeem(first).status_code == 200
+        return
+    second = api.post(f"/api/v1/hr-admin/accounts/{user_id}/reset-password")
+    assert second.status_code == 200, second.text
+    refused = redeem(first)
+    assert refused.status_code == 401
+    assert refused.json()["detail"] == "A newer reset link has been issued. Use the latest one."
+    accepted = redeem(second.json()["set_password_token"])
+    assert accepted.status_code == 200, accepted.text
+
+
+def test_admin_reset_authenticator_clears_it_and_ends_sessions(api: TestClient):
+    from app.models import AuditLog, AuthMfa
+
+    _set_policy(api, breach_check_enabled=False, mfa_hr_enabled=True)
+    try:
+        acct = _provision_hr(api, "hr.lostphone@democo.test")
+        user_id = acct["user_id"]
+        sp = api.post(
+            "/api/v1/hr/auth/set-password",
+            json={"token": acct["set_password_token"], "password": STRONG_PW},
+            headers=_tenant(),
+        )
+        auth = {**_bearer(sp.json()["access_token"]), **_tenant()}
+        secret = api.post("/api/v1/hr/auth/mfa/enroll/start", headers=auth).json()["secret"]
+        assert api.post(
+            "/api/v1/hr/auth/mfa/enroll/confirm", json={"code": _code(secret)}, headers=auth,
+        ).status_code == 200
+
+        res = api.post(f"/api/v1/hr-admin/accounts/{user_id}/mfa/reset")
+        assert res.status_code == 204, res.text
+        assert res.content == b""
+        with SessionLocal() as s:
+            assert s.query(AuthMfa).filter(AuthMfa.subject_id == user_id).count() == 0
+            audit = s.query(AuditLog).filter(
+                AuditLog.action == "mfa_reset", AuditLog.entity_id == user_id,
+            ).one()
+            assert audit.entity_type == "hr_account"
+            assert audit.client_id == DEMO_CLIENT_ID
+        # The security trail records the reset with the admin who did it.
+        [event] = _events("mfa_reset", user_id)
+        assert (event.surface, event.subject_type, event.outcome) == ("hr", "user", "success")
+        assert (event.client_id, event.broker_firm_id) == (DEMO_CLIENT_ID, DEMO_BROKER_FIRM_ID)
+        assert event.detail == {"sessions_revoked": 1, "actor_user_id": DEMO_USER_ID}
+        # The live session (possibly on the lost phone) ended; the next sign-in
+        # is password-only until a new authenticator is enrolled.
+        assert api.get("/api/v1/hr/auth/me", headers=auth).status_code == 401
+        login = api.post(
+            "/api/v1/hr/auth/login",
+            json={"identifier": "hr.lostphone@democo.test", "password": STRONG_PW},
+            headers=_tenant(),
+        )
+        assert login.json()["status"] == "authenticated"
+    finally:
+        _set_policy(api, mfa_hr_enabled=False)
+
+
+def test_admin_reset_authenticator_is_firm_scoped(api: TestClient):
+    from datetime import UTC, datetime
+
+    from app.core import passwords as PW
+    from app.models import AuthCredential, AuthMfa, User, UserClientAccess
+
+    with SessionLocal() as s:
+        other = User(
+            email="hr.otherfirm@beta.test", broker_firm_id=FIRM_B,
+            role="client_hr", status="active",
+        )
+        s.add(other)
+        s.flush()
+        other_id = other.id
+        s.add(UserClientAccess(user_id=other_id, client_id=CLIENT_B))
+        s.add(AuthCredential(
+            user_id=other_id, broker_firm_id=FIRM_B, hr_login_id="HR-OTHER1",
+            password_hash=PW.hash_password(STRONG_PW),
+        ))
+        s.add(AuthMfa(
+            subject_type="user", subject_id=other_id, totp_secret_enc="unused",
+            confirmed_at=datetime.now(UTC),
+        ))
+        s.commit()
+    # Mock broker_admin belongs to the demo firm; the account is in Firm B.
+    res = api.post(f"/api/v1/hr-admin/accounts/{other_id}/mfa/reset")
+    assert res.status_code == 404
+    with SessionLocal() as s:
+        assert s.query(AuthMfa).filter(AuthMfa.subject_id == other_id).count() == 1
+
+
+
+def test_admin_actions_are_filed_under_the_accounts_company(api: TestClient, system_admin_request):
+    """A system admin reaches another firm's HR accounts (here through a write
+    access grant) with whichever company it has selected (here the demo
+    company). Each audit row and auth event must name the ACCOUNT's company, or
+    the action lands in the wrong company's activity and is missing from the
+    right one."""
+    from datetime import UTC, datetime, timedelta
+
+    from app.core import passwords as PW
+    from app.models import AuditLog, AuthCredential, AuthMfa, User, UserClientAccess
+    from app.models.platform import PlatformAccessGrant
+
+    with SessionLocal() as s:
+        s.add(PlatformAccessGrant(
+            user_id=DEMO_USER_ID, broker_firm_id=FIRM_B, scope="write",
+            reason="Reset HR sign-in for Firm B support case",
+            expires_at=datetime.now(UTC) + timedelta(hours=1),
+        ))
+        target = User(
+            email="hr.stamped@beta.test", broker_firm_id=FIRM_B,
+            role="client_hr", status="active",
+        )
+        s.add(target)
+        s.flush()
+        target_id = target.id
+        s.add(UserClientAccess(user_id=target_id, client_id=CLIENT_B))
+        s.add(AuthCredential(
+            user_id=target_id, broker_firm_id=FIRM_B, hr_login_id="HR-STAMP1",
+            password_hash=PW.hash_password(STRONG_PW),
+        ))
+        s.add(AuthMfa(
+            subject_type="user", subject_id=target_id, totp_secret_enc="unused",
+            confirmed_at=datetime.now(UTC),
+        ))
+        s.commit()
+
+    base = f"/api/v1/hr-admin/accounts/{target_id}"
+    for path in ("regenerate-login-id", "reset-password", "mfa/reset", "disable", "enable"):
+        res = system_admin_request(api, "POST", f"{base}/{path}")
+        assert res.status_code in (200, 204), (path, res.text)
+    created = system_admin_request(api, "POST", "/api/v1/hr-admin/accounts", json={
+        "client_id": CLIENT_B, "email": "hr.stamped.new@beta.test",
+    })
+    assert created.status_code == 201, created.text
+    policy = system_admin_request(
+        api, "PUT", f"/api/v1/hr-admin/clients/{CLIENT_B}/auth-policy",
+        json={"breach_check_enabled": False},
+    )
+    assert policy.status_code == 200, policy.text
+
+    with SessionLocal() as s:
+        rows = s.query(AuditLog).filter(
+            AuditLog.entity_id.in_([target_id, created.json()["user_id"], CLIENT_B]),
+            AuditLog.entity_type.in_(["hr_account", "client_auth_policy"]),
+        ).all()
+        stamps = sorted((r.entity_type, r.action, r.client_id, r.cross_tenant_access)
+                        for r in rows)
+    assert stamps == sorted(
+        [("hr_account", action, CLIENT_B, True)
+         for action in ("update", "reset_password", "mfa_reset", "disable", "enable",
+                        "create")]
+        + [("client_auth_policy", "update", CLIENT_B, True)]
+    )
+    for event_type in ("password_reset_request", "mfa_reset"):
+        [event] = _events(event_type, target_id)
+        assert (event.client_id, event.broker_firm_id) == (CLIENT_B, FIRM_B)
+        assert event.detail["actor_user_id"] == DEMO_USER_ID
+
+
+# ── An HR session belongs to one broker's host ───────────────────────────────
+
+HR_ALIAS = "hr-shared-co"
+
+
+@pytest.fixture
+def hr_two_brokers():
+    """Brokers A and B on their own client domains (A also has a staff-only
+    one), each with a company aliased `hr-shared-co` and an HR user there."""
+    from app.core import passwords as PW
+    from app.models import AuthCredential, AuthEvent, AuthSession, User, UserClientAccess
+    from app.models.platform import TenantDomain
+
+    ids: dict[str, list[str]] = {"firms": [], "clients": [], "users": []}
+    with SessionLocal() as s:
+        for key in ("a", "b"):
+            firm = BrokerFirm(name=f"HR broker {key}", slug=f"hr-broker-{key}")
+            s.add(firm)
+            s.flush()
+            s.add(TenantDomain(broker_firm_id=firm.id, hostname=f"hr.broker-{key}.test",
+                               surface="client", is_primary=True, status="active"))
+            company = Client(name=f"HR shared {key}", broker_firm_id=firm.id, slug=HR_ALIAS)
+            user = User(email=f"hr.{key}@shared.test", broker_firm_id=firm.id,
+                        role="client_hr", status="active")
+            s.add_all([company, user])
+            s.flush()
+            s.add(UserClientAccess(user_id=user.id, client_id=company.id))
+            s.add(AuthCredential(user_id=user.id, broker_firm_id=firm.id,
+                                 hr_login_id=f"HR-SHRD{key.upper()}",
+                                 password_hash=PW.hash_password(STRONG_PW)))
+            ids["firms"].append(firm.id)
+            ids["clients"].append(company.id)
+            ids["users"].append(user.id)
+        s.add(TenantDomain(broker_firm_id=ids["firms"][0], hostname="staff.broker-a.test",
+                           surface="staff", is_primary=True, status="active"))
+        s.commit()
+    try:
+        yield ids
+    finally:
+        with SessionLocal() as s:
+            for model, column, values in (
+                (AuthSession, AuthSession.client_id, ids["clients"]),
+                (AuthEvent, AuthEvent.client_id, ids["clients"]),
+                (AuthCredential, AuthCredential.user_id, ids["users"]),
+                (UserClientAccess, UserClientAccess.user_id, ids["users"]),
+                (User, User.id, ids["users"]),
+                (Client, Client.id, ids["clients"]),
+                (TenantDomain, TenantDomain.broker_firm_id, ids["firms"]),
+                (BrokerFirm, BrokerFirm.id, ids["firms"]),
+            ):
+                s.query(model).filter(column.in_(values)).delete(synchronize_session=False)
+            s.commit()
+
+
+def _hr_on(host: str) -> TestClient:
+    return TestClient(app, base_url=f"http://{host}")
+
+
+def _hr_login(api: TestClient, email: str):
+    return api.post(
+        "/api/v1/hr/auth/login",
+        json={"identifier": email, "password": STRONG_PW},
+        headers=_tenant(HR_ALIAS),
+    )
+
+
+def test_hr_session_is_refused_on_another_brokers_host(hr_two_brokers):
+    on_a = _hr_login(_hr_on("hr.broker-a.test"), "hr.a@shared.test")
+    assert on_a.status_code == 200, on_a.text
+    assert on_a.json()["me"]["client_id"] == hr_two_brokers["clients"][0]
+    headers = {**_tenant(HR_ALIAS), **_bearer(on_a.json()["access_token"])}
+
+    assert _hr_on("hr.broker-a.test").get("/api/v1/hr/auth/me", headers=headers).status_code == 200
+    # Same alias, other broker: that host's company, which this session is not.
+    refused = _hr_on("hr.broker-b.test").get("/api/v1/hr/auth/me", headers=headers)
+    assert (refused.status_code, refused.json()["detail"]) == (404, "Unknown tenant.")
+    # Even with no alias named, the session's company is not B's.
+    bare = _hr_on("hr.broker-b.test").get(
+        "/api/v1/hr/auth/me", headers=_bearer(on_a.json()["access_token"])
+    )
+    assert bare.status_code == 404
+
+
+def test_hr_sign_in_resolves_the_alias_within_the_hosts_broker(hr_two_brokers):
+    on_b = _hr_login(_hr_on("hr.broker-b.test"), "hr.b@shared.test")
+    assert on_b.status_code == 200, on_b.text
+    assert on_b.json()["me"]["client_id"] == hr_two_brokers["clients"][1]
+    # A's HR user does not exist in B's company of the same alias.
+    assert _hr_login(_hr_on("hr.broker-b.test"), "hr.a@shared.test").status_code == 401
+
+
+def test_hr_portal_is_not_served_on_a_staff_only_host(hr_two_brokers):
+    on_a = _hr_login(_hr_on("hr.broker-a.test"), "hr.a@shared.test")
+    staff = _hr_on("staff.broker-a.test")
+    assert _hr_login(staff, "hr.a@shared.test").status_code == 404
+    headers = {**_tenant(HR_ALIAS), **_bearer(on_a.json()["access_token"])}
+    assert staff.get("/api/v1/hr/auth/me", headers=headers).status_code == 404

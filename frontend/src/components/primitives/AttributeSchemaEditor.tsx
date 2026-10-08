@@ -1,4 +1,4 @@
-import { SystemAdminOnly } from "@/components/auth/SystemAdminOnly";
+import { FirmOwnerOnly } from "@/components/auth/FirmOwnerOnly";
 import { Pencil, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -130,7 +130,7 @@ export function AttributeSchemaEditor({
                       </Button>
                     )}
                     {onDelete && (
-                      <SystemAdminOnly><Button
+                      <FirmOwnerOnly><Button
                         variant="ghost"
                         size="icon-sm"
                         disabled={locked}
@@ -142,7 +142,7 @@ export function AttributeSchemaEditor({
                         className="text-error hover:text-error"
                       >
                         <Trash2 className="size-3.5" />
-                      </Button></SystemAdminOnly>
+                      </Button></FirmOwnerOnly>
                     )}
                   </div>
                 </TableCell>

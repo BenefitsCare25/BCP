@@ -11,10 +11,14 @@ not plan hydration or the review.
 """
 from __future__ import annotations
 
+import asyncio
+import io
 import itertools
+import logging
 import os
 from datetime import UTC, date, datetime
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 
@@ -790,6 +794,136 @@ def test_broker_viewer_cannot_remove_claim_evidence(
         f"/api/v1/claims/{claim['id']}/documents/{document['id']}",
         params={"expected_revision": claim["revision"]},
     ).status_code == 403
+
+
+# ── Evidence is filed and read under the claim company's firm ────────────────
+
+
+def _firm_less_admin() -> CurrentUser:
+    # A platform admin belongs to no firm; it works through the selected company.
+    return CurrentUser(
+        user_id="00000000-0000-0000-0000-0000000000a1",
+        broker_firm_id=None,
+        client_id=DEMO_CLIENT_ID,
+        role="system_admin",
+    )
+
+
+def test_a_firm_less_admin_works_a_claim_under_the_companys_firm(anon: TestClient):
+    """Building the storage key from the ACTOR's firm 500'd a platform admin's
+    upload, and rerun refused it with a 409. Both now take the firm from the
+    claim's company, and the admin's read lands in that company's trail."""
+    claim = _submitted(anon, b" firm-less admin")
+    app.dependency_overrides[get_current_user] = _firm_less_admin
+    try:
+        admin = TestClient(app)
+        added = admin.post(
+            f"/api/v1/claims/{claim['id']}/documents",
+            files={"file": ("estimate.pdf", PDF + b" estimate", "application/pdf")},
+        )
+        assert added.status_code == 201, added.text
+        doc_id = added.json()["id"]
+        downloaded = admin.get(f"/api/v1/claims/{claim['id']}/documents/{doc_id}/download")
+        rerun = admin.post(f"/api/v1/claims/{claim['id']}/rerun-review")
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+
+    assert downloaded.status_code == 200
+    assert downloaded.content == PDF + b" estimate"
+    assert rerun.status_code == 200, rerun.text
+    with SessionLocal() as session:
+        stored = session.get(StoredDocument, doc_id)
+        assert stored.storage_path.startswith(f"{DEMO_BROKER_FIRM_ID}/{DEMO_CLIENT_ID}/claim/")
+        access = (
+            session.query(AuditLog)
+            .filter_by(entity_id=doc_id, action="claim.document.download")
+            .one()
+        )
+        assert access.client_id == DEMO_CLIENT_ID
+        assert access.cross_tenant_access is True
+
+
+def test_a_document_is_never_filed_for_another_firm():
+    """The caller's firm is only checked against the company's: a mismatch is a
+    tenancy fault, refused before a byte is stored."""
+    from fastapi import UploadFile
+
+    from app.services.claims import attach_document
+
+    upload = UploadFile(io.BytesIO(PDF), filename="receipt.pdf")
+    with SessionLocal() as session, pytest.raises(RuntimeError, match="different broker firm"):
+        asyncio.run(
+            attach_document(
+                session,
+                client_id=DEMO_CLIENT_ID,
+                broker_firm_id="another-firm",
+                entity_type="claim",
+                entity_id="no-such-claim",
+                file=upload,
+            )
+        )
+
+
+def _point_at_another_tenant(doc_id: str, content: bytes) -> str:
+    """Re-point a document row at a key filed under another firm and company
+    that really holds bytes — what a copied or tampered row would reach."""
+    from app.core.storage import get_storage
+
+    foreign = f"other-firm/other-client/claim/{uuid4()}/{uuid4()}.pdf"
+    get_storage().save(io.BytesIO(content), foreign)
+    with SessionLocal() as session:
+        session.get(StoredDocument, doc_id).storage_path = foreign
+        session.commit()
+    return foreign
+
+
+def test_a_row_pointing_at_another_tenant_is_never_served(
+    anon: TestClient, broker: TestClient, caplog: pytest.LogCaptureFixture
+):
+    from app.core.storage import get_storage
+
+    claim = _submitted(anon, b" foreign-read")
+    doc_id = _get(anon, claim["id"])["documents"][0]["id"]
+    foreign = _point_at_another_tenant(doc_id, PDF + b" another tenant")
+    try:
+        path = f"/claims/{claim['id']}/documents/{doc_id}/download"
+        with caplog.at_level(logging.ERROR, logger="app.services.claims"):
+            as_broker = broker.get(f"/api/v1{path}")
+            as_member = anon.get(f"/api/v1/portal{path}", headers=_auth())
+    finally:
+        get_storage().delete(foreign)
+
+    assert (as_broker.status_code, as_member.status_code) == (404, 404)
+    assert b"another tenant" not in as_broker.content + as_member.content
+    refusals = [
+        r for r in caplog.records
+        if getattr(r, "error_code", None) == "storage_scope_violation"
+    ]
+    assert len(refusals) == 2
+
+
+def test_deferred_deletion_never_removes_another_tenants_blob(anon: TestClient):
+    from app.core.storage import get_storage
+    from app.services.claims import retry_pending_document_deletes
+
+    claim = _submitted(anon, b" foreign-delete")
+    doc_id = _get(anon, claim["id"])["documents"][0]["id"]
+    foreign = _point_at_another_tenant(doc_id, b"another tenant's evidence")
+    try:
+        with SessionLocal() as session:
+            session.get(StoredDocument, doc_id).storage_state = "delete_pending"
+            session.commit()
+            retry_pending_document_deletes(session)
+            session.commit()
+            kept = session.get(StoredDocument, doc_id)
+            assert kept is not None and kept.storage_state == "delete_pending"
+            assert "outside its firm and company" in (kept.delete_error or "")
+        assert get_storage().read(foreign) == b"another tenant's evidence"
+    finally:
+        get_storage().delete(foreign)
+        with SessionLocal() as session:
+            session.delete(session.get(StoredDocument, doc_id))
+            session.commit()
 
 
 # ── The record ───────────────────────────────────────────────────────────────

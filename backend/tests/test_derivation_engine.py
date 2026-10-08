@@ -1,8 +1,25 @@
-"""Unit tests for schema-driven attribute derivation."""
+"""Unit tests for schema-driven attribute derivation, and the guard that keeps a
+derivation pattern from backtracking exponentially (ReDoS)."""
 from __future__ import annotations
 
+import re
+from collections.abc import Iterator
+
+import pytest
+from fastapi.testclient import TestClient
+
+from app.core.auth import DEMO_BROKER_FIRM_ID, DEMO_CLIENT_ID, CurrentUser, get_current_user
+from app.db.session import SessionLocal
+from app.main import app
 from app.models.schema_def import EmployeeAttributeSchema
-from app.services.derivation_engine import derive
+from app.services.derivation_engine import (
+    MAX_MATCH_INPUT,
+    MAX_PATTERN_LENGTH,
+    apply_rule,
+    derive,
+    pattern_error,
+    rule_pattern_error,
+)
 
 
 def _schema(attribute_id: str, rule: dict | None) -> EmployeeAttributeSchema:
@@ -199,3 +216,131 @@ def test_multiple_schemas_independent() -> None:
         schemas,
     )
     assert out == {"grade": 12, "family_status": "M", "pass": "EP"}
+
+
+# ── ReDoS guard ──────────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "pattern",
+    [
+        r"(a+)+", r"(.*)*", r"(\w+)*", r"(a|aa)+", r"((ab)+)+", r"(a?)+",
+        r"(\d{2,4})+", r"(?:\s|-)+", r"(a+)(?#comment)+", r"(?:x(a|b)y){2}",
+    ],
+)
+def test_nested_repetition_is_refused(pattern: str) -> None:
+    problem = pattern_error(pattern)
+    assert problem is not None
+    assert "exponential time" in problem
+
+
+@pytest.mark.parametrize(
+    "pattern",
+    [
+        r"\b(\d{1,2})\b",
+        r"^\s*([A-Za-z0-9]+)",
+        r"(?i)\bintern(?:s)?\b(?!.*oversea)",
+        r"(?i)(?:married|spouse).{0,40}(?:2|two)\s*(?:child|children|kids?)",
+        r"(?i)board\s*of\s*directors|\bbod\b",
+        r"(\d{3})+",
+        r"[(+*]+(x)",
+    ],
+)
+def test_ordinary_patterns_pass(pattern: str) -> None:
+    assert pattern_error(pattern) is None
+
+
+def test_overlong_invalid_and_verbose_patterns_are_refused() -> None:
+    assert pattern_error("a" * (MAX_PATTERN_LENGTH + 1)) == (
+        f"Derivation patterns must be at most {MAX_PATTERN_LENGTH} characters."
+    )
+    assert "not a valid regular expression" in (pattern_error("[") or "")
+    assert "verbose mode" in (pattern_error(r"(?x)(a +) +") or "")
+    assert pattern_error(12) == "Derivation patterns must be text."
+
+
+def test_rule_check_reads_every_regex_case() -> None:
+    rule = {
+        "op": "regex_case",
+        "source": "category",
+        "cases": [{"pattern": r"(?i)married", "value": "M"}, {"pattern": r"(a|aa)+$"}],
+    }
+    assert "(a|aa)+$" in (rule_pattern_error(rule) or "")
+    assert rule_pattern_error({"op": "regex_extract", "pattern": r"Grade\s+(\d+)"}) is None
+    assert rule_pattern_error({"op": "value_map", "mappings": []}) is None
+
+
+def test_a_stored_unsafe_pattern_never_runs() -> None:
+    """Rules saved before the check existed are refused by the engine too."""
+    rule = {"op": "regex_extract", "source": "category", "pattern": r"(a+)+$"}
+    assert derive({"category": "a" * 40 + "!"}, [_schema("grade", rule)]) == {}
+    with pytest.raises(re.error, match="unsafe derivation pattern"):
+        apply_rule(rule, {"category": "aaa!"})
+
+
+def test_patterns_only_read_the_start_of_an_oversized_value() -> None:
+    rule = {"op": "regex_extract", "source": "category", "pattern": r"Grade\s+(\d+)"}
+    near = "x" * (MAX_MATCH_INPUT - 20) + " Grade 7"
+    far = "x" * MAX_MATCH_INPUT + " Grade 7"
+    assert derive({"category": near}, [_schema("grade", rule)]) == {"grade": "7"}
+    assert derive({"category": far}, [_schema("grade", rule)]) == {}
+
+
+GLOBAL_SCHEMA_ID = "00000000-0000-0000-0000-0000000de001"
+
+
+@pytest.fixture
+def schemas_api() -> Iterator[TestClient]:
+    with SessionLocal() as db:
+        db.query(EmployeeAttributeSchema).filter(
+            EmployeeAttributeSchema.id == GLOBAL_SCHEMA_ID
+        ).delete()
+        db.add(EmployeeAttributeSchema(
+            id=GLOBAL_SCHEMA_ID, client_id=None, attribute_id="redos_probe",
+            display_name="ReDoS probe", data_type="string",
+        ))
+        db.commit()
+    app.dependency_overrides[get_current_user] = lambda: CurrentUser(
+        user_id="00000000-0000-0000-0000-0000000de0ff",
+        broker_firm_id=DEMO_BROKER_FIRM_ID,
+        client_id=DEMO_CLIENT_ID,
+        role="broker_admin",
+    )
+    try:
+        with TestClient(app) as client:
+            yield client
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+        with SessionLocal() as db:
+            db.query(EmployeeAttributeSchema).filter(
+                EmployeeAttributeSchema.id == GLOBAL_SCHEMA_ID
+            ).delete()
+            db.commit()
+
+
+def test_attribute_endpoints_refuse_unsafe_patterns(schemas_api: TestClient) -> None:
+    unsafe = {"op": "regex_extract", "source": "category", "pattern": r"(\w+)*$"}
+    created = schemas_api.post(
+        "/api/v1/schemas/employee-attributes",
+        json={
+            "attribute_id": "redos_new", "display_name": "ReDoS", "data_type": "string",
+            "derivation_rule": unsafe,
+        },
+    )
+    patched = schemas_api.patch(
+        f"/api/v1/schemas/employee-attributes/{GLOBAL_SCHEMA_ID}",
+        json={"derivation_rule": {"op": "regex_case", "source": "category",
+                                  "cases": [{"pattern": r"(a|aa)+", "value": "A"}]}},
+    )
+    safe = schemas_api.patch(
+        f"/api/v1/schemas/employee-attributes/{GLOBAL_SCHEMA_ID}",
+        json={"derivation_rule": {"op": "regex_extract", "source": "category",
+                                  "pattern": r"Grade\s+(\d+)"}},
+    )
+
+    assert created.status_code == 422
+    assert "exponential time" in created.json()["detail"]
+    assert patched.status_code == 422
+    assert "(a|aa)+" in patched.json()["detail"]
+    assert safe.status_code == 200, safe.text
+    assert safe.json()["derivation_rule"]["pattern"] == r"Grade\s+(\d+)"

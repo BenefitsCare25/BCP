@@ -7,6 +7,8 @@ import { ArrowRight } from "lucide-react";
 import { adoptSession, isTokenResult, useHrLogin, useHrMfa } from "@/api/hr";
 import { errorCode, formatError } from "@/lib/errors";
 import { loginError, validateCredentials, type LoginFieldErrors } from "@/lib/loginValidation";
+import { handOverSetPasswordChallenge } from "@/lib/setPasswordToken";
+import { useSessionEndNotice } from "@/lib/surfaceSession";
 import { useHrSession } from "@/stores/hrSession";
 import { hrPath } from "@/lib/tenant";
 import { MFA_CODE_MAX_LENGTH, canSubmitMfaCode, normalizeMfaCode } from "@/lib/mfa";
@@ -32,7 +34,10 @@ export function HrSignInPage() {
   const [password, setPassword] = useState("");
   const [code, setCode] = useState("");
   const [challenge, setChallenge] = useState("");
-  const [error, setError] = useState<string | null>(null);
+  // Why the last session ended when the company's HR access was switched off
+  // mid-session (`hrClient.ts`); replaced by the next submit's outcome.
+  const endNotice = useSessionEndNotice("hr");
+  const [error, setError] = useState<string | null>(endNotice);
   const [company, setCompany] = useState("");
   const companyRequired = useCompanyRequired();
   const [fieldErrors, setFieldErrors] = useState<LoginFieldErrors>({});
@@ -66,9 +71,11 @@ export function HrSignInPage() {
             setChallenge(data.challenge_token);
             setStep("mfa");
           } else if (data.status === "password_reset_required") {
-            window.location.assign(
-              hrPath(`/hr/set-password?token=${encodeURIComponent(data.challenge_token)}`),
-            );
+            // Through tab storage, never the address bar (history, logs,
+            // Referer); an in-app move keeps the memory fallback alive when
+            // storage is blocked.
+            handOverSetPasswordChallenge("hr", data.challenge_token);
+            void navigate({ href: hrPath("/hr/set-password") });
           }
         },
         // 423 (locked out) and 429 (rate limited) must reach the user —

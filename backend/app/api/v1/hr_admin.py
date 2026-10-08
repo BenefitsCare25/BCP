@@ -1,7 +1,10 @@
 """Broker-side provisioning of HR credential accounts.
 
 Registered INSIDE the broker router loop (`require_write_access`); every action
-is `require_firm_admin`-gated. Creating an HR account provisions a `User`
+is `require_firm_admin`-gated. A platform admin reaches another firm's HR
+accounts only through its access model (standing access to the platform owner's
+firm, else an active grant; a write grant to change anything), like the rest of
+that firm's data. Creating an HR account provisions a `User`
 (role `client_hr`/`client_admin`, status `invited`) + a `UserClientAccess`
 grant to the client + an `AuthCredential` with a system-generated HR login id
 and an unusable placeholder password. The HR admin sets their own password via
@@ -23,9 +26,10 @@ from app.core import hr_auth as HR
 from app.core import passwords as PW
 from app.core import sessions as SESS
 from app.core.audit import write_audit
-from app.core.auth import CurrentUser
-from app.core.deps import require_firm_admin
+from app.core.auth import ROLE_SYSTEM_ADMIN, CurrentUser
+from app.core.deps import assert_platform_firm_access, require_firm_admin
 from app.core.request_context import client_ip, user_agent
+from app.core.tenant_resolution import client_origin
 from app.db.session import get_db
 from app.models import AuthCredential, Client, User, UserClientAccess
 from app.models.auth import SUBJECT_USER
@@ -38,14 +42,20 @@ from app.models.user import (
 router = APIRouter(prefix="/hr-admin", tags=["hr-admin"])
 
 _MAX_LOGIN_ID_TRIES = 6
+_EMAIL_TAKEN = "This email already has an account in this firm."
 
 
-def _load_firm_client(db: Session, user: CurrentUser, client_id: str) -> Client:
+def _load_firm_client(
+    db: Session, user: CurrentUser, client_id: str, *, write: bool
+) -> Client:
     client = db.get(Client, client_id)
     if client is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Client not found")
-    if user.role != "system_admin" and client.broker_firm_id != user.broker_firm_id:
+    if user.role != ROLE_SYSTEM_ADMIN and client.broker_firm_id != user.broker_firm_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Client not found")
+    assert_platform_firm_access(
+        db, user, client.broker_firm_id, write=write, not_found="Client not found"
+    )
     return client
 
 
@@ -74,8 +84,14 @@ def _load_hr_user(db: Session, actor: CurrentUser, user_id: str) -> tuple[User, 
     )
     if target is None or cred is None or target.role not in HR.HR_ROLES:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "HR account not found")
-    if actor.role != "system_admin" and target.broker_firm_id != actor.broker_firm_id:
+    if actor.role != ROLE_SYSTEM_ADMIN and target.broker_firm_id != actor.broker_firm_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "HR account not found")
+    if not target.broker_firm_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "HR account not found")
+    # Every caller of this loader changes the account.
+    assert_platform_firm_access(
+        db, actor, target.broker_firm_id, write=True, not_found="HR account not found"
+    )
     return target, cred
 
 
@@ -101,6 +117,8 @@ class HrAccountOut(BaseModel):
     # `{tenant_slug}.hr.<base>`, NOT on the broker host the admin is using, so
     # the UI needs it to build an absolute (clickable, emailable) URL.
     tenant_slug: str | None = None
+    # The broker's address for HR links (`https://host`); None when it has none.
+    client_origin: str | None = None
 
 
 class HrAccountCreated(HrAccountOut):
@@ -161,6 +179,7 @@ def _account_out(db: Session, user: User, cred: AuthCredential, client_id: str) 
         mfa_enrolled=HR.user_has_confirmed_mfa(db, user.id),
         last_login_at=cred.last_login_at,
         tenant_slug=client.slug if client else None,
+        client_origin=client_origin(db, client.broker_firm_id) if client else None,
     )
 
 
@@ -173,6 +192,35 @@ def _client_id_for(db: Session, user_id: str) -> str | None:
     return client_id if isinstance(client_id, str) else None
 
 
+def _record_admin_action(
+    db: Session, request: Request, actor: CurrentUser, target: User, client_id: str | None,
+    *, event_type: str, detail: dict[str, Any],
+) -> None:
+    """Security-trail row for a credential action an admin took on an HR user.
+
+    Subject is the account acted on; the admin who did it goes in `detail`, so
+    the trail answers "who reset whom" on its own rather than having to be
+    joined against the broker audit log. Filed under the TARGET's company and
+    firm, not the actor's: `_load_hr_user` lets a `system_admin` cross firms,
+    and an event under the actor's firm is invisible to the firm whose account
+    was actually reset, and mis-attributed in another.
+    """
+    EV.write_auth_event(
+        db,
+        event_type=event_type,
+        outcome=EV.OUTCOME_SUCCESS,
+        surface="hr",
+        subject_type=SUBJECT_USER,
+        subject_id=target.id,
+        client_id=client_id,
+        broker_firm_id=target.broker_firm_id,
+        ip=client_ip(request),
+        user_agent=user_agent(request),
+        subdomain=request.headers.get("host"),
+        detail={**detail, "actor_user_id": actor.user_id},
+    )
+
+
 # ── Endpoints ──────────────────────────────────────────────────────────────────
 @router.post("/accounts", response_model=HrAccountCreated, status_code=201)
 def create_account(
@@ -182,15 +230,17 @@ def create_account(
 ) -> HrAccountCreated:
     if body.role not in HR.HR_ROLES:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid HR role.")
-    client = _load_firm_client(db, user, body.client_id)
+    client = _load_firm_client(db, user, body.client_id, write=True)
     firm_id = client.broker_firm_id
     email = body.email.strip().lower()
     if "@" not in email or "." not in email.split("@")[-1]:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid email address.")
-    if db.query(User).filter(User.email == email).one_or_none() is not None:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT, "That email is already registered on the platform."
-        )
+    # Email is unique per firm; the message never speaks for another firm.
+    taken = db.query(User.id).filter(
+        User.email == email, User.broker_firm_id == firm_id
+    ).first()
+    if taken is not None:
+        raise HTTPException(status.HTTP_409_CONFLICT, _EMAIL_TAKEN)
 
     new_user = User(
         external_id=None,
@@ -214,18 +264,17 @@ def create_account(
     )
     db.add(cred)
     db.flush()
-    token = HR.issue_set_password_token(new_user.id, HR.credential_version(cred))
+    token = HR.issue_set_password_link(cred)
     write_audit(
         db, user, action="create", entity_type="hr_account", entity_id=new_user.id,
         after={"email": email, "role": body.role, "client_id": client.id},
+        client_id=client.id,
     )
     try:
         db.commit()
     except IntegrityError as exc:
         db.rollback()
-        raise HTTPException(
-            status.HTTP_409_CONFLICT, "That email is already registered on the platform."
-        ) from exc
+        raise HTTPException(status.HTTP_409_CONFLICT, _EMAIL_TAKEN) from exc
     out = _account_out(db, new_user, cred, client.id)
     return HrAccountCreated(**out.model_dump(), set_password_token=token)
 
@@ -236,7 +285,7 @@ def list_accounts(
     user: CurrentUser = Depends(require_firm_admin),
     db: Session = Depends(get_db),
 ) -> list[HrAccountOut]:
-    client = _load_firm_client(db, user, client_id)
+    client = _load_firm_client(db, user, client_id, write=False)
     rows = (
         db.query(User, AuthCredential)
         .join(AuthCredential, AuthCredential.user_id == User.id)
@@ -260,11 +309,12 @@ def regenerate_login_id(
     target, cred = _load_hr_user(db, user, user_id)
     if not cred.broker_firm_id:
         raise HTTPException(status.HTTP_409_CONFLICT, "HR account has no broker firm.")
+    company = _client_id_for(db, target.id)
     cred.hr_login_id = _unique_login_id(db, cred.broker_firm_id)
     write_audit(db, user, action="update", entity_type="hr_account", entity_id=target.id,
-                after={"hr_login_id": cred.hr_login_id})
+                after={"hr_login_id": cred.hr_login_id}, client_id=company)
     db.commit()
-    return _account_out(db, target, cred, _client_id_for(db, target.id) or "")
+    return _account_out(db, target, cred, company or "")
 
 
 @router.post("/accounts/{user_id}/reset-password", response_model=HrAccountCreated)
@@ -275,38 +325,50 @@ def reset_password(
     db: Session = Depends(get_db),
 ) -> HrAccountCreated:
     target, cred = _load_hr_user(db, user, user_id)
-    token = HR.issue_set_password_token(target.id, HR.credential_version(cred))
+    company = _client_id_for(db, target.id)
+    # The new link cancels every earlier one, so only the latest link handed
+    # out can set the password.
+    token = HR.issue_set_password_link(cred)
     # An admin reset is a containment action — evict live sessions NOW rather
     # than whenever the user happens to redeem the link, otherwise an attacker
     # already signed in keeps their session for its full absolute lifetime.
     revoked = SESS.revoke_all_for_subject(db, SUBJECT_USER, target.id)
-    # Subject is the account being reset; the admin who did it goes in `detail`,
-    # so the security trail answers "who reset whom" on its own rather than
-    # having to be joined against the broker audit log written below.
-    EV.write_auth_event(
-        db,
+    _record_admin_action(
+        db, request, user, target, company,
         event_type=EV.EVENT_PASSWORD_RESET_REQUEST,
-        outcome=EV.OUTCOME_SUCCESS,
-        surface="hr",
-        subject_type=SUBJECT_USER,
-        subject_id=target.id,
-        client_id=_client_id_for(db, target.id),
-        # The TARGET's firm, not the actor's. `_load_hr_user` lets a
-        # `system_admin` cross firms, so stamping the actor's would file the
-        # event under the wrong firm — invisible to the firm whose account was
-        # actually reset, and mis-attributed in another.
-        broker_firm_id=target.broker_firm_id,
-        ip=client_ip(request),
-        user_agent=user_agent(request),
-        subdomain=request.headers.get("host"),
-        detail={"reason": "admin_reset", "actor_user_id": user.user_id,
-                "sessions_revoked": revoked},
+        detail={"reason": "admin_reset", "sessions_revoked": revoked},
     )
     write_audit(db, user, action="reset_password", entity_type="hr_account",
-                entity_id=target.id, after={"sessions_revoked": revoked})
+                entity_id=target.id, after={"sessions_revoked": revoked}, client_id=company)
     db.commit()
-    out = _account_out(db, target, cred, _client_id_for(db, target.id) or "")
+    out = _account_out(db, target, cred, company or "")
     return HrAccountCreated(**out.model_dump(), set_password_token=token)
+
+
+@router.post("/accounts/{user_id}/mfa/reset", status_code=status.HTTP_204_NO_CONTENT)
+def reset_mfa(
+    request: Request,
+    user_id: str,
+    user: CurrentUser = Depends(require_firm_admin),
+    db: Session = Depends(get_db),
+) -> None:
+    """Remove an HR user's authenticator (a lost or replaced phone).
+
+    Their sessions end too: one may be on the lost device. They sign in again
+    with their password and, where the company requires two-factor, must enrol
+    a new authenticator before anything else.
+    """
+    target, _ = _load_hr_user(db, user, user_id)
+    company = _client_id_for(db, target.id)
+    HR.disable_user_mfa(db, target.id)
+    revoked = SESS.revoke_all_for_subject(db, SUBJECT_USER, target.id)
+    _record_admin_action(
+        db, request, user, target, company,
+        event_type=EV.EVENT_MFA_RESET, detail={"sessions_revoked": revoked},
+    )
+    write_audit(db, user, action="mfa_reset", entity_type="hr_account",
+                entity_id=target.id, after={"sessions_revoked": revoked}, client_id=company)
+    db.commit()
 
 
 @router.post("/accounts/{user_id}/disable", response_model=HrAccountOut)
@@ -316,12 +378,14 @@ def disable_account(
     db: Session = Depends(get_db),
 ) -> HrAccountOut:
     target, cred = _load_hr_user(db, user, user_id)
+    company = _client_id_for(db, target.id)
     target.status = USER_STATUS_DISABLED
     # Kill all live sessions so a disable takes effect immediately.
     SESS.revoke_all_for_subject(db, SUBJECT_USER, target.id)
-    write_audit(db, user, action="disable", entity_type="hr_account", entity_id=target.id)
+    write_audit(db, user, action="disable", entity_type="hr_account", entity_id=target.id,
+                client_id=company)
     db.commit()
-    return _account_out(db, target, cred, _client_id_for(db, target.id) or "")
+    return _account_out(db, target, cred, company or "")
 
 
 @router.post("/accounts/{user_id}/enable", response_model=HrAccountOut)
@@ -337,9 +401,11 @@ def enable_account(
         if cred.last_login_at is not None
         else USER_STATUS_INVITED
     )
-    write_audit(db, user, action="enable", entity_type="hr_account", entity_id=target.id)
+    company = _client_id_for(db, target.id)
+    write_audit(db, user, action="enable", entity_type="hr_account", entity_id=target.id,
+                client_id=company)
     db.commit()
-    return _account_out(db, target, cred, _client_id_for(db, target.id) or "")
+    return _account_out(db, target, cred, company or "")
 
 
 # ── Per-tenant auth policy ─────────────────────────────────────────────────────
@@ -349,7 +415,7 @@ def get_policy(
     user: CurrentUser = Depends(require_firm_admin),
     db: Session = Depends(get_db),
 ) -> AuthPolicyOut:
-    _load_firm_client(db, user, client_id)
+    _load_firm_client(db, user, client_id, write=False)
     p = HR.get_auth_policy(db, client_id)
     return AuthPolicyOut(client_id=client_id, **p.__dict__)
 
@@ -363,7 +429,7 @@ def put_policy(
 ) -> AuthPolicyOut:
     from app.models import ClientAuthPolicy
 
-    _load_firm_client(db, user, client_id)
+    _load_firm_client(db, user, client_id, write=True)
     row = db.get(ClientAuthPolicy, client_id)
     if row is None:
         row = ClientAuthPolicy(client_id=client_id)
@@ -379,7 +445,7 @@ def put_policy(
         elif getattr(row, required):
             setattr(row, enabled, True)
     write_audit(db, user, action="update", entity_type="client_auth_policy",
-                entity_id=client_id, after=changes)
+                entity_id=client_id, after=changes, client_id=client_id)
     db.commit()
     p = HR.get_auth_policy(db, client_id)
     return AuthPolicyOut(client_id=client_id, **p.__dict__)

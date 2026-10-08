@@ -11,7 +11,9 @@ materializing an enrollment row.
 from __future__ import annotations
 
 import os
+from io import BytesIO
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 
@@ -25,6 +27,8 @@ from sqlalchemy import select  # noqa: E402
 
 from app.core.auth import DEMO_BROKER_FIRM_ID, CurrentUser, get_current_user  # noqa: E402
 from app.core.portal_auth import issue_member_token  # noqa: E402
+from app.core.settings import clear_settings_cache  # noqa: E402
+from app.core.storage import LocalStorage  # noqa: E402
 from app.db.base import Base  # noqa: E402
 from app.db.session import SessionLocal, engine  # noqa: E402
 from app.main import app  # noqa: E402
@@ -46,6 +50,7 @@ from app.models import (  # noqa: E402
     Plan,
     PolicyYear,
     Product,
+    StoredDocument,
     WorkflowNotification,
 )
 from app.models.category import CategoryStatus, SourceKind  # noqa: E402
@@ -71,9 +76,12 @@ def _broker() -> CurrentUser:
 
 
 @pytest.fixture(scope="module", autouse=True)
-def _setup_db():
+def _setup_db(tmp_path_factory):
     if TEST_DB.exists():
         TEST_DB.unlink()
+    # Retained blobs go to a temp store, never the developer's backend/var.
+    os.environ["INSPRO_STORAGE_DIR"] = str(tmp_path_factory.mktemp("portal_enrollment_storage"))
+    clear_settings_cache()
     Base.metadata.create_all(bind=engine)
     seed()
     with SessionLocal() as s:
@@ -130,6 +138,8 @@ def _setup_db():
         ))
         s.commit()
     yield
+    os.environ.pop("INSPRO_STORAGE_DIR", None)
+    clear_settings_cache()
     engine.dispose()
     if TEST_DB.exists():
         TEST_DB.unlink()
@@ -704,6 +714,78 @@ def test_cancel_notifies_and_preserves_signed_pdf(broker: TestClient) -> None:
     assert notices["items"][0]["reason"] == "Wrong period"
 
 
+@pytest.fixture
+def form_storage(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> LocalStorage:
+    """Signed forms and form documents for these tests live in a temp store."""
+    from app.api.v1 import enrollment_forms as forms_api
+    from app.api.v1 import portal_enrollment as portal_api
+    from app.services import claims as claims_service
+    from app.services.enrollment_forms import register, submission
+
+    local = LocalStorage(tmp_path)
+    for module in (forms_api, portal_api, claims_service, register, submission):
+        monkeypatch.setattr(module, "get_storage", lambda: local)
+    return local
+
+
+def _point_at_another_tenant(storage: LocalStorage, doc_id: str, content: bytes) -> None:
+    """Re-point a stored document at a key under another firm and company that
+    really holds bytes — what a copied or tampered row would reach."""
+    foreign = f"other-firm/other-client/enrollment_form/{uuid4()}/{uuid4()}.pdf"
+    storage.save(BytesIO(content), foreign)
+    with SessionLocal() as db:
+        db.get(StoredDocument, doc_id).storage_path = foreign
+        db.commit()
+
+
+def test_signed_forms_are_read_only_from_inside_the_company(
+    broker: TestClient, form_storage: LocalStorage
+) -> None:
+    _signed_enrollment(broker)
+    with SessionLocal() as db:
+        sub = db.scalar(select(EnrollmentFormSubmission))
+        sub_id, doc_id = sub.id, sub.document_id
+        assert db.get(StoredDocument, doc_id).storage_path.startswith(
+            f"{DEMO_BROKER_FIRM_ID}/{CLIENT_ID}/"
+        )
+    pdf = f"/api/v1/enrollment-forms/{sub_id}/pdf"
+    member_pdf = f"/api/v1/portal/enrollment-forms/{sub_id}/pdf"
+    archive = f"/api/v1/policy-years/{PY_ID}/enrollment-forms/export.zip"
+    assert broker.get(pdf).status_code == 200
+    assert broker.get(archive).status_code == 200
+
+    _point_at_another_tenant(form_storage, doc_id, b"%PDF-1.4 another tenant")
+    assert broker.get(pdf).status_code == 404
+    assert broker.get(member_pdf, headers=_member_auth()).status_code == 404
+    # The only matching form is out of scope, so there is nothing to archive.
+    assert broker.get(archive).status_code == 404
+
+
+def test_form_documents_are_read_only_from_inside_the_company(
+    broker: TestClient, form_storage: LocalStorage
+) -> None:
+    window_id = _make_window(broker)
+    uploaded = broker.post(
+        f"/api/v1/enrollment-windows/{window_id}/form-config/documents",
+        files={"file": ("guide.pdf", b"%PDF-1.4 product guide", "application/pdf")},
+    )
+    assert uploaded.status_code == 200, uploaded.text
+    doc_id = uploaded.json()["document_id"]
+    config = f"/api/v1/enrollment-windows/{window_id}/form-config"
+    settings = broker.get(config).json()["settings"]
+    settings["documents"] = [{"id": "guide", "label": "Product guide", "document_id": doc_id}]
+    assert broker.put(config, json=settings).status_code == 200
+
+    as_broker = f"{config}/documents/{doc_id}"
+    as_member = f"/api/v1/portal/enrollment/form/documents/{doc_id}"
+    assert broker.get(as_broker).content == b"%PDF-1.4 product guide"
+    assert broker.get(as_member, headers=_member_auth()).content == b"%PDF-1.4 product guide"
+
+    _point_at_another_tenant(form_storage, doc_id, b"%PDF-1.4 another tenant")
+    assert broker.get(as_broker).status_code == 404
+    assert broker.get(as_member, headers=_member_auth()).status_code == 404
+
+
 def test_sign_retry_is_idempotent_and_broker_edits_require_return(broker: TestClient) -> None:
     _, eid, payload = _signed_enrollment(broker)
     retry = broker.post("/api/v1/portal/enrollment/sign", json=payload, headers=_member_auth())
@@ -748,7 +830,7 @@ def test_enrollment_email_retries_without_exposing_reason(broker: TestClient, mo
         def send_workflow_notice(self, *args):
             sent.append(args)
 
-    monkeypatch.setattr(workflow_delivery, "get_mailer", lambda: Mailer())
+    monkeypatch.setattr(workflow_delivery, "get_mailer", lambda *_: Mailer())
     assert workflow_delivery.process_one_workflow_notification(None)
     assert workflow_delivery.process_one_workflow_notification(None)
     assert not workflow_delivery.process_one_workflow_notification(None)
@@ -855,7 +937,7 @@ def test_email_failure_retry_and_recipient_change(broker: TestClient, monkeypatc
         def send_workflow_notice(self, *args):
             raise RuntimeError("private provider response")
 
-    monkeypatch.setattr(workflow_delivery, "get_mailer", lambda: FailingMailer())
+    monkeypatch.setattr(workflow_delivery, "get_mailer", lambda *_: FailingMailer())
     assert workflow_delivery.process_one_workflow_notification(None)
     with SessionLocal() as db:
         outbox = db.scalar(select(WorkflowNotification))

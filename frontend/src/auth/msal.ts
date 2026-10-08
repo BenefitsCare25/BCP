@@ -1,58 +1,58 @@
 import {
-  Configuration,
   PublicClientApplication,
   type AccountInfo,
+  type AuthenticationResult,
+  type Configuration,
 } from "@azure/msal-browser";
-import { brokerAccount, useBrokerSession, type BrokerSession } from "@/stores/brokerSession";
-import { brokerAccessToken, brokerAuthRequest, refreshBrokerSession } from "./brokerSession";
+import { errorCode } from "@/lib/errors";
+import { brokerAccount, useBrokerSession } from "@/stores/brokerSession";
+import { useNotifications } from "@/stores/notifications";
+import { useSession } from "@/stores/session";
+import { clearBrokerInvite, pendingBrokerInvite } from "./brokerInvite";
+import {
+  acceptBrokerSession,
+  brokerAccessToken,
+  brokerAuthRequest,
+  exchangeMicrosoftToken,
+  refreshBrokerSession,
+  restorationSuppressed,
+  setRestorationSuppressed,
+} from "./brokerSession";
+import { entraConfig, type EntraClientConfig } from "./staffSignIn";
 
-const tenantId = import.meta.env.VITE_ENTRA_TENANT_ID ?? "";
-const clientId = import.meta.env.VITE_ENTRA_CLIENT_ID ?? "";
-const audience = import.meta.env.VITE_ENTRA_AUDIENCE || `api://${clientId}`;
+/** MSAL is configured at runtime from the firm's directory (`/public/site`),
+ *  falling back to the build's `VITE_ENTRA_*` values; see `staffSignIn.ts`.
+ *  Microsoft tokens are exchanged once for an Inspro broker session and never
+ *  reach data APIs. */
+function msalConfiguration(entra: EntraClientConfig): Configuration {
+  return {
+    auth: {
+      clientId: entra.clientId,
+      authority: entra.authority,
+      redirectUri: window.location.origin + "/auth/callback",
+      postLogoutRedirectUri: window.location.origin + "/",
+    },
+    cache: {
+      // MSAL requires this for redirects. Clear the first-factor credentials
+      // immediately on return; platform sessions never use browser storage.
+      cacheLocation: "sessionStorage",
+    },
+  };
+}
 
-export const ENTRA_ENABLED = Boolean(tenantId && clientId);
-
-export const msalConfig: Configuration = {
-  auth: {
-    clientId,
-    authority: tenantId ? `https://login.microsoftonline.com/${tenantId}` : undefined,
-    redirectUri:
-      typeof window !== "undefined"
-        ? window.location.origin + "/auth/callback"
-        : "/auth/callback",
-    postLogoutRedirectUri:
-      typeof window !== "undefined" ? window.location.origin + "/" : "/",
-  },
-  cache: {
-    // MSAL requires this for redirects. Clear the first-factor credentials
-    // immediately on return; platform sessions never use browser storage.
-    cacheLocation: "sessionStorage",
-  },
-};
-
-export const loginRequest = {
-  scopes: ["openid", "profile", "email", `${audience}/access_as_user`],
-};
-
-// Singleton — instantiated once even with React strict-mode double-render.
+// One instance per directory configuration, so React strict-mode double
+// renders and repeated callers share it.
 let _msal: PublicClientApplication | null = null;
+let _msalKey = "";
 let _initialisationPromise: Promise<void> | null = null;
-const signedOutKey = "inspro-broker-signed-out";
+const prepared = new WeakMap<PublicClientApplication, Promise<AuthenticationResult | null>>();
 
-function restorationSuppressed(): boolean {
-  // The URL also covers browsers that refuse sessionStorage writes.
-  if (new URLSearchParams(window.location.search).get("signed_out") === "1") return true;
-  try { return sessionStorage.getItem(signedOutKey) === "1"; } catch { return false; }
+function onOtherSurface(): boolean {
+  const path = window.location.pathname;
+  return path.startsWith("/portal/") || path.startsWith("/hr/");
 }
 
-function setRestorationSuppressed(suppressed: boolean): void {
-  try {
-    if (suppressed) sessionStorage.setItem(signedOutKey, "1");
-    else sessionStorage.removeItem(signedOutKey);
-  } catch { /* The sign-out URL retains this tab's explicit choice. */ }
-}
-
-function removeLegacyBrokerTokens(): void {
+function removeLegacyBrokerTokens(clientId: string): void {
   for (const name of ["sessionStorage", "localStorage"] as const) {
     try {
       const storage = window[name];
@@ -65,50 +65,83 @@ function removeLegacyBrokerTokens(): void {
   }
 }
 
-export function getMsal(): PublicClientApplication | null {
-  if (!ENTRA_ENABLED) return null;
-  if (_msal === null) {
-    _msal = new PublicClientApplication(msalConfig);
+function getMsal(): { msal: PublicClientApplication; entra: EntraClientConfig } | null {
+  const entra = entraConfig();
+  if (!entra) return null;
+  const key = `${entra.clientId}|${entra.authority}`;
+  if (_msal === null || _msalKey !== key) {
+    _msal = new PublicClientApplication(msalConfiguration(entra));
+    _msalKey = key;
   }
-  return _msal;
+  return { msal: _msal, entra };
+}
+
+/** MSAL requires `initialize()` before any other call, and the redirect
+ *  response must be read before a new interaction starts. Once per instance. */
+function prepare(msal: PublicClientApplication, clientId: string): Promise<AuthenticationResult | null> {
+  let ready = prepared.get(msal);
+  if (!ready) {
+    ready = (async () => {
+      await msal.initialize();
+      removeLegacyBrokerTokens(clientId);
+      return await msal.handleRedirectPromise();
+    })().catch((err: unknown) => {
+      // Never reuse an instance whose start-up failed: the next attempt
+      // builds a fresh one instead of awaiting this rejection forever.
+      prepared.delete(msal);
+      if (_msal === msal) {
+        _msal = null;
+        _msalKey = "";
+      }
+      throw err;
+    });
+    prepared.set(msal, ready);
+  }
+  return ready;
+}
+
+async function completeMicrosoftSignIn(accessToken: string): Promise<void> {
+  const inviteToken = pendingBrokerInvite();
+  try {
+    const session = await exchangeMicrosoftToken(accessToken, inviteToken);
+    if (inviteToken) clearBrokerInvite();
+    acceptBrokerSession(session);
+  } catch (error) {
+    // A refused invitation cannot succeed on retry; anything else (an outage,
+    // another account chosen by mistake) keeps it for the next attempt.
+    if (inviteToken && errorCode(error) === "invitation_invalid") clearBrokerInvite();
+    throw error;
+  }
 }
 
 /**
- * MSAL requires explicit `initialize()` before any other call. Idempotent —
- * the same promise is returned across callers so concurrent boots don't double-init.
+ * Finish a Microsoft redirect (exchanging its token for a broker session) or
+ * restore this tab's session from the refresh cookie, whichever applies. Runs
+ * at boot before the router renders. Idempotent: concurrent callers share one
+ * promise, and a failure clears it so a retry starts afresh.
  */
-export async function initializeMsal(): Promise<PublicClientApplication | null> {
-  const msal = getMsal();
-  if (!msal) return null;
+export async function initializeBrokerSignIn(): Promise<void> {
   if (_initialisationPromise === null) {
     _initialisationPromise = (async () => {
-      await msal.initialize();
-      removeLegacyBrokerTokens();
-      // Process the response from a redirect-flow sign-in BEFORE the app
-      // renders. If we're not in the callback URL this is a no-op.
-      const response = await msal.handleRedirectPromise();
-      if (response?.account) {
-        await msal.clearCache();
-        const session = await brokerAuthRequest<BrokerSession>("/exchange", { access_token: response.accessToken });
-        setRestorationSuppressed(false);
-        useBrokerSession.getState().set(session);
-      } else if (!restorationSuppressed() && !window.location.pathname.startsWith("/portal/") && !window.location.pathname.startsWith("/hr/")) {
+      const client = getMsal();
+      const response = client ? await prepare(client.msal, client.entra.clientId) : null;
+      if (client && response?.account) {
+        await client.msal.clearCache();
+        await completeMicrosoftSignIn(response.accessToken);
+      } else if (!restorationSuppressed() && !onOtherSurface()) {
         await refreshBrokerSession();
       }
     })().catch((err: unknown) => {
-      // Reset the cached promise on failure so a retry (e.g. from the sign-in
-      // page) can attempt initialization again instead of re-awaiting the
-      // same rejection forever.
       _initialisationPromise = null;
       // MSAL memoizes redirect results, including failures. A fresh instance
       // lets a refused identity choose another account without re-exchanging
       // the earlier callback or awaiting its cached error.
       _msal = null;
+      _msalKey = "";
       throw err;
     });
   }
   await _initialisationPromise;
-  return msal;
 }
 
 export function getActiveAccount(): AccountInfo | null {
@@ -128,34 +161,40 @@ export async function acquireAccessToken(
 export async function signIn(options?: {
   /** Force the Microsoft account picker. Used after an access refusal — the
    * browser still holds a Microsoft session, so the default flow would sign the
-   * SAME rejected account straight back in and the user could never switch. */
+   * SAME rejected account straight back in and the user could never switch —
+   * and when accepting an invitation, which may be for another account. */
   selectAccount?: boolean;
 }): Promise<void> {
-  const msal = await initializeMsal();
-  if (!msal) return;
-  await msal.loginRedirect(
-    options?.selectAccount
-      ? { ...loginRequest, prompt: "select_account" }
-      : loginRequest,
+  const client = getMsal();
+  if (!client) throw new Error("Microsoft sign-in is not available for this organisation.");
+  await prepare(client.msal, client.entra.clientId);
+  const request = { scopes: client.entra.scopes };
+  await client.msal.loginRedirect(
+    options?.selectAccount ? { ...request, prompt: "select_account" } : request,
   );
 }
 
 /**
  * Clear platform memory, cached data and any remaining Microsoft credentials.
  * Server revocation belongs to signOut(); access refusals use this local cleanup.
+ * The company/benefit-year selection is persisted and the alerts are global, so
+ * both are reset too: the next account in this browser must not start in the
+ * previous one's company or read its alerts.
  */
 export async function clearLocalSession(): Promise<void> {
   useBrokerSession.getState().set(null);
+  useSession.getState().setActiveClient(null);
+  useNotifications.getState().clear();
   const { queryClient } = await import("@/lib/queryClient");
   queryClient.clear();
-  const msal = getMsal();
+  const msal = _msal;
   if (!msal) return;
   try {
     await msal.clearCache();
+    msal.setActiveAccount(null);
   } catch {
     console.warn("Could not clear the Microsoft sign-in cache.");
   }
-  msal.setActiveAccount(null);
 }
 
 export async function signOut(): Promise<void> {
@@ -168,6 +207,7 @@ export async function signOut(): Promise<void> {
     }
   }
   setRestorationSuppressed(true);
+  clearBrokerInvite();
   await clearLocalSession();
   window.location.replace("/sign-in?signed_out=1");
 }

@@ -6,6 +6,7 @@ import { wicaApi, type WicaSettings as Settings } from "@/api/wica";
 import { useSession } from "@/stores/session";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { isBrokerAdminRole } from "@/lib/roles";
 import { Failure, Field, Loading } from "./shared";
 
 export function WicaSettings() {
@@ -20,7 +21,7 @@ function SettingsLoader({ clientId }: { clientId: string }) {
 }
 function SettingsForm({ clientId, initial }: { clientId: string; initial: Settings }) {
   const { data: me } = useMe();
-  const editable = me?.role === "broker_admin" || me?.role === "system_admin";
+  const editable = isBrokerAdminRole(me?.role);
   const [value, setValue] = useState(initial);
   const [saved, setSaved] = useState(false);
   const qc = useQueryClient();

@@ -21,7 +21,7 @@ from sqlalchemy import select  # noqa: E402
 from app.db.base import Base  # noqa: E402
 from app.db.session import SessionLocal, engine  # noqa: E402
 from app.main import app  # noqa: E402
-from app.models import Employee  # noqa: E402
+from app.models import Dependant, Employee, PolicyYear  # noqa: E402
 from app.models.employee import EMPLOYEE_STATUS_TERMINATED  # noqa: E402
 from scripts.seed_demo import seed  # noqa: E402
 
@@ -142,3 +142,40 @@ def test_dependant_report_headers_and_masking(client: TestClient) -> None:
     kid = next(r for r in body if r[2] == "Rita Kid")
     assert kid[0] == "R-1"
     assert kid[5] == "T******5Z", "dependant NRIC must be masked"
+
+
+def test_roster_text_is_written_as_text_not_formulas(client: TestClient) -> None:
+    """A roster value starting with = + - @ must not become a live formula."""
+    py = _py(client)
+    with SessionLocal() as db:
+        year = db.get(PolicyYear, py)
+        assert year is not None
+        emp = Employee(
+            client_id=year.client_id, policy_year_id=py, staff_id="R-9",
+            employee_name="=HYPERLINK(\"http://x\")",
+            attribute_values={"pass": "+EP", "category": "-Manager"},
+            source="csv_import", status="active",
+        )
+        db.add(emp)
+        db.flush()
+        db.add(Dependant(
+            client_id=year.client_id, policy_year_id=py, employee_id=emp.id,
+            attribute_values={"name": "@SUM(1)", "relationship": "Child"},
+            link_method="staff_id", status="active",
+        ))
+        db.commit()
+
+    employees = _load(
+        client.get(f"/api/v1/employees/coverage-report/export?policy_year_id={py}")
+    )
+    dependants = _load(
+        client.get(f"/api/v1/dependants/coverage-report/export?policy_year_id={py}")
+    )
+
+    row = next(r for r in employees[1:] if r[0] == "R-9")
+    assert row[1] == "'=HYPERLINK(\"http://x\")"
+    assert row[employees[0].index("Pass")] == "'+EP"
+    assert row[employees[0].index("Category")] == "'-Manager"
+    kid = next(r for r in dependants[1:] if r[0] == "R-9")
+    assert kid[1] == "'=HYPERLINK(\"http://x\")"
+    assert kid[2] == "'@SUM(1)"

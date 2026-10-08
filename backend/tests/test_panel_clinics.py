@@ -38,6 +38,7 @@ from app.models.member_account import MEMBER_STATUS_ACTIVE  # noqa: E402
 from app.models.policy_year import PolicyYearStatus  # noqa: E402
 from app.services.panel_clinics import (  # noqa: E402
     PanelParseError,
+    export_listing_workbook,
     haversine_km,
     parse_panel_workbook,
 )
@@ -295,6 +296,30 @@ def test_haversine_known_distance() -> None:
     assert 14.0 < dist < 16.5
 
 
+def test_export_writes_formula_text_as_text_and_still_round_trips(tmp_path: Path) -> None:
+    clinic = PanelClinic(
+        code="@C1", name="=HYPERLINK(\"http://x\")", zone="-North", area="Yishun",
+        address="1 Yishun Road", postal_code="760618", country="SINGAPORE",
+        phone="+65 6123 4567", hours={"mon_fri": "-closed-"},
+        latitude=1.4187, longitude=103.8357, google_map_url=None,
+    )
+
+    exported = export_listing_workbook([clinic])
+    row = list(load_workbook(BytesIO(exported)).active.iter_rows(values_only=True))[1]
+    assert row[:3] == ("'@C1", "'=HYPERLINK(\"http://x\")", "'-North")
+    assert row[HEADERS.index("PhoneNumber")] == "'+65 6123 4567"
+    assert row[HEADERS.index("Latitude")] == 1.4187
+
+    # A downloaded list re-uploads unchanged: the guard is stripped on parse.
+    path = tmp_path / "export.xlsx"
+    path.write_bytes(exported)
+    (parsed,) = parse_panel_workbook(path).clinics
+    assert (parsed.code, parsed.name, parsed.zone, parsed.phone) == (
+        "@C1", "=HYPERLINK(\"http://x\")", "-North", "+65 6123 4567"
+    )
+    assert parsed.hours == {"mon_fri": "-closed-"}
+
+
 # ── Broker CRUD + upload + tagging ───────────────────────────────────────────
 
 
@@ -494,6 +519,47 @@ def test_validation_rejects_unknown_type_and_country(broker_a: TestClient) -> No
 
 
 # ── Isolation ────────────────────────────────────────────────────────────────
+
+
+def test_platform_admin_library_write_needs_a_company() -> None:
+    """A firm-less system_admin reaches a firm's panel library only through its
+    selected company. With none selected the session stays on `public`, so the
+    create is refused until a company is chosen — and then it succeeds."""
+    payload = {
+        "insurer": "PLATFORM-SG",
+        "panel_provider": "Scope",
+        "country": "SG",
+        "clinic_type": "gp",
+    }
+
+    def as_platform_admin(client_id: str | None) -> TestClient:
+        app.dependency_overrides[get_current_user] = lambda: CurrentUser(
+            user_id="00000000-0000-0000-0000-0000000000d0",
+            broker_firm_id=None,
+            client_id=client_id,
+            role="system_admin",
+        )
+        return TestClient(app)
+
+    try:
+        refused = as_platform_admin(None).post("/api/v1/panel-listings", json=payload)
+        assert refused.status_code == 409, refused.text
+        assert refused.json()["detail"]["code"] == "client_selection_required"
+        with SessionLocal() as session:
+            assert session.query(PanelListing).filter_by(insurer="PLATFORM-SG").count() == 0
+
+        created = as_platform_admin(DEMO_CLIENT_ID).post("/api/v1/panel-listings", json=payload)
+        assert created.status_code == 201, created.text
+        removed = as_platform_admin(None).delete(
+            f"/api/v1/panel-listings/{created.json()['id']}"
+        )
+        assert removed.status_code == 409
+        assert removed.json()["detail"]["code"] == "client_selection_required"
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+        with SessionLocal() as session:
+            session.query(PanelListing).filter_by(insurer="PLATFORM-SG").delete()
+            session.commit()
 
 
 def test_cross_tenant_listing_access_404(broker_a: TestClient) -> None:

@@ -23,6 +23,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.clock import today as business_today
+from app.core.tenant_resolution import FirmOriginUnavailable
 from app.models import AuthMfa, Client, Employee, MemberAccount, PolicyYear
 from app.models.auth import SUBJECT_MEMBER
 from app.services.insurer_reports import (
@@ -130,8 +131,12 @@ def build_portal_access_workbook(db: Session, py: PolicyYear) -> Workbook:
     client = db.get(Client, py.client_id)
     # One URL for the whole company — built by the SAME function that emails
     # the invite, so the link on this sheet is the link the member received.
-    # A hand-built one drifts the moment tenant routing changes.
-    profile_link = portal_sign_in_url(client.slug if client else None)
+    # A hand-built one drifts the moment tenant routing changes. Blank while the
+    # broker has no web address: no invite could have been mailed either.
+    try:
+        profile_link = portal_sign_in_url(db, client) if client else ""
+    except FirmOriginUnavailable:
+        profile_link = ""
 
     resolved: list[tuple[Employee, MemberAccount | None]] = []
     for emp in employees:

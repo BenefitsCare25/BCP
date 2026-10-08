@@ -4,10 +4,18 @@
  * never `X-Inspro-Client` — a member is pinned to one client server-side).
  * A 401 clears the session and sends the member back to the portal sign-in.
  */
-import { errorCode, errorFromText } from "@/lib/errors";
+import { errorCode, errorFromText, uploadRefusal } from "@/lib/errors";
 import { withSessionRefreshLock } from "@/lib/sessionRefresh";
+import {
+  isSignedOut,
+  rememberSessionEndNotice,
+  sessionEndingRefusal,
+  sessionEndQuery,
+  type SessionEndingRefusal,
+} from "@/lib/surfaceSession";
 import { currentPortalTenantSlug, portalPath } from "@/lib/tenant";
 import { usePortalSession } from "@/stores/portalSession";
+import { useNotifications } from "@/stores/notifications";
 import { claimPeriodHeaders } from "@/lib/claimPeriod";
 import { queryClient } from "@/lib/queryClient";
 
@@ -29,85 +37,77 @@ function authHeader(): Record<string, string> {
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
-/** Their access has ENDED — not a permission slip they can work around, so the
- * session goes the way it does on a 401. Distinguished from the other portal
- * 403 (`coverage_ended`, an ordinary refusal a signed-in member reads and works
- * around): ending the session on every capability refusal would sign a member
- * out for tapping the panel-card tab.
+/** Refusals that END the session — not a permission slip a member can work
+ * around, so the session goes the way it does on a 401:
  *
- * Returns the server's own sentence, which carries the DATE their access ended
- * — the one fact a member needs and cannot look up. `""` when the code matches
- * but no message came with it; `null` when this is some other 403. */
-function accessEndedMessage(text: string): string | null {
-  try {
-    const detail = (JSON.parse(text) as { detail?: unknown }).detail;
-    if (!detail || typeof detail !== "object") return null;
-    const { code, message } = detail as { code?: unknown; message?: unknown };
-    if (code !== "access_ended") return null;
-    return typeof message === "string" ? message : "";
-  } catch {
-    return null;
-  }
-}
-
-/** Where the refusal's sentence waits out the full page load below.
+ * - `access_ended`: their own access ended (they left, and the run-off is over).
+ * - `portal_disabled`: the company's employee portal was switched off.
  *
- * `sessionStorage`, because the redirect is a `window.location.assign` and
- * nothing in memory survives it. Not the query string: this is a whole sentence
- * naming a date, and a URL is a bad place to put prose the member will read. */
-const ENDED_MESSAGE_KEY = "inspro.portal.access-ended-message";
+ * Distinguished from the other portal 403 (`coverage_ended`, an ordinary
+ * refusal a signed-in member reads and works around): ending the session on
+ * every capability refusal would sign a member out for tapping the panel-card
+ * tab. */
+const SESSION_ENDING_CODES: ReadonlySet<string> = new Set([
+  "access_ended",
+  "portal_disabled",
+]);
 
-/** Read once per page load, so a second call in the same load still answers.
- *  `undefined` = not yet read; `null` = read, and there was nothing. */
-let consumed: string | null | undefined;
-
-/** The refusal the member was last redirected on. Clears the store, but keeps
- *  answering for the rest of THIS page load.
- *
- *  Not a bare read-and-delete: the sign-in page takes this in a `useState`
- *  initialiser, and StrictMode invokes those twice in development — a strict
- *  one-shot handed the second call `null`, so the whole point of this (the
- *  server's dated sentence) showed up only in production builds. */
-export function takeAccessEndedMessage(): string | null {
-  if (consumed !== undefined) return consumed;
-  try {
-    consumed = sessionStorage.getItem(ENDED_MESSAGE_KEY);
-    sessionStorage.removeItem(ENDED_MESSAGE_KEY);
-  } catch {
-    consumed = null; // storage blocked (private mode) — generic line still shows
-  }
-  return consumed || null;
-}
-
-function handleAccessEnded(message: string): never {
+/** Forget this tab's member identity: token, cached portal data and the alerts
+ *  raised under it. Server-side revocation is the caller's business. */
+export function clearLocalPortalSession(): void {
   usePortalSession.getState().clearSession();
-  // Carried across the reload so the sign-in page can say "your access ended on
-  // 30 June" rather than the undated line it used to hardcode — the server has
-  // already worded this, including the date, and discarding it made the member
-  // ask their HR team a question the screen could have answered.
-  if (message) {
-    try {
-      sessionStorage.setItem(ENDED_MESSAGE_KEY, message);
-      consumed = undefined; // a new refusal supersedes anything already read
-    } catch {
-      /* storage blocked — fall back to the generic line */
-    }
-  }
-  // `?ended` so the sign-in page can say why they are back here instead of
-  // showing an empty form that will refuse them again. Appended to a raw URL
-  // rather than routed through `navigate({search})` — the router JSON-encodes
-  // search values, which is how a `"1"` reaches the address bar as `%221%22`.
-  // The company segment is NOT optional: landing on the pathless sign-in turns
-  // the company field back on and sends an EMPTY tenant header.
+  void queryClient.cancelQueries({ queryKey: ["portal"] });
+  queryClient.removeQueries({ queryKey: ["portal"] });
+  useNotifications.getState().clear();
+}
+
+/** The sign-in address a session-ending refusal already sent this tab to. The
+ *  401 whose refresh met that refusal is handled a moment later, and the bare
+ *  sign-in page it used to assign replaced the navigation — dropping the
+ *  `?ended` reason, the only explanation left when tab storage is blocked. */
+let sessionEndTarget: string | null = null;
+
+/** For the route guard, whose own redirect after a failed refresh would
+ *  otherwise race the same navigation. */
+export function portalSessionEndTarget(): string | null {
+  return sessionEndTarget;
+}
+
+/** End the session on a refusal and tell the sign-in page why.
+ *
+ * The server's own sentence waits out the full page load in tab storage — it
+ * carries the DATE their access ended, the one fact a member needs and cannot
+ * look up. The `?ended` flag (see `sessionEndQuery`) carries a generic line
+ * when storage is blocked. The company segment is NOT optional: landing on the
+ * pathless sign-in turns the company field back on and sends an EMPTY tenant
+ * header.
+ *
+ * No redirect when sign-in is already showing: its own guard refreshes, and a
+ * refusal there must not reload the page forever. */
+function endRefusedSession(refusal: SessionEndingRefusal): void {
+  const reason = refusal.code === "portal_disabled" ? "disabled" : "ended";
+  clearLocalPortalSession();
+  rememberSessionEndNotice("portal", reason, refusal.message);
   const target = portalPath(currentPortalTenantSlug(), "/sign-in");
-  window.location.assign(`${target}?ended`);
-  throw new PortalUnauthorizedError("Portal access has ended");
+  const path = window.location.pathname;
+  if (path === target || path === "/portal/sign-in") return;
+  sessionEndTarget = `${target}?${sessionEndQuery(reason)}`;
+  window.location.assign(sessionEndTarget);
+}
+
+function handleSessionRefused(refusal: SessionEndingRefusal): never {
+  endRefusedSession(refusal);
+  throw new PortalUnauthorizedError(
+    refusal.code === "portal_disabled"
+      ? "The employee portal is switched off"
+      : "Portal access has ended",
+  );
 }
 
 /** **The ONE place a failed portal response becomes an error.**
  *
  * Every fetch path here — JSON, blob, upload — has to end a dead session on a
- * 401 and end it again on an `access_ended` 403, and the three had grown three
+ * 401 and end it again on a session-ending 403, and the three had grown three
  * copies of that decision. They had already drifted: `blob` and `upload` threw
  * a bare `Error`, losing the typed errors (`ConflictDetailError` and friends)
  * that pages branch on, so the same backend refusal read differently depending
@@ -115,28 +115,32 @@ function handleAccessEnded(message: string): never {
  */
 async function failed(
   res: Response,
-  opts: { credential?: boolean } = {},
+  opts: { credential?: boolean; upload?: boolean } = {},
 ): Promise<never> {
   // A `credential` call is one whose BODY carried a value the member just typed,
   // where a 401 means "that value is wrong" and must reach the form.
   if (res.status === 401 && !opts.credential) return handleUnauthorized();
   const text = await res.text();
   if (res.status === 403) {
-    const ended = accessEndedMessage(text);
-    if (ended !== null) return handleAccessEnded(ended);
+    const refusal = sessionEndingRefusal(text, SESSION_ENDING_CODES);
+    if (refusal) return handleSessionRefused(refusal);
     if (errorCode(errorFromText(res.status, text, res.statusText)) === "mfa_enrollment_required") {
       usePortalSession.setState({ mfaEnrollmentRequired: true });
       const target = portalPath(currentPortalTenantSlug(), "/security");
       if (window.location.pathname !== target) window.location.assign(target);
     }
   }
+  // A file too large to accept, or a busy malware scanner: their own sentence,
+  // never the proxy's markup or a bare status.
+  if (opts.upload) {
+    const refusal = uploadRefusal(res.status, text, res.headers.get("Retry-After"));
+    if (refusal) throw refusal;
+  }
   throw errorFromText(res.status, text, res.statusText);
 }
 
 function handleUnauthorized(): never {
-  usePortalSession.getState().clearSession();
-  void queryClient.cancelQueries({ queryKey: ["portal"] });
-  queryClient.removeQueries({ queryKey: ["portal"] });
+  clearLocalPortalSession();
   // Back to THIS company's sign-in. Dropping the segment on a routine session
   // expiry sent the member to the pathless page, which turns the company field
   // back on and sends an EMPTY tenant header — so their re-sign-in 400s until
@@ -148,14 +152,17 @@ function handleUnauthorized(): never {
     window.location.pathname !== target &&
     window.location.pathname !== "/portal/sign-in"
   ) {
-    window.location.assign(target);
+    window.location.assign(sessionEndTarget ?? target);
   }
   throw new PortalUnauthorizedError();
 }
 
 let refreshInFlight: Promise<boolean> | null = null;
 
+/** Never after an explicit sign-out in this tab: the refresh cookie may by then
+ *  belong to whoever signed in at this company in another tab. */
 export async function refreshPortalSession(passive = false): Promise<boolean> {
+  if (isSignedOut("portal")) return false;
   if (!refreshInFlight) {
     const expectedMember = usePortalSession.getState().member?.id ?? null;
     refreshInFlight = withSessionRefreshLock("portal", currentPortalTenantSlug(), async () => {
@@ -165,8 +172,8 @@ export async function refreshPortalSession(passive = false): Promise<boolean> {
         });
         if (!res.ok) {
           if (res.status === 403) {
-            const ended = accessEndedMessage(await res.text());
-            if (ended !== null) handleAccessEnded(ended);
+            const refusal = sessionEndingRefusal(await res.text(), SESSION_ENDING_CODES);
+            if (refusal) endRefusedSession(refusal);
           }
           return false;
         }
@@ -276,7 +283,7 @@ export const portalApi = {
       body: formData,
       headers: { ...tenantHeader(), ...authHeader(), ...claimPeriodHeaders(path) },
     });
-    if (!res.ok) return failed(res);
+    if (!res.ok) return failed(res, { upload: true });
     return (await res.json()) as T;
   },
   /** Unauthenticated call for the sign-in flow — a 401 here is a wrong
@@ -297,6 +304,11 @@ export const portalApi = {
     const res = await fetch(`${API_BASE}/portal/auth/logout`, {
       method: "POST", credentials: "include", headers: { ...tenantHeader(), ...authHeader() },
     });
-    if (!res.ok) throw errorFromText(res.status, await res.text(), res.statusText);
+    if (res.ok) return;
+    const text = await res.text();
+    // A refusal that ends sessions (the portal switched off) means there is no
+    // server session left to end; only this tab's local state remains.
+    if (res.status === 403 && sessionEndingRefusal(text, SESSION_ENDING_CODES)) return;
+    throw errorFromText(res.status, text, res.statusText);
   },
 };

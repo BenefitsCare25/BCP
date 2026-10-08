@@ -173,7 +173,7 @@ def test_invite_then_password_sign_in_flow(
     # Capture the mailed one-time password — the only copy that ever exists.
     mailed: list[str] = []
 
-    def _send(account, password, slug, login_source=None) -> bool:
+    def _send(account, password, slug, login_source=None, **_) -> bool:
         mailed.append(password)
         return True
 
@@ -831,3 +831,438 @@ def test_background_delivery_rechecks_ownership_in_the_clients_firm(monkeypatch)
         account = db.get(MemberAccount, account_id)
         assert account.password_hash == "unchanged-test-hash"
         assert account.invite_sent_at is None
+
+
+# ── Link supersession, broker attribution, authenticator reset ───────────────
+
+
+def _member(staff_id: str, **fields) -> str:
+    with SessionLocal() as session:
+        account = MemberAccount(client_id=DEMO_CLIENT_ID, staff_id=staff_id, **fields)
+        session.add(account)
+        session.commit()
+        return account.id
+
+
+def _confirmed_authenticator(account_id: str) -> None:
+    from app.models import AuthMfa
+    from app.models.auth import SUBJECT_MEMBER
+
+    with SessionLocal() as session:
+        session.add(AuthMfa(
+            subject_type=SUBJECT_MEMBER, subject_id=account_id,
+            totp_secret_enc="not-read-by-reset", confirmed_at=datetime.now(UTC),
+        ))
+        session.commit()
+
+
+def _authenticators(account_id: str) -> int:
+    from app.models import AuthMfa
+
+    with SessionLocal() as session:
+        return session.query(AuthMfa).filter(AuthMfa.subject_id == account_id).count()
+
+
+@pytest.mark.parametrize("reissued", [False, True])
+def test_a_new_set_password_link_cancels_the_earlier_ones(
+    broker_client: TestClient, anon_client: TestClient, monkeypatch, reissued: bool,
+):
+    """Every reissue used to leave all earlier links redeemable until they
+    expired, so a link in an old or forwarded message still set the password."""
+    from app.api.v1 import portal_auth
+    from app.core.portal_auth import issue_member_set_password_token
+
+    monkeypatch.setattr(portal_auth, "is_breached", lambda password: False)
+    account_id = _member(f"S-RELINK-{int(reissued)}", status=MEMBER_STATUS_INVITED)
+    # A link handed out a minute ago through the same path (stamp + token).
+    earlier = datetime.now(UTC) - timedelta(minutes=1)
+    with SessionLocal() as session:
+        account = session.get(MemberAccount, account_id)
+        account.password_token_issued_at = earlier
+        version = credential_version(account)
+        session.commit()
+    first = issue_member_set_password_token(account_id, version, issued_at=earlier)
+
+    def redeem(token: str):
+        return anon_client.post(
+            "/api/v1/portal/auth/set-password",
+            json={"token": token, "password": "Relinked-Member-42"},
+            headers=_TENANT,
+        )
+
+    if not reissued:
+        assert redeem(first).status_code == 200
+        return
+    second = broker_client.post(f"/api/v1/member-accounts/{account_id}/password-setup")
+    assert second.status_code == 200, second.text
+    refused = redeem(first)
+    assert refused.status_code == 401
+    assert refused.json()["detail"] == "A newer reset link has been issued. Use the latest one."
+    assert redeem(second.json()["set_password_token"]).status_code == 200
+
+
+def test_broker_issued_links_name_the_broker(broker_client: TestClient):
+    """The security trail must say which broker handed a member a link — on
+    account creation as well as on a later password-setup link."""
+    from app.models import AuthEvent
+
+    employee_id = "00000000-0000-0000-0000-00000000pa09"
+    with SessionLocal() as session:
+        session.add(Employee(
+            id=employee_id, client_id=DEMO_CLIENT_ID, policy_year_id=PY_ACTIVE,
+            staff_id="S-LINK-ACTOR", employee_name="Link Actor", attribute_values={},
+            derived_attribute_values={}, source="csv_import", status="active",
+        ))
+        session.commit()
+    created = broker_client.post(
+        f"/api/v1/employees/{employee_id}/member-account",
+        json={"delivery": "individual_link"},
+    )
+    assert created.status_code == 201, created.text
+    account_id = created.json()["id"]
+    assert broker_client.post(
+        f"/api/v1/member-accounts/{account_id}/password-setup"
+    ).status_code == 200
+    with SessionLocal() as session:
+        events = session.query(AuthEvent).filter(
+            AuthEvent.subject_id == account_id,
+            AuthEvent.event_type == "password_reset_request",
+        ).all()
+    assert [event.detail for event in events] == [
+        {"reason": "broker_link", "actor_user_id": _broker().user_id},
+    ] * 2
+    assert {(event.client_id, event.broker_firm_id) for event in events} == {
+        (DEMO_CLIENT_ID, DEMO_BROKER_FIRM_ID),
+    }
+
+
+def test_broker_reset_authenticator_clears_it_and_ends_sessions(
+    broker_client: TestClient, anon_client: TestClient,
+):
+    """A member who lost their phone cannot pass the second factor until a
+    broker removes the old authenticator; any session on that phone ends too."""
+    from app.models import AuditLog, AuthEvent
+
+    account_id = _member(
+        "S-LOST-PHONE", status=MEMBER_STATUS_ACTIVE,
+        password_hash=PW.hash_password("Lost-Phone-Member-42"),
+        password_updated_at=datetime.now(UTC),
+    )
+    _confirmed_authenticator(account_id)
+    with SessionLocal() as session:
+        version = credential_version(session.get(MemberAccount, account_id))
+    token, _ = issue_member_token(account_id, DEMO_CLIENT_ID, version)
+    bearer = {"Authorization": f"Bearer {token}"}
+    status_url = "/api/v1/portal/auth/security-status"
+    assert anon_client.get(status_url, headers=bearer).json()["mfa_status"] == "confirmed"
+
+    res = broker_client.post(f"/api/v1/member-accounts/{account_id}/mfa/reset")
+    assert res.status_code == 204, res.text
+    assert res.content == b""
+    assert _authenticators(account_id) == 0
+    assert anon_client.get(status_url, headers=bearer).status_code == 401
+    with SessionLocal() as session:
+        audit = session.query(AuditLog).filter(
+            AuditLog.action == "mfa_reset", AuditLog.entity_id == account_id,
+        ).one()
+        event = session.query(AuthEvent).filter(
+            AuthEvent.event_type == "mfa_reset", AuthEvent.subject_id == account_id,
+        ).one()
+    assert audit.entity_type == "member_account"
+    assert audit.after == {"sessions_revoked": 1}
+    assert audit.client_id == DEMO_CLIENT_ID
+    # The security trail names the broker who removed it, on its own row.
+    assert (event.surface, event.subject_type, event.outcome) == ("portal", "member", "success")
+    assert (event.client_id, event.broker_firm_id) == (DEMO_CLIENT_ID, DEMO_BROKER_FIRM_ID)
+    assert event.detail == {"sessions_revoked": 1, "actor_user_id": _broker().user_id}
+
+
+def test_reset_authenticator_is_tenant_scoped(broker_client: TestClient):
+    with SessionLocal() as session:
+        other = Client(name="Authenticator Reset Other Co", broker_firm_id=DEMO_BROKER_FIRM_ID)
+        session.add(other)
+        session.flush()
+        foreign = MemberAccount(
+            client_id=other.id, staff_id="S-FOREIGN", status=MEMBER_STATUS_ACTIVE,
+        )
+        session.add(foreign)
+        session.commit()
+        foreign_id = foreign.id
+    _confirmed_authenticator(foreign_id)
+    res = broker_client.post(f"/api/v1/member-accounts/{foreign_id}/mfa/reset")
+    assert res.status_code == 404
+    assert _authenticators(foreign_id) == 1
+
+
+def test_viewers_cannot_reset_an_authenticator():
+    account_id = _member("S-VIEWER-RESET", status=MEMBER_STATUS_ACTIVE)
+    _confirmed_authenticator(account_id)
+    viewer = CurrentUser(user_id=_broker().user_id, broker_firm_id=DEMO_BROKER_FIRM_ID,
+                         client_id=DEMO_CLIENT_ID, role="broker_viewer")
+    app.dependency_overrides[get_current_user] = lambda: viewer
+    try:
+        res = TestClient(app).post(f"/api/v1/member-accounts/{account_id}/mfa/reset")
+        assert res.status_code == 403
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+    assert _authenticators(account_id) == 1
+
+
+def test_member_account_actions_are_filed_under_the_members_company():
+    """A system admin reaches every company's members with whichever company it
+    has selected. The audit rows and the security trail must name the MEMBER's
+    company, or the action shows up in the wrong company's activity."""
+    from app.models import AuditLog, AuthEvent
+
+    with SessionLocal() as session:
+        other = Client(name="Stamped Member Co", broker_firm_id=DEMO_BROKER_FIRM_ID)
+        session.add(other)
+        session.flush()
+        account = MemberAccount(
+            client_id=other.id, staff_id="S-STAMPED", status=MEMBER_STATUS_ACTIVE,
+        )
+        session.add(account)
+        session.commit()
+        other_id, account_id = other.id, account.id
+    _confirmed_authenticator(account_id)
+    admin = CurrentUser(user_id="00000000-0000-0000-0000-0000000000d1",
+                        broker_firm_id=None, client_id=DEMO_CLIENT_ID, role="system_admin")
+    app.dependency_overrides[get_current_user] = lambda: admin
+    try:
+        api = TestClient(app)
+        base = f"/api/v1/member-accounts/{account_id}"
+        assert api.post(f"{base}/regenerate-login-id").status_code == 200
+        assert api.post(f"{base}/mfa/reset").status_code == 204
+        assert api.patch(base, json={"status": "disabled"}).status_code == 200
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+    with SessionLocal() as session:
+        audits = session.query(AuditLog).filter(AuditLog.entity_id == account_id).all()
+        event = session.query(AuthEvent).filter(
+            AuthEvent.event_type == "mfa_reset", AuthEvent.subject_id == account_id,
+        ).one()
+    assert {(a.action, a.client_id, a.cross_tenant_access) for a in audits} == {
+        ("member_account.login_id_regenerated", other_id, True),
+        ("mfa_reset", other_id, True),
+        ("member_account.status_changed", other_id, True),
+    }
+    assert (event.client_id, event.broker_firm_id) == (other_id, DEMO_BROKER_FIRM_ID)
+    assert event.detail["actor_user_id"] == admin.user_id
+
+
+# ── Rollout: "using the portal" means having signed in ───────────────────────
+
+PY_HANDOVER = "00000000-0000-0000-0000-00000000pa20"
+
+
+def test_a_handover_password_is_not_using_the_portal(broker_client: TestClient, monkeypatch):
+    """A broker's direct password set activates the account before the member
+    has ever signed in. It used to be counted as using the portal; it is a
+    credential handed over, so it reads as invited, the send leaves it alone,
+    and only a real sign-in moves it."""
+    from app.api.v1 import member_accounts
+
+    monkeypatch.setattr(member_accounts, "is_breached", lambda password: False)
+    with SessionLocal() as session:
+        # Its own (draft) year, so the counts and the send see this one member
+        # only; a company has a single active year.
+        session.add(PolicyYear(
+            id=PY_HANDOVER, client_id=DEMO_CLIENT_ID, year=2029,
+            start_date=date(2029, 1, 1), end_date=date(2029, 12, 31),
+            status=PolicyYearStatus.draft,
+        ))
+        account = MemberAccount(
+            client_id=DEMO_CLIENT_ID, staff_id="S-HANDOVER", email="handover@acme.test",
+            status=MEMBER_STATUS_INVITED,
+        )
+        session.add(account)
+        session.flush()
+        session.add(Employee(
+            client_id=DEMO_CLIENT_ID, policy_year_id=PY_HANDOVER, staff_id="S-HANDOVER",
+            employee_name="Hana Handover", attribute_values={"email": "handover@acme.test"},
+            derived_attribute_values={}, source="csv_import", status="active",
+            member_account_id=account.id,
+        ))
+        session.commit()
+        account_id = account.id
+
+    def buckets() -> tuple[int, int, int]:
+        roll = broker_client.get(
+            "/api/v1/member-accounts/rollout", params={"policy_year_id": PY_HANDOVER}
+        ).json()
+        return roll["invite_pending"], roll["invited"], roll["signed_in"]
+
+    assert buckets() == (1, 0, 0)
+    handed = broker_client.post(
+        f"/api/v1/member-accounts/{account_id}/set-password",
+        json={"password": "Handover-Member-4821"},
+    )
+    assert handed.status_code == 200, handed.text
+    assert handed.json()["status"] == MEMBER_STATUS_ACTIVE
+    assert buckets() == (0, 1, 0)
+
+    with SessionLocal() as session:
+        handover_hash = session.get(MemberAccount, account_id).password_hash
+    sent = broker_client.post(
+        "/api/v1/member-accounts/bulk-invite", json={"policy_year_id": PY_HANDOVER}
+    )
+    assert sent.status_code == 200, sent.text
+    assert (sent.json()["queued"], sent.json()["already_invited"]) == (0, 1)
+    with SessionLocal() as session:
+        account = session.get(MemberAccount, account_id)
+        # No fresh one-time password replaced the one the member was given.
+        assert account.password_hash == handover_hash
+        assert account.invite_sent_at is None
+        account.last_sign_in_at = datetime.now(UTC)
+        session.commit()
+    assert buckets() == (0, 0, 1)
+
+
+# ── Authenticator state on the broker's account rows ─────────────────────────
+
+
+def test_accounts_say_whether_an_authenticator_is_enrolled(broker_client: TestClient):
+    """The panel offers "Reset authenticator" only when there is one to reset.
+    A pending enrolment signs nobody in, so it does not count."""
+    from app.models import AuthMfa
+    from app.models.auth import SUBJECT_MEMBER
+
+    enrolled = _member("S-MFA-ON", status=MEMBER_STATUS_ACTIVE)
+    _confirmed_authenticator(enrolled)
+    pending = _member("S-MFA-PENDING", status=MEMBER_STATUS_ACTIVE)
+    with SessionLocal() as session:
+        session.add(AuthMfa(
+            subject_type=SUBJECT_MEMBER, subject_id=pending, totp_secret_enc="unconfirmed",
+        ))
+        session.commit()
+    _member("S-MFA-OFF", status=MEMBER_STATUS_ACTIVE)
+
+    def listed() -> dict[str, bool]:
+        items = broker_client.get("/api/v1/member-accounts").json()["items"]
+        return {
+            item["staff_id"]: item["mfa_enrolled"]
+            for item in items if item["staff_id"].startswith("S-MFA-")
+        }
+
+    assert listed() == {"S-MFA-ON": True, "S-MFA-PENDING": False, "S-MFA-OFF": False}
+    single = broker_client.post(f"/api/v1/member-accounts/{enrolled}/regenerate-login-id")
+    assert single.json()["mfa_enrolled"] is True
+    assert broker_client.post(f"/api/v1/member-accounts/{enrolled}/mfa/reset").status_code == 204
+    assert listed()["S-MFA-ON"] is False
+
+
+def test_listing_accounts_reads_authenticators_in_one_query(broker_client: TestClient):
+    """One authenticator query for the whole roster, however many are enrolled."""
+    from sqlalchemy import event
+
+    def authenticator_queries() -> int:
+        seen: list[str] = []
+
+        def record(conn, cursor, statement, parameters, context, executemany):
+            if "auth_mfa" in statement:
+                seen.append(statement)
+
+        event.listen(engine, "before_cursor_execute", record)
+        try:
+            assert broker_client.get("/api/v1/member-accounts").status_code == 200
+        finally:
+            event.remove(engine, "before_cursor_execute", record)
+        return len(seen)
+
+    for n in range(3):
+        _confirmed_authenticator(_member(f"S-MFA-BATCH-{n}", status=MEMBER_STATUS_ACTIVE))
+    assert authenticator_queries() == 1
+
+
+# ── No web address, no invite ────────────────────────────────────────────────
+
+ORIGIN_UNAVAILABLE = {
+    "code": "firm_origin_unavailable", "message": "This broker has no active web address yet.",
+}
+
+
+@pytest.fixture
+def no_broker_address(monkeypatch):
+    """The demo company's broker has no address an invite link could use.
+    Yields the (never expected to be called) mail sender."""
+    from unittest.mock import Mock
+
+    from app.api.v1 import member_accounts
+    from app.core.tenant_resolution import FirmOriginUnavailable
+
+    def unavailable(db, client):
+        raise FirmOriginUnavailable(client.broker_firm_id)
+
+    sent = Mock(return_value=True)
+    monkeypatch.setattr(member_accounts, "portal_sign_in_url", unavailable)
+    monkeypatch.setattr(member_accounts, "send_member_invite", sent)
+    monkeypatch.setattr(member_accounts, "mail_deliverable", lambda: True)
+    staff_ids = ["NOADDR-NEW", "NOADDR-OLD"]
+    with SessionLocal() as db:
+        db.add(Employee(client_id=DEMO_CLIENT_ID, policy_year_id=PY_ACTIVE,
+            staff_id="NOADDR-NEW", employee_name="No address, new",
+            attribute_values={"email": "noaddr.new@acme.test"}, derived_attribute_values={},
+            source="csv_import", status="active"))
+        db.add(MemberAccount(client_id=DEMO_CLIENT_ID, staff_id="NOADDR-OLD",
+            email="noaddr.old@acme.test", status=MEMBER_STATUS_INVITED,
+            password_hash="unchanged-test-hash"))
+        db.commit()
+    try:
+        yield sent
+    finally:
+        with SessionLocal() as db:
+            db.query(Employee).filter(Employee.staff_id.in_(staff_ids)).delete(
+                synchronize_session=False
+            )
+            db.query(MemberAccount).filter(MemberAccount.staff_id.in_(staff_ids)).delete(
+                synchronize_session=False
+            )
+            db.commit()
+
+
+def _noaddr(staff_id: str) -> MemberAccount | None:
+    with SessionLocal() as db:
+        return db.query(MemberAccount).filter(MemberAccount.staff_id == staff_id).one_or_none()
+
+
+def test_invites_are_refused_while_the_broker_has_no_address(broker_client, no_broker_address):
+    """Every broker-triggered send stops with 409 before anything changes: no
+    account created, no credential replaced, no mail."""
+    with SessionLocal() as db:
+        employee_id = db.query(Employee.id).filter(Employee.staff_id == "NOADDR-NEW").scalar()
+    created = broker_client.post(f"/api/v1/employees/{employee_id}/member-account", json={})
+    assert created.status_code == 409, created.text
+    assert created.json()["detail"] == ORIGIN_UNAVAILABLE
+    assert _noaddr("NOADDR-NEW") is None
+
+    existing = _noaddr("NOADDR-OLD")
+    assert existing is not None
+    resent = broker_client.post(f"/api/v1/member-accounts/{existing.id}/resend-invite")
+    assert resent.status_code == 409
+    assert resent.json()["detail"] == ORIGIN_UNAVAILABLE
+    unchanged = _noaddr("NOADDR-OLD")
+    assert unchanged is not None
+    assert (unchanged.password_hash, unchanged.invite_sent_at) == ("unchanged-test-hash", None)
+
+    bulk = broker_client.post(
+        "/api/v1/member-accounts/bulk-invite", json={"policy_year_id": PY_ACTIVE}
+    )
+    assert bulk.status_code == 409
+    assert bulk.json()["detail"] == ORIGIN_UNAVAILABLE
+    assert _noaddr("NOADDR-NEW") is None
+    no_broker_address.assert_not_called()
+
+
+def test_background_invites_wait_for_the_brokers_address(no_broker_address):
+    """A run queued before the address went away sends nothing and changes
+    nothing, so every target is picked up by the next run."""
+    from app.api.v1 import member_accounts
+
+    existing = _noaddr("NOADDR-OLD")
+    assert existing is not None
+    member_accounts._deliver_invites([existing.id], DEMO_CLIENT_ID)
+    no_broker_address.assert_not_called()
+    unchanged = _noaddr("NOADDR-OLD")
+    assert unchanged is not None
+    assert (unchanged.password_hash, unchanged.invite_sent_at) == ("unchanged-test-hash", None)
+    assert DEMO_CLIENT_ID not in member_accounts._SENDING

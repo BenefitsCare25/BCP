@@ -16,7 +16,7 @@ from typing import Any
 from anthropic import RateLimitError
 from sqlalchemy.orm import Session
 
-from app.core.storage import get_storage
+from app.core.storage import assert_key_in_scope, company_firm_id, get_storage
 from app.db.tenancy import set_search_path
 from app.models import Claim, StoredDocument
 from app.services import ai_gateway
@@ -86,13 +86,19 @@ def extract_documents(
     (``{document_id, file_name, sha256, document_type, fields}``), warning
     rule-results for unreadable documents, and per-call gateway metadata for
     token accounting.
+
+    A document whose stored key is outside the claim's own firm and company is
+    not "unreadable": ``StorageScopeError`` fails the review (manual review)
+    instead of reading another tenant's bytes.
     """
     storage = get_storage()
+    scope_firm_id = company_firm_id(db, claim.client_id)
     extractions: list[dict[str, Any]] = []
     warnings: list[dict[str, Any]] = []
     call_metadata: list[dict[str, Any]] = []
 
     for doc in docs:
+        assert_key_in_scope(doc.storage_path, scope_firm_id, claim.client_id)
         try:
             raw = storage.read(doc.storage_path)
             blocks = vision_blocks_for_document(raw, Path(doc.storage_path).suffix)

@@ -646,3 +646,133 @@ def test_member_display_hides_gtl_without_changing_internal_statement():
     assert [bucket.product_code for bucket in member_visible_utilization(usage).insured] == ["GHS"]
     assert [line.product_code for line in statement.coverage] == ["GTL", "GHS"]
     assert [bucket.product_code for bucket in usage.insured] == ["GTL", "GHS"]
+
+
+# ── A member session belongs to one broker's host ────────────────────────────
+
+SHARED_ALIAS = "iso-shared-co"
+MEMBER_EMAIL = "same.person@iso.test"
+PASSWORD_A = "Broker-A-Member-Pass-1"
+PASSWORD_B = "Broker-B-Member-Pass-2"
+
+
+@pytest.fixture
+def two_brokers():
+    """Brokers A and B on their own client domains (A also has a staff-only
+    one), each with a company aliased `iso-shared-co` and a member who uses the
+    same email at both; B alone has `iso-only-b`."""
+    from app.core import passwords as PW
+    from app.models import BrokerFirm
+    from app.models.platform import TenantDomain
+
+    with SessionLocal() as session:
+        firms = {key: BrokerFirm(name=f"Isolation broker {key}", slug=f"iso-{key}")
+                 for key in ("a", "b")}
+        session.add_all(firms.values())
+        session.flush()
+        session.add_all([
+            TenantDomain(broker_firm_id=firms["a"].id, hostname="portal.iso-a.test",
+                         surface="client", is_primary=True, status="active"),
+            TenantDomain(broker_firm_id=firms["a"].id, hostname="staff.iso-a.test",
+                         surface="staff", is_primary=True, status="active"),
+            TenantDomain(broker_firm_id=firms["b"].id, hostname="portal.iso-b.test",
+                         surface="client", is_primary=True, status="active"),
+        ])
+        companies = {
+            "a": Client(name="Shared A", broker_firm_id=firms["a"].id, slug=SHARED_ALIAS),
+            "b": Client(name="Shared B", broker_firm_id=firms["b"].id, slug=SHARED_ALIAS),
+            "only_b": Client(name="Only B", broker_firm_id=firms["b"].id, slug="iso-only-b"),
+        }
+        session.add_all(companies.values())
+        session.flush()
+        members = {
+            key: MemberAccount(
+                client_id=companies[key].id, email=MEMBER_EMAIL, staff_id="ISO-1",
+                status=MEMBER_STATUS_ACTIVE, password_hash=PW.hash_password(password),
+            )
+            for key, password in (("a", PASSWORD_A), ("b", PASSWORD_B))
+        }
+        session.add_all(members.values())
+        session.commit()
+        ids = {
+            "firms": [firm.id for firm in firms.values()],
+            "clients": [company.id for company in companies.values()],
+            "a": members["a"].id, "b": members["b"].id,
+        }
+    try:
+        yield ids
+    finally:
+        from app.models import AuthEvent, AuthSession
+
+        with SessionLocal() as session:
+            session.query(AuthSession).filter(
+                AuthSession.client_id.in_(ids["clients"])
+            ).delete(synchronize_session=False)
+            session.query(AuthEvent).filter(
+                AuthEvent.client_id.in_(ids["clients"])
+            ).delete(synchronize_session=False)
+            session.query(MemberAccount).filter(
+                MemberAccount.client_id.in_(ids["clients"])
+            ).delete(synchronize_session=False)
+            session.query(Client).filter(Client.id.in_(ids["clients"])).delete(
+                synchronize_session=False
+            )
+            session.query(TenantDomain).filter(
+                TenantDomain.broker_firm_id.in_(ids["firms"])
+            ).delete(synchronize_session=False)
+            session.query(BrokerFirm).filter(BrokerFirm.id.in_(ids["firms"])).delete(
+                synchronize_session=False
+            )
+            session.commit()
+
+
+def _on(host: str) -> TestClient:
+    return TestClient(app, base_url=f"http://{host}")
+
+
+def _member_login(api: TestClient, alias: str, password: str):
+    return api.post(
+        "/api/v1/portal/auth/login",
+        json={"identifier": MEMBER_EMAIL, "password": password},
+        headers={"X-Inspro-Tenant-Slug": alias},
+    )
+
+
+def test_same_alias_signs_in_to_each_brokers_own_company(two_brokers):
+    on_a = _member_login(_on("portal.iso-a.test"), SHARED_ALIAS, PASSWORD_A)
+    on_b = _member_login(_on("portal.iso-b.test"), SHARED_ALIAS, PASSWORD_B)
+    assert on_a.status_code == 200, on_a.text
+    assert on_b.status_code == 200, on_b.text
+    assert on_a.json()["member"]["id"] == two_brokers["a"]
+    assert on_b.json()["member"]["id"] == two_brokers["b"]
+    # On B's host the alias is B's company, where A's password means nothing.
+    assert _member_login(_on("portal.iso-b.test"), SHARED_ALIAS, PASSWORD_A).status_code == 401
+
+
+def test_member_session_is_refused_on_another_brokers_host(two_brokers):
+    signed_in = _member_login(_on("portal.iso-a.test"), SHARED_ALIAS, PASSWORD_A)
+    assert signed_in.status_code == 200, signed_in.text
+    bearer = {"Authorization": f"Bearer {signed_in.json()['token']}"}
+    status_path = "/api/v1/portal/auth/security-status"
+
+    assert _on("portal.iso-a.test").get(status_path, headers=bearer).status_code == 200
+    refused = _on("portal.iso-b.test").get(status_path, headers=bearer)
+    assert refused.status_code == 401
+    assert _on("portal.iso-b.test").get("/api/v1/portal/me", headers=bearer).status_code == 401
+
+
+def test_another_brokers_alias_is_unknown_on_this_host(two_brokers):
+    unknown = _member_login(_on("portal.iso-a.test"), "iso-only-b", PASSWORD_B)
+    assert unknown.status_code == 404
+    assert unknown.json()["detail"] == "Unknown tenant."
+    # On its own broker's host the company exists; only the password is wrong.
+    assert _member_login(_on("portal.iso-b.test"), "iso-only-b", PASSWORD_B).status_code == 401
+
+
+def test_portal_is_not_served_on_a_staff_only_host(two_brokers):
+    signed_in = _member_login(_on("portal.iso-a.test"), SHARED_ALIAS, PASSWORD_A)
+    bearer = {"Authorization": f"Bearer {signed_in.json()['token']}"}
+    staff = _on("staff.iso-a.test")
+    assert _member_login(staff, SHARED_ALIAS, PASSWORD_A).status_code == 404
+    assert staff.get("/api/v1/portal/auth/security-status", headers=bearer).status_code == 404
+    assert staff.get("/api/v1/portal/me", headers=bearer).status_code == 404

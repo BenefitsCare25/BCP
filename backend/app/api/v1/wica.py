@@ -37,11 +37,18 @@ from app.core.deps import (
     require_claim_access,
     require_claim_configuration,
     require_client_id,
-    require_system_admin,
+    require_firm_owner,
 )
 from app.core.downloads import attachment_header
 from app.core.rate_limit import limiter
-from app.core.storage import DOCUMENT_SUFFIXES, MAX_DOCUMENT_BYTES, document_path, get_storage
+from app.core.storage import (
+    DOCUMENT_SUFFIXES,
+    MAX_DOCUMENT_BYTES,
+    StorageScopeError,
+    company_firm_id,
+    document_path,
+    get_storage,
+)
 from app.core.uploads import saved_upload
 from app.db.session import get_db
 from app.models import (
@@ -55,7 +62,7 @@ from app.models import (
 )
 from app.schemas.wica import ActionIn, IncidentIn, PackIn, RevisionIn, SentIn, SettingsIn, TagIn
 from app.services import wica as svc
-from app.services.claims import _sniff_mime
+from app.services.claims import _sniff_mime, assert_document_scope
 from app.services.file_security import scan_quarantined_document
 
 router = APIRouter(prefix="/wica", tags=["wica"], dependencies=[Depends(require_claim_access)])
@@ -344,8 +351,9 @@ def _persist_upload(
         raise HTTPException(409, "This upload was already recorded. Refresh the incident.")
     storage = get_storage()
     stored_id = str(uuid4())
+    # Filed under the company's own firm, whoever uploads (a firm-less admin too).
     target = document_path(
-        user.broker_firm_id, row.client_id, "wica", row.id, stored_id, path.suffix
+        company_firm_id(db, row.client_id), row.client_id, "wica", row.id, stored_id, path.suffix
     )
     try:
         with path.open("rb") as stream:
@@ -438,8 +446,14 @@ def download_document(
     ):
         raise HTTPException(404, "Document not found")
     try:
+        assert_document_scope(
+            stored.storage_path, company_firm_id(db, row.client_id), row.client_id
+        )
         content = get_storage().read(stored.storage_path)
+    except StorageScopeError:
+        raise HTTPException(404, "Document not found") from None
     except Exception:
+        logger.exception("WICA retained file unavailable %s", stored.id)
         raise HTTPException(503, "File unavailable. Try again later.") from None
     if hashlib.sha256(content).hexdigest() != stored.sha256:
         raise HTTPException(409, "File integrity check failed. Contact your administrator.")
@@ -451,6 +465,7 @@ def download_document(
         row.id,
         after={"document_id": doc.id},
         request=request,
+        client_id=row.client_id,
     )
     db.commit()
     return Response(
@@ -466,7 +481,7 @@ def download_document(
 
 @router.post(
     "/incidents/{incident_id}/documents/{document_id}/remove",
-    dependencies=[Depends(require_system_admin)],
+    dependencies=[Depends(require_firm_owner)],
 )
 def remove_untagged(
     incident_id: str,
@@ -622,7 +637,12 @@ def download_pack(
             ):
                 raise HTTPException(404, "Document not found")
             try:
+                assert_document_scope(
+                    stored.storage_path, company_firm_id(db, row.client_id), row.client_id
+                )
                 content = storage.read(stored.storage_path)
+            except StorageScopeError:
+                raise HTTPException(404, "Document not found") from None
             except Exception:
                 logger.exception("WICA retained file unavailable %s", stored.id)
                 raise HTTPException(
@@ -648,6 +668,7 @@ def download_pack(
         row.id,
         after={"pack_id": pack.id},
         request=request,
+        client_id=row.client_id,
     )
     db.commit()
     return Response(

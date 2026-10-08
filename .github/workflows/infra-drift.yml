@@ -48,13 +48,18 @@ on:
         type: choice
         options: [what-if, apply]
 
+# Read-only by default. Only the job that signs in to Azure adds
+# `id-token: write`, as in deploy.yml.
 permissions:
-  id-token: write
   contents: read
 
 env:
   PROD_RG: rg-inspro-prod
   PROD_APP: inspro-portal
+  # Public base URL for app smoke checks. Set the repository variable to the
+  # platform host before turning on the Front Door origin lock, which makes
+  # the raw azurewebsites.net hostname answer 403.
+  PROD_APP_URL: ${{ vars.INSPRO_PROD_APP_URL || 'https://inspro-portal.azurewebsites.net' }}
   PROD_WORKER: inspro-portal-review-worker
   PROD_KV: inspro-prod-kv
   REGISTRY: insproacr.azurecr.io
@@ -71,6 +76,9 @@ jobs:
     name: Re-assert prod infrastructure
     runs-on: ubuntu-latest
     environment: prod
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@v4
 
@@ -110,6 +118,18 @@ jobs:
           else
             MODE="${{ github.event.inputs.mode || 'what-if' }}"
           fi
+          # The next step treats anything but what-if as `create`, so only the
+          # two known modes get past here.
+          case "$MODE" in
+            what-if|apply) ;;
+            *) echo "::error::Unknown mode '$MODE'"; exit 1 ;;
+          esac
+          # A dispatch from another branch would apply that branch's template
+          # to prod. Only main's infrastructure is ever applied.
+          if [ "$MODE" = apply ] && [ "$GITHUB_REF" != refs/heads/main ]; then
+            echo "::error::apply only from main"
+            exit 1
+          fi
           echo "mode=$MODE" >> "$GITHUB_OUTPUT"
           echo "Mode: $MODE (event: ${{ github.event_name }})"
 
@@ -141,8 +161,6 @@ jobs:
         run: |
           set -euo pipefail
           MODE="${{ steps.mode.outputs.mode }}"
-          if [ "$MODE" = "what-if" ]; then VERB="what-if"; else VERB="create"; fi
-          echo "Running az deployment group $VERB"
           DEPLOYMENT_NAME="drift-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           BICEP_ARGS=(
             --resource-group "$PROD_RG"
@@ -158,12 +176,87 @@ jobs:
               "smtpFrom=$SMTP_FROM"
               "alertEmail=$ALERT_EMAIL"
           )
+          # `--output none` on validate and create: this repository's Actions
+          # logs are public, and their result JSON echoes every parameter value
+          # and template output. Errors and warnings go to stderr, so they still
+          # reach the log and the diagnostics artifact below.
           az deployment group validate \
             --name "${DEPLOYMENT_NAME}-validate" \
-            "${BICEP_ARGS[@]}" 2>&1 | tee /tmp/drift-validate.txt
-          az deployment group "$VERB" \
-            --name "$DEPLOYMENT_NAME" \
-            "${BICEP_ARGS[@]}" 2>&1 | tee /tmp/drift-output.txt
+            "${BICEP_ARGS[@]}" --output none 2>&1 | tee /tmp/drift-validate.txt
+          if [ "$MODE" = "what-if" ]; then
+            echo "Running az deployment group what-if"
+            # The raw result stays in a file that is neither printed nor
+            # uploaded: what-if reports property VALUES, and both apps' app
+            # settings carry the App Insights connection string. The report
+            # below names every changed property but withholds the values under
+            # app settings, connection strings and secret-named properties.
+            az deployment group what-if \
+              --name "$DEPLOYMENT_NAME" \
+              "${BICEP_ARGS[@]}" --no-pretty-print --output json \
+              2>&1 >/tmp/whatif-result.json | tee /tmp/drift-whatif-errors.txt
+            python3 - /tmp/whatif-result.json <<'PY' | tee /tmp/drift-output.txt
+          import json
+          import re
+          import sys
+
+          WITHHELD = re.compile(
+              r"appSettings|connectionString|instrumentationKey|password|secret",
+              re.IGNORECASE,
+          )
+          SYMBOL = {"Create": "+", "Delete": "-", "Modify": "~", "Array": "~",
+                    "NoEffect": "x", "Deploy": "!", "Unsupported": "?"}
+
+
+          def shown(value, path):
+              if value is None:
+                  return "null"
+              if WITHHELD.search(path):
+                  if isinstance(value, list):
+                      return f"[{len(value)} entries, values withheld]"
+                  return "(value withheld)"
+              text = json.dumps(value, sort_keys=True)
+              return text if len(text) <= 160 else text[:157] + "..."
+
+
+          def properties(deltas, parent, out):
+              for delta in deltas or []:
+                  path = f"{parent}.{delta['path']}" if parent else delta["path"]
+                  if delta.get("children"):
+                      properties(delta["children"], path, out)
+                      continue
+                  kind = delta.get("propertyChangeType")
+                  before = shown(delta.get("before"), path)
+                  after = shown(delta.get("after"), path)
+                  change = {"Create": after, "Delete": before}.get(kind, f"{before} => {after}")
+                  out.append(f"    {SYMBOL.get(kind, '~')} {path}: {change}")
+
+
+          with open(sys.argv[1], encoding="utf-8") as handle:
+              result = json.load(handle)
+          lines, unchanged = [], 0
+          for resource in result.get("changes") or []:
+              kind = resource.get("changeType")
+              if kind in ("NoChange", "Ignore"):
+                  unchanged += 1
+                  continue
+              # Relative to the resource group, so no subscription id is printed.
+              name = re.sub(r"^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/", "",
+                            resource.get("resourceId") or "", flags=re.IGNORECASE)
+              lines.append(f"{SYMBOL.get(kind, '?')} {name} ({kind})")
+              if resource.get("unsupportedReason"):
+                  lines.append(f"    unsupported: {resource['unsupportedReason']}")
+              properties(resource.get("delta"), "", lines)
+          print("Resource and property changes (values under app settings, connection")
+          print("strings and secret-named properties withheld):")
+          print("\n".join(lines) if lines else "(none)")
+          print(f"{unchanged} resource(s) unchanged or ignored.")
+          PY
+          else
+            echo "Running az deployment group create"
+            az deployment group create \
+              --name "$DEPLOYMENT_NAME" \
+              "${BICEP_ARGS[@]}" --output none 2>&1 | tee /tmp/drift-output.txt
+          fi
 
       - name: Preserve Azure diagnostics
         if: failure()
@@ -212,14 +305,16 @@ jobs:
             echo '`netFrameworkVersion`, and `retentionPolicy.days` on diagnostic settings.'
             echo
             echo "**Anything else is real drift** — re-run this workflow with"
-            echo "\`mode=apply\` to correct it."
+            echo "\`mode=apply\` to correct it. Values under app settings and connection"
+            echo "strings are withheld; a changed setting is named by its path."
             echo
             echo '```'
             # `always()` means this also runs when the what-if itself failed, so
             # the file may be absent or empty — say so rather than failing the
-            # summary step and masking the real error above.
+            # summary step and masking the real error above. The file holds the
+            # redacted report only, never the raw what-if result.
             if [ -s /tmp/drift-output.txt ]; then
-              sed -n '/Resource and property changes/,$p' /tmp/drift-output.txt | head -200
+              head -200 /tmp/drift-output.txt
             else
               echo "(no what-if output — the preview step failed; see its log)"
             fi
@@ -233,6 +328,6 @@ jobs:
         if: steps.mode.outputs.mode != 'what-if'
         run: |
           curl -fsS --retry 20 --retry-delay 5 --retry-all-errors \
-            "https://${{ env.PROD_APP }}.azurewebsites.net/health"
+            "${{ env.PROD_APP_URL }}/health"
           curl -fsS --retry 20 --retry-delay 5 --retry-all-errors \
-            "https://${{ env.PROD_APP }}.azurewebsites.net/readiness"
+            "${{ env.PROD_APP_URL }}/readiness"

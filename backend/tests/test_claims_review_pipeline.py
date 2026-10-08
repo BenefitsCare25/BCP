@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import io
 import os
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
@@ -63,7 +63,7 @@ from app.services.claims_review import pipeline  # noqa: E402
 from app.services.claims_review.field_maps import AI_RULES, FIELD_MAPS  # noqa: E402
 from app.services.claims_review.pipeline import run_review  # noqa: E402
 from app.workers.claim_review import process_one_job  # noqa: E402
-from scripts.seed_demo import seed  # noqa: E402
+from scripts.seed_demo import DEMO_CLIENT_2_ID, seed  # noqa: E402
 
 PY = "00000000-0000-0000-0000-00000000cr01"
 EMP = "00000000-0000-0000-0000-00000000cr02"
@@ -1211,15 +1211,29 @@ def test_doc_completeness_ignores_plain_outpatient_receipt():
 
 def _reset_doc_types(broker: TestClient) -> list[dict]:
     current = broker.get("/api/v1/claim-doc-types").json()
-    response = broker.post(
-        "/api/v1/claim-doc-types/reset",
-        json={
-            "expected_versions": {
-                row["id"]: row["updated_at"] for row in current
-            }
-        },
+    # Discarding saved configuration is a system_admin action.
+    previous = app.dependency_overrides.get(get_current_user)
+    app.dependency_overrides[get_current_user] = lambda: CurrentUser(
+        user_id="00000000-0000-0000-0000-0000000000a8",
+        broker_firm_id=None,
+        client_id=DEMO_CLIENT_ID,
+        role="system_admin",
     )
-    assert response.status_code == 200
+    try:
+        response = broker.post(
+            "/api/v1/claim-doc-types/reset",
+            json={
+                "expected_versions": {
+                    row["id"]: row["updated_at"] for row in current
+                }
+            },
+        )
+    finally:
+        if previous is None:
+            app.dependency_overrides.pop(get_current_user, None)
+        else:
+            app.dependency_overrides[get_current_user] = previous
+    assert response.status_code == 200, response.text
     return response.json()
 
 
@@ -2445,3 +2459,256 @@ def test_a_claim_with_no_invoice_number_never_matches():
     _set_invoice(second, "  ")
 
     assert _rule(second, "invoice number")["status"] == "pass"
+
+
+# ── Durable job hardening: deadlines, linkage, storage scope, firm routing ────
+
+
+@pytest.fixture
+def quiet_queue():
+    """Start a durable-worker test with no earlier active job ahead of it."""
+    with SessionLocal() as s:
+        for job in s.query(ClaimReviewJob).filter(
+            ClaimReviewJob.state.in_(("queued", "running", "retry_wait"))
+        ):
+            job.state = "cancelled"
+        s.commit()
+
+
+def _durable_job(claim_id: str, review_id: str, **over) -> str:
+    values = {
+        "broker_firm_id": DEMO_BROKER_FIRM_ID,
+        "client_id": DEMO_CLIENT_ID,
+        "claim_id": claim_id,
+        "review_id": review_id,
+        "claim_revision": 0,
+        "idempotency_key": f"test:{review_id}",
+        "available_at": datetime.now(UTC),
+    }
+    values.update(over)
+    with SessionLocal() as s:
+        job = ClaimReviewJob(**values)
+        s.add(job)
+        s.commit()
+        return job.id
+
+
+def _clean_gateway():
+    return (
+        patch("app.services.ai_gateway.extract_claim_document", return_value=_extract_result()),
+        patch(
+            "app.services.ai_gateway.review_claim",
+            return_value=_review_result([_match("amount_claimed")]),
+        ),
+    )
+
+
+def test_review_deadline_counts_from_the_lease_and_age_from_enqueue(monkeypatch):
+    from types import SimpleNamespace
+
+    from app.services.claims_review.pipeline import review_deadline_reason
+
+    monkeypatch.delenv("INSPRO_REVIEW_DEADLINE_SECONDS", raising=False)
+    monkeypatch.delenv("INSPRO_REVIEW_MAX_AGE_SECONDS", raising=False)
+    now = datetime.now(UTC)
+
+    def job(queued: timedelta, processing: timedelta | None):
+        started = None if processing is None else now - processing
+        return SimpleNamespace(created_at=now - queued, started_at=started)
+
+    # Three hours behind a backlog is not three hours of processing.
+    assert review_deadline_reason(job(timedelta(hours=3), timedelta(minutes=5)), now) is None
+    assert review_deadline_reason(job(timedelta(hours=3), None), now) is None
+    assert "processing deadline" in review_deadline_reason(
+        job(timedelta(minutes=30), timedelta(minutes=21)), now
+    )
+    # The absolute ceiling still retires a job that keeps coming back.
+    assert "maximum age" in review_deadline_reason(
+        job(timedelta(hours=25), timedelta(minutes=1)), now
+    )
+    monkeypatch.setenv("INSPRO_REVIEW_MAX_AGE_SECONDS", "3600")
+    assert "maximum age" in review_deadline_reason(
+        job(timedelta(hours=3), timedelta(minutes=5)), now
+    )
+    monkeypatch.setenv("INSPRO_REVIEW_DEADLINE_SECONDS", "soon")
+    with pytest.raises(RuntimeError, match="whole number"):
+        review_deadline_reason(job(timedelta(minutes=1), timedelta(minutes=1)), now)
+
+
+def test_a_job_that_waited_in_the_queue_still_gets_its_full_budget(quiet_queue):
+    """Queue time used to count against the 20-minute deadline, so a job that
+    waited behind a backlog was retired at its very first checkpoint."""
+    claim_id, review_id = _mk_claim(marker=b"queued-long")
+    waited = datetime.now(UTC) - timedelta(hours=2)
+    _durable_job(claim_id, review_id, created_at=waited, available_at=waited)
+    extract, review = _clean_gateway()
+    with extract, review:
+        assert process_one_job("test-queued-long") is True
+
+    claim, review_row = _load(claim_id, review_id)
+    assert claim.status == CLAIM_STATUS_AI_VERIFIED
+    assert review_row.status == "complete"
+
+
+def test_recovered_parse_failure_is_not_instantly_past_its_deadline(quiet_queue):
+    from app.services.claims_review.recovery import retry_failed_parse_reviews
+
+    claim_id, review_id = _mk_claim(status=CLAIM_STATUS_SUBMITTED, marker=b"parse-recovery")
+    two_days_ago = datetime.now(UTC) - timedelta(days=2)
+    job_id = _durable_job(
+        claim_id,
+        review_id,
+        state="failed",
+        attempt=1,
+        last_error_code="AIParseError",
+        created_at=two_days_ago,
+        available_at=two_days_ago,
+        started_at=two_days_ago,
+        finished_at=two_days_ago,
+    )
+    with SessionLocal() as s:
+        s.get(ClaimAIReview, review_id).status = "error"
+        s.commit()
+
+    assert retry_failed_parse_reviews() >= 1
+    extract, review = _clean_gateway()
+    with extract, review:
+        assert process_one_job("test-parse-recovery") is True
+
+    claim, review_row = _load(claim_id, review_id)
+    assert claim.status == CLAIM_STATUS_AI_VERIFIED
+    assert review_row.status == "complete"
+    with SessionLocal() as s:
+        job = s.get(ClaimReviewJob, job_id)
+        assert job.state == "succeeded"
+        assert job.attempt == 2
+
+
+@pytest.mark.parametrize(
+    "mismatch",
+    [{"client_id": DEMO_CLIENT_2_ID}, {"broker_firm_id": "another-firm"}, "review"],
+)
+def test_a_job_that_does_not_match_its_claim_never_reviews_it(quiet_queue, mismatch):
+    claim_id, review_id = _mk_claim(marker=f"linkage-{mismatch}".encode())
+    over = mismatch if isinstance(mismatch, dict) else {}
+    if mismatch == "review":
+        # The job names this claim but another claim's review.
+        _, review_id = _mk_claim(marker=b"linkage-foreign-review")
+    job_id = _durable_job(claim_id, review_id, **over)
+    extract, review = _clean_gateway()
+    with extract as extract_mock, review:
+        assert process_one_job("test-linkage") is True
+
+    assert extract_mock.call_count == 0
+    with SessionLocal() as s:
+        assert s.get(Claim, claim_id).status == CLAIM_STATUS_AI_REVIEW_PENDING
+        job = s.get(ClaimReviewJob, job_id)
+        assert job.state == "cancelled"
+        assert job.last_error_code == "review_ownership_lost"
+
+
+def _referral_letter(entity_id: str, client_id: str = DEMO_CLIENT_ID) -> str:
+    doc_id = new_uuid()
+    path = document_path(DEMO_BROKER_FIRM_ID, client_id, "referral", entity_id, doc_id, ".pdf")
+    blob = get_storage().save(io.BytesIO(b"%PDF-1.4 referral " + doc_id.encode()), path)
+    with SessionLocal() as s:
+        s.add(
+            StoredDocument(
+                id=doc_id, client_id=client_id, entity_type="referral",
+                entity_id=entity_id, file_name="referral.pdf",
+                mime_type="application/pdf", size_bytes=blob.size_bytes,
+                sha256=blob.sha256, storage_path=blob.path,
+            )
+        )
+        s.commit()
+    return doc_id
+
+
+@pytest.mark.parametrize(
+    ("owner", "expected_extractions"),
+    [("claimant", 2), ("another member", 1), ("another company", 1)],
+)
+def test_only_the_claimants_own_referral_letter_is_reviewed(owner, expected_extractions):
+    letter = {
+        "claimant": lambda: _referral_letter(EMP),
+        "another member": lambda: _referral_letter(new_uuid()),
+        "another company": lambda: _referral_letter(EMP, DEMO_CLIENT_2_ID),
+    }[owner]()
+    claim_id, review_id = _mk_claim(marker=f"referral-{owner}".encode())
+    with SessionLocal() as s:
+        s.get(Claim, claim_id).referral_document_id = letter
+        s.commit()
+    extract, review = _clean_gateway()
+    with extract as extract_mock, review:
+        run_review(claim_id, review_id, None)
+
+    assert extract_mock.call_count == expected_extractions
+
+
+def test_a_document_filed_under_another_firm_is_never_read():
+    claim_id, review_id = _mk_claim(marker=b"storage-scope", docs=0)
+    with SessionLocal() as s:
+        s.add(
+            StoredDocument(
+                id=new_uuid(), client_id=DEMO_CLIENT_ID, entity_type="claim",
+                entity_id=claim_id, file_name="receipt.pdf",
+                mime_type="application/pdf", size_bytes=10, sha256="f" * 64,
+                storage_path=f"another-firm/{DEMO_CLIENT_ID}/claim/{claim_id}/x.pdf",
+            )
+        )
+        s.commit()
+    with patch("app.services.claims_review.extraction.get_storage") as storage, patch(
+        "app.services.ai_gateway.extract_claim_document"
+    ) as extract_mock:
+        run_review(claim_id, review_id, None)
+
+    storage.return_value.read.assert_not_called()
+    assert extract_mock.call_count == 0
+    claim, review = _load(claim_id, review_id)
+    assert claim.status == CLAIM_STATUS_SUBMITTED  # manual review
+    assert review.status == "error"
+
+
+def test_firm_less_admin_amendment_is_queued_under_the_claims_firm():
+    """A system admin has no firm; the job must still be filed — under the
+    claim's own company firm — or the amended claim is never reviewed."""
+    from app.services.claims_review.queue import enqueue_amended_claim_review
+
+    claim_id, _ = _mk_claim(status=CLAIM_STATUS_SUBMITTED, marker=b"admin-amend")
+    with SessionLocal() as s:
+        claim = s.get(Claim, claim_id)
+        result = enqueue_amended_claim_review(s, claim, None)
+        assert result is not None and result.job is not None
+        assert result.job.broker_firm_id == DEMO_BROKER_FIRM_ID
+        s.rollback()
+        with pytest.raises(RuntimeError, match="different broker firm"):
+            enqueue_amended_claim_review(s, s.get(Claim, claim_id), "another-firm")
+        s.rollback()
+
+
+def test_firm_less_admin_amendment_over_http_is_reviewed():
+    claim_id, _ = _mk_claim(status=CLAIM_STATUS_SUBMITTED, marker=b"admin-amend-http")
+    with SessionLocal() as s:
+        claim = s.get(Claim, claim_id)
+        claim.claim_type = "Group Hospital & Surgical"
+        claim.sub_type = "Emergency Accidental Outpatient Treatment"
+        claim.diagnosis = "Dengue fever"
+        claim.invoice_number = "INV-ADMIN-1"
+        s.commit()
+    app.dependency_overrides[get_current_user] = lambda: CurrentUser(
+        user_id="00000000-0000-0000-0000-0000000000a9",
+        broker_firm_id=None,
+        client_id=DEMO_CLIENT_ID,
+        role="system_admin",
+    )
+    try:
+        res = TestClient(app).patch(
+            f"/api/v1/claims/{claim_id}",
+            json={"provider_name": "Raffles Medical Clinic", "expected_revision": 0},
+        )
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+    assert res.status_code == 200, res.text
+    with SessionLocal() as s:
+        job = s.query(ClaimReviewJob).filter_by(claim_id=claim_id, state="queued").one()
+        assert job.broker_firm_id == DEMO_BROKER_FIRM_ID

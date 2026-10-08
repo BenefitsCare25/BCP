@@ -1,4 +1,4 @@
-import { SystemAdminOnly } from "@/components/auth/SystemAdminOnly";
+import { FirmOwnerOnly } from "@/components/auth/FirmOwnerOnly";
 import { useState } from "react";
 import { toast } from "sonner";
 import { AttributeSchemaEditor } from "@/components/primitives/AttributeSchemaEditor";
@@ -36,6 +36,7 @@ import {
 import { ScopeToggle } from "@/components/schema/ScopeToggle";
 import { ValueMappingEditor } from "@/components/schema/ValueMappingEditor";
 import { formatError } from "@/lib/errors";
+import { isBrokerAdminRole } from "@/lib/roles";
 import type { AttributeSchema } from "@/types";
 
 const TYPES = ["string", "integer", "decimal", "boolean", "date", "enum"];
@@ -90,7 +91,7 @@ export function SchemaAttributesPage({
 }) {
   const { data: attrs = [], isLoading } = useEmployeeAttributes();
   const { data: me } = useMe();
-  const isAdmin = me?.role === "broker_admin" || me?.role === "system_admin";
+  const isAdmin = isBrokerAdminRole(me?.role);
   const create = useCreateAttribute();
   const update = useUpdateAttribute();
   const remove = useDeleteAttribute();
@@ -385,7 +386,7 @@ export function SchemaAttributesPage({
         </CardContent>
       </Card>
 
-      <SystemAdminOnly><AlertDialog
+      <FirmOwnerOnly><AlertDialog
         open={Boolean(deleting)}
         onOpenChange={(o) => !o && setDeleting(null)}
         title={`Delete attribute ${deleting?.display_name ?? ""}?`}
@@ -409,7 +410,7 @@ export function SchemaAttributesPage({
             toast.error(formatError(err));
           }
         }}
-      /></SystemAdminOnly>
+      /></FirmOwnerOnly>
     </div>
   );
 }

@@ -78,6 +78,7 @@ import { ImportRulesDialog } from "@/components/claims/review-rules/ImportRulesD
 import { InfoHint } from "@/components/ui/tooltip";
 import { cn } from "@/lib/cn";
 import { formatError } from "@/lib/errors";
+import { isBrokerAdminRole } from "@/lib/roles";
 import { fmtDate } from "@/lib/format";
 import { toast } from "sonner";
 
@@ -1367,7 +1368,7 @@ export function ClaimsQueuePage() {
   };
   const legacyLogTab = search.tab === "log";
   const requestedTab: ClaimsTab = isClaimsTab(search.tab) ? search.tab : "queue";
-  const canConfigure = me?.role === "broker_admin" || me?.role === "system_admin";
+  const canConfigure = isBrokerAdminRole(me?.role);
   const tab: ClaimsTab =
     !canConfigure && ["ai-extraction", "settings"].includes(requestedTab)
       ? "queue"

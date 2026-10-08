@@ -1,20 +1,49 @@
-"""Registration and response-shape regressions for delegated HR claims."""
+"""Registration and response-shape regressions for delegated HR claims, and the
+HR enrolment-form exports (masking, the admin-only bulk ZIP, rate limits)."""
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from datetime import date
+from io import BytesIO
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from fastapi import HTTPException
 from fastapi.routing import APIRoute
+from fastapi.testclient import TestClient
+from openpyxl import load_workbook
 from starlette.requests import Request
 
 from app.api.v1 import hr_claims
-from app.core.auth import CurrentUser
+from app.core.auth import CurrentUser, Role
 from app.core.deps import require_write_access
+from app.core.hr_auth import get_current_hr_user
+from app.core.rate_limit import limiter
+from app.db.session import SessionLocal
 from app.main import app
+from app.models import (
+    AuditLog,
+    BrokerFirm,
+    Client,
+    Employee,
+    PolicyYear,
+    User,
+    UserClientAccess,
+)
 from app.models.claim import ORIGIN_HR
+from app.models.enrollment_form import EnrollmentFormSubmission
+from app.models.policy_year import PolicyYearStatus
+
+FORMS_FIRM = "hr-forms-firm"
+FORMS_CLIENT = "hr-forms-client"
+FORMS_YEAR = "hr-forms-year"
+FORMS_EMPLOYEE = "hr-forms-employee"
+FORMS_SUBMISSION = "hr-forms-submission"
+FORMS_HR = "hr-forms-user-hr"
+FORMS_ADMIN = "hr-forms-user-admin"
+EXPORTS = "/api/v1/hr/enrollment-forms"
 
 
 def test_hr_claims_router_is_registered_outside_broker_write_gate() -> None:
@@ -149,3 +178,142 @@ def test_hr_evidence_window_is_status_gated_not_portal_origin_gated() -> None:
 
     assert decided.value.status_code == 403
     assert decided.value.detail == "Evidence is retained after a decision."
+
+
+# ── HR enrolment-form exports ────────────────────────────────────────────────
+
+
+def _hr_principal(user_id: str, role: str) -> CurrentUser:
+    return CurrentUser(
+        user_id=user_id,
+        broker_firm_id=FORMS_FIRM,
+        client_id=FORMS_CLIENT,
+        role=cast(Role, role),
+        email=f"{user_id}@example.test",
+    )
+
+
+def _cleanup_forms() -> None:
+    with SessionLocal() as db:
+        db.query(AuditLog).filter(AuditLog.client_id == FORMS_CLIENT).delete(
+            synchronize_session=False
+        )
+        db.query(EnrollmentFormSubmission).filter(
+            EnrollmentFormSubmission.id == FORMS_SUBMISSION
+        ).delete(synchronize_session=False)
+        db.query(UserClientAccess).filter(
+            UserClientAccess.user_id.in_((FORMS_HR, FORMS_ADMIN))
+        ).delete(synchronize_session=False)
+        db.query(Employee).filter(Employee.id == FORMS_EMPLOYEE).delete(
+            synchronize_session=False
+        )
+        db.query(PolicyYear).filter(PolicyYear.id == FORMS_YEAR).delete(
+            synchronize_session=False
+        )
+        db.query(User).filter(User.id.in_((FORMS_HR, FORMS_ADMIN))).delete(
+            synchronize_session=False
+        )
+        db.query(Client).filter(Client.id == FORMS_CLIENT).delete(synchronize_session=False)
+        db.query(BrokerFirm).filter(BrokerFirm.id == FORMS_FIRM).delete(
+            synchronize_session=False
+        )
+        db.commit()
+
+
+@pytest.fixture
+def hr_forms() -> Iterator[tuple[TestClient, dict[str, CurrentUser]]]:
+    _cleanup_forms()
+    with SessionLocal() as db:
+        db.add(BrokerFirm(id=FORMS_FIRM, name="HR forms firm"))
+        db.add(Client(id=FORMS_CLIENT, name="HR forms client", broker_firm_id=FORMS_FIRM))
+        db.flush()
+        db.add(PolicyYear(
+            id=FORMS_YEAR, client_id=FORMS_CLIENT, year=2026,
+            start_date=date(2026, 1, 1), end_date=date(2026, 12, 31),
+            status=PolicyYearStatus.active,
+        ))
+        db.flush()
+        db.add(Employee(
+            id=FORMS_EMPLOYEE, client_id=FORMS_CLIENT, policy_year_id=FORMS_YEAR,
+            staff_id="F-001", employee_name="Form Filer",
+            attribute_values={"id_no": "S1234567D"},
+        ))
+        for user_id, role in ((FORMS_HR, "client_hr"), (FORMS_ADMIN, "client_admin")):
+            db.add(User(
+                id=user_id, email=f"{user_id}@example.test", display_name=user_id,
+                broker_firm_id=FORMS_FIRM, role=role,
+            ))
+            db.add(UserClientAccess(user_id=user_id, client_id=FORMS_CLIENT))
+        db.flush()
+        db.add(EnrollmentFormSubmission(
+            id=FORMS_SUBMISSION, client_id=FORMS_CLIENT, policy_year_id=FORMS_YEAR,
+            employee_id=FORMS_EMPLOYEE, reference_no="EF-2026-90001",
+            snapshot={
+                "particulars": {"id_no": "S1234567D", "contact_no": "+6591234567"},
+                "dependants": [
+                    {"relationship": "Spouse", "name": "Kim Filer", "id_no": "T7654321Z"},
+                ],
+            },
+        ))
+        db.commit()
+
+    active = {"user": _hr_principal(FORMS_HR, "client_hr")}
+    app.dependency_overrides[get_current_hr_user] = lambda: active["user"]
+    try:
+        with TestClient(app) as client:
+            yield client, active
+    finally:
+        app.dependency_overrides.pop(get_current_hr_user, None)
+        _cleanup_forms()
+
+
+def test_hr_summary_export_is_masked_and_audited_with_counts(
+    hr_forms: tuple[TestClient, dict[str, CurrentUser]],
+) -> None:
+    client, _ = hr_forms
+
+    res = client.get(f"{EXPORTS}/export.xlsx")
+
+    assert res.status_code == 200, res.text
+    workbook = load_workbook(BytesIO(res.content))
+    summary = list(workbook["Enrolment forms"].iter_rows(values_only=True))
+    family = list(workbook["Family members"].iter_rows(values_only=True))
+    assert summary[1][summary[0].index("NRIC / FIN")] == "S******7D"
+    assert family[1][family[0].index("NRIC / BC / FIN")] == "T******1Z"
+    with SessionLocal() as db:
+        row = db.query(AuditLog).filter(
+            AuditLog.client_id == FORMS_CLIENT,
+            AuditLog.action == "enrollment_form.export_xlsx",
+        ).one()
+    assert row.after == {"masked": True, "forms": 1, "family_members": 1}
+    assert row.ip_address == "testclient"
+
+
+def test_bulk_signed_form_zip_is_for_hr_administrators_only(
+    hr_forms: tuple[TestClient, dict[str, CurrentUser]],
+) -> None:
+    client, active = hr_forms
+
+    refused = client.get(f"{EXPORTS}/export.zip")
+    active["user"] = _hr_principal(FORMS_ADMIN, "client_admin")
+    allowed = client.get(f"{EXPORTS}/export.zip")
+
+    assert refused.status_code == 403
+    # Past the role gate: nothing to zip because no PDF was ever stored.
+    assert allowed.status_code == 404
+    assert allowed.json()["detail"] == "No forms match these filters."
+
+
+def test_hr_bulk_exports_are_rate_limited(
+    hr_forms: tuple[TestClient, dict[str, CurrentUser]],
+) -> None:
+    client, _ = hr_forms
+    limiter.reset()
+    limiter.enabled = True
+    try:
+        statuses = [client.get(f"{EXPORTS}/export.xlsx").status_code for _ in range(6)]
+    finally:
+        limiter.enabled = False
+        limiter.reset()
+
+    assert statuses == [200] * 5 + [429]

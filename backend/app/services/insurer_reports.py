@@ -11,7 +11,6 @@ the endpoint gates that behind a write-capable role and audits every download.
 """
 from __future__ import annotations
 
-from collections.abc import Sequence
 from datetime import date, datetime
 from typing import Any
 
@@ -40,7 +39,10 @@ from app.services.roster_attributes import (
 from app.services.roster_attributes import (
     roster_date as _as_date,
 )
-from app.services.roster_parser import _FORMULA_LEADERS
+
+# Re-exported: report modules import the formula guard from this toolkit.
+from app.services.xlsx_safe import append_safe as append_safe
+from app.services.xlsx_safe import safe_cell as safe_cell
 
 # Report vocabulary for the "Status" column, keyed by Enrollment.status.
 # confirmed and deemed both read "Processed" — the insurer only cares that the
@@ -188,28 +190,6 @@ bold_header = _bold_header
 as_date = _as_date
 last_day_of_service = _last_day_of_service
 resolved_last_day = _resolved_last_day
-
-
-# Spreadsheet formula-injection guard. openpyxl stores any string starting with
-# = + - @ (or a leading control char) as a live formula, so a roster value like
-# ``=HYPERLINK(...)`` or ``=cmd|...`` would execute in the insurer's Excel when
-# they open our deliverable. Prefix such strings with an apostrophe so Excel
-# treats them as literal text. Applied to every cell in the insurer workbooks.
-#
-# The tuple lives in `roster_parser` because that module owns the READ half
-# (`unescape_formula_guard`): our listings are exported through here and
-# uploaded back through there, so an escape with no matching unescape
-# turns "+60186448967" into a phantom change on every upload.
-def safe_cell(value: object) -> object:
-    if isinstance(value, str) and value and value[0] in _FORMULA_LEADERS:
-        return "'" + value
-    return value
-
-
-def append_safe(ws: Worksheet, row: Sequence[object]) -> None:
-    """Append a row with every string cell neutralized against formula
-    injection (see ``safe_cell``)."""
-    ws.append([safe_cell(v) for v in row])
 
 
 BENEFIT_SELECTION_HEADER = [

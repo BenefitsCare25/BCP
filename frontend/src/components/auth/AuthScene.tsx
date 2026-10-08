@@ -2,6 +2,8 @@ import type { ReactNode } from "react";
 import { AuthPanel } from "./AuthPanel";
 import { LeafScopeContext } from "@/lib/leaf-scope";
 import { cn } from "@/lib/cn";
+import { BrandLogo, PoweredBy } from "@/components/brand/BrandLogo";
+import { useBrandOwner } from "@/components/brand/BrandProvider";
 
 /**
  * Shared sign-in shell for both surfaces (broker Entra + member password): a clean
@@ -25,16 +27,17 @@ export function AuthScene({
   secondary?: ReactNode;
   portalTheme?: "employee" | "hr";
 }) {
+  const owner = useBrandOwner();
   return (
     <LeafScopeContext.Provider value={!!portalTheme}>
     <div className={cn("flex min-h-screen w-full flex-col bg-background lg:h-screen lg:flex-row", portalTheme && "leaf portal-clay portal-ui portal-auth")}>
       {/* ── Form column ─────────────────────────────────────────────── */}
       <section className="relative flex flex-1 flex-col bg-background px-6 py-8 sm:px-10 lg:h-screen lg:w-[45%] lg:overflow-y-auto lg:px-12 lg:py-10">
         <div className="mx-auto flex w-full max-w-sm flex-1 flex-col">
-          <img
-            src="/inspro-logo-mark.png"
-            alt="Inspro Insurance Brokers"
+          <BrandLogo
+            variant="lockup"
             className="signin-in h-12 w-auto self-start sm:h-14"
+            wordmarkClassName="signin-in self-start text-xl"
           />
 
           <div className="flex flex-1 flex-col justify-center py-10">
@@ -74,26 +77,27 @@ export function AuthScene({
           </div>
 
           <footer className="flex items-center justify-between text-xs text-subtle">
-            <span>© {new Date().getFullYear()} Inspro Insurance Brokers</span>
+            <span>© {new Date().getFullYear()} {owner}</span>
             <span className="inline-flex items-center gap-1.5">
               <span className="size-1.5 rounded-full bg-good" />
               Secure sign-in
             </span>
           </footer>
+          <PoweredBy className="mt-2 text-subtle" />
         </div>
       </section>
 
       {/* ── Brand panel ─────────────────────────────────────────────── */}
       <section className={cn("min-h-[42vh] p-4 sm:p-5 lg:h-screen lg:min-h-0 lg:w-[55%] lg:py-5 lg:pl-0 lg:pr-5", portalTheme && "hidden lg:block")}>
         {portalTheme ? (
-          <div className="portal-auth-panel flex h-full flex-col justify-center rounded-[32px] bg-[#ebf8f0] p-10">
+          <div className="portal-auth-panel flex h-full flex-col justify-center tone-mint rounded-[32px] bg-[var(--tone-wash)] p-10">
             <img src="/portal/clay/enrol.webp" alt="" className="size-44 self-start" />
             <h2 className="mt-5 max-w-sm text-3xl font-bold text-record">
               {portalTheme === "hr" ? "Employee benefits administration" : "Your benefits, in one place"}
             </h2>
-            <div className="mt-6 flex flex-wrap gap-2 text-sm font-medium text-[#0e6340]">
+            <div className="mt-6 flex flex-wrap gap-2 text-sm font-medium text-[var(--tone-ink)]">
               {(portalTheme === "hr" ? ["Claims", "Enrolment forms"] : ["Coverage", "Claims", "Clinics", "Enrolment"]).map((label) => (
-                <span key={label} className="rounded-xl bg-white px-4 py-3">{label}</span>
+                <span key={label} className="rounded-xl bg-bar px-4 py-3">{label}</span>
               ))}
             </div>
           </div>

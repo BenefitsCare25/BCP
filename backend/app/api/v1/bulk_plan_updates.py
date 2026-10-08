@@ -29,7 +29,7 @@ from sqlalchemy.orm import Session
 
 from app.core.audit import write_audit
 from app.core.auth import CurrentUser, get_current_user
-from app.core.deps import load_bulk_plan_update, load_policy_year
+from app.core.deps import load_bulk_plan_update, load_policy_year, require_firm_owner
 from app.core.pagination import MAX_LIMIT
 from app.core.rate_limit import limiter
 from app.db.base import new_uuid
@@ -492,15 +492,18 @@ def _legacy_change(record: BulkPlanUpdate) -> list[dict[str, Any]]:
 def undo_bulk_update(
     request: Request,
     batch_id: str,
+    # Before `record`, so a non-admin is refused before the batch is looked up.
+    user: CurrentUser = Depends(require_firm_owner),
     record: BulkPlanUpdate = Depends(load_bulk_plan_update),
-    user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> BulkUndoResult:
     """Restore what a batch replaced, as a NEW batch.
 
     Undo never deletes history: it writes its own record pointing at the source,
     so the timeline reads "this was applied, then this was put back" rather than
-    losing the fact that it happened.
+    losing the fact that it happened. It overwrites members' current coverage
+    with the saved values, a destructive reset reserved for firm owners
+    (`firm_admin`, `system_admin`; AGENTS.md).
     """
     already = db.execute(
         select(BulkPlanUpdate.id).where(BulkPlanUpdate.undo_of == record.id)

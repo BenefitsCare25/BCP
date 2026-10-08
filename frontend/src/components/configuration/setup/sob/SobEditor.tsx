@@ -15,6 +15,7 @@ import {
   unassignedColumns,
 } from "@/lib/sob";
 import { rowIssues, rowVisibility, type RowVisibility } from "@/lib/sobAttention";
+import { isFirmOwnerRole } from "@/lib/roles";
 import { useMe } from "@/api/hooks";
 import { ColumnManager } from "./ColumnManager";
 import { SobRow } from "./SobRow";
@@ -61,7 +62,7 @@ export function SobEditor({
 
   const unassigned = useMemo(() => unassignedColumns(sob), [sob]);
   const { data: me } = useMe();
-  const canRemove = me?.role === "system_admin";
+  const canRemove = isFirmOwnerRole(me?.role);
   const issues = useMemo(
     () => rowIssues(sob.items, sob.columns, canRemove),
     [sob.items, sob.columns, canRemove],

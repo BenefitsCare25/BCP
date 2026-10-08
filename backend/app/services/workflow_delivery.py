@@ -10,6 +10,7 @@ from app.db.session import SessionLocal
 from app.db.tenancy import is_postgres, set_search_path
 from app.models import UnderwritingReview, WorkflowNotification
 from app.models.underwriting_case import OPEN_REVIEW_STATUSES
+from app.services.brand import resolve_client_brand
 
 
 def process_one_workflow_notification(broker_firm_id: str | None) -> bool:
@@ -69,11 +70,12 @@ def process_one_workflow_notification(broker_firm_id: str | None) -> bool:
         row.lease_expires_at = now + timedelta(minutes=5)
         ident, kind, recipient, subject_id = row.id, row.kind, row.recipient_email, row.subject_id
         payload = dict(row.payload)
+        brand = resolve_client_brand(db, row.client_id)
         db.commit()
     error = None
     try:
         if kind == "underwriting_reminder":
-            get_mailer().send_workflow_notice(
+            get_mailer(brand).send_workflow_notice(
                 recipient,
                 "Underwriting follow-up from your benefits team",
                 "Your benefits team is following up on an outstanding underwriting review. "
@@ -86,7 +88,7 @@ def process_one_workflow_notification(broker_firm_id: str | None) -> bool:
 
             if get_settings().mail_mode != "smtp":
                 raise ValueError("Email delivery is not configured")
-            get_mailer().send_workflow_notice(
+            get_mailer(brand).send_workflow_notice(
                 recipient,
                 "An enrolment update is available in your benefits portal",
                 "Your benefits enrolment has an update. Sign in to read the details "

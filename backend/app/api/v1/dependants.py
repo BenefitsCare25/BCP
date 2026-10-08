@@ -25,12 +25,12 @@ from app.core.auth import CurrentUser, get_current_user
 from app.core.deps import (
     assert_policy_year_for_user,
     load_dependant,
-    require_client_id,
-    require_system_admin,
+    policy_year_company,
+    require_firm_owner,
 )
 from app.core.pagination import MAX_LIMIT
 from app.core.rate_limit import limiter
-from app.core.storage import get_storage
+from app.core.storage import assert_key_in_scope, company_firm_id, get_storage
 from app.core.uploads import WORKBOOK_SUFFIXES, saved_upload
 from app.db.session import get_db
 from app.models import Dependant, Employee, StoredDocument
@@ -109,6 +109,16 @@ def _first_free(
     return None
 
 
+def _assert_selected_company(db: Session, d: Dependant, user: CurrentUser) -> None:
+    """Refuse an edit made under another company's selection.
+
+    These edits file audit rows — their own and the flex refresh's — under the
+    actor's company, so a system_admin's stale tab must not act on this
+    dependant (`policy_year_company`).
+    """
+    policy_year_company(assert_policy_year_for_user(d.policy_year_id, user, db), user)
+
+
 @router.get("", response_model=DependantList)
 def list_dependants(
     policy_year_id: str,
@@ -168,14 +178,16 @@ def dependant_coverage_report(
     db: Session = Depends(get_db),
 ) -> Response:
     """Dependant listing with the insurance products covering each dependant and
-    the sponsoring employee's flex tier (.xlsx). NRIC masked; audited (PII)."""
-    assert_policy_year_for_user(policy_year_id, user, db)
+    the sponsoring employee's flex tier (.xlsx). NRIC masked; audited (PII),
+    under the YEAR's company whichever one the actor has selected."""
+    py = assert_policy_year_for_user(policy_year_id, user, db)
     wb = build_dependant_report_workbook(db, policy_year_id)
     buf = BytesIO()
     wb.save(buf)
     write_audit(
         db, user, action="export", entity_type="dependant_coverage_report",
         entity_id=policy_year_id, after={"policy_year_id": policy_year_id},
+        client_id=py.client_id,
     )
     db.commit()
     return Response(
@@ -205,8 +217,7 @@ def auto_match_dependants(
     attribute_values (populated since roster parser v2) to re-attempt the same
     multi-key lookup used during upload.
     """
-    client_id = require_client_id(user)
-    assert_policy_year_for_user(policy_year_id, user, db)
+    client_id = policy_year_company(assert_policy_year_for_user(policy_year_id, user, db), user)
 
     employees = list(
         db.execute(
@@ -274,8 +285,9 @@ def update_dependant(
     Pass `relink: true` with `employee_id` (or null to unlink). A target
     employee must belong to the same tenant + policy year as the dependant.
     """
+    _assert_selected_company(db, d, user)
     if payload.relink and payload.employee_id is None:
-        require_system_admin(user)
+        require_firm_owner(user)
     before = {
         "attribute_values": d.attribute_values,
         "employee_id": d.employee_id,
@@ -341,6 +353,7 @@ def decide_dependant_approval(
     Approval activates the dependant and re-runs flex assignment (family
     status may change → wallet size), exactly like the bulk-upload path.
     """
+    _assert_selected_company(db, d, user)
     if d.status != DEPENDANT_STATUS_PENDING:
         raise HTTPException(
             status.HTTP_409_CONFLICT,
@@ -408,6 +421,19 @@ def download_dependant_document(
     ):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Document not found")
     try:
+        # The row's key must sit under the dependant's own firm and company:
+        # a path copied between tenants or mis-written must not serve another
+        # tenant's bytes. A company with no firm cannot be checked — refused.
+        assert_key_in_scope(doc.storage_path, company_firm_id(db, d.client_id), d.client_id)
+    except ValueError:
+        logger.warning(
+            "Refusing dependant document %s: its key is not within the "
+            "dependant's firm and company",
+            doc.id,
+            extra={"error_code": "storage_scope_violation"},
+        )
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Document not found") from None
+    try:
         content = get_storage().read(doc.storage_path)
     except FileNotFoundError:
         raise HTTPException(
@@ -445,8 +471,7 @@ def bulk_delete_dependants(
     silently discard member-submitted records. Family status is dependant-derived
     and sizes the flex wallet, so assignments are refreshed after the wipe.
     """
-    client_id = require_client_id(user)
-    assert_policy_year_for_user(policy_year_id, user, db)
+    client_id = policy_year_company(assert_policy_year_for_user(policy_year_id, user, db), user)
     rows = list(
         db.execute(
             select(Dependant).where(
@@ -506,15 +531,9 @@ async def upload_dependants(
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> UploadResult:
-    client_id = require_client_id(user)
-    py = assert_policy_year_for_user(policy_year_id, user, db)
     # Invariant: a dependant's client must own the policy year (guards the
-    # system_admin path, where the cross-client check above is bypassed).
-    if py.client_id != client_id:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            "Policy year belongs to a different client than the active one.",
-        )
+    # system_admin path, where user_owns bypasses the cross-client check).
+    client_id = policy_year_company(assert_policy_year_for_user(policy_year_id, user, db), user)
 
     async with saved_upload(file, WORKBOOK_SUFFIXES) as tmp_path:
         records = parse_dependant_workbook(tmp_path)

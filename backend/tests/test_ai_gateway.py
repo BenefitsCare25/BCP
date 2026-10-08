@@ -2,10 +2,20 @@
 from __future__ import annotations
 
 import os
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
+import httpx
 import pytest
+from anthropic import (
+    APIConnectionError,
+    APIStatusError,
+    APITimeoutError,
+    BadRequestError,
+    InternalServerError,
+    NotFoundError,
+)
 
 TEST_DB = Path(__file__).parent / "_test_ai_gateway.db"
 os.environ["INSPRO_DATABASE_URL"] = f"sqlite:///{TEST_DB}"
@@ -27,8 +37,10 @@ from app.models.platform_ai_settings import SINGLETON_ID  # noqa: E402
 from app.schemas.api import AttributeSchemaOut  # noqa: E402
 from app.schemas.rule import RuleEnvelope  # noqa: E402
 from app.services import ai_breaker, ai_cache  # noqa: E402
+from app.services.ai_breaker import CircuitOpenError, breaker_scope  # noqa: E402
 from app.services.ai_gateway import (  # noqa: E402
     AIBudgetExceededError,
+    AICapacityError,
     AIPlatformBudgetExceededError,
     _concurrency_state,
     _slot,
@@ -37,7 +49,9 @@ from app.services.ai_gateway import (  # noqa: E402
     platform_month_to_date_tokens,
     record_platform_usage,
 )
-from scripts.seed_demo import seed  # noqa: E402
+from app.services.platform_ai_settings import PlatformAILimits  # noqa: E402
+from app.services.vertex_gemini import CredentialRefreshError  # noqa: E402
+from scripts.seed_demo import DEMO_CLIENT_2_ID, seed  # noqa: E402
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -423,24 +437,168 @@ def test_clean_session_releases_connection_before_queueing() -> None:
         db.close()
 
 
-def test_provider_failure_increments_breaker() -> None:
+def _status_error(error_type: type[APIStatusError], status_code: int) -> APIStatusError:
+    request = httpx.Request("POST", "http://vertex.test/")
+    return error_type(
+        "provider said no", response=httpx.Response(status_code, request=request), body=None
+    )
+
+
+def _connection_error() -> APIConnectionError:
+    return APIConnectionError(
+        message="vertex unreachable", request=httpx.Request("POST", "http://vertex.test/")
+    )
+
+
+def _rule_call(db, description: str, client_id: str = DEMO_CLIENT_ID):
+    return generate_rule_for_category(
+        db,
+        client_id=client_id,
+        policy_year_id=None,
+        description=description,
+        schema=_schema(),
+    )
+
+
+@pytest.mark.parametrize(
+    "make_error",
+    [
+        _connection_error,
+        lambda: _status_error(InternalServerError, 503),
+        lambda: APITimeoutError(request=httpx.Request("POST", "http://vertex.test/")),
+        lambda: TimeoutError("socket timed out"),
+    ],
+)
+def test_provider_failure_increments_breaker(make_error) -> None:
+    db = SessionLocal()
+    try:
+        breaker = ai_breaker.get_breaker()
+        error = make_error()
+        with patch("app.services.ai_gateway.generate_rule_via_ai", side_effect=error):
+            for i in range(breaker.threshold):
+                with pytest.raises(type(error)):
+                    _rule_call(db, f"Some unique description to bypass cache {i}")
+        assert breaker.state == "open"
+    finally:
+        db.close()
+
+
+@pytest.mark.parametrize(
+    "make_error",
+    [
+        lambda: _status_error(BadRequestError, 400),  # the request was rejected
+        lambda: _status_error(NotFoundError, 404),  # model not enabled for the project
+        lambda: ValueError("The service-account key is not valid JSON."),  # malformed key
+        lambda: CredentialRefreshError(
+            message="token refresh", request=httpx.Request("POST", "http://t/")
+        ),
+        lambda: RuntimeError("an application bug"),
+    ],
+)
+def test_caller_side_failures_never_trip_breaker(make_error) -> None:
+    """Only the provider failing counts: these fail the same way on every
+    retry, and counting them let one bad request or key open the circuit."""
+    db = SessionLocal()
+    try:
+        breaker = ai_breaker.get_breaker()
+        error = make_error()
+        with patch("app.services.ai_gateway.generate_rule_via_ai", side_effect=error):
+            for i in range(breaker.threshold + 2):
+                with pytest.raises(type(error)):
+                    _rule_call(db, f"caller-side failure {type(error).__name__} {i}")
+        assert breaker.state == "closed"
+    finally:
+        db.close()
+
+
+def test_capacity_wait_does_not_trip_breaker(monkeypatch) -> None:
+    """A saturated worker pool is our own backpressure, not a provider outage:
+    counting it opened the breaker for every tenant during a busy burst."""
+    import app.services.ai_gateway as G
+
+    monkeypatch.setattr(G, "_AI_SLOT_WAIT_SECONDS", 0.01)
+    monkeypatch.setattr(
+        G, "resolve_platform_ai_limits", lambda _db: PlatformAILimits(0, 0, 1)
+    )
     db = SessionLocal()
     try:
         breaker = ai_breaker.get_breaker()
         with patch(
             "app.services.ai_gateway.generate_rule_via_ai",
-            side_effect=RuntimeError("simulated provider down"),
+            return_value=_fake_envelope_meta(),
+        ) as provider, _slot(1):
+            for i in range(breaker.threshold + 2):
+                with pytest.raises(AICapacityError):
+                    _rule_call(db, f"capacity wait {i}")
+        assert provider.call_count == 0
+        assert breaker.state == "closed"
+    finally:
+        db.close()
+
+
+def test_byok_company_failures_open_only_its_own_breaker(monkeypatch) -> None:
+    """One company's broken key must not take AI down for everyone else."""
+    import app.services.ai_gateway as G
+
+    real_load = G.load_ai_config
+
+    def demo_on_byok(db, client_id=None):
+        cfg = real_load(db, client_id)
+        return replace(cfg, source="byok") if client_id == DEMO_CLIENT_ID else cfg
+
+    monkeypatch.setattr(G, "load_ai_config", demo_on_byok)
+    db = SessionLocal()
+    try:
+        company = ai_breaker.get_breaker(breaker_scope("byok", DEMO_CLIENT_ID))
+        with patch(
+            "app.services.ai_gateway.generate_rule_via_ai", side_effect=_connection_error()
         ):
-            for _ in range(breaker.threshold):
-                with pytest.raises(RuntimeError):
-                    generate_rule_for_category(
-                        db,
-                        client_id=DEMO_CLIENT_ID,
-                        policy_year_id=None,
-                        description="Some unique description to bypass cache",
-                        schema=_schema(),
-                    )
-        assert breaker.state == "open"
+            for i in range(company.threshold):
+                with pytest.raises(APIConnectionError):
+                    _rule_call(db, f"byok outage {i}")
+        assert company.state == "open"
+        assert ai_breaker.get_breaker().state == "closed"
+
+        with patch(
+            "app.services.ai_gateway.generate_rule_via_ai",
+            return_value=_fake_envelope_meta(),
+        ) as provider:
+            # A company on the platform key is unaffected...
+            _rule_call(db, "platform company still served", client_id=DEMO_CLIENT_2_ID)
+            # ...while the failing company fails fast without a provider call.
+            with pytest.raises(CircuitOpenError):
+                _rule_call(db, "byok company fails fast")
+        assert provider.call_count == 1
+    finally:
+        db.rollback()
+        db.close()
+
+
+def test_cache_entries_never_cross_companies_or_credential_sources(monkeypatch) -> None:
+    import app.services.ai_gateway as G
+
+    db = SessionLocal()
+    try:
+        with patch(
+            "app.services.ai_gateway.generate_rule_via_ai",
+            return_value=_fake_envelope_meta(),
+        ) as provider:
+            _rule_call(db, "Identical description in two companies")
+            _rule_call(db, "Identical description in two companies", DEMO_CLIENT_2_ID)
+            assert provider.call_count == 2
+
+            real_load = G.load_ai_config
+            monkeypatch.setattr(
+                G,
+                "load_ai_config",
+                lambda session, client_id=None: replace(
+                    real_load(session, client_id), source="byok"
+                ),
+            )
+            # Same company and input, now on its own key: no platform-key hit.
+            _rule_call(db, "Identical description in two companies")
+            assert provider.call_count == 3
+        db.rollback()
     finally:
         db.close()
 

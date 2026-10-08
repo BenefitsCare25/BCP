@@ -1,4 +1,4 @@
-import { SystemAdminOnly } from "@/components/auth/SystemAdminOnly";
+import { FirmOwnerOnly } from "@/components/auth/FirmOwnerOnly";
 import { Plus, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -287,7 +287,7 @@ function CopayGrid({
                   <div className="flex items-center gap-1">
                     {f.label}
                     {!STANDARD_COPAY_KEYS.has(f.key) && (
-                      <SystemAdminOnly><Button
+                      <FirmOwnerOnly><Button
                         size="icon-sm"
                         variant="ghost"
                         onClick={() => setSob((s) => removeCopayField(s, idx, f.key))}
@@ -295,7 +295,7 @@ function CopayGrid({
                         className="text-error hover:text-error"
                       >
                         <X className="size-3" />
-                      </Button></SystemAdminOnly>
+                      </Button></FirmOwnerOnly>
                     )}
                   </div>
                 </td>
@@ -427,7 +427,7 @@ function LimitRows({
             onChange={(e) => set(i, { value: e.target.value || null })}
             className="h-7 max-w-40 text-xs"
           />
-          <SystemAdminOnly><Button
+          <FirmOwnerOnly><Button
             size="icon-sm"
             variant="ghost"
             onClick={() => onChange(limits.filter((_, j) => j !== i))}
@@ -435,7 +435,7 @@ function LimitRows({
             className="text-error hover:text-error"
           >
             <X className="size-3.5" />
-          </Button></SystemAdminOnly>
+          </Button></FirmOwnerOnly>
         </div>
       ))}
       <Button
@@ -512,7 +512,7 @@ function SubItems({
                 ))}
               </SelectContent>
             </Select>
-            <SystemAdminOnly><Button
+            <FirmOwnerOnly><Button
               size="icon-sm"
               variant="ghost"
               onClick={() => setSob((s) => removeSub(s, idx, subIdx))}
@@ -520,7 +520,7 @@ function SubItems({
               className="ml-auto text-error hover:text-error"
             >
               <X className="size-3.5" />
-            </Button></SystemAdminOnly>
+            </Button></FirmOwnerOnly>
           </div>
           <div className="flex flex-wrap gap-2">
             {columns.map((col, ci) => (
@@ -616,7 +616,7 @@ function ListRows({
             }
             className="h-7 max-w-96 text-xs"
           />
-          <SystemAdminOnly><Button
+          <FirmOwnerOnly><Button
             size="icon-sm"
             variant="ghost"
             onClick={() => setSob((s) => removeSub(s, idx, subIdx))}
@@ -624,7 +624,7 @@ function ListRows({
             className="text-error hover:text-error"
           >
             <X className="size-3.5" />
-          </Button></SystemAdminOnly>
+          </Button></FirmOwnerOnly>
         </div>
       ))}
       <Button

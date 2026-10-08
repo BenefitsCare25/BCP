@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.42.1.51946",
-      "templateHash": "11837356854020498446"
+      "templateHash": "12154166688447029089"
     }
   },
   "parameters": {
@@ -120,7 +120,21 @@
     "corsOrigins": {
       "type": "string",
       "metadata": {
-        "description": "CORS origins (comma-separated)."
+        "description": "CORS origins (comma-separated). In prod every entry must be an https origin; the app refuses to start on a wildcard, plaintext or localhost entry."
+      }
+    },
+    "frontendOrigin": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Public https origin of the portal, used for links in outbound mail (INSPRO_FRONTEND_ORIGIN), e.g. https://portal.example.com. Leave empty for the web app's default host, https://<siteName>.azurewebsites.net. In prod the app refuses to start on a missing, non-https or localhost origin."
+      }
+    },
+    "forwardedAllowIps": {
+      "type": "string",
+      "defaultValue": "127.0.0.1",
+      "metadata": {
+        "description": "Exact trusted reverse-proxy peers for Uvicorn. Never use a wildcard on a public listener."
       }
     },
     "containerImage": {
@@ -252,6 +266,59 @@
         "description": "Integrate the web app with the VNet so it reaches Postgres over the private endpoint. Setting this to false stops NEW deployments wiring the subnet, but does not tear down existing integration — for a rollback run `az webapp vnet-integration remove` as well, which reverts the app to the public path."
       }
     },
+    "platformHosts": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Hosts that serve the platform owner's firm and the master-admin console (INSPRO_PLATFORM_HOSTS, comma-separated, no scheme). Leave empty to keep the app default: the INSPRO_FRONTEND_ORIGIN host."
+      }
+    },
+    "useRestrictedDbRole": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Run the web app and worker as the least-privilege database login (Key Vault secret database-url-app, role inspro_app: no DDL) and leave new firm schemas to the migration job (INSPRO_RUNTIME_PROVISIONING=false). Turn on only after docs/DATABASE_ROLES_RUNBOOK.md has been applied and verified; off keeps the current connection."
+      }
+    },
+    "deployFrontDoor": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Provision Front Door Premium (profile, endpoint, WAF, rule set, routes, customer domains) in front of the web app. Off: no Front Door resource exists and the site is unchanged."
+      }
+    },
+    "frontDoorRequireEdge": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Set INSPRO_FRONT_DOOR_ID on the web app. The app then refuses requests without this profile's X-Azure-FDID (except /health and /readiness) and takes the public host from X-Inspro-Edge-Host. Turn on only after the edge hostname has been verified."
+      }
+    },
+    "frontDoorOriginLock": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Lock the web app's main site to this Front Door profile: allow service tag AzureFrontDoor.Backend with X-Azure-FDID equal to the profile ID, deny everything else. The SCM site keeps its own (open) rules. Turn on last."
+      }
+    },
+    "frontDoorWafMode": {
+      "type": "string",
+      "defaultValue": "Detection",
+      "allowedValues": [
+        "Detection",
+        "Prevention"
+      ],
+      "metadata": {
+        "description": "WAF mode. Detection (default) logs rule matches without blocking, for the first rollout while false positives on uploads and JSON bodies are tuned out; switch to Prevention once the WAF logs are clean."
+      }
+    },
+    "frontDoorCustomDomains": {
+      "type": "array",
+      "defaultValue": [],
+      "metadata": {
+        "description": "Hostnames served through Front Door, each with the firm that owns it: [{ \"hostname\": \"benefits.acme.com\", \"firmSlug\": \"acme\" }]. Each gets a Front Door-managed certificate (TLS 1.2 minimum) and is bound to the routes and the WAF. Onboard with infra/scripts/onboard_domain.py."
+      }
+    },
     "alertEmail": {
       "type": "string",
       "defaultValue": "",
@@ -264,6 +331,23 @@
       "defaultValue": [],
       "metadata": {
         "description": "Additional notification emails. Production declares its named responders here to avoid duplicate delivery through forwarding aliases."
+      }
+    },
+    "logAnalyticsRetentionDays": {
+      "type": "int",
+      "defaultValue": 90,
+      "minValue": 30,
+      "maxValue": 730,
+      "metadata": {
+        "description": "Log Analytics retention in days. 90 meets the 90-day security/audit log requirement in docs/PRODUCTION_RESILIENCE_RUNBOOK.md. Retention beyond the free period (31 days for most tables) is billed per GB-month of retained data, which at this volume is small next to ingestion."
+      }
+    },
+    "logAnalyticsDailyQuotaGb": {
+      "type": "int",
+      "defaultValue": 2,
+      "minValue": -1,
+      "metadata": {
+        "description": "Log Analytics daily ingestion cap in GB (-1 = no cap). A cost backstop against a runaway log loop: 2 GB/day bounds ingestion at roughly 60 GB a month. Once the cap is reached, ingestion stops until the daily reset, so the rest of that day's logs, Application Insights telemetry and log-based alerts are lost. Keep it well above normal daily volume (see the Usage table)."
       }
     },
     "mailMode": {
@@ -318,13 +402,18 @@
     "prefix": "[format('inspro-{0}', parameters('env'))]",
     "isProd": "[equals(parameters('env'), 'prod')]",
     "appName": "[if(empty(parameters('siteName')), format('{0}-api', variables('prefix')), parameters('siteName'))]",
+    "effectiveFrontendOrigin": "[if(empty(parameters('frontendOrigin')), format('https://{0}.azurewebsites.net', variables('appName')), parameters('frontendOrigin'))]",
     "effectivePostgresName": "[if(empty(parameters('postgresServerName')), format('{0}-pg', variables('prefix')), parameters('postgresServerName'))]",
     "acrName": "[split(parameters('acrLoginServer'), '.')[0]]",
     "alertRecipients": "[concat(if(empty(parameters('alertEmail')), createArray(), createArray(parameters('alertEmail'))), parameters('additionalAlertEmails'))]",
     "hasAlertRecipients": "[greater(length(variables('alertRecipients')), 0)]",
     "keyVaultSecretsUserRoleId": "4633458b-17de-408a-b874-0445c86b69e6",
     "storageBlobDataContributorRoleId": "ba92f5b4-2d11-453d-a403-e96b0029c9fe",
-    "redisAppSettings": "[if(parameters('deployRedis'), createArray(createObject('name', 'INSPRO_REDIS_URL', 'value', format('@Microsoft.KeyVault(VaultName={0};SecretName=redis-url)', format('{0}-kv', variables('prefix'))))), createArray())]"
+    "requireEdge": "[and(parameters('deployFrontDoor'), parameters('frontDoorRequireEdge'))]",
+    "lockOrigin": "[and(parameters('deployFrontDoor'), parameters('frontDoorOriginLock'))]",
+    "redisAppSettings": "[if(parameters('deployRedis'), createArray(createObject('name', 'INSPRO_REDIS_URL', 'value', format('@Microsoft.KeyVault(VaultName={0};SecretName=redis-url)', format('{0}-kv', variables('prefix'))))), createArray())]",
+    "dbRoleSettings": "[if(parameters('useRestrictedDbRole'), createArray(createObject('name', 'INSPRO_RUNTIME_PROVISIONING', 'value', 'false')), createArray())]",
+    "platformHostSettings": "[if(empty(parameters('platformHosts')), createArray(), createArray(createObject('name', 'INSPRO_PLATFORM_HOSTS', 'value', parameters('platformHosts'))))]"
   },
   "resources": [
     {
@@ -336,7 +425,10 @@
         "sku": {
           "name": "PerGB2018"
         },
-        "retentionInDays": 30
+        "retentionInDays": "[parameters('logAnalyticsRetentionDays')]",
+        "workspaceCapping": {
+          "dailyQuotaGb": "[parameters('logAnalyticsDailyQuotaGb')]"
+        }
       }
     },
     {
@@ -592,11 +684,12 @@
         "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', format('{0}-plan', variables('prefix')))]",
         "httpsOnly": true,
         "virtualNetworkSubnetId": "[if(parameters('enableVnetIntegration'), reference(resourceId('Microsoft.Resources/deployments', format('private-networking-{0}', parameters('env'))), '2025-04-01').outputs.appSubnetId.value, null())]",
-        "siteConfig": "[union(createObject('linuxFxVersion', format('DOCKER|{0}', parameters('containerImage')), 'acrUseManagedIdentityCreds', true(), 'ftpsState', 'Disabled', 'minTlsVersion', '1.2', 'http20Enabled', true(), 'healthCheckPath', '/health', 'appSettings', concat(createArray(createObject('name', 'DOCKER_REGISTRY_SERVER_URL', 'value', format('https://{0}', parameters('acrLoginServer'))), createObject('name', 'INSPRO_ENV', 'value', parameters('env')), createObject('name', 'INSPRO_AUTH_MODE', 'value', 'entra'), createObject('name', 'INSPRO_ENTRA_TENANT_ID', 'value', parameters('entraTenantId')), createObject('name', 'INSPRO_ENTRA_CLIENT_ID', 'value', parameters('entraClientId')), createObject('name', 'INSPRO_ENTRA_AUDIENCE', 'value', parameters('entraClientId')), createObject('name', 'INSPRO_ENTRA_ISSUER', 'value', format('{0}{1}/v2.0', environment().authentication.loginEndpoint, parameters('entraTenantId'))), createObject('name', 'INSPRO_ENTRA_JWKS_URL', 'value', format('{0}{1}/discovery/v2.0/keys', environment().authentication.loginEndpoint, parameters('entraTenantId'))), createObject('name', 'INSPRO_CORS_ORIGINS', 'value', parameters('corsOrigins')), createObject('name', 'INSPRO_TENANT_MODE', 'value', parameters('tenantMode')), createObject('name', 'INSPRO_BASE_DOMAIN', 'value', parameters('baseDomain')), createObject('name', 'INSPRO_DATABASE_URL', 'value', format('@Microsoft.KeyVault(VaultName={0};SecretName=database-url)', format('{0}-kv', variables('prefix')))), createObject('name', 'INSPRO_DB_CONNECT_TIMEOUT', 'value', '5'), createObject('name', 'INSPRO_DB_POOL_TIMEOUT', 'value', '5'), createObject('name', 'INSPRO_PORTAL_JWT_SECRET', 'value', format('@Microsoft.KeyVault(VaultName={0};SecretName=portal-jwt-secret)', format('{0}-kv', variables('prefix')))), createObject('name', 'INSPRO_AI_KEY_ENCRYPTION_KEY', 'value', format('@Microsoft.KeyVault(VaultName={0};SecretName=ai-key-encryption-key)', format('{0}-kv', variables('prefix')))), createObject('name', 'INSPRO_MAIL_MODE', 'value', parameters('mailMode')), createObject('name', 'INSPRO_SMTP_HOST', 'value', parameters('smtpHost')), createObject('name', 'INSPRO_SMTP_PORT', 'value', parameters('smtpPort')), createObject('name', 'INSPRO_SMTP_USER', 'value', parameters('smtpUser')), createObject('name', 'INSPRO_SMTP_FROM', 'value', parameters('smtpFrom')), createObject('name', 'INSPRO_SMTP_PASSWORD', 'value', if(equals(parameters('mailMode'), 'smtp'), format('@Microsoft.KeyVault(VaultName={0};SecretName=smtp-password)', format('{0}-kv', variables('prefix'))), '')), createObject('name', 'INSPRO_STORAGE_MODE', 'value', 'azure'), createObject('name', 'INSPRO_STORAGE_ACCOUNT_URL', 'value', reference(resourceId('Microsoft.Storage/storageAccounts', replace(format('{0}docs', variables('prefix')), '-', '')), '2023-05-01').primaryEndpoints.blob), createObject('name', 'INSPRO_STORAGE_CONTAINER', 'value', 'documents'), createObject('name', 'APPLICATIONINSIGHTS_CONNECTION_STRING', 'value', reference(resourceId('Microsoft.Insights/components', format('{0}-appi', variables('prefix'))), '2020-02-02').ConnectionString)), variables('redisAppSettings'), createArray(createObject('name', 'WEBSITES_PORT', 'value', '8000'), createObject('name', 'WEB_CONCURRENCY', 'value', string(parameters('webConcurrency'))), createObject('name', 'INSPRO_DB_POOL_SIZE', 'value', string(parameters('dbPoolSize'))), createObject('name', 'INSPRO_DB_MAX_OVERFLOW', 'value', string(parameters('dbMaxOverflow'))), createObject('name', 'OTEL_SERVICE_NAME', 'value', format('{0}-api', variables('prefix')))))), createObject('alwaysOn', variables('isProd')))]"
+        "siteConfig": "[union(createObject('linuxFxVersion', format('DOCKER|{0}', parameters('containerImage')), 'acrUseManagedIdentityCreds', true(), 'ftpsState', 'Disabled', 'minTlsVersion', '1.2', 'http20Enabled', true(), 'healthCheckPath', '/health', 'appSettings', concat(createArray(createObject('name', 'DOCKER_REGISTRY_SERVER_URL', 'value', format('https://{0}', parameters('acrLoginServer'))), createObject('name', 'INSPRO_ENV', 'value', parameters('env')), createObject('name', 'INSPRO_AUTH_MODE', 'value', 'entra'), createObject('name', 'INSPRO_ENTRA_TENANT_ID', 'value', parameters('entraTenantId')), createObject('name', 'INSPRO_ENTRA_CLIENT_ID', 'value', parameters('entraClientId')), createObject('name', 'INSPRO_ENTRA_AUDIENCE', 'value', parameters('entraClientId')), createObject('name', 'INSPRO_CORS_ORIGINS', 'value', parameters('corsOrigins')), createObject('name', 'INSPRO_FRONTEND_ORIGIN', 'value', variables('effectiveFrontendOrigin')), createObject('name', 'FORWARDED_ALLOW_IPS', 'value', parameters('forwardedAllowIps')), createObject('name', 'INSPRO_TENANT_MODE', 'value', parameters('tenantMode')), createObject('name', 'INSPRO_BASE_DOMAIN', 'value', parameters('baseDomain')), createObject('name', 'INSPRO_DATABASE_URL', 'value', format('@Microsoft.KeyVault(VaultName={0};SecretName={1})', format('{0}-kv', variables('prefix')), if(parameters('useRestrictedDbRole'), 'database-url-app', 'database-url'))), createObject('name', 'INSPRO_DB_CONNECT_TIMEOUT', 'value', '5'), createObject('name', 'INSPRO_DB_POOL_TIMEOUT', 'value', '5'), createObject('name', 'INSPRO_PORTAL_JWT_SECRET', 'value', format('@Microsoft.KeyVault(VaultName={0};SecretName=portal-jwt-secret)', format('{0}-kv', variables('prefix')))), createObject('name', 'INSPRO_AI_KEY_ENCRYPTION_KEY', 'value', format('@Microsoft.KeyVault(VaultName={0};SecretName=ai-key-encryption-key)', format('{0}-kv', variables('prefix')))), createObject('name', 'INSPRO_MAIL_MODE', 'value', parameters('mailMode')), createObject('name', 'INSPRO_SMTP_HOST', 'value', parameters('smtpHost')), createObject('name', 'INSPRO_SMTP_PORT', 'value', parameters('smtpPort')), createObject('name', 'INSPRO_SMTP_USER', 'value', parameters('smtpUser')), createObject('name', 'INSPRO_SMTP_FROM', 'value', parameters('smtpFrom')), createObject('name', 'INSPRO_SMTP_PASSWORD', 'value', if(equals(parameters('mailMode'), 'smtp'), format('@Microsoft.KeyVault(VaultName={0};SecretName=smtp-password)', format('{0}-kv', variables('prefix'))), '')), createObject('name', 'INSPRO_STORAGE_MODE', 'value', 'azure'), createObject('name', 'INSPRO_STORAGE_ACCOUNT_URL', 'value', reference(resourceId('Microsoft.Storage/storageAccounts', replace(format('{0}docs', variables('prefix')), '-', '')), '2023-05-01').primaryEndpoints.blob), createObject('name', 'INSPRO_STORAGE_CONTAINER', 'value', 'documents'), createObject('name', 'APPLICATIONINSIGHTS_CONNECTION_STRING', 'value', reference(resourceId('Microsoft.Insights/components', format('{0}-appi', variables('prefix'))), '2020-02-02').ConnectionString)), variables('dbRoleSettings'), variables('platformHostSettings'), variables('redisAppSettings'), if(variables('requireEdge'), createArray(createObject('name', 'INSPRO_FRONT_DOOR_ID', 'value', reference(resourceId('Microsoft.Resources/deployments', format('front-door-{0}', parameters('env'))), '2025-04-01').outputs.frontDoorId.value)), createArray()), createArray(createObject('name', 'WEBSITES_PORT', 'value', '8000'), createObject('name', 'WEB_CONCURRENCY', 'value', string(parameters('webConcurrency'))), createObject('name', 'INSPRO_DB_POOL_SIZE', 'value', string(parameters('dbPoolSize'))), createObject('name', 'INSPRO_DB_MAX_OVERFLOW', 'value', string(parameters('dbMaxOverflow'))), createObject('name', 'OTEL_SERVICE_NAME', 'value', format('{0}-api', variables('prefix')))))), createObject('alwaysOn', variables('isProd')), if(not(parameters('deployFrontDoor')), createObject(), if(variables('lockOrigin'), createObject('ipSecurityRestrictionsDefaultAction', 'Deny', 'ipSecurityRestrictions', createArray(createObject('name', 'front-door-only', 'description', 'This Front Door profile only', 'priority', 100, 'action', 'Allow', 'tag', 'ServiceTag', 'ipAddress', 'AzureFrontDoor.Backend', 'headers', createObject('x-azure-fdid', createArray(reference(resourceId('Microsoft.Resources/deployments', format('front-door-{0}', parameters('env'))), '2025-04-01').outputs.frontDoorId.value)))), 'scmIpSecurityRestrictionsUseMain', false()), createObject('ipSecurityRestrictionsDefaultAction', 'Allow', 'ipSecurityRestrictions', createArray(), 'scmIpSecurityRestrictionsUseMain', false()))))]"
       },
       "dependsOn": [
         "[resourceId('Microsoft.Insights/components', format('{0}-appi', variables('prefix')))]",
         "[resourceId('Microsoft.Storage/storageAccounts/blobServices/containers', replace(format('{0}docs', variables('prefix')), '-', ''), 'default', 'documents')]",
+        "[resourceId('Microsoft.Resources/deployments', format('front-door-{0}', parameters('env')))]",
         "[resourceId('Microsoft.KeyVault/vaults', format('{0}-kv', variables('prefix')))]",
         "[resourceId('Microsoft.KeyVault/vaults/secrets', format('{0}-kv', variables('prefix')), 'redis-url')]",
         "[resourceId('Microsoft.Web/serverfarms', format('{0}-plan', variables('prefix')))]",
@@ -626,7 +719,7 @@
           "http20Enabled": true,
           "healthCheckPath": "/readyz",
           "alwaysOn": true,
-          "appSettings": "[concat(createArray(createObject('name', 'DOCKER_REGISTRY_SERVER_URL', 'value', format('https://{0}', parameters('acrLoginServer'))), createObject('name', 'INSPRO_ENV', 'value', parameters('env')), createObject('name', 'INSPRO_AUTH_MODE', 'value', 'entra'), createObject('name', 'INSPRO_ENTRA_TENANT_ID', 'value', parameters('entraTenantId')), createObject('name', 'INSPRO_ENTRA_CLIENT_ID', 'value', parameters('entraClientId')), createObject('name', 'INSPRO_ENTRA_AUDIENCE', 'value', parameters('entraClientId')), createObject('name', 'INSPRO_ENTRA_ISSUER', 'value', format('{0}{1}/v2.0', environment().authentication.loginEndpoint, parameters('entraTenantId'))), createObject('name', 'INSPRO_ENTRA_JWKS_URL', 'value', format('{0}{1}/discovery/v2.0/keys', environment().authentication.loginEndpoint, parameters('entraTenantId'))), createObject('name', 'INSPRO_CORS_ORIGINS', 'value', parameters('corsOrigins')), createObject('name', 'INSPRO_TENANT_MODE', 'value', parameters('tenantMode')), createObject('name', 'INSPRO_BASE_DOMAIN', 'value', parameters('baseDomain')), createObject('name', 'INSPRO_DATABASE_URL', 'value', format('@Microsoft.KeyVault(VaultName={0};SecretName=database-url)', format('{0}-kv', variables('prefix')))), createObject('name', 'INSPRO_DB_CONNECT_TIMEOUT', 'value', '5'), createObject('name', 'INSPRO_DB_POOL_TIMEOUT', 'value', '5'), createObject('name', 'INSPRO_PORTAL_JWT_SECRET', 'value', format('@Microsoft.KeyVault(VaultName={0};SecretName=portal-jwt-secret)', format('{0}-kv', variables('prefix')))), createObject('name', 'INSPRO_AI_KEY_ENCRYPTION_KEY', 'value', format('@Microsoft.KeyVault(VaultName={0};SecretName=ai-key-encryption-key)', format('{0}-kv', variables('prefix')))), createObject('name', 'INSPRO_MAIL_MODE', 'value', parameters('mailMode')), createObject('name', 'INSPRO_SMTP_HOST', 'value', parameters('smtpHost')), createObject('name', 'INSPRO_SMTP_PORT', 'value', parameters('smtpPort')), createObject('name', 'INSPRO_SMTP_USER', 'value', parameters('smtpUser')), createObject('name', 'INSPRO_SMTP_FROM', 'value', parameters('smtpFrom')), createObject('name', 'INSPRO_SMTP_PASSWORD', 'value', if(equals(parameters('mailMode'), 'smtp'), format('@Microsoft.KeyVault(VaultName={0};SecretName=smtp-password)', format('{0}-kv', variables('prefix'))), '')), createObject('name', 'INSPRO_STORAGE_MODE', 'value', 'azure'), createObject('name', 'INSPRO_STORAGE_ACCOUNT_URL', 'value', reference(resourceId('Microsoft.Storage/storageAccounts', replace(format('{0}docs', variables('prefix')), '-', '')), '2023-05-01').primaryEndpoints.blob), createObject('name', 'INSPRO_STORAGE_CONTAINER', 'value', 'documents'), createObject('name', 'APPLICATIONINSIGHTS_CONNECTION_STRING', 'value', reference(resourceId('Microsoft.Insights/components', format('{0}-appi', variables('prefix'))), '2020-02-02').ConnectionString)), variables('redisAppSettings'), createArray(createObject('name', 'WEBSITES_PORT', 'value', '8081'), createObject('name', 'PORT', 'value', '8081'), createObject('name', 'WEB_CONCURRENCY', 'value', '1'), createObject('name', 'INSPRO_DB_POOL_SIZE', 'value', string(parameters('reviewWorkerDbPoolSize'))), createObject('name', 'INSPRO_DB_MAX_OVERFLOW', 'value', string(parameters('reviewWorkerDbMaxOverflow'))), createObject('name', 'INSPRO_REVIEW_WORKER_CONCURRENCY', 'value', string(parameters('reviewWorkerConcurrency'))), createObject('name', 'INSPRO_REVIEW_MAX_CONCURRENT_PER_CLIENT', 'value', string(parameters('reviewWorkerMaxConcurrentPerClient'))), createObject('name', 'OTEL_SERVICE_NAME', 'value', format('{0}-claim-review-worker', variables('prefix')))))]"
+          "appSettings": "[concat(createArray(createObject('name', 'DOCKER_REGISTRY_SERVER_URL', 'value', format('https://{0}', parameters('acrLoginServer'))), createObject('name', 'INSPRO_ENV', 'value', parameters('env')), createObject('name', 'INSPRO_AUTH_MODE', 'value', 'entra'), createObject('name', 'INSPRO_ENTRA_TENANT_ID', 'value', parameters('entraTenantId')), createObject('name', 'INSPRO_ENTRA_CLIENT_ID', 'value', parameters('entraClientId')), createObject('name', 'INSPRO_ENTRA_AUDIENCE', 'value', parameters('entraClientId')), createObject('name', 'INSPRO_CORS_ORIGINS', 'value', parameters('corsOrigins')), createObject('name', 'INSPRO_FRONTEND_ORIGIN', 'value', variables('effectiveFrontendOrigin')), createObject('name', 'FORWARDED_ALLOW_IPS', 'value', parameters('forwardedAllowIps')), createObject('name', 'INSPRO_TENANT_MODE', 'value', parameters('tenantMode')), createObject('name', 'INSPRO_BASE_DOMAIN', 'value', parameters('baseDomain')), createObject('name', 'INSPRO_DATABASE_URL', 'value', format('@Microsoft.KeyVault(VaultName={0};SecretName={1})', format('{0}-kv', variables('prefix')), if(parameters('useRestrictedDbRole'), 'database-url-app', 'database-url'))), createObject('name', 'INSPRO_DB_CONNECT_TIMEOUT', 'value', '5'), createObject('name', 'INSPRO_DB_POOL_TIMEOUT', 'value', '5'), createObject('name', 'INSPRO_PORTAL_JWT_SECRET', 'value', format('@Microsoft.KeyVault(VaultName={0};SecretName=portal-jwt-secret)', format('{0}-kv', variables('prefix')))), createObject('name', 'INSPRO_AI_KEY_ENCRYPTION_KEY', 'value', format('@Microsoft.KeyVault(VaultName={0};SecretName=ai-key-encryption-key)', format('{0}-kv', variables('prefix')))), createObject('name', 'INSPRO_MAIL_MODE', 'value', parameters('mailMode')), createObject('name', 'INSPRO_SMTP_HOST', 'value', parameters('smtpHost')), createObject('name', 'INSPRO_SMTP_PORT', 'value', parameters('smtpPort')), createObject('name', 'INSPRO_SMTP_USER', 'value', parameters('smtpUser')), createObject('name', 'INSPRO_SMTP_FROM', 'value', parameters('smtpFrom')), createObject('name', 'INSPRO_SMTP_PASSWORD', 'value', if(equals(parameters('mailMode'), 'smtp'), format('@Microsoft.KeyVault(VaultName={0};SecretName=smtp-password)', format('{0}-kv', variables('prefix'))), '')), createObject('name', 'INSPRO_STORAGE_MODE', 'value', 'azure'), createObject('name', 'INSPRO_STORAGE_ACCOUNT_URL', 'value', reference(resourceId('Microsoft.Storage/storageAccounts', replace(format('{0}docs', variables('prefix')), '-', '')), '2023-05-01').primaryEndpoints.blob), createObject('name', 'INSPRO_STORAGE_CONTAINER', 'value', 'documents'), createObject('name', 'APPLICATIONINSIGHTS_CONNECTION_STRING', 'value', reference(resourceId('Microsoft.Insights/components', format('{0}-appi', variables('prefix'))), '2020-02-02').ConnectionString)), variables('dbRoleSettings'), variables('platformHostSettings'), variables('redisAppSettings'), createArray(createObject('name', 'WEBSITES_PORT', 'value', '8081'), createObject('name', 'PORT', 'value', '8081'), createObject('name', 'WEB_CONCURRENCY', 'value', '1'), createObject('name', 'INSPRO_DB_POOL_SIZE', 'value', string(parameters('reviewWorkerDbPoolSize'))), createObject('name', 'INSPRO_DB_MAX_OVERFLOW', 'value', string(parameters('reviewWorkerDbMaxOverflow'))), createObject('name', 'INSPRO_REVIEW_WORKER_CONCURRENCY', 'value', string(parameters('reviewWorkerConcurrency'))), createObject('name', 'INSPRO_REVIEW_MAX_CONCURRENT_PER_CLIENT', 'value', string(parameters('reviewWorkerMaxConcurrentPerClient'))), createObject('name', 'OTEL_SERVICE_NAME', 'value', format('{0}-claim-review-worker', variables('prefix')))))]"
         }
       },
       "dependsOn": [
@@ -958,7 +1051,7 @@
           }
         ],
         "Request": {
-          "RequestUrl": "[format('https://{0}.azurewebsites.net/health', variables('appName'))]",
+          "RequestUrl": "[format('https://{0}/health', if(variables('lockOrigin'), reference(resourceId('Microsoft.Resources/deployments', format('front-door-{0}', parameters('env'))), '2025-04-01').outputs.endpointHostName.value, format('{0}.azurewebsites.net', variables('appName'))))]",
           "HttpVerb": "GET",
           "FollowRedirects": true,
           "ParseDependentRequests": false
@@ -970,7 +1063,8 @@
         }
       },
       "dependsOn": [
-        "[resourceId('Microsoft.Insights/components', format('{0}-appi', variables('prefix')))]"
+        "[resourceId('Microsoft.Insights/components', format('{0}-appi', variables('prefix')))]",
+        "[resourceId('Microsoft.Resources/deployments', format('front-door-{0}', parameters('env')))]"
       ]
     },
     {
@@ -997,7 +1091,7 @@
           }
         ],
         "Request": {
-          "RequestUrl": "[format('https://{0}.azurewebsites.net/readiness', variables('appName'))]",
+          "RequestUrl": "[format('https://{0}/readiness', if(variables('lockOrigin'), reference(resourceId('Microsoft.Resources/deployments', format('front-door-{0}', parameters('env'))), '2025-04-01').outputs.endpointHostName.value, format('{0}.azurewebsites.net', variables('appName'))))]",
           "HttpVerb": "GET",
           "FollowRedirects": true,
           "ParseDependentRequests": false
@@ -1009,7 +1103,8 @@
         }
       },
       "dependsOn": [
-        "[resourceId('Microsoft.Insights/components', format('{0}-appi', variables('prefix')))]"
+        "[resourceId('Microsoft.Insights/components', format('{0}-appi', variables('prefix')))]",
+        "[resourceId('Microsoft.Resources/deployments', format('front-door-{0}', parameters('env')))]"
       ]
     },
     {
@@ -1571,6 +1666,414 @@
       ]
     },
     {
+      "condition": "[parameters('deployFrontDoor')]",
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "[format('front-door-{0}', parameters('env'))]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "prefix": {
+            "value": "[variables('prefix')]"
+          },
+          "originHostName": {
+            "value": "[format('{0}.azurewebsites.net', variables('appName'))]"
+          },
+          "wafMode": {
+            "value": "[parameters('frontDoorWafMode')]"
+          },
+          "customDomains": {
+            "value": "[parameters('frontDoorCustomDomains')]"
+          },
+          "logAnalyticsWorkspaceId": {
+            "value": "[resourceId('Microsoft.OperationalInsights/workspaces', format('{0}-law', variables('prefix')))]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.42.1.51946",
+              "templateHash": "11666016740851577312"
+            }
+          },
+          "parameters": {
+            "prefix": {
+              "type": "string",
+              "metadata": {
+                "description": "Resource name prefix, e.g. inspro-prod."
+              }
+            },
+            "originHostName": {
+              "type": "string",
+              "metadata": {
+                "description": "The App Service default hostname Front Door forwards to, e.g. inspro-portal.azurewebsites.net."
+              }
+            },
+            "wafMode": {
+              "type": "string",
+              "allowedValues": [
+                "Detection",
+                "Prevention"
+              ],
+              "metadata": {
+                "description": "WAF mode. Detection logs matches without blocking; Prevention blocks requests whose anomaly score reaches the threshold."
+              }
+            },
+            "customDomains": {
+              "type": "array",
+              "metadata": {
+                "description": "Hostnames to serve, as [{ hostname, firmSlug }]: hostname is fully qualified (prefer a subdomain; an apex cannot take a CNAME), firmSlug is the owning firm's broker_firms.slug and prefixes the resource name. Each needs a CNAME to the endpoint hostname and a _dnsauth TXT record before its certificate is issued."
+              }
+            },
+            "logAnalyticsWorkspaceId": {
+              "type": "string",
+              "metadata": {
+                "description": "Log Analytics workspace that receives the WAF log and Front Door metrics."
+              }
+            }
+          },
+          "variables": {
+            "copy": [
+              {
+                "name": "customDomainNames",
+                "count": "[length(parameters('customDomains'))]",
+                "input": "[format('{0}--{1}', toLower(parameters('customDomains')[copyIndex('customDomainNames')].firmSlug), replace(toLower(parameters('customDomains')[copyIndex('customDomainNames')].hostname), '.', '-'))]"
+              },
+              {
+                "name": "customDomainRefs",
+                "count": "[length(variables('customDomainNames'))]",
+                "input": {
+                  "id": "[resourceId('Microsoft.Cdn/profiles/customDomains', variables('profileName'), variables('customDomainNames')[copyIndex('customDomainRefs')])]"
+                }
+              }
+            ],
+            "profileName": "[format('{0}-afd', parameters('prefix'))]",
+            "endpointName": "[parameters('prefix')]",
+            "wafPolicyName": "[replace(format('{0}waf', parameters('prefix')), '-', '')]"
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Cdn/profiles",
+              "apiVersion": "2024-09-01",
+              "name": "[variables('profileName')]",
+              "location": "global",
+              "sku": {
+                "name": "Premium_AzureFrontDoor"
+              },
+              "properties": {
+                "originResponseTimeoutSeconds": 60
+              }
+            },
+            {
+              "type": "Microsoft.Cdn/profiles/afdEndpoints",
+              "apiVersion": "2024-09-01",
+              "name": "[format('{0}/{1}', variables('profileName'), variables('endpointName'))]",
+              "location": "global",
+              "properties": {
+                "enabledState": "Enabled",
+                "autoGeneratedDomainNameLabelScope": "TenantReuse"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Cdn/profiles', variables('profileName'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.Cdn/profiles/originGroups",
+              "apiVersion": "2024-09-01",
+              "name": "[format('{0}/{1}', variables('profileName'), 'app-service')]",
+              "properties": {
+                "loadBalancingSettings": {
+                  "sampleSize": 4,
+                  "successfulSamplesRequired": 3,
+                  "additionalLatencyInMilliseconds": 50
+                },
+                "healthProbeSettings": {
+                  "probePath": "/health",
+                  "probeRequestType": "GET",
+                  "probeProtocol": "Https",
+                  "probeIntervalInSeconds": 100
+                },
+                "sessionAffinityState": "Disabled"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Cdn/profiles', variables('profileName'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.Cdn/profiles/originGroups/origins",
+              "apiVersion": "2024-09-01",
+              "name": "[format('{0}/{1}/{2}', variables('profileName'), 'app-service', 'web-app')]",
+              "properties": {
+                "hostName": "[parameters('originHostName')]",
+                "originHostHeader": "[parameters('originHostName')]",
+                "httpPort": 80,
+                "httpsPort": 443,
+                "priority": 1,
+                "weight": 1000,
+                "enabledState": "Enabled",
+                "enforceCertificateNameCheck": true
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Cdn/profiles/originGroups', variables('profileName'), 'app-service')]"
+              ]
+            },
+            {
+              "type": "Microsoft.Cdn/profiles/ruleSets",
+              "apiVersion": "2024-09-01",
+              "name": "[format('{0}/{1}', variables('profileName'), 'EdgeHeaders')]",
+              "dependsOn": [
+                "[resourceId('Microsoft.Cdn/profiles', variables('profileName'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.Cdn/profiles/ruleSets/rules",
+              "apiVersion": "2024-09-01",
+              "name": "[format('{0}/{1}/{2}', variables('profileName'), 'EdgeHeaders', 'SetEdgeHost')]",
+              "properties": {
+                "order": 1,
+                "conditions": [],
+                "actions": [
+                  {
+                    "name": "ModifyRequestHeader",
+                    "parameters": {
+                      "typeName": "DeliveryRuleHeaderActionParameters",
+                      "headerAction": "Overwrite",
+                      "headerName": "X-Inspro-Edge-Host",
+                      "value": "{hostname}"
+                    }
+                  }
+                ],
+                "matchProcessingBehavior": "Continue"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Cdn/profiles/ruleSets', variables('profileName'), 'EdgeHeaders')]"
+              ]
+            },
+            {
+              "copy": {
+                "name": "customDomain",
+                "count": "[length(parameters('customDomains'))]"
+              },
+              "type": "Microsoft.Cdn/profiles/customDomains",
+              "apiVersion": "2024-09-01",
+              "name": "[format('{0}/{1}', variables('profileName'), variables('customDomainNames')[copyIndex()])]",
+              "properties": {
+                "hostName": "[toLower(parameters('customDomains')[copyIndex()].hostname)]",
+                "tlsSettings": {
+                  "certificateType": "ManagedCertificate",
+                  "minimumTlsVersion": "TLS12"
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Cdn/profiles', variables('profileName'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.Cdn/profiles/afdEndpoints/routes",
+              "apiVersion": "2024-09-01",
+              "name": "[format('{0}/{1}/{2}', variables('profileName'), variables('endpointName'), 'default')]",
+              "properties": {
+                "originGroup": {
+                  "id": "[resourceId('Microsoft.Cdn/profiles/originGroups', variables('profileName'), 'app-service')]"
+                },
+                "ruleSets": [
+                  {
+                    "id": "[resourceId('Microsoft.Cdn/profiles/ruleSets', variables('profileName'), 'EdgeHeaders')]"
+                  }
+                ],
+                "customDomains": "[variables('customDomainRefs')]",
+                "supportedProtocols": [
+                  "Http",
+                  "Https"
+                ],
+                "patternsToMatch": [
+                  "/*"
+                ],
+                "forwardingProtocol": "HttpsOnly",
+                "httpsRedirect": "Enabled",
+                "linkToDefaultDomain": "Enabled",
+                "enabledState": "Enabled"
+              },
+              "dependsOn": [
+                "customDomain",
+                "[resourceId('Microsoft.Cdn/profiles/ruleSets/rules', variables('profileName'), 'EdgeHeaders', 'SetEdgeHost')]",
+                "[resourceId('Microsoft.Cdn/profiles/afdEndpoints', variables('profileName'), variables('endpointName'))]",
+                "[resourceId('Microsoft.Cdn/profiles/originGroups/origins', variables('profileName'), 'app-service', 'web-app')]",
+                "[resourceId('Microsoft.Cdn/profiles/originGroups', variables('profileName'), 'app-service')]",
+                "[resourceId('Microsoft.Cdn/profiles/ruleSets', variables('profileName'), 'EdgeHeaders')]"
+              ]
+            },
+            {
+              "type": "Microsoft.Cdn/profiles/afdEndpoints/routes",
+              "apiVersion": "2024-09-01",
+              "name": "[format('{0}/{1}/{2}', variables('profileName'), variables('endpointName'), 'assets')]",
+              "properties": {
+                "originGroup": {
+                  "id": "[resourceId('Microsoft.Cdn/profiles/originGroups', variables('profileName'), 'app-service')]"
+                },
+                "ruleSets": [
+                  {
+                    "id": "[resourceId('Microsoft.Cdn/profiles/ruleSets', variables('profileName'), 'EdgeHeaders')]"
+                  }
+                ],
+                "customDomains": "[variables('customDomainRefs')]",
+                "supportedProtocols": [
+                  "Http",
+                  "Https"
+                ],
+                "patternsToMatch": [
+                  "/assets/*"
+                ],
+                "forwardingProtocol": "HttpsOnly",
+                "httpsRedirect": "Enabled",
+                "linkToDefaultDomain": "Enabled",
+                "enabledState": "Enabled",
+                "cacheConfiguration": {
+                  "queryStringCachingBehavior": "IgnoreQueryString",
+                  "compressionSettings": {
+                    "isCompressionEnabled": true,
+                    "contentTypesToCompress": [
+                      "application/javascript",
+                      "text/javascript",
+                      "text/css",
+                      "image/svg+xml",
+                      "application/json",
+                      "font/woff2"
+                    ]
+                  }
+                }
+              },
+              "dependsOn": [
+                "customDomain",
+                "[resourceId('Microsoft.Cdn/profiles/ruleSets/rules', variables('profileName'), 'EdgeHeaders', 'SetEdgeHost')]",
+                "[resourceId('Microsoft.Cdn/profiles/afdEndpoints', variables('profileName'), variables('endpointName'))]",
+                "[resourceId('Microsoft.Cdn/profiles/originGroups/origins', variables('profileName'), 'app-service', 'web-app')]",
+                "[resourceId('Microsoft.Cdn/profiles/originGroups', variables('profileName'), 'app-service')]",
+                "[resourceId('Microsoft.Cdn/profiles/ruleSets', variables('profileName'), 'EdgeHeaders')]"
+              ]
+            },
+            {
+              "type": "Microsoft.Network/FrontDoorWebApplicationFirewallPolicies",
+              "apiVersion": "2024-02-01",
+              "name": "[variables('wafPolicyName')]",
+              "location": "Global",
+              "sku": {
+                "name": "Premium_AzureFrontDoor"
+              },
+              "properties": {
+                "policySettings": {
+                  "enabledState": "Enabled",
+                  "mode": "[parameters('wafMode')]",
+                  "requestBodyCheck": "Enabled"
+                },
+                "managedRules": {
+                  "managedRuleSets": [
+                    {
+                      "ruleSetType": "Microsoft_DefaultRuleSet",
+                      "ruleSetVersion": "2.1",
+                      "ruleSetAction": "Block"
+                    },
+                    {
+                      "ruleSetType": "Microsoft_BotManagerRuleSet",
+                      "ruleSetVersion": "1.1"
+                    }
+                  ]
+                }
+              }
+            },
+            {
+              "type": "Microsoft.Cdn/profiles/securityPolicies",
+              "apiVersion": "2024-09-01",
+              "name": "[format('{0}/{1}', variables('profileName'), 'waf')]",
+              "properties": {
+                "parameters": {
+                  "type": "WebApplicationFirewall",
+                  "wafPolicy": {
+                    "id": "[resourceId('Microsoft.Network/FrontDoorWebApplicationFirewallPolicies', variables('wafPolicyName'))]"
+                  },
+                  "associations": [
+                    {
+                      "domains": "[concat(createArray(createObject('id', resourceId('Microsoft.Cdn/profiles/afdEndpoints', variables('profileName'), variables('endpointName')))), variables('customDomainRefs'))]",
+                      "patternsToMatch": [
+                        "/*"
+                      ]
+                    }
+                  ]
+                }
+              },
+              "dependsOn": [
+                "customDomain",
+                "[resourceId('Microsoft.Cdn/profiles/afdEndpoints', variables('profileName'), variables('endpointName'))]",
+                "[resourceId('Microsoft.Cdn/profiles', variables('profileName'))]",
+                "[resourceId('Microsoft.Network/FrontDoorWebApplicationFirewallPolicies', variables('wafPolicyName'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.Insights/diagnosticSettings",
+              "apiVersion": "2021-05-01-preview",
+              "scope": "[resourceId('Microsoft.Cdn/profiles', variables('profileName'))]",
+              "name": "to-law",
+              "properties": {
+                "workspaceId": "[parameters('logAnalyticsWorkspaceId')]",
+                "logs": [
+                  {
+                    "category": "FrontDoorWebApplicationFirewallLog",
+                    "enabled": true
+                  },
+                  {
+                    "category": "FrontDoorHealthProbeLog",
+                    "enabled": true
+                  }
+                ],
+                "metrics": [
+                  {
+                    "category": "AllMetrics",
+                    "enabled": true
+                  }
+                ]
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Cdn/profiles', variables('profileName'))]"
+              ]
+            }
+          ],
+          "outputs": {
+            "frontDoorId": {
+              "type": "string",
+              "metadata": {
+                "description": "The profile's Front Door ID, sent to the origin as X-Azure-FDID."
+              },
+              "value": "[reference(resourceId('Microsoft.Cdn/profiles', variables('profileName')), '2024-09-01').frontDoorId]"
+            },
+            "endpointHostName": {
+              "type": "string",
+              "metadata": {
+                "description": "The endpoint hostname brokers point their CNAME records at."
+              },
+              "value": "[reference(resourceId('Microsoft.Cdn/profiles/afdEndpoints', variables('profileName'), variables('endpointName')), '2024-09-01').hostName]"
+            },
+            "profileName": {
+              "type": "string",
+              "value": "[variables('profileName')]"
+            },
+            "endpointName": {
+              "type": "string",
+              "value": "[variables('endpointName')]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.OperationalInsights/workspaces', format('{0}-law', variables('prefix')))]"
+      ]
+    },
+    {
       "type": "Microsoft.Resources/deployments",
       "apiVersion": "2025-04-01",
       "name": "[format('acr-pull-{0}', parameters('env'))]",
@@ -1738,9 +2241,13 @@
       "type": "string",
       "value": "[format('{0}-kv', variables('prefix'))]"
     },
-    "appInsightsConnectionString": {
+    "frontDoorId": {
       "type": "string",
-      "value": "[reference(resourceId('Microsoft.Insights/components', format('{0}-appi', variables('prefix'))), '2020-02-02').ConnectionString]"
+      "value": "[if(parameters('deployFrontDoor'), reference(resourceId('Microsoft.Resources/deployments', format('front-door-{0}', parameters('env'))), '2025-04-01').outputs.frontDoorId.value, '')]"
+    },
+    "frontDoorEndpointHostName": {
+      "type": "string",
+      "value": "[if(parameters('deployFrontDoor'), reference(resourceId('Microsoft.Resources/deployments', format('front-door-{0}', parameters('env'))), '2025-04-01').outputs.endpointHostName.value, '')]"
     }
   }
 }

@@ -6,6 +6,7 @@ import { AlertDialog } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { formatError } from "@/lib/errors";
+import { isFirmOwnerRole } from "@/lib/roles";
 import { useSession } from "@/stores/session";
 import { Field } from "./TemplateEditor";
 import { apiPath, clientOptions, fieldClass, SOURCE_LABELS, type Branding, type BrandingContent, type Scope } from "./types";
@@ -73,7 +74,7 @@ function BrandingForm({ initial, scope, editable, onDirty }: { initial: Branding
     </Field>
     {error && <p role="alert" className="text-sm text-error">{error}</p>}
     <div className="flex flex-wrap gap-2">{editable && <Button disabled={!dirty || busy || Object.keys(errors).length > 0} loading={busy} onClick={() => void save()}>Save branding</Button>}
-      {me?.role === "system_admin" && revision > 0 && <Button variant="outline" disabled={busy} onClick={() => setConfirmReset(true)}>Restore inherited branding</Button>}</div>
+      {isFirmOwnerRole(me?.role) && revision > 0 && <Button variant="outline" disabled={busy} onClick={() => setConfirmReset(true)}>Restore inherited branding</Button>}</div>
     <p role="status" className="text-sm text-muted-foreground">{message}</p>
     <AlertDialog open={confirmReset} onOpenChange={setConfirmReset} title="Restore inherited branding?" description="This removes the saved branding at this scope and discards unsaved changes. Inherited defaults will apply." confirmLabel="Restore branding" loading={busy} onConfirm={reset} />
   </div>;

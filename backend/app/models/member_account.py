@@ -65,6 +65,12 @@ class MemberAccount(Base, TimestampMixin):
     last_sign_in_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # When the newest set-password link was issued. A link minted before this
+    # instant is refused, so reissuing a link cancels every earlier one instead
+    # of leaving them all redeemable until they expire.
+    password_token_issued_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     # ── Credential login (username + Argon2id password) ──
     # Broker-generated alternate username (e.g. "EM-7Q2M8K"); unique per client.
     system_login_id: Mapped[str | None] = mapped_column(String(32), nullable=True)

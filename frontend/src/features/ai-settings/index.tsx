@@ -1,5 +1,6 @@
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { useMe } from "@/api/hooks";
+import { SystemAdminOnly } from "@/components/auth/SystemAdminOnly";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { AIProviderPage } from "@/routes/configuration/ai-provider";
@@ -7,6 +8,7 @@ import { AIUsageTile } from "@/components/schema/AIUsageTile";
 import { PlatformAIProviderCard } from "@/components/configuration/PlatformAIProviderCard";
 import { PlatformAILimitsCard } from "@/components/configuration/PlatformAILimitsCard";
 import { useSession } from "@/stores/session";
+import { isBrokerStaffRole } from "@/lib/roles";
 import { PolicyLibrary } from "./policies";
 
 export function AISettingsPage() {
@@ -27,10 +29,7 @@ export function AISettingsPage() {
         </Button>
       </div>
     );
-  if (
-    !me ||
-    !["system_admin", "broker_admin", "broker_viewer"].includes(me.role)
-  )
+  if (!me || !isBrokerStaffRole(me.role))
     return (
       <div>
         <h1 className="text-2xl font-semibold">AI Settings</h1>
@@ -63,12 +62,10 @@ export function AISettingsPage() {
         <TabsContent value="provider" className="mt-0">
           {!activeClientId ? (
             <div className="space-y-5">
-              {me.role === "system_admin" && (
-                <>
-                  <PlatformAIProviderCard />
-                  <PlatformAILimitsCard />
-                </>
-              )}
+              <SystemAdminOnly>
+                <PlatformAIProviderCard />
+                <PlatformAILimitsCard />
+              </SystemAdminOnly>
               <p className="text-sm text-muted-foreground">
                 Select a company in the top bar to view its AI usage and company
                 settings. Platform policies are available in the Policies tab.
@@ -114,6 +111,11 @@ function AIUseAndAccess() {
               "System administrator",
               "system_admin",
               "Manages the shared provider, platform limits and policy documents. Can also manage company overrides.",
+            ],
+            [
+              "Firm administrator",
+              "firm_admin",
+              "Everything a broker administrator can do, plus the firm’s users, web addresses and removal of saved data, including clearing a company’s AI key.",
             ],
             [
               "Broker administrator",

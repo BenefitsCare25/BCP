@@ -1,7 +1,7 @@
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/native-select";
-import { SystemAdminOnly } from "@/components/auth/SystemAdminOnly";
+import { FirmOwnerOnly } from "@/components/auth/FirmOwnerOnly";
 import type { AttributeSchema } from "@/types";
 
 type Rule = Record<string, unknown> | null;
@@ -29,7 +29,7 @@ export function ValueMappingEditor({ rule, attributes, onChange }: {
           onChange={e => update({ mappings: rows.map((r, i) => i === index ? { ...r, from: e.target.value } : r) })} />
         <Input aria-label={`Eligibility value ${index + 1}`} placeholder="Eligibility value" maxLength={250} value={row.to}
           onChange={e => update({ mappings: rows.map((r, i) => i === index ? { ...r, to: e.target.value } : r) })} />
-        <SystemAdminOnly><Button type="button" size="sm" variant="ghost" onClick={() => update({ mappings: rows.filter((_, i) => i !== index) })}>Remove mapping {index + 1}</Button></SystemAdminOnly>
+        <FirmOwnerOnly><Button type="button" size="sm" variant="ghost" onClick={() => update({ mappings: rows.filter((_, i) => i !== index) })}>Remove mapping {index + 1}</Button></FirmOwnerOnly>
       </div>)}
       <Button type="button" size="sm" variant="outline" disabled={rows.length >= 500} onClick={() => update({ mappings: [...rows, { from: "", to: "" }] })}>Add another value</Button>
       <label className="block space-y-1 text-sm">Values without a mapping

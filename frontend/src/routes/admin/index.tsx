@@ -1,24 +1,20 @@
-import { SystemAdminOnly } from "@/components/auth/SystemAdminOnly";
+import { FirmOwnerOnly } from "@/components/auth/FirmOwnerOnly";
 import { useState } from "react";
 import { Loader2, Plus, ShieldAlert, Trash2 } from "lucide-react";
 import {
   type AdminClient,
-  type AdminUser,
   useAdminClients,
-  useAdminUsers,
   useBrokerFirms,
   useCreateClient,
-  useCreateInvitation,
   useDashboardSummary,
   useDeleteClient,
-  useInvitations,
   useMe,
   usePatchClient,
-  usePatchUser,
-  useRevokeInvitation,
 } from "@/api/hooks";
+import { FirmConsole } from "@/components/admin/FirmConsole";
+import { FirmPicker } from "@/components/admin/FirmPicker";
+import { UsersCard } from "@/components/admin/UsersCard";
 import { AlertDialog } from "@/components/ui/alert-dialog";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -29,36 +25,18 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { FieldLabel, InfoHint } from "@/components/ui/tooltip";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
+import { InfoHint } from "@/components/ui/tooltip";
 import { formatError } from "@/lib/errors";
+import { isBrokerAdminRole, isFirmOwnerRole, isSystemAdminRole } from "@/lib/roles";
 import { toast } from "sonner";
 import { portalPath } from "@/lib/tenant";
 
-// Brokerage staff roles only. A company's HR logins (client_admin / client_hr)
-// are provisioned per-company under Company settings → Authentication → HR
-// admins — never from this firm-wide surface — so the two audiences stay
-// cleanly separated.
-const ASSIGNABLE_ROLES = ["broker_admin", "broker_viewer"];
-const CLIENT_ROLES = new Set(["client_admin", "client_hr"]);
-
-function statusVariant(status: string): "good" | "warn" | "error" | "default" {
-  if (status === "active") return "good";
-  if (status === "invited") return "warn";
-  if (status === "disabled") return "error";
-  return "default";
-}
-
 export function AdminPage() {
   const { data: me, isLoading, isError, refetch } = useMe();
-  const isSystemAdmin = me?.role === "system_admin";
-  const canAdmin = me?.role === "broker_admin" || isSystemAdmin;
+  const isSystemAdmin = isSystemAdminRole(me?.role);
+  const canAdmin = isBrokerAdminRole(me?.role);
+  const isFirmOwner = isFirmOwnerRole(me?.role);
 
   if (isLoading) {
     return <div className="text-sm text-muted-foreground p-8">Loading…</div>;
@@ -102,44 +80,81 @@ export function AdminPage() {
 
   return (
     <div className="space-y-5">
-      {/* No "Broker firms" card, deliberately. Inspro Insurance Broker OWNS this
-          platform rather than being one tenant among many, so the broker firm is
-          internal plumbing (it is what the per-firm Postgres schema keys on) and
-          not a concept anyone administers. The single firm is created once at
-          bootstrap by scripts/create_system_admin.py --firm-name. */}
+      {/* Broker firms themselves are administered in the platform console
+          (/platform/firms). This page is one firm's own surface: companies for
+          broker administrators; users, web addresses and the platform access
+          log for firm owners only, so no other role fetches them. */}
       <ClientsCard isSystemAdmin={isSystemAdmin} />
-      {isSystemAdmin && <UsersCard />}
+      {isFirmOwner && <UsersCard callerRole={me.role} />}
+      {isFirmOwner && <FirmConsole isSystemAdmin={isSystemAdmin} />}
     </div>
   );
 }
 
-/** Firm target for a system_admin's create/invite action.
- *
- * A broker_admin always acts on their own firm, and a single-firm platform has
- * exactly one answer (the backend resolves it), so this renders NOTHING in
- * either case — showing a select with one option is noise. It appears only when
- * there really are several firms and the choice is the admin's to make. */
-function FirmPicker({
-  firms, value, onChange,
-}: {
-  firms: { id: string; name: string }[];
-  value: string;
-  onChange: (v: string) => void;
-}) {
-  if (firms.length < 2) return null;
+const ACCESS_SURFACES = [
+  { key: "portal_enabled", label: "Employee portal", noun: "employee portal" },
+  { key: "hr_enabled", label: "HR portal", noun: "HR portal" },
+] as const;
+
+type AccessSurface = (typeof ACCESS_SURFACES)[number];
+
+/** The company's employee- and HR-portal kill switches, under the same
+ *  permission as editing the company. Turning one off signs everyone out of
+ *  that portal for the company, so only that direction is confirmed. */
+function ClientAccessSwitches({ client }: { client: AdminClient }) {
+  const patch = usePatchClient();
+  const [turningOff, setTurningOff] = useState<AccessSurface | null>(null);
+
+  const apply = async (surface: AccessSurface, enabled: boolean) => {
+    try {
+      await patch.mutateAsync(
+        surface.key === "portal_enabled"
+          ? { id: client.id, portal_enabled: enabled }
+          : { id: client.id, hr_enabled: enabled },
+      );
+      toast.success(`${surface.label} turned ${enabled ? "on" : "off"} for ${client.name}`);
+    } catch (e) {
+      toast.error(formatError(e));
+    } finally {
+      setTurningOff(null);
+    }
+  };
+
   return (
-    <div className="flex flex-col gap-1.5">
-      <FieldLabel hint="Which broker firm this belongs to. Shown because you administer more than one.">
-        Broker firm
-      </FieldLabel>
-      <Select value={value} onValueChange={onChange}>
-        <SelectTrigger><SelectValue placeholder="Select a firm" /></SelectTrigger>
-        <SelectContent>
-          {firms.map((f) => (
-            <SelectItem key={f.id} value={f.id}>{f.name}</SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
+    <div className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1.5">
+      {ACCESS_SURFACES.map((surface) => {
+        const id = `${surface.key}-${client.id}`;
+        return (
+          <div key={surface.key} className="flex items-center gap-2">
+            <Switch
+              id={id}
+              checked={client[surface.key]}
+              disabled={patch.isPending}
+              aria-label={`${surface.label} for ${client.name}`}
+              onCheckedChange={(on) => {
+                if (on) void apply(surface, true);
+                else setTurningOff(surface);
+              }}
+            />
+            <Label htmlFor={id} className="text-xs font-normal text-muted-foreground">
+              {surface.label}
+            </Label>
+          </div>
+        );
+      })}
+      <AlertDialog
+        open={turningOff !== null}
+        onOpenChange={(open) => {
+          if (!open) setTurningOff(null);
+        }}
+        title={`Turn off the ${turningOff?.noun ?? "portal"} for ${client.name}?`}
+        description={`Everyone signed in to this portal for ${client.name} will be signed out, and no one can sign in to it until it is turned back on.`}
+        confirmLabel="Turn off"
+        loading={patch.isPending}
+        onConfirm={() => {
+          if (turningOff) void apply(turningOff, false);
+        }}
+      />
     </div>
   );
 }
@@ -372,6 +387,7 @@ function ClientsCard({ isSystemAdmin }: { isSystemAdmin: boolean }) {
                         {portalPath(c.slug)}
                       </div>
                     )}
+                    <ClientAccessSwitches client={c} />
                   </div>
                   <div className="flex gap-1 shrink-0">
                     <Button
@@ -381,7 +397,7 @@ function ClientsCard({ isSystemAdmin }: { isSystemAdmin: boolean }) {
                     >
                       Edit
                     </Button>
-                    <SystemAdminOnly><Button
+                    <FirmOwnerOnly><Button
                       size="sm"
                       variant="ghost"
                       className="text-error hover:text-error"
@@ -389,7 +405,7 @@ function ClientsCard({ isSystemAdmin }: { isSystemAdmin: boolean }) {
                       onClick={() => setDeleteTarget({ id: c.id, name: c.name })}
                     >
                       <Trash2 className="size-3.5" />
-                    </Button></SystemAdminOnly>
+                    </Button></FirmOwnerOnly>
                   </div>
                 </>
               )}
@@ -417,7 +433,7 @@ function ClientsCard({ isSystemAdmin }: { isSystemAdmin: boolean }) {
         if (aliasConfirm) void save(aliasConfirm);
       }}
     />
-    <SystemAdminOnly><AlertDialog
+    <FirmOwnerOnly><AlertDialog
       open={deleteTarget !== null}
       onOpenChange={(open) => !open && setDeleteTarget(null)}
       title={`Delete ${deleteTarget?.name ?? "company"}?`}
@@ -426,297 +442,7 @@ function ClientsCard({ isSystemAdmin }: { isSystemAdmin: boolean }) {
       confirmVariant="destructive"
       loading={del.isPending}
       onConfirm={onDelete}
-    /></SystemAdminOnly>
+    /></FirmOwnerOnly>
     </>
-  );
-}
-
-function UsersCard() {
-  const { data: users = [] } = useAdminUsers();
-  const { data: invites = [] } = useInvitations();
-  const { data: firms = [] } = useBrokerFirms(true);
-  const [firmId, setFirmId] = useState("");
-  const invite = useCreateInvitation();
-  const patch = usePatchUser();
-  const revoke = useRevokeInvitation();
-
-  const [email, setEmail] = useState("");
-  const [name, setName] = useState("");
-  const [role, setRole] = useState("broker_viewer");
-  // Which row is having its name edited, and the draft value.
-  const [editingUser, setEditingUser] = useState<string | null>(null);
-  const [editName, setEditName] = useState("");
-
-  const roleOptions = [...ASSIGNABLE_ROLES, "system_admin"];
-  const [objectId, setObjectId] = useState("");
-  const [bindingUser, setBindingUser] = useState<string | null>(null);
-  const [bindingId, setBindingId] = useState("");
-
-  const onInvite = async () => {
-    if (!email.trim()) return;
-    try {
-      await invite.mutateAsync({
-        email: email.trim(),
-        ...(name.trim() ? { display_name: name.trim() } : {}),
-        role,
-        external_id: objectId.trim(),
-        client_ids: [],
-        ...(firmId ? { broker_firm_id: firmId } : {}),
-      });
-      // Deliberately not "Invitation sent": with SMTP unconfigured nothing is
-      // emailed. Sign-in checks the bound Microsoft identity and live invitation.
-      toast.success("User invited with their verified Microsoft identity");
-      setEmail("");
-      setName("");
-      setObjectId("");
-    } catch (e) {
-      toast.error(formatError(e));
-    }
-  };
-
-  const onSaveName = async (u: AdminUser) => {
-    const next = editName.trim();
-    if (next === (u.display_name ?? "")) {
-      setEditingUser(null);
-      return;
-    }
-    try {
-      // Empty string CLEARS the name (the API reads "" as "unset"); null would
-      // mean "leave it alone", which is not what an emptied box is asking for.
-      await patch.mutateAsync({ id: u.id, patch: { display_name: next } });
-      toast.success(next ? "Name updated" : "Name removed");
-      setEditingUser(null);
-    } catch (e) {
-      toast.error(formatError(e));
-    }
-  };
-
-  const onRoleChange = async (u: AdminUser, newRole: string) => {
-    try {
-      await patch.mutateAsync({ id: u.id, patch: { role: newRole } });
-      toast.success("Role updated");
-    } catch (e) {
-      toast.error(formatError(e));
-    }
-  };
-
-  const onToggleStatus = async (u: AdminUser) => {
-    const next = u.status === "disabled" ? "active" : "disabled";
-    try {
-      await patch.mutateAsync({ id: u.id, patch: { status: next } });
-      toast.success(next === "disabled" ? "User disabled" : "User enabled");
-    } catch (e) {
-      toast.error(formatError(e));
-    }
-  };
-
-  const onMfaChange = async (u: AdminUser, required: boolean) => {
-    try {
-      await patch.mutateAsync({ id: u.id, patch: { broker_mfa_required: required } });
-      toast.success(`Authenticator ${required ? "required" : "turned off"}. This user must sign in again.`);
-    } catch (e) {
-      toast.error(formatError(e));
-    }
-  };
-
-  const pendingByEmail = new Map(invites.map((i) => [i.email, i]));
-  // Firm-wide user management is brokerage staff only; a company's HR logins
-  // live under Company settings → Authentication, so keep them out of here.
-  const brokerUsers = users.filter((u) => !CLIENT_ROLES.has(u.role));
-
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-1.5 text-sm">
-          Users
-          <InfoHint>
-            Bind the Microsoft object ID from your tenant before granting access. Status: invited
-            = awaiting first sign-in, active = has signed in, disabled = access
-            revoked.
-          </InfoHint>
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <p className="text-sm text-muted-foreground">Authenticator verification is off by default.
-          Only a system administrator can require it per account. Changing it signs that user out.</p>
-        <div className="rounded-md border border-border p-3 space-y-3 bg-muted/30">
-          <div className="grid grid-cols-1 md:grid-cols-[1fr_1fr_180px_auto] gap-2 items-end">
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="broker-invite-email">Email</Label>
-              <Input
-                id="broker-invite-email"
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="person@company.com"
-              />
-            </div>
-            {/* Optional, and the invite is not blocked on it — an invite is
-                often sent from an email address alone. Without it the list
-                shows the email twice until someone fills the name in. */}
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="broker-invite-name">Name</Label>
-              <Input
-                id="broker-invite-name"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder="Optional"
-              />
-            </div>
-            <div className="flex flex-col gap-1.5">
-              <Label htmlFor="broker-invite-oid">Microsoft object ID</Label>
-              <Input id="broker-invite-oid" value={objectId} onChange={event => setObjectId(event.target.value)} placeholder="Object ID from Microsoft Entra" />
-            </div>
-            <div className="flex flex-col gap-1.5">
-              <FieldLabel
-                hint={
-                  <>
-                    system_admin: full platform. broker_admin: manage this firm.
-                    broker_viewer: read-only. A company's HR logins are managed
-                    under Company settings → Authentication, not here.
-                  </>
-                }
-              >
-                Role
-              </FieldLabel>
-              <Select value={role} onValueChange={setRole}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  {roleOptions.map((r) => (
-                    <SelectItem key={r} value={r}>{r}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <FirmPicker firms={firms} value={firmId} onChange={setFirmId} />
-            <Button onClick={onInvite} disabled={invite.isPending || !email.trim() || !/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(objectId.trim())}>
-              {invite.isPending ? <Loader2 className="size-4 animate-spin" /> : <Plus className="size-4" />}
-              Invite
-            </Button>
-          </div>
-        </div>
-
-        <ul className="divide-y divide-border rounded-md border border-border">
-          {brokerUsers.map((u) => {
-            const inv = pendingByEmail.get(u.email);
-            return (
-              <li key={u.id} className="flex flex-col items-stretch justify-between gap-3 px-3 py-2.5 sm:flex-row sm:items-center">
-                {editingUser === u.id ? (
-                  <div className="flex min-w-0 flex-1 items-center gap-2">
-                    <Input
-                      autoFocus
-                      value={editName}
-                      onChange={(e) => setEditName(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") onSaveName(u);
-                        if (e.key === "Escape") setEditingUser(null);
-                      }}
-                      className="h-8 max-w-64"
-                      placeholder="Full name"
-                      aria-label={`Name for ${u.email}`}
-                    />
-                    <Button size="sm" onClick={() => onSaveName(u)} disabled={patch.isPending}>
-                      Save
-                    </Button>
-                    <Button size="sm" variant="ghost" onClick={() => setEditingUser(null)}>
-                      Cancel
-                    </Button>
-                  </div>
-                ) : (
-                  <div className="flex min-w-0 flex-1 items-center gap-2">
-                    <div className="min-w-0">
-                      {/* Only the email when there is no name — printing it as
-                          the title AND the subtitle just says it twice. */}
-                      {u.display_name ? (
-                        <>
-                          <div className="text-sm font-medium truncate">
-                            {u.display_name}
-                          </div>
-                          <div className="text-xs text-muted-foreground truncate">
-                            {u.email}
-                          </div>
-                        </>
-                      ) : (
-                        <div className="text-sm truncate">{u.email}</div>
-                      )}
-                    </div>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      className="shrink-0 text-muted-foreground"
-                      onClick={() => {
-                        setEditName(u.display_name ?? "");
-                        setEditingUser(u.id);
-                      }}
-                    >
-                      {u.display_name ? "Rename" : "Add name"}
-                    </Button>
-                  </div>
-                )}
-                <div className="flex flex-wrap items-center gap-2 sm:shrink-0">
-                  {!u.external_id && (bindingUser === u.id ? <div className="flex flex-wrap items-center gap-2">
-                    <Input aria-label={`Microsoft object ID for ${u.email}`} value={bindingId} onChange={event => setBindingId(event.target.value)} className="max-w-80" />
-                    <Button size="sm" disabled={patch.isPending || !bindingId.trim()} onClick={async () => {
-                      try {
-                        await patch.mutateAsync({ id: u.id, patch: { external_id: bindingId.trim() } });
-                        setBindingUser(null); setBindingId(""); toast.success("Microsoft identity bound");
-                      } catch (error) { toast.error(formatError(error)); }
-                    }}>Save identity</Button>
-                    <Button size="sm" variant="ghost" onClick={() => setBindingUser(null)}>Cancel</Button>
-                  </div> : <Button size="sm" variant="outline" onClick={() => { setBindingUser(u.id); setBindingId(""); }}>Bind Microsoft identity</Button>)}
-                  <Badge variant={statusVariant(u.status)}>{u.status}</Badge>
-                  <div className="flex flex-col gap-1">
-                    <Label htmlFor={`broker-mfa-${u.id}`} className="text-xs">Authenticator</Label>
-                    <Select value={u.broker_mfa_required ? "required" : "off"}
-                      disabled={patch.isPending} onValueChange={value => void onMfaChange(u, value === "required")}>
-                      <SelectTrigger id={`broker-mfa-${u.id}`} className="h-8 w-[130px]"
-                        aria-label={`Authenticator for ${u.email}`}><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="off">Off</SelectItem>
-                        <SelectItem value="required">Required</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <Select value={u.role} onValueChange={(v) => onRoleChange(u, v)}>
-                    <SelectTrigger className="h-8 w-[150px]"><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      {roleOptions.map((r) => (
-                        <SelectItem key={r} value={r}>{r}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  {inv ? (
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      className="text-error hover:text-error"
-                      onClick={async () => {
-                        try {
-                          await revoke.mutateAsync(inv.id);
-                          toast.success("Invitation revoked");
-                        } catch (e) {
-                          toast.error(formatError(e));
-                        }
-                      }}
-                    >
-                      Revoke
-                    </Button>
-                  ) : (
-                    <Button size="sm" variant="outline" onClick={() => onToggleStatus(u)}>
-                      {u.status === "disabled" ? "Enable" : "Disable"}
-                    </Button>
-                  )}
-                </div>
-              </li>
-            );
-          })}
-          {brokerUsers.length === 0 && (
-            <li className="px-3 py-3 text-sm text-muted-foreground flex items-center gap-2">
-              <ShieldAlert className="size-4" /> No users yet.
-            </li>
-          )}
-        </ul>
-      </CardContent>
-    </Card>
   );
 }

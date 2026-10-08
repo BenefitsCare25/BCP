@@ -1,9 +1,9 @@
 import { useEffect } from "react";
 import { useNavigate } from "@tanstack/react-router";
-import { initializeMsal } from "@/auth/msal";
+import { initializeBrokerSignIn } from "@/auth/msal";
 
 /**
- * `initializeMsal()` runs at app boot (see main.tsx) so by the time this
+ * `initializeBrokerSignIn()` runs at app boot (see main.tsx) so by the time this
  * component renders the redirect response has typically been consumed. We
  * still await it here as a safety net for direct navigations to /auth/callback.
  */
@@ -11,7 +11,7 @@ export function AuthCallbackPage() {
   const navigate = useNavigate();
 
   useEffect(() => {
-    initializeMsal()
+    initializeBrokerSignIn()
       .then(() => navigate({ to: "/", replace: true }))
       .catch(() => {
         // A failed redirect handshake would otherwise strand the user on a

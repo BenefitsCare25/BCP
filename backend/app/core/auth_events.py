@@ -14,12 +14,14 @@ from sqlalchemy.orm import Session
 if TYPE_CHECKING:
     from app.models import AuthEvent
 
-# Canonical event types (keep in sync with docs/AUTH_DESIGN.md §4).
+# Canonical event types (docs/AUTH_DESIGN.md, "Credential controls", describes them).
 EVENT_LOGIN_SUCCESS = "login_success"
 EVENT_LOGIN_FAIL = "login_fail"
 EVENT_MFA_CHALLENGE = "mfa_challenge"
 EVENT_MFA_FAIL = "mfa_fail"
 EVENT_MFA_SUCCESS = "mfa_success"
+# An admin removed the subject's authenticator; `detail.actor_user_id` says who.
+EVENT_MFA_RESET = "mfa_reset"
 EVENT_PASSWORD_RESET_REQUEST = "password_reset_request"
 EVENT_PASSWORD_RESET_COMPLETE = "password_reset_complete"
 EVENT_PASSWORD_CHANGE = "password_change"

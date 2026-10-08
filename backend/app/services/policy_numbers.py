@@ -12,6 +12,7 @@ from typing import Any, Protocol
 
 from fastapi import HTTPException
 
+from app.core.auth import FIRM_OWNER_ROLES
 from app.schemas.policy_numbers import PolicyNumberAssignment
 from app.services.roster_attributes import first_value
 
@@ -69,11 +70,11 @@ def scalar_number(mappings: list[dict[str, Any]]) -> str | None:
 
 def require_assignment_removal_permission(old: Any, new: Any, role: str) -> None:
     if (
-        role != "system_admin" and isinstance(old, list)
+        role not in FIRM_OWNER_ROLES and isinstance(old, list)
         and old and (not isinstance(new, list) or len(new) < len(old))
     ):
         raise HTTPException(
-            403, "Only system administrators may remove saved policy-number assignments."
+            403, "Only firm administrators may remove saved policy-number assignments."
         )
 
 

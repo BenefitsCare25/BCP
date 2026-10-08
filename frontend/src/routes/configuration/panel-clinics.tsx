@@ -1,4 +1,4 @@
-import { SystemAdminOnly } from "@/components/auth/SystemAdminOnly";
+import { FirmOwnerOnly } from "@/components/auth/FirmOwnerOnly";
 /** Panel clinics — two sibling surfaces under one settings page.
  *
  * "Locations" is a SHARED library of clinic network lists: each row is one
@@ -493,14 +493,14 @@ function ListingRow({
           <Button variant="ghost" size="sm" onClick={onEdit} title="Edit listing">
             <Pencil className="size-4" />
           </Button>
-          <SystemAdminOnly><Button
+          <FirmOwnerOnly><Button
             variant="ghost"
             size="sm"
             onClick={onDelete}
             title="Delete listing"
           >
             <Trash2 className="size-4 text-error" />
-          </Button></SystemAdminOnly>
+          </Button></FirmOwnerOnly>
         </div>
       </TableCell>
     </TableRow>
@@ -703,7 +703,7 @@ export function PanelClinicsPage() {
         />
       )}
 
-      <SystemAdminOnly><AlertDialog
+      <FirmOwnerOnly><AlertDialog
         open={deleting !== null}
         onOpenChange={(open) => !open && setDeleting(null)}
         title="Delete panel listing?"
@@ -714,7 +714,7 @@ export function PanelClinicsPage() {
         }
         loading={remove.isPending}
         onConfirm={() => void confirmDelete()}
-      /></SystemAdminOnly>
+      /></FirmOwnerOnly>
       </TabsContent>
     </Tabs>
   );

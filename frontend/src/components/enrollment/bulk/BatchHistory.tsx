@@ -21,6 +21,7 @@ import {
 } from "@/api/enrollment";
 import { formatError } from "@/lib/errors";
 import { fmtDateTime } from "@/lib/format";
+import { FirmOwnerOnly } from "@/components/auth/FirmOwnerOnly";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { AlertDialog } from "@/components/ui/alert-dialog";
@@ -148,16 +149,20 @@ export function BatchHistory({
                 )}
                 {/* An undo is not itself undoable, and a batch that recorded no
                     previous state has nothing to put back — offering the button
-                    there would promise something that cannot happen. */}
+                    there would promise something that cannot happen. Like other
+                    resets of saved data, Undo is offered to firm owners only
+                    (the API refuses everyone else). */}
                 {!isUndo && !b.undone_by && b.restorable > 0 && (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    disabled={undo.isPending}
-                    onClick={() => setConfirming(b)}
-                  >
-                    <Undo2 className="size-4" /> Undo
-                  </Button>
+                  <FirmOwnerOnly>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      disabled={undo.isPending}
+                      onClick={() => setConfirming(b)}
+                    >
+                      <Undo2 className="size-4" /> Undo
+                    </Button>
+                  </FirmOwnerOnly>
                 )}
               </span>
             </li>
@@ -165,27 +170,29 @@ export function BatchHistory({
         })}
       </ul>
 
-      <AlertDialog
-        open={!!confirming}
-        onOpenChange={(open) => !open && setConfirming(null)}
-        title="Put this coverage change back?"
-        description={
-          `${confirming?.restorable ?? 0} coverage change(s) go back to what this ` +
-          "batch replaced. Anyone whose coverage has moved since is left alone and " +
-          "reported. This is recorded as a new change, not a deletion." +
-          (confirming?.not_restorable
-            ? ` ${confirming.not_restorable} more were applied but not recorded ` +
-              "in detail (the batch was too large), and will stay on their new " +
-              "coverage."
-            : "")
-        }
-        confirmLabel="Undo"
-        confirmVariant="default"
-        loading={undo.isPending}
-        onConfirm={() => {
-          if (confirming) runUndo(confirming);
-        }}
-      />
+      <FirmOwnerOnly>
+        <AlertDialog
+          open={!!confirming}
+          onOpenChange={(open) => !open && setConfirming(null)}
+          title="Put this coverage change back?"
+          description={
+            `${confirming?.restorable ?? 0} coverage change(s) go back to what this ` +
+            "batch replaced. Anyone whose coverage has moved since is left alone and " +
+            "reported. This is recorded as a new change, not a deletion." +
+            (confirming?.not_restorable
+              ? ` ${confirming.not_restorable} more were applied but not recorded ` +
+                "in detail (the batch was too large), and will stay on their new " +
+                "coverage."
+              : "")
+          }
+          confirmLabel="Undo"
+          confirmVariant="default"
+          loading={undo.isPending}
+          onConfirm={() => {
+            if (confirming) runUndo(confirming);
+          }}
+        />
+      </FirmOwnerOnly>
     </>
   );
 }

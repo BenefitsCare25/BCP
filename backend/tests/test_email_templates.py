@@ -526,7 +526,8 @@ def test_saved_preview_retains_company_values_after_company_changes(
         base_domain="benefits.example.com",
         frontend_origin="https://benefits.example.com",
     )
-    monkeypatch.setattr("app.services.email_template_recipients.get_settings", lambda: settings)
+    # Company links resolve through the firm's public origin (tenant_resolution).
+    monkeypatch.setattr("app.core.tenant_resolution.get_settings", lambda: settings)
     monkeypatch.setattr("app.services.member_invite.get_settings", lambda: settings)
     content = BASE | {
         "body": "Hello {{recipient_name}} at {{company_name}}. Visit {{portal_url}}.",
@@ -665,3 +666,41 @@ def test_formatting_wraps_placeholders_without_interpreting_recipient_text():
     assert "<em>S1</em>" in output["html"]
     assert "<strong>Admin</strong>" not in output["html"]
     assert output["text"].startswith("**Admin** <script>\n\nS1")
+
+
+def test_unsaved_branding_follows_the_resolved_brand(setup):
+    from app.models.brand import BrandProfile
+
+    client, factory, _ = setup
+    builtin = client.get("/email-templates/branding").json()
+    assert builtin["source"] == "builtin"
+    assert builtin["content"] == BrandingContent().model_dump()
+    with factory() as db:
+        db.add_all([
+            BrandProfile(broker_firm_id="f1", scope_key="firm",
+                         email_sender_name="Firm One Benefits", support_email="help@f1.test"),
+            BrandProfile(broker_firm_id="f1", client_id="c1", scope_key="c1",
+                         email_sender_name="ACME Benefits"),
+            BrandProfile(broker_firm_id="f2", scope_key="firm",
+                         email_sender_name="Other Firm", support_email="help@f2.test"),
+        ])
+        db.commit()
+    company = client.get("/email-templates/branding").json()["content"]
+    assert (company["sender_display_name"], company["support_email"]) == (
+        "ACME Benefits", "help@f1.test",
+    )
+    firm = client.get("/email-templates/branding?scope=firm").json()["content"]
+    assert firm["sender_display_name"] == "Firm One Benefits"
+    # A save that omits a field takes it from the brand; the stored row then wins.
+    saved = client.put("/email-templates/branding", json={"content": {"footer": "Regards"}})
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["content"] == {
+        "sender_display_name": "ACME Benefits", "support_email": "help@f1.test",
+        "footer": "Regards", "logo_url": "",
+    }
+    with factory() as db:
+        row = db.query(BrandProfile).filter_by(scope_key="c1").one()
+        row.email_sender_name = "Renamed"
+        db.commit()
+    stored = client.get("/email-templates/branding").json()["content"]
+    assert stored["sender_display_name"] == "ACME Benefits"

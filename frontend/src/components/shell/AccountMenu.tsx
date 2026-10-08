@@ -1,19 +1,22 @@
 import { useEffect, useRef, useState } from "react";
+import { useNavigate } from "@tanstack/react-router";
 import { LogIn, LogOut, ShieldCheck, User } from "lucide-react";
 import { brokerAccount, useBrokerSession } from "@/stores/brokerSession";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import { ENTRA_ENABLED, signIn, signOut } from "@/auth/msal";
+import { signOut } from "@/auth/msal";
+import { brokerAuthEnabled } from "@/auth/staffSignIn";
 
 /**
  * Top-right account control. Three states:
- * - Entra disabled (mock mode): show a "demo" pill.
- * - Entra enabled, no account: show "Sign in" button.
- * - Entra enabled, signed in: show name + sign-out.
+ * - Sign-in not required (development mock identity): show a "demo" pill.
+ * - Sign-in required, no account: "Sign in" opens the sign-in page, which
+ *   offers this firm's methods.
+ * - Signed in: show name + sign-out.
  */
 export function AccountMenu() {
-  if (!ENTRA_ENABLED) {
+  if (!brokerAuthEnabled()) {
     return (
       <Badge
         variant="info"
@@ -40,6 +43,7 @@ function initialsOf(name: string): string {
 
 function SignedInOrOut() {
   useBrokerSession((state) => state.session);
+  const navigate = useNavigate();
   const account = brokerAccount();
   const [open, setOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -61,7 +65,7 @@ function SignedInOrOut() {
         size="sm"
         variant="outline"
         aria-label="Sign in"
-        onClick={() => void signIn()}
+        onClick={() => void navigate({ to: "/sign-in" })}
       >
         <LogIn className="size-4" />
         <span className="hidden sm:inline">Sign in</span>

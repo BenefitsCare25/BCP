@@ -18,6 +18,7 @@ from app.core.deps import (
     assert_policy_year_editable,
     assert_policy_year_for_user,
     load_category,
+    policy_year_company,
     require_client_id,
     tenant_or_global,
 )
@@ -192,12 +193,15 @@ def create_category(
     the rule editor). New categories land as ``needs_review`` so they surface for
     confirmation, mirroring slip-parsed rows.
     """
-    assert_policy_year_editable(assert_policy_year_for_user(payload.policy_year_id, user, db))
+    py = assert_policy_year_editable(
+        assert_policy_year_for_user(payload.policy_year_id, user, db)
+    )
+    client_id = policy_year_company(py, user)
     if payload.product_id is not None:
         product = db.execute(
             select(Product).where(
                 Product.id == payload.product_id,
-                tenant_or_global(Product.client_id, user.client_id),
+                tenant_or_global(Product.client_id, client_id),
             )
         ).scalar_one_or_none()
         if product is None:
@@ -300,7 +304,9 @@ def confirm_category(
     _assert_category_year_editable(db, c)
     before = _to_dict(c)
     try:
-        confirm_category_mapping(db, category=c, client_id=require_client_id(user))
+        confirm_category_mapping(
+            db, category=c, client_id=policy_year_company(c.policy_year, user)
+        )
     except ValueError as exc:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -328,7 +334,8 @@ def bulk_confirm(
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    assert_policy_year_editable(assert_policy_year_for_user(policy_year_id, user, db))
+    py = assert_policy_year_editable(assert_policy_year_for_user(policy_year_id, user, db))
+    client_id = policy_year_company(py, user)
     rows = [
         category
         for category in db.execute(
@@ -341,7 +348,6 @@ def bulk_confirm(
     ]
     confirmed = 0
     skipped = 0
-    client_id = require_client_id(user)
     batch = (
         CategoryConfirmationBatch(
             db,
@@ -506,7 +512,7 @@ def ai_suggest_rule(
     stays `needs_review` so admin must confirm before activation.
     """
     _assert_category_year_editable(db, c)
-    client_id = require_client_id(user)
+    client_id = policy_year_company(c.policy_year, user)
     schema, context, catalog = build_ai_eligibility_inputs(db, category=c, client_id=client_id)
 
     try:

@@ -179,14 +179,15 @@ def _normalize_name(s: Any) -> str | None:
 
 
 # Characters that make Excel treat a string cell as a live formula. The WRITE
-# half of this contract is `insurer_reports.safe_cell`, which imports this tuple
-# — the escape and the unescape must never drift apart, or exported values stop
-# round-tripping through an upload.
+# half of this contract is `xlsx_safe.safe_cell` (re-exported by
+# `insurer_reports`), which imports this tuple — the escape and the unescape
+# must never drift apart, or exported values stop round-tripping through an
+# upload.
 _FORMULA_LEADERS = ("=", "+", "-", "@", "\t", "\r", "\n")
 
 
 def unescape_formula_guard(value: Any) -> Any:
-    """Undo `insurer_reports.safe_cell` on the way back in.
+    """Undo `xlsx_safe.safe_cell` on the way back in.
 
     Our own exports prefix a value starting with ``= + - @`` with an apostrophe
     so Excel can't execute it as a formula. Exported listings are

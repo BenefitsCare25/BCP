@@ -7,6 +7,7 @@
  */
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/api/client";
+import { keepPreviousInScope } from "@/lib/scopedPlaceholder";
 import { useSession } from "@/stores/session";
 import type { FacetValue, MemberQuery } from "@/api/memberQuery";
 import type { DependantList } from "@/types";
@@ -81,6 +82,7 @@ export function useDependantQueryList(
         { query, ...page },
       ),
     enabled: !!policyYearId,
-    placeholderData: (prev) => prev,
+    // Previous rows bridge a filter or page change, never a company or year.
+    ...keepPreviousInScope(clientId, policyYearId),
   });
 }

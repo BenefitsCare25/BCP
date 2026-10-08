@@ -8,7 +8,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.core.auth import ROLE_SYSTEM_ADMIN, CurrentUser, get_current_user
+from app.core.audit import PLATFORM_ENTITY_TYPES, mask_personal_data
+from app.core.auth import ROLE_BROKER_VIEWER, ROLE_SYSTEM_ADMIN, CurrentUser, get_current_user
 from app.core.deps import require_claim_access, require_client_id
 from app.core.pagination import MAX_LIMIT
 from app.db.session import get_db
@@ -32,6 +33,14 @@ def get_claim_workload(
     return claim_workload(db, require_client_id(user), from_date, to_date)
 
 
+def _entry(row: AuditLog, actor_name: str | None, *, masked: bool) -> AuditLogEntry:
+    update: dict[str, Any] = {"actor_name": actor_name}
+    if masked:
+        update["before"] = mask_personal_data(row.before)
+        update["after"] = mask_personal_data(row.after)
+    return AuditLogEntry.model_validate(row).model_copy(update=update)
+
+
 @router.get("", response_model=AuditLogPage)
 def list_audit_log(
     limit: int = Query(50, ge=1, le=MAX_LIMIT),
@@ -43,9 +52,11 @@ def list_audit_log(
     # Intake baselines contain medical readings for server-side comparison.
     # They are internal records, never generic company activity payloads.
     filters = [AuditLog.action != "claim.intake_suggested"]
-    # System admins see everything; everyone else is scoped to their client.
+    # System admins see everything; everyone else is scoped to their client,
+    # and platform records never belong to a company's feed.
     if user.role != ROLE_SYSTEM_ADMIN:
         filters.append(AuditLog.client_id == require_client_id(user))
+        filters.append(AuditLog.entity_type.not_in(sorted(PLATFORM_ENTITY_TYPES)))
     if entity_type:
         filters.append(AuditLog.entity_type == entity_type)
     if entity_id:
@@ -65,12 +76,9 @@ def list_audit_log(
             else []
         )
     }
+    # A read-only role sees what changed, not the personal data that changed.
+    masked = user.role == ROLE_BROKER_VIEWER
     return AuditLogPage(
         total=total,
-        items=[
-            AuditLogEntry.model_validate(row).model_copy(
-                update={"actor_name": actors.get(row.user_id or "")}
-            )
-            for row in rows
-        ],
+        items=[_entry(row, actors.get(row.user_id or ""), masked=masked) for row in rows],
     )

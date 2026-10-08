@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { policyMappingIssue, policySourceNumbers } from "@/lib/policyNumbers";
+import { isFirmOwnerRole } from "@/lib/roles";
 import type { PolicyNumberAssignment } from "@/types";
 
 export function PolicyNumberMappingsEditor({ policyYearId, productCode, source, value, entities, persistedCount, onChange }: {
@@ -43,7 +44,7 @@ export function PolicyNumberMappingsEditor({ policyYearId, productCode, source, 
             {item.entity !== null && <><Label htmlFor={`${id}-entity-${index}`} className="sr-only">Legal entity {index + 1}</Label><Input id={`${id}-entity-${index}`} list={`${id}-entities`} value={item.entity} maxLength={500} placeholder="Choose or enter the legal entity" onChange={(e) => update(index, { entity: e.target.value })} /></>}
           </div>
           <div className="flex flex-col gap-1.5"><Label htmlFor={`${id}-number-${index}`}>Policy number {index + 1}</Label><Input id={`${id}-number-${index}`} list={`${id}-numbers`} value={item.policy_number} maxLength={64} placeholder="One issued policy number" onChange={(e) => update(index, { policy_number: e.target.value })} /></div>
-          {(index >= persistedCount || me?.role === "system_admin") && <Button type="button" variant="ghost" size="icon" aria-label={`Remove policy-number assignment ${index + 1}`} onClick={() => onChange(value.filter((_, i) => i !== index))}><X className="size-4" /></Button>}
+          {(index >= persistedCount || isFirmOwnerRole(me?.role)) && <Button type="button" variant="ghost" size="icon" aria-label={`Remove policy-number assignment ${index + 1}`} onClick={() => onChange(value.filter((_, i) => i !== index))}><X className="size-4" /></Button>}
         </div>
       ))}
       {!value.length && !issue && <p className="text-sm text-muted-foreground">No issued policy number assigned. Reports will show “Not assigned”.</p>}

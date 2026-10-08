@@ -69,6 +69,9 @@ os.environ.setdefault("INSPRO_FX_ENABLED", "0")
 _SUITE_DIRECTORY = TemporaryDirectory(prefix="inspro-pytest-")
 _SUITE_DB = Path(_SUITE_DIRECTORY.name) / "inspro.db"
 os.environ["INSPRO_DATABASE_URL"] = f"sqlite:///{_SUITE_DB}"
+# Documents too: without this, tests that store blobs wrote synthetic files
+# into backend/var/uploads, the shared working document store.
+os.environ.setdefault("INSPRO_STORAGE_DIR", str(Path(_SUITE_DIRECTORY.name) / "uploads"))
 
 # Import app.db.session HERE, while the env var above is still the one in
 # effect. Binding the engine from conftest is what makes the pin stick: test
@@ -77,6 +80,17 @@ os.environ["INSPRO_DATABASE_URL"] = f"sqlite:///{_SUITE_DB}"
 # Those reassignments are now no-ops — which is what they always were, just
 # non-deterministically so.
 import app.db.session  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _fresh_firm_resolution():
+    """Hosts resolve to firms through a per-process cache; tests create and
+    delete firms freely, so every test starts with it empty."""
+    from app.core.tenant_resolution import invalidate_firm_cache
+
+    invalidate_firm_cache()
+    yield
+    invalidate_firm_cache()
 
 
 @pytest.fixture(scope="module", autouse=True)

@@ -1,4 +1,5 @@
 import { BadgeCheck, HeartPulse, ShieldCheck } from "lucide-react";
+import { useBrand } from "@/components/brand/BrandProvider";
 
 /**
  * Right-hand brand panel of the sign-in surface — a clean, near-white showcase
@@ -17,6 +18,7 @@ const AVATARS = [
 ];
 
 export function AuthPanel() {
+  const brand = useBrand();
   return (
     <div className="signin-panel signin-shadow-frame relative h-full w-full overflow-hidden rounded-3xl text-foreground ring-1 ring-border">
       {/* No logo here — the single brand lockup lives at the page's top-left,
@@ -32,7 +34,7 @@ export function AuthPanel() {
             <div className="flex items-center justify-between">
               <span className="inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">
                 <ShieldCheck className="size-4 text-primary" strokeWidth={2.25} />
-                Inspro · Panel card
+                {brand.short_name} · Panel card
               </span>
               <span className="text-xs font-medium text-muted-foreground">
                 2027

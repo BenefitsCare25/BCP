@@ -73,7 +73,7 @@ def delivery(monkeypatch):
             sent.append((email, urls, "digest"))
 
     monkeypatch.setattr(service, "SessionLocal", factory)
-    monkeypatch.setattr(service, "get_mailer", Mailer)
+    monkeypatch.setattr(service, "get_mailer", lambda *_: Mailer())
     yield factory, sent
     engine.dispose()
 
@@ -110,9 +110,9 @@ def test_digest_groups_distinct_claims_but_never_other_member_or_company(deliver
     assert sent[0][0] == "a@test.invalid"
     assert sent[0][2] == "digest"
     assert len(sent[0][1]) == 2
-    assert all(
-        link.startswith(service.portal_sign_in_url("one") + "?claim=") for link in sent[0][1]
-    )
+    with factory() as db:
+        expected = service.portal_sign_in_url(db, db.get(Client, "one"))
+    assert all(link.startswith(expected + "?claim=") for link in sent[0][1])
     with factory() as db:
         rows = db.scalars(
             select(ClaimNotification).where(ClaimNotification.digest_key == first.digest_key)
@@ -149,7 +149,7 @@ def test_failure_retries_entire_digest_and_redacts_terminal_recipient(delivery, 
         def send_claim_digest(self, *_):
             raise RuntimeError("private mail provider error")
 
-    monkeypatch.setattr(service, "get_mailer", BrokenMailer)
+    monkeypatch.setattr(service, "get_mailer", lambda *_: BrokenMailer())
     assert service.process_one_claim_notification(None)
     with factory() as db:
         rows = [db.get(ClaimNotification, ident) for ident in (one.id, two.id)]
@@ -181,7 +181,7 @@ def test_expired_worker_cannot_overwrite_new_lease(delivery, monkeypatch):
                 lease = service._lease_one(db)
                 assert lease is not None
 
-    monkeypatch.setattr(service, "get_mailer", ReclaimedDuringSend)
+    monkeypatch.setattr(service, "get_mailer", lambda *_: ReclaimedDuringSend())
     assert service.process_one_claim_notification(None)
     with factory() as db:
         current = db.get(ClaimNotification, row.id)
@@ -209,7 +209,7 @@ def test_notification_preferences_are_company_scoped_and_detect_stale_updates(de
 
 def test_digest_email_contains_only_numbered_authenticated_links():
     message = _claim_digest_message(
-        "a@test.invalid", ["https://portal.invalid/sign-in?claim=one"], "benefits@test.invalid"
+        "a@test.invalid", ["https://portal.invalid/sign-in?claim=one"]
     )
     assert "Claim 1:" in message.get_content()
     assert "diagnosis" not in message.get_content()

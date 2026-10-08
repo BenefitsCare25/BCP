@@ -30,6 +30,7 @@ import jwt
 from fastapi import Depends, Header, HTTPException, Request, Response, status
 from sqlalchemy.orm import Session
 
+from app.core import credentials as CRED
 from app.core.settings import Settings, get_settings
 from app.core.tenancy_host import (
     SURFACE_PORTAL,
@@ -37,9 +38,11 @@ from app.core.tenancy_host import (
     resolve_host_info,
     resolve_tenant_context,
 )
+from app.core.tenant_resolution import refuse_unserved_surface, request_firm
 from app.db.session import get_db
 from app.db.tenancy import set_search_path
 from app.models import Employee, MemberAccount, PolicyYear
+from app.models.platform import DOMAIN_SURFACE_CLIENT
 from app.services.member_access import (
     UNSET as _UNSET,  # "year not supplied", distinct from "no active year"
 )
@@ -132,8 +135,12 @@ def generate_member_login_id() -> str:
     return f"EM-{body}"
 
 
-def issue_member_set_password_token(member_account_id: str, version: int) -> str:
-    now = datetime.now(UTC)
+def issue_member_set_password_token(
+    member_account_id: str, version: int, *, issued_at: datetime | None = None,
+) -> str:
+    """The bare token. Links a person is given come from
+    `issue_member_set_password_link`, which also cancels earlier links."""
+    now = issued_at or datetime.now(UTC)
     return jwt.encode(
         {
             "sub": member_account_id,
@@ -147,7 +154,20 @@ def issue_member_set_password_token(member_account_id: str, version: int) -> str
     )
 
 
-def verify_member_set_password_token(token: str) -> tuple[str, int]:
+def issue_member_set_password_link(account: MemberAccount) -> str:
+    """Mint the token for a NEW set-password link and cancel every earlier one.
+
+    Stamps `password_token_issued_at` with the token's issue time, so links
+    issued before it are refused. Every path that hands a member a link uses
+    this rather than the bare issuer. Caller commits.
+    """
+    return issue_member_set_password_token(
+        account.id, CRED.credential_version(account),
+        issued_at=CRED.stamp_password_token(account),
+    )
+
+
+def verify_member_set_password_token(token: str) -> CRED.SetPasswordClaim:
     claims = jwt.decode(
         token,
         _derive_key(_SET_PW_LABEL),
@@ -156,7 +176,9 @@ def verify_member_set_password_token(token: str) -> tuple[str, int]:
     )
     if claims.get("typ") != _TOKEN_TYPE_SET_PW:
         raise jwt.InvalidTokenError("wrong token type")
-    return str(claims["sub"]), int(claims.get("v", 0))
+    return CRED.SetPasswordClaim(
+        str(claims["sub"]), int(claims.get("v", 0)), int(claims.get("iat", 0)),
+    )
 
 
 def issue_member_mfa_challenge_token(member_account_id: str, client_id: str) -> str:
@@ -217,9 +239,12 @@ def require_portal_tenant(
 
     Normally the `{slug}.portal.<base>` subdomain; a single-host deployment
     (`INSPRO_TENANT_MODE=header`) or non-prod accepts an `X-Inspro-Tenant-Slug`
-    header stand-in (same as the HR surface)."""
+    header stand-in (same as the HR surface). The alias is looked up within
+    the broker firm the host belongs to."""
+    firm = request_firm(request)
+    refuse_unserved_surface(firm, DOMAIN_SURFACE_CLIENT)
     host_info = resolve_host_info(request, SURFACE_PORTAL, x_inspro_tenant_slug)
-    ctx = resolve_tenant_context(host_info, db)
+    ctx = resolve_tenant_context(host_info, db, firm)
     if ctx is None or ctx.surface != SURFACE_PORTAL:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
@@ -254,6 +279,8 @@ def get_current_member(
     from app.models import Client, MemberAccount  # lazy: avoid import cost at module load
     from app.models.member_account import MEMBER_STATUS_ACTIVE
 
+    firm = request_firm(request)
+    refuse_unserved_surface(firm, DOMAIN_SURFACE_CLIENT)
     if not authorization or not authorization.startswith("Bearer "):
         raise _unauthorized("Missing Bearer token")
     token = authorization.removeprefix("Bearer ").strip()
@@ -280,10 +307,13 @@ def get_current_member(
     # Password change evicts older tokens. Without this a member token stayed
     # valid for its full TTL after a reset, so resetting a phished password gave
     # the member no containment at all.
-    from app.core.credentials import credential_version as _cred_version
-
-    if int(claims.get("cv") or 0) != _cred_version(account):
+    if int(claims.get("cv") or 0) != CRED.credential_version(account):
         raise _unauthorized("Session ended — sign in again")
+    client = db.get(Client, account.client_id)
+    # The member's company belongs to one broker; another broker's host does not
+    # accept the session. Checked before the session is touched.
+    if firm is not None and (client is None or client.broker_firm_id != firm.firm_id):
+        raise _unauthorized("Invalid portal token")
     from app.core import sessions as SESS
     from app.core.hr_auth import get_auth_policy
     from app.models.auth import SUBJECT_MEMBER
@@ -297,6 +327,13 @@ def get_current_member(
         and request.url.path != "/api/v1/portal/enrollment/notices"
         and not request.url.path.startswith("/api/v1/portal/enrollment/state/"),
     )
+    if client is not None and not client.portal_enabled:
+        # Per request, not only at sign-in: switching the portal off has to stop
+        # what live sessions can do, not just new sign-ins.
+        raise HTTPException(status.HTTP_403_FORBIDDEN, {
+            "code": "portal_disabled",
+            "message": "Employee portal access for this company is switched off.",
+        })
     if policy.mfa_portal_required and not session.mfa_verified:
         from app.core import mfa as MFA
 
@@ -314,7 +351,6 @@ def get_current_member(
                 "message": "Complete two-factor setup before continuing.",
             })
 
-    client = db.get(Client, account.client_id)
     broker_firm_id = client.broker_firm_id if client else None
     set_search_path(db, broker_firm_id)
     return CurrentMember(

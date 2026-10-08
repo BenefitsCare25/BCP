@@ -14,6 +14,8 @@ catalog rows or run matching (deferred to a later phase).
 
 Tenant scoping rides on `load_policy_year` (the scheme is keyed by the already
 tenant-checked policy year), matching the product-setup / recommendations routers.
+Writes refuse a stale company selection (`policy_year_company`): their audit
+rows are filed under the actor's active company, which must be the year's.
 """
 from __future__ import annotations
 
@@ -47,7 +49,7 @@ from app.core.auth import CurrentUser, get_current_user
 from app.core.deps import (
     assert_policy_year_editable,
     load_policy_year,
-    require_client_id,
+    policy_year_company,
 )
 from app.core.rate_limit import limiter
 from app.core.uploads import FLEX_SUFFIXES, saved_upload
@@ -78,6 +80,7 @@ from app.services.flex_pricing_resolver import _is_age
 from app.services.flex_proration import proration_errors
 from app.services.flex_reconcile import seed_tier_match_sets
 from app.services.flex_submission import submission_rule_errors
+from app.services.xlsx_safe import append_safe
 
 logger = logging.getLogger(__name__)
 
@@ -506,7 +509,7 @@ async def extract_flex(
     Locked once the policy year is activated (configuration is snapshotted).
     """
     assert_policy_year_editable(policy_year)
-    client_id = require_client_id(user)
+    client_id = policy_year_company(policy_year, user)
     if not files:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "No files uploaded.")
 
@@ -706,25 +709,27 @@ def _build_coverage_workbook(
     for b in cov.buckets:
         summary.append([b.label, b.count])
 
+    # The exception and roster sheets carry roster text (names, designations,
+    # raw marital values), so every row passes the formula guard.
     for b in cov.buckets:
         if b.count == 0:
             continue
         ws = wb.create_sheet(_sanitize_sheet_title(b.label))
         if b.kind == "dependant":
-            ws.append(["Employee Staff ID", "Employee Name", "Dependant", "Reason"])
+            append_safe(ws, ["Employee Staff ID", "Employee Name", "Dependant", "Reason"])
         else:
-            ws.append(["Staff ID", "Name", "Designation", "Reason"])
+            append_safe(ws, ["Staff ID", "Name", "Designation", "Reason"])
         for row in b.rows:
-            ws.append([row.staff_id or "", row.name or "", row.label or "", row.detail])
+            append_safe(ws, [row.staff_id or "", row.name or "", row.label or "", row.detail])
 
     roster_ws = wb.create_sheet("Full roster")
-    roster_ws.append([
+    append_safe(roster_ws, [
         "Staff ID", "Name", "Designation", "Grade", "Nationality",
         "Family status", "Source", "Spouse", "Children",
         "Tier", "Wallet", "Currency", "Issues",
     ])
     for r in resolved:
-        roster_ws.append([
+        append_safe(roster_ws, [
             r.staff_id, r.name or "", r.designation or "", r.grade or "",
             r.nationality or "", r.family_status or "", r.source,
             r.spouse_count, r.child_count, r.tier_name or "",
@@ -758,6 +763,7 @@ def flex_coverage_export(
             "employees_attention": cov.employees_total - cov.employees_ok,
             "dependants_attention": cov.dependants_total - cov.dependants_ok,
         },
+        client_id=policy_year.client_id,
     )
     db.commit()
 
@@ -809,6 +815,7 @@ def flex_suggest_matches(
     exists. Tiers already carrying match sets (reconciled by the broker) are left
     untouched. Locked once the policy year is activated."""
     assert_policy_year_editable(policy_year)
+    policy_year_company(policy_year, user)
     row = _get_scheme(db, policy_year_id)
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No flex scheme for this policy year")
@@ -837,6 +844,7 @@ def save_flex(
     """Save edited scheme answers. Shallow-merges top-level sections so a partial
     body cannot wipe a section the client didn't send."""
     assert_policy_year_editable(policy_year)
+    policy_year_company(policy_year, user)
     # Fail fast at the write boundary: a malformed section (e.g. a non-list
     # `tiers`) must not persist and break later reads.
     shape_errors = _section_shape_errors(body.scheme)
@@ -886,6 +894,7 @@ def confirm_flex(
     db: Session = Depends(get_db),
 ) -> FlexSchemeOut:
     assert_policy_year_editable(policy_year)
+    policy_year_company(policy_year, user)
     row = _get_scheme(db, policy_year_id)
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No flex scheme to confirm")
@@ -960,6 +969,7 @@ def assign_flex(
     are only meaningful once the configuration is locked. Use after the roster or
     dependant listing changes to refresh the snapshot.
     """
+    policy_year_company(policy_year, user)
     row = _get_scheme(db, policy_year_id)
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No flex scheme for this policy year")
@@ -982,6 +992,7 @@ def discard_flex(
     db: Session = Depends(get_db),
 ) -> None:
     assert_policy_year_editable(policy_year)
+    policy_year_company(policy_year, user)
     row = _get_scheme(db, policy_year_id)
     if row is not None:
         db.delete(row)

@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { AlertDialog } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { formatError } from "@/lib/errors";
+import { isBrokerAdminRole, isFirmOwnerRole } from "@/lib/roles";
 import { useSession } from "@/stores/session";
 import { useSetupNavigation } from "@/stores/setupNavigation";
 import { TemplateEditor } from "./TemplateEditor";
@@ -25,7 +26,7 @@ export function EmailSettings() {
 function EmailWorkspace() {
   const clientId = useSession(s => s.activeClientId);
   const { data: me } = useMe();
-  const editable = me?.role === "broker_admin" || me?.role === "system_admin";
+  const editable = isBrokerAdminRole(me?.role);
   const [scope, setScope] = useState<Scope>("company");
   const [tab, setTab] = useState<"templates" | "branding" | "prepared">("templates");
   const [selected, setSelected] = useState<string | null>(null);
@@ -90,7 +91,7 @@ function EmailWorkspace() {
         <p role="status" className="text-sm text-muted-foreground">Loading email templates…</p> : sending?.published_content ?
           <SendFlow key={`${clientId}-${sending.key}`} item={sending} onBack={back} onDirty={onDirty} onPrepared={() => { void qc.invalidateQueries({ queryKey: ["email-preparations"] }); }} /> : selected ?
           <TemplateEditor key={`${scope}-${selected}`} item={row} initial={copyContent} scope={scope} fields={query.data.placeholders} editable={editable}
-            systemAdmin={me?.role === "system_admin"} onBack={back} onSaved={saved} onDirty={onDirty} /> : <>
+            firmOwner={isFirmOwnerRole(me?.role)} onBack={back} onSaved={saved} onDirty={onDirty} /> : <>
           <div className="flex flex-wrap gap-3"><Input className="max-w-sm" aria-label="Search email templates" placeholder="Search template title or subject" value={filter} onChange={e => setFilter(e.target.value)} />
             {editable && <Button onClick={() => { setCopyContent(undefined); setSelected("new"); }}><Plus className="size-4" />New template</Button>}</div>
           <p className="text-sm text-muted-foreground">Email delivery is not configured. Editing, real-data previews and recipient preparation are available.</p>
@@ -106,7 +107,7 @@ function EmailWorkspace() {
                 {editable && <><Button size="sm" variant="outline" disabled={!item.published_content || scope === "firm"} title={scope === "firm" ? "Select Company overrides to choose recipients" : undefined}
                   onClick={() => setSendKey(item.key)}><Mail className="size-4" />Send email</Button>
                   <Button size="sm" variant="ghost" aria-label={`Duplicate ${item.content.title}`} onClick={() => { setCopyContent({ ...item.content, title: `${item.content.title.slice(0, 113)} (copy)` }); setSelected(`new-${item.key}`); }}><Copy className="size-4" /></Button></>}
-                {me?.role === "system_admin" && item.has_local_draft && <Button size="sm" variant="ghost" aria-label={`Remove ${item.content.title}`} onClick={() => setRemove(item)}><Trash2 className="size-4" /></Button>}
+                {isFirmOwnerRole(me?.role) && item.has_local_draft && <Button size="sm" variant="ghost" aria-label={`Remove ${item.content.title}`} onClick={() => setRemove(item)}><Trash2 className="size-4" /></Button>}
               </div></td>
             </tr>)}</tbody></table></div>
           {!query.data.items.some(item => `${item.content.title} ${item.content.subject}`.toLowerCase().includes(filter.toLowerCase())) && <p className="text-sm text-muted-foreground">No templates match your search.</p>}

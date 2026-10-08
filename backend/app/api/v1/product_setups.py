@@ -41,6 +41,7 @@ from app.core.auth import CurrentUser, get_current_user
 from app.core.deps import (
     assert_policy_year_editable,
     load_policy_year,
+    policy_year_company,
     require_client_id,
     tenant_or_global,
 )
@@ -668,7 +669,7 @@ def save_setup(
     db: Session = Depends(get_db),
 ) -> SetupOut:
     assert_policy_year_editable(py)
-    client_id = require_client_id(user)
+    client_id = policy_year_company(py, user)
     # Only the canonical code is needed here — skip synthesizing structure.
     tpl = _resolve_template(
         db, policy_year_id, product_code, client_id, need_structure=False
@@ -753,7 +754,7 @@ def remove_product_from_year(
     product leaves the tab and becomes re-addable — while a product configured
     in another year is preserved. Idempotent."""
     assert_policy_year_editable(py)
-    client_id = require_client_id(user)
+    client_id = policy_year_company(py, user)
     code = product_code.strip().upper()
     products = list(
         db.execute(
@@ -928,7 +929,7 @@ def confirm_setup(
     (otherwise a re-confirm could leave matches pointing at deleted categories).
     """
     assert_policy_year_editable(py)
-    client_id = require_client_id(user)
+    client_id = policy_year_company(py, user)
     # confirm materializes from the draft answers, not the template structure —
     # it only needs the product's attributes, so skip the Plan/Category scan.
     tpl = _resolve_template(

@@ -1,0 +1,49 @@
+/* ─── White-label brand ─────────────────────────────────────────────────────
+   The firm's brand colours, set on <html> by BrandProvider (lib/brand.ts)
+   from `/public/site`. The defaults below are today's palette.
+
+   Two modes, so a default brand renders exactly today's look:
+   - No `data-brand`: every token keeps the literal it has always had in
+     styles.css, leaf.css and the sign-in sheets.
+   - `data-brand="custom"`: the brand-coloured tokens are DERIVED from
+     --brand-primary / --brand-accent with color-mix(), and their measured
+     literals no longer apply.
+
+   Neutrals (the warm greys), status colours (good/warn/error/info) and the
+   portals' approved blue action palette are not brand colours and never
+   follow it. The sign-in sheets carry their own scoped overrides
+   (components/auth/broker-login.css, portal-login.css). */
+
+:root {
+  --brand-primary: #c11a2b;
+  --brand-primary-foreground: #ffffff;
+  --brand-accent: #c11a2b;
+  --brand-accent-foreground: #ffffff;
+}
+
+/* Unlayered, so it outranks the @theme defaults (layer `theme`). */
+:root[data-brand="custom"] {
+  /* Broker app: primary actions, focus ring. */
+  --color-primary: var(--brand-primary);
+  --color-primary-foreground: var(--brand-primary-foreground);
+  --color-ring: var(--brand-primary);
+
+  /* Soft highlight family (badges, selected rows, the active sidebar item),
+     from the accent colour: a 10% wash and a darkened ink for text on it. */
+  --color-accent: color-mix(in srgb, var(--brand-accent) 10%, #fff);
+  --color-accent-foreground: color-mix(in oklab, var(--brand-accent) 62%, #000);
+  --color-sidebar-active: var(--color-accent);
+  --color-sidebar-active-foreground: var(--color-accent-foreground);
+
+  /* Deep ramp for the immersive sign-in panel. */
+  --color-brand-200: color-mix(in srgb, var(--brand-primary) 40%, #fff);
+  --color-brand-500: color-mix(in srgb, var(--brand-primary) 90%, #fff);
+  --color-brand-600: color-mix(in srgb, var(--brand-primary) 92%, #000);
+  --color-brand-800: color-mix(in srgb, var(--brand-primary) 55%, #000);
+  --color-brand-950: color-mix(in srgb, var(--brand-primary) 28%, #000);
+
+  /* Portal brand pair (leaf.css): fill and a text-safe ink. */
+  --color-brand: var(--brand-primary);
+  --color-brand-ink: color-mix(in oklab, var(--brand-primary) 80%, #000);
+  --color-brand-foreground: var(--brand-primary-foreground);
+}

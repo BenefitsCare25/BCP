@@ -22,6 +22,7 @@ from datetime import UTC, datetime
 
 import jwt
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -39,7 +40,7 @@ from app.core.portal_auth import (
     CurrentMember,
     get_current_member,
     issue_member_mfa_challenge_token,
-    issue_member_set_password_token,
+    issue_member_set_password_link,
     issue_member_token,
     require_portal_tenant,
     resolve_member_credential,
@@ -51,6 +52,7 @@ from app.core.request_context import client_ip
 from app.core.session_logout import revoke_tab_session
 from app.core.settings import get_settings
 from app.core.tenancy_host import TenantContext
+from app.core.tenant_resolution import require_client_surface
 from app.db.session import get_db
 from app.models import Client, MemberAccount
 from app.models.auth import SUBJECT_MEMBER
@@ -60,6 +62,7 @@ from app.models.member_account import (
     MEMBER_STATUS_INVITED,
 )
 from app.schemas.portal import MemberSessionOut, PortalMemberOut
+from app.services.brand import resolve_client_brand
 from app.services.member_access import (
     CODE_ACCESS_ENDED,
     Capability,
@@ -70,7 +73,11 @@ from app.services.member_invite import clear_invite_expiry, invite_expired
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/portal/auth", tags=["portal-auth"])
+# Only hosts that serve the client portals; the company resolves within the
+# host's broker firm (`require_portal_tenant`, `get_current_member`).
+router = APIRouter(
+    prefix="/portal/auth", tags=["portal-auth"], dependencies=[Depends(require_client_surface)],
+)
 
 
 class MemberLoginIn(BaseModel):
@@ -94,7 +101,20 @@ class MemberChallengeOut(BaseModel):
 
 
 # ── Credential login (username + password) ────────────────────────────────────
-_INVALID = HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid credentials.")
+def _invalid() -> HTTPException:
+    """The generic credential 401 — a FRESH instance per raise.
+
+    A shared module-level instance collected every raise's traceback, and with
+    it each request's frames and locals (plaintext passwords included), for the
+    life of the process.
+    """
+    return HTTPException(status.HTTP_401_UNAUTHORIZED, _INVALID_CREDENTIALS)
+
+
+_INVALID_CREDENTIALS = "Invalid credentials."
+_LOCKED = "Account temporarily locked. Try again later."
+_SESSION_ENDED = "Session ended. Sign in again."
+_SUPERSEDED_LINK = "A newer reset link has been issued. Use the latest one."
 
 
 # Aliased rather than re-implemented — see core/request_context.
@@ -199,7 +219,7 @@ def member_login(
             ip=_client_ip(request), subdomain=request.headers.get("host"),
         )
         db.commit()
-        raise _INVALID
+        raise _invalid()
     if CRED.is_locked(account):
         EV.write_auth_event(
             db, event_type=EV.EVENT_LOCKOUT, outcome=EV.OUTCOME_BLOCKED, surface="portal",
@@ -207,9 +227,9 @@ def member_login(
             ip=_client_ip(request), subdomain=request.headers.get("host"),
         )
         db.commit()
-        raise HTTPException(status.HTTP_423_LOCKED, "Account temporarily locked. Try again later.")
+        raise HTTPException(status.HTTP_423_LOCKED, _LOCKED)
     if not PW.verify_password(account.password_hash, body.password):
-        CRED.register_failure(account)
+        CRED.register_failure(db, account)
         EV.write_auth_event(
             db, event_type=EV.EVENT_LOGIN_FAIL, outcome=EV.OUTCOME_FAIL, surface="portal",
             subject_type=SUBJECT_MEMBER, subject_id=account.id, client_id=tenant.client_id,
@@ -217,7 +237,7 @@ def member_login(
             subdomain=request.headers.get("host"),
         )
         db.commit()
-        raise _INVALID
+        raise _invalid()
 
     if PW.needs_rehash(account.password_hash):
         account.password_hash = PW.hash_password(body.password)
@@ -244,11 +264,10 @@ def member_login(
     policy = get_auth_policy(db, tenant.client_id)
 
     # Forced rotation — the member proved the current password, so hand them a
-    # self-serve set-password token rather than locking them out.
+    # self-serve set-password token rather than locking them out. Minting it
+    # cancels any earlier link, as every other issuer does.
     if CRED.rotation_due(account):
-        token = issue_member_set_password_token(
-            account.id, CRED.credential_version(account)
-        )
+        token = issue_member_set_password_link(account)
         EV.write_auth_event(
             db, event_type=EV.EVENT_PASSWORD_RESET_REQUEST, outcome=EV.OUTCOME_SUCCESS,
             surface="portal", subject_type=SUBJECT_MEMBER, subject_id=account.id,
@@ -287,7 +306,7 @@ def member_mfa(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Unknown tenant.")
     account = db.get(MemberAccount, member_id)
     if account is None or account.status == MEMBER_STATUS_DISABLED:
-        raise _INVALID
+        raise _invalid()
     # Mirror `/login`'s lockout on the second factor too — per-IP limiting alone
     # let a six-digit code (accepted across a +/-1 step window) be ground out
     # from rotating IPs for the challenge's whole TTL.
@@ -298,14 +317,12 @@ def member_mfa(
             ip=_client_ip(request), subdomain=request.headers.get("host"),
         )
         db.commit()
-        raise HTTPException(
-            status.HTTP_423_LOCKED, "Account temporarily locked. Try again later."
-        )
+        raise HTTPException(status.HTTP_423_LOCKED, _LOCKED)
     ok = mfa.verify_totp(db, SUBJECT_MEMBER, member_id, body.code) or mfa.consume_recovery_code(
         db, SUBJECT_MEMBER, member_id, body.code
     )
     if not ok:
-        CRED.register_failure(account)
+        CRED.register_failure(db, account)
         EV.write_auth_event(
             db, event_type=EV.EVENT_MFA_FAIL, outcome=EV.OUTCOME_FAIL, surface="portal",
             subject_type=SUBJECT_MEMBER, subject_id=member_id, client_id=tenant.client_id,
@@ -328,14 +345,16 @@ def member_set_password(
     db: Session = Depends(get_db),
 ) -> MemberSessionOut | MemberChallengeOut:
     try:
-        member_id, version = verify_member_set_password_token(body.token)
+        claim = verify_member_set_password_token(body.token)
     except jwt.InvalidTokenError as exc:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Reset link expired or invalid.") from exc
-    account = db.get(MemberAccount, member_id)
+    account = db.get(MemberAccount, claim.subject_id)
     if account is None or account.client_id != tenant.client_id:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Reset link is not valid.")
-    if CRED.credential_version(account) != version:
+    if CRED.credential_version(account) != claim.version:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Reset link already used.")
+    if not CRED.password_token_current(account, claim.issued_at):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, _SUPERSEDED_LINK)
     # A disabled account must not be reactivated via a set-password link
     # (mirrors the broker-side member_password_setup 409).
     if account.status == MEMBER_STATUS_DISABLED:
@@ -383,6 +402,52 @@ class MemberChangePasswordIn(BaseModel):
     new_password: str = Field(min_length=1, max_length=256)
 
 
+def _session_id(request: Request) -> str:
+    """The session id of the bearer token `get_current_member` already accepted.
+
+    The signature is checked again but the expiry is not: the dependency
+    enforced it moments ago, and a token that lapses between the two decodes
+    must not surface as a 500.
+    """
+    claims = jwt.decode(
+        request.headers.get("authorization", "")[7:], get_settings().portal_jwt_secret,
+        algorithms=["HS256"], options={"verify_exp": False},
+    )
+    return str(claims["sid"])
+
+
+def _reverify_password(
+    db: Session, request: Request, account: MemberAccount, password: str, *, action: str,
+) -> bool:
+    """Whether `password` is the signed-in member's current one.
+
+    A re-verification is a password guess like any other, so it shares the
+    sign-in lockout: a locked account gets 423 without a check, and a wrong
+    password counts as a failed attempt — committed here, because the caller
+    raises next. `action` names the change being confirmed in the trail.
+    """
+    if CRED.is_locked(account):
+        EV.write_auth_event(
+            db, event_type=EV.EVENT_LOCKOUT, outcome=EV.OUTCOME_BLOCKED, surface="portal",
+            subject_type=SUBJECT_MEMBER, subject_id=account.id, client_id=account.client_id,
+            ip=_client_ip(request), subdomain=request.headers.get("host"),
+            detail={"action": action},
+        )
+        db.commit()
+        raise HTTPException(status.HTTP_423_LOCKED, _LOCKED)
+    if account.password_hash is not None and PW.verify_password(account.password_hash, password):
+        return True
+    CRED.register_failure(db, account)
+    EV.write_auth_event(
+        db, event_type=EV.EVENT_LOGIN_FAIL, outcome=EV.OUTCOME_FAIL, surface="portal",
+        subject_type=SUBJECT_MEMBER, subject_id=account.id, client_id=account.client_id,
+        ip=_client_ip(request), subdomain=request.headers.get("host"),
+        detail={"reason": "reauth_failed", "action": action},
+    )
+    db.commit()
+    return False
+
+
 @router.post("/change-password")
 @limiter.limit("5/minute")
 def member_change_password(
@@ -397,10 +462,8 @@ def member_change_password(
     borrowed unlocked phone must not be enough to take the account over. The
     new one meets the same policy and breach check as a reset."""
     account = db.get(MemberAccount, member.member_account_id)
-    if (
-        account is None
-        or account.password_hash is None
-        or not PW.verify_password(account.password_hash, body.current_password)
+    if account is None or not _reverify_password(
+        db, request, account, body.current_password, action="change_password",
     ):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Your current password is incorrect.")
     if body.new_password == body.current_password:
@@ -444,18 +507,41 @@ class MemberMfaDisableIn(BaseModel):
     password: str = Field(min_length=1, max_length=256)
 
 
+class MemberMfaStartIn(BaseModel):
+    # Needed only once the session's sign-in is older than the re-auth window.
+    current_password: str | None = Field(default=None, max_length=256)
+
+
 @router.post("/mfa/enroll/start")
 def member_mfa_start(
+    request: Request,
+    body: MemberMfaStartIn | None = None,
     member: CurrentMember = Depends(get_current_member),
     db: Session = Depends(get_db),
 ) -> dict[str, str]:
+    """Begin authenticator enrolment.
+
+    A fresh sign-in is enough (so mandatory setup straight after sign-in asks
+    for nothing more); an older session must confirm the password, or a
+    borrowed unlocked device could bind its own authenticator to the account.
+    """
     if not get_auth_policy(db, member.client_id).mfa_portal_enabled:
         raise HTTPException(
             status.HTTP_403_FORBIDDEN,
             "Two-factor authentication isn't enabled for your company.",
         )
+    if not mfa.signed_in_recently(db, _session_id(request)):
+        account = db.get(MemberAccount, member.member_account_id)
+        password = body.current_password if body else None
+        if account is None or not password or not _reverify_password(
+            db, request, account, password, action="mfa_enroll",
+        ):
+            raise mfa.reauth_required()
     label = member.email or member.staff_id
-    secret, uri = mfa.start_enrollment(db, SUBJECT_MEMBER, member.member_account_id, label)
+    issuer = resolve_client_brand(db, member.client_id).product_name
+    secret, uri = mfa.start_enrollment(
+        db, SUBJECT_MEMBER, member.member_account_id, label, issuer
+    )
     db.commit()
     return {"secret": secret, "otpauth_uri": uri}
 
@@ -472,17 +558,14 @@ def member_mfa_confirm(
     )
     if recovery is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "That code didn't match — try again.")
-    claims = jwt.decode(
-        request.headers.get("authorization", "")[7:], get_settings().portal_jwt_secret,
-        algorithms=["HS256"],
-    )
-    SESS.confirm_session_mfa(db, str(claims["sid"]))
+    SESS.confirm_session_mfa(db, _session_id(request))
     db.commit()
     return {"status": "enrolled", "recovery_codes": recovery}
 
 
 @router.post("/mfa/disable")
 def member_mfa_disable(
+    request: Request,
     body: MemberMfaDisableIn,
     member: CurrentMember = Depends(get_current_member),
     db: Session = Depends(get_db),
@@ -492,10 +575,8 @@ def member_mfa_disable(
             status.HTTP_403_FORBIDDEN, "Your company requires two-factor authentication.",
         )
     account = db.get(MemberAccount, member.member_account_id)
-    if (
-        account is None
-        or account.password_hash is None
-        or not PW.verify_password(account.password_hash, body.password)
+    if account is None or not _reverify_password(
+        db, request, account, body.password, action="mfa_disable",
     ):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Password incorrect.")
     mfa.disable(db, SUBJECT_MEMBER, member.member_account_id)
@@ -510,13 +591,9 @@ def member_security_status(
     db: Session = Depends(get_db),
 ) -> dict[str, str | bool]:
     policy = get_auth_policy(db, member.client_id)
-    claims = jwt.decode(
-        request.headers.get("authorization", "")[7:], get_settings().portal_jwt_secret,
-        algorithms=["HS256"],
-    )
     from app.models import AuthSession
 
-    session = db.get(AuthSession, str(claims["sid"]))
+    session = db.get(AuthSession, _session_id(request))
     return {
         "mfa_status": mfa.status_for(db, SUBJECT_MEMBER, member.member_account_id),
         "mfa_available": policy.mfa_portal_enabled,
@@ -527,13 +604,26 @@ def member_security_status(
     }
 
 
+def _refuse_refresh(status_code: int, detail: object, client_id: str) -> JSONResponse:
+    """A refresh refusal that also drops the dead refresh cookie.
+
+    Returned, not raised: FastAPI discards headers set on the injected
+    `Response` when the handler raises, so the cookie survived the refusal and
+    every later refresh replayed it — and a revoked token replayed is filed as
+    token reuse. The body is the one the `HTTPException` would have sent.
+    """
+    refused = JSONResponse({"detail": detail}, status_code=status_code)
+    PA.clear_refresh_cookie(refused, client_id)
+    return refused
+
+
 @router.post("/refresh", response_model=MemberSessionOut)
 @limiter.limit("30/minute")
 def member_refresh(
     request: Request, response: Response,
     tenant: TenantContext = Depends(require_portal_tenant),
     db: Session = Depends(get_db),
-) -> MemberSessionOut:
+) -> MemberSessionOut | JSONResponse:
     from app.models import AuthSession
 
     require_same_origin(request)
@@ -550,17 +640,27 @@ def member_refresh(
             or account.client_id != tenant.client_id):
         SESS.revoke_family(db, row.family_id)
         db.commit()
-        raise _INVALID
+        return _refuse_refresh(
+            status.HTTP_401_UNAUTHORIZED, _INVALID_CREDENTIALS, tenant.client_id,
+        )
     policy = get_auth_policy(db, tenant.client_id)
     result = SESS.rotate_session(
         db, token, absolute_hours=policy.session_absolute_hours,
         idle_minutes=policy.session_idle_minutes, ip=_client_ip(request),
         touch_activity=request.headers.get("X-Inspro-Session-Activity") != "passive",
     )
+    if result.reuse_detected:
+        # Filed against the session's own subject and company, as on the HR
+        # surface, so the trail says whose family was revoked.
+        EV.write_auth_event(
+            db, event_type=EV.EVENT_TOKEN_REUSE, outcome=EV.OUTCOME_BLOCKED,
+            surface="portal", subject_type=row.subject_type, subject_id=row.subject_id,
+            client_id=row.client_id, broker_firm_id=row.broker_firm_id,
+            ip=_client_ip(request), subdomain=request.headers.get("host"),
+        )
     if result.session is None:
         db.commit()
-        PA.clear_refresh_cookie(response, tenant.client_id)
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Session ended. Sign in again.")
+        return _refuse_refresh(status.HTTP_401_UNAUTHORIZED, _SESSION_ENDED, tenant.client_id)
     issued = result.session
     access = access_for_account(
         db, member_account_id=account.id, client_id=account.client_id, staff_id=account.staff_id,
@@ -568,7 +668,18 @@ def member_refresh(
     if access.state == "ended":
         SESS.revoke_family(db, row.family_id)
         db.commit()
-        raise HTTPException(status.HTTP_403_FORBIDDEN, refusal(access, Capability.RECORD))
+        return _refuse_refresh(
+            status.HTTP_403_FORBIDDEN, refusal(access, Capability.RECORD), tenant.client_id,
+        )
+    child = db.get(AuthSession, issued.session_id)
+    mfa_verified = bool(child and child.mfa_verified)
+    if (policy.mfa_portal_required and not mfa_verified
+            and mfa.has_confirmed(db, SUBJECT_MEMBER, account.id)):
+        SESS.revoke_family(db, row.family_id)
+        db.commit()
+        return _refuse_refresh(
+            status.HTTP_401_UNAUTHORIZED, _INVALID_CREDENTIALS, tenant.client_id,
+        )
     access_token, expiry = issue_member_token(
         account.id, account.client_id, CRED.credential_version(account),
         session_id=issued.session_id,
@@ -576,15 +687,7 @@ def member_refresh(
     db.commit()
     PA.set_refresh_cookie(response, issued.token, issued.expires_at, tenant.client_id)
     out = _member_out(access_token, expiry, account)
-    child = db.get(AuthSession, issued.session_id)
-    if (policy.mfa_portal_required and not bool(child and child.mfa_verified)
-            and mfa.has_confirmed(db, SUBJECT_MEMBER, account.id)):
-        SESS.revoke_family(db, row.family_id)
-        db.commit()
-        raise _INVALID
-    out.mfa_enrollment_required = (
-        policy.mfa_portal_required and not bool(child and child.mfa_verified)
-    )
+    out.mfa_enrollment_required = policy.mfa_portal_required and not mfa_verified
     return out
 
 

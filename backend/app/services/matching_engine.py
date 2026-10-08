@@ -684,8 +684,15 @@ def match_policy_year(
     a failure mid-run rolls back the WHOLE run. (Mid-loop commits used to leave
     half the roster on new matches and half stale when a run died partway.)
     Large rosters are flushed in batches to bound the dirty set.
+
+    The company whose entity aliases and attribute schemas apply is the policy
+    year's own; scoping never reads ``user``. A caller therefore cannot pair one
+    company's year with another's catalog, whichever company the actor has
+    selected (a system_admin reaches every year).
     """
     started = time.monotonic()
+    policy_year = db.get(PolicyYear, policy_year_id)
+    client_id = policy_year.client_id if policy_year is not None else None
 
     categories = list(
         db.execute(
@@ -706,13 +713,13 @@ def match_policy_year(
 
     # Loaded once per run and threaded into the indices + every match_one call:
     # resolving aliases per employee would re-query for each of them.
-    aliases = entity_alias_map(db, user.client_id)
+    aliases = entity_alias_map(db, client_id)
     product_indices = _build_product_indices(categories, product_lookup, aliases)
 
     schemas = list(
         db.execute(
             select(EmployeeAttributeSchema).where(
-                tenant_or_global(EmployeeAttributeSchema.client_id, user.client_id)
+                tenant_or_global(EmployeeAttributeSchema.client_id, client_id)
             )
         )
         .scalars()
@@ -855,7 +862,6 @@ def match_policy_year(
     # helpers.
     from app.services.underwriting import refresh_underwriting_cases
 
-    policy_year = db.get(PolicyYear, policy_year_id)
     if policy_year is not None:
         refresh_underwriting_cases(db, policy_year)
 

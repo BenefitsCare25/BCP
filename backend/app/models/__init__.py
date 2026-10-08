@@ -9,6 +9,7 @@ from app.models.auth import (
     AuthSession,
     ClientAuthPolicy,
 )
+from app.models.brand import BrandProfile
 from app.models.bulk_plan_update import BulkPlanUpdate
 from app.models.category import Category
 from app.models.claim import Claim
@@ -53,6 +54,12 @@ from app.models.panel_card import PanelCard, PolicyYearCard
 from app.models.panel_clinic import PanelClinic, PanelListing, PolicyYearPanel
 from app.models.placement_slip import PlacementSlipRow
 from app.models.plan import Plan
+from app.models.platform import (
+    IdentityProvider,
+    PlatformAccessGrant,
+    PlatformAuditLog,
+    TenantDomain,
+)
 from app.models.platform_ai_settings import PlatformAISetting, PlatformAIUsage
 from app.models.policy_year import PolicyYear
 from app.models.product import PlanAttributeSchema, Product
@@ -77,6 +84,7 @@ __all__ = [
     "AuthEvent",
     "AuthMfa",
     "AuthSession",
+    "BrandProfile",
     "BrokerFirm",
     "BulkPlanUpdate",
     "Category",
@@ -114,6 +122,7 @@ __all__ = [
     "FlexPricing",
     "FlexScheme",
     "FxRate",
+    "IdentityProvider",
     "Insurer",
     "Invitation",
     "LeaveElection",
@@ -130,6 +139,8 @@ __all__ = [
     "PlanAttributeSchema",
     "PlatformAISetting",
     "PlatformAIUsage",
+    "PlatformAccessGrant",
+    "PlatformAuditLog",
     "PolicyYear",
     "PolicyYearCard",
     "PolicyYearPanel",
@@ -140,6 +151,7 @@ __all__ = [
     "RosterMappingProfile",
     "SlipTemplateProfile",
     "StoredDocument",
+    "TenantDomain",
     "UnderwritingCase",
     "UnderwritingReview",
     "User",

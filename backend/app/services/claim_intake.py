@@ -839,7 +839,11 @@ def assert_intake_valid(
     submitted; the AI review then cross-checks the documents against these
     same fields."""
     if claim_kind != CLAIM_KIND_INSURED:
-        return  # flex claims: wallet currency + category checks live elsewhere
+        # Flex claims: wallet currency + category checks live elsewhere. A
+        # referral letter they name is still served back with the claim, so it
+        # must be the member's own like on any other claim.
+        assert_referral_owned(db, employee, referral_document_id)
+        return
 
     if currency.upper() not in ALLOWED_CURRENCIES:
         raise HTTPException(
@@ -906,22 +910,32 @@ def assert_intake_valid(
                 f"{product_code} claims do not take a visit type.",
             )
 
-    if referral_document_id is not None:
-        doc = db.get(StoredDocument, referral_document_id)
-        if (
-            doc is None
-            or doc.entity_type != DOC_ENTITY_REFERRAL
-            or doc.storage_state != STORAGE_AVAILABLE
-            # The PERSON, not this year's row (`person_employee_ids`). A course
-            # begun before the renewal carries a letter stamped with the old
-            # employee id, and the anchor picker offers that course across the
-            # year boundary on purpose — checking a single row here would refuse
-            # the letter the member was just told to use, naming a document they
-            # never chose and cannot fix.
-            or doc.entity_id not in person_employee_ids(db, employee)
-        ):
-            # Same not-403 convention as tenant scoping: someone else's letter
-            # simply doesn't exist.
-            raise HTTPException(
-                status.HTTP_404_NOT_FOUND, "Referral letter not found"
-            )
+    assert_referral_owned(db, employee, referral_document_id)
+
+
+def assert_referral_owned(
+    db: Session, employee: Employee, referral_document_id: str | None
+) -> None:
+    """404 unless the named referral letter is an available letter of this
+    member's own. Applies to every claim kind: the claim payload serves the
+    letter's metadata back, so an unchecked id would expose someone else's."""
+    if referral_document_id is None:
+        return
+    doc = db.get(StoredDocument, referral_document_id)
+    if (
+        doc is None
+        or doc.entity_type != DOC_ENTITY_REFERRAL
+        or doc.storage_state != STORAGE_AVAILABLE
+        # The PERSON, not this year's row (`person_employee_ids`). A course
+        # begun before the renewal carries a letter stamped with the old
+        # employee id, and the anchor picker offers that course across the
+        # year boundary on purpose — checking a single row here would refuse
+        # the letter the member was just told to use, naming a document they
+        # never chose and cannot fix.
+        or doc.entity_id not in person_employee_ids(db, employee)
+    ):
+        # Same not-403 convention as tenant scoping: someone else's letter
+        # simply doesn't exist.
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, "Referral letter not found"
+        )

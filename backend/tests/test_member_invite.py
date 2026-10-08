@@ -3,17 +3,33 @@
 Unit-level companions to the endpoint tests in `test_portal_auth.py`. The rules
 under test are the ones whose failure is silent — a generated password the
 tenant's own policy would reject, an expiry that outlives the credential it
-bounds, or a sign-in link that drops the tenant.
+bounds, a sign-in link that drops the tenant or points at another broker's
+address, or mail sent for a broker that has no address yet.
 """
 from __future__ import annotations
 
+from collections.abc import Iterator
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.pool import StaticPool
 
 from app.core import passwords as PW
 from app.core.settings import clear_settings_cache
-from app.models import MemberAccount
+from app.core.tenant_resolution import FirmOriginUnavailable
+from app.db.base import Base
+from app.models import (
+    BrokerFirm,
+    Claim,
+    ClaimMessage,
+    ClaimNotification,
+    Client,
+    MemberAccount,
+)
+from app.models.platform import TenantDomain
 from app.services.member_invite import (
     INVITE_TTL_DAYS,
     clear_invite_expiry,
@@ -84,6 +100,28 @@ def test_naive_expiry_is_treated_as_utc():
     assert invite_expired(account)
 
 
+def test_newest_set_password_link_wins_at_one_second_resolution():
+    """Issuing a link refuses every link issued in an EARLIER second. `iat` is
+    whole seconds, so a link from the same second as the newest stays valid,
+    and an account stamped before the column existed accepts any link (links
+    already in members' mailboxes keep working)."""
+    from app.core.credentials import password_token_current, stamp_password_token
+
+    account = _account()
+    assert password_token_current(account, 0)
+
+    issued = stamp_password_token(account)
+    assert account.password_token_issued_at == issued
+    second = int(issued.timestamp())
+    assert password_token_current(account, second)
+    assert password_token_current(account, second + 5)
+    assert not password_token_current(account, second - 1)
+
+    account.password_token_issued_at = issued.replace(tzinfo=None)  # as SQLite returns it
+    assert password_token_current(account, second)
+    assert not password_token_current(account, second - 1)
+
+
 def test_failed_send_restores_the_previous_credential():
     """A send that fails must not leave a password nobody received."""
     account = _account()
@@ -121,45 +159,149 @@ def test_username_never_renders_blank():
     assert login_username(_account(system_login_id=None), "system_id") == "a@b.test"
 
 
-def test_sign_in_url_tolerates_a_trailing_slash_on_the_origin(_settings_env):
-    """`INSPRO_FRONTEND_ORIGIN` is often configured with a trailing slash; the
-    emailed link must still carry the company in the path, not `//portal/...`."""
-    _settings_env.setenv("INSPRO_TENANT_MODE", "header")
-    _settings_env.setenv("INSPRO_FRONTEND_ORIGIN", "https://inspro-portal.example/")
-    clear_settings_cache()
-
-    assert portal_sign_in_url("cdl") == (
-        "https://inspro-portal.example/portal/cdl/sign-in"
-    )
-
-
 @pytest.fixture
 def _settings_env(monkeypatch):
     yield monkeypatch
     clear_settings_cache()
 
 
-def test_sign_in_url_always_carries_the_tenant(_settings_env):
+@pytest.fixture
+def links_db() -> Iterator[Session]:
+    """A private in-memory database holding an owner firm with no domain, a
+    broker with its own client domain, and a broker with no address at all."""
+    engine = create_engine(
+        "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
+    )
+    Base.metadata.create_all(engine)
+    with sessionmaker(engine, expire_on_commit=False)() as db:
+        db.add_all([
+            BrokerFirm(id="owner", name="Owner", slug="owner", is_platform_owner=True),
+            BrokerFirm(id="brokera", name="Broker A", slug="brokera"),
+            BrokerFirm(id="brokerb", name="Broker B", slug="brokerb"),
+        ])
+        db.flush()
+        db.add(TenantDomain(broker_firm_id="brokera", hostname="benefits.brokera.test",
+                            surface="client", is_primary=True, status="active"))
+        db.add_all([
+            Client(id="owned", name="CDL", slug="cdl", broker_firm_id="owner"),
+            Client(id="unaliased", name="No alias", broker_firm_id="owner"),
+            Client(id="hosted", name="CDL at A", slug="cdl", broker_firm_id="brokera"),
+            Client(id="homeless", name="CDL at B", slug="cdl", broker_firm_id="brokerb"),
+        ])
+        db.commit()
+        yield db
+    engine.dispose()
+
+
+def test_sign_in_url_tolerates_a_trailing_slash_on_the_origin(_settings_env, links_db):
+    """`INSPRO_FRONTEND_ORIGIN` is often configured with a trailing slash; the
+    emailed link must still carry the company in the path, not `//portal/...`."""
+    _settings_env.setenv("INSPRO_FRONTEND_ORIGIN", "https://inspro-portal.example/")
+    clear_settings_cache()
+
+    assert portal_sign_in_url(links_db, links_db.get(Client, "owned")) == (
+        "https://inspro-portal.example/portal/cdl/sign-in"
+    )
+
+
+def test_sign_in_url_always_carries_the_tenant(_settings_env, links_db):
     """Without the tenant the portal cannot resolve the company, and the member
     is told their details weren't recognised — indistinguishable from a wrong
     password, on the one screen where that misdiagnosis costs the most."""
-    _settings_env.setenv("INSPRO_TENANT_MODE", "header")
     _settings_env.setenv("INSPRO_FRONTEND_ORIGIN", "https://inspro-portal.example")
     clear_settings_cache()
-    # Single-host carries the company in the PATH, so the address the member is
-    # emailed is the one they keep using. The old `?company=` form still
-    # resolves client-side (`captureTenantSlugFromUrl` promotes it into the
-    # path) — unopened invites are live credentials for INVITE_TTL_DAYS.
-    assert portal_sign_in_url("cdl") == (
+    # The company rides in the PATH, so the address the member is emailed is the
+    # one they keep using. The old `?company=` form still resolves client-side
+    # (`captureTenantSlugFromUrl` promotes it into the path) — unopened invites
+    # are live credentials for INVITE_TTL_DAYS.
+    assert portal_sign_in_url(links_db, links_db.get(Client, "owned")) == (
         "https://inspro-portal.example/portal/cdl/sign-in"
     )
     # No slug is still a real state (a client with no alias): the link stays
     # valid and the portal asks which company, rather than 404ing.
-    assert portal_sign_in_url(None) == (
+    assert portal_sign_in_url(links_db, links_db.get(Client, "unaliased")) == (
         "https://inspro-portal.example/portal/sign-in"
     )
 
-    _settings_env.setenv("INSPRO_TENANT_MODE", "subdomain")
-    _settings_env.setenv("INSPRO_BASE_DOMAIN", "inspro.sg")
+
+def test_links_open_on_the_companys_own_broker_address(_settings_env, links_db):
+    """A broker's members are sent to that broker's domain, never the platform's
+    — the same alias at another broker is another company."""
+    from app.services.email_template_recipients import company_sign_in_url
+
+    _settings_env.setenv("INSPRO_FRONTEND_ORIGIN", "https://inspro-portal.example")
     clear_settings_cache()
-    assert portal_sign_in_url("cdl") == "https://cdl.portal.inspro.sg/portal/sign-in"
+    hosted = links_db.get(Client, "hosted")
+    assert portal_sign_in_url(links_db, hosted) == (
+        "https://benefits.brokera.test/portal/cdl/sign-in"
+    )
+    assert company_sign_in_url(hosted, "employee") == (
+        "https://benefits.brokera.test/portal/cdl/sign-in"
+    )
+    assert company_sign_in_url(hosted, "hr") == (
+        "https://benefits.brokera.test/hr/sign-in?company=cdl"
+    )
+
+
+def test_no_link_for_a_broker_without_an_address(_settings_env, links_db, monkeypatch):
+    """Production never falls back to the platform's address for another
+    broker's members: the send stops instead."""
+    from app.core import tenant_resolution
+    from app.services.email_template_recipients import company_sign_in_url
+
+    prod = replace(tenant_resolution.get_settings(), env="prod")
+    monkeypatch.setattr(tenant_resolution, "get_settings", lambda: prod)
+    homeless = links_db.get(Client, "homeless")
+    with pytest.raises(FirmOriginUnavailable):
+        portal_sign_in_url(links_db, homeless)
+    with pytest.raises(FirmOriginUnavailable):
+        company_sign_in_url(homeless, "hr")
+
+
+def test_claim_mail_waits_for_the_brokers_address(_settings_env, links_db, monkeypatch):
+    """A worker holding mail for a broker with no address sends nothing, spends
+    no attempt and keeps the item queued — then delivers once the address exists."""
+    from app.core import tenant_resolution
+    from app.services import claim_notifications as service
+
+    prod = replace(tenant_resolution.get_settings(), env="prod")
+    monkeypatch.setattr(tenant_resolution, "get_settings", lambda: prod)
+    factory = sessionmaker(links_db.get_bind(), expire_on_commit=False)
+    sent: list[str] = []
+
+    class Mailer:
+        def send_claim_update(self, email: str, url: str) -> None:
+            sent.append(url)
+
+    monkeypatch.setattr(service, "SessionLocal", factory)
+    monkeypatch.setattr(service, "get_mailer", lambda *_: Mailer())
+    links_db.add(MemberAccount(id="member", client_id="homeless", staff_id="S-1",
+                               email="member@b.test", failed_attempts=0))
+    queued = service.enqueue_claim_notification(
+        links_db,
+        Claim(id="claim", client_id="homeless", submitted_by_member_id="member"),
+        ClaimMessage(id="message", author_type="broker", event=None),
+    )
+    links_db.commit()
+    assert queued is not None
+
+    assert service.process_one_claim_notification(None) is False
+    assert sent == []
+    with factory() as db:
+        held = db.get(ClaimNotification, queued.id)
+        assert (held.status, held.attempts, held.last_error) == (
+            "queued", 0, "firm_origin_unavailable",
+        )
+        assert held.available_at.replace(tzinfo=UTC) > datetime.now(UTC) + timedelta(
+            minutes=service.ORIGIN_RETRY_MINUTES - 1
+        )
+        db.add(TenantDomain(broker_firm_id="brokerb", hostname="portal.brokerb.test",
+                            surface="client", is_primary=True, status="active"))
+        held.available_at = datetime.now(UTC) - timedelta(seconds=1)
+        db.commit()
+
+    assert service.process_one_claim_notification(None) is True
+    assert sent == ["https://portal.brokerb.test/portal/cdl/sign-in"]
+    with factory() as db:
+        delivered = db.get(ClaimNotification, queued.id)
+        assert (delivered.status, delivered.attempts) == ("sent", 1)

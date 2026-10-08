@@ -83,6 +83,10 @@ class AuthCredential(Base, TimestampMixin):
     last_login_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # When the newest set-password link was issued; older links are refused.
+    password_token_issued_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
 
 class AuthMfa(Base, TimestampMixin):

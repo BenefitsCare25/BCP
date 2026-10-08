@@ -6,11 +6,11 @@ from urllib.parse import quote
 
 from fastapi import HTTPException
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, object_session
 
 from app.core.auth import CurrentUser
 from app.core.hr_auth import get_auth_policy
-from app.core.settings import get_settings
+from app.core.tenant_resolution import FirmOriginUnavailable, public_origin
 from app.models import (
     AuthCredential,
     Client,
@@ -20,6 +20,7 @@ from app.models import (
     User,
     UserClientAccess,
 )
+from app.models.platform import DOMAIN_SURFACE_CLIENT
 from app.schemas.email_templates import BrandingContent, TemplateContent
 from app.services.email_template_content import valid_email
 from app.services.member_invite import login_username, portal_sign_in_url
@@ -119,7 +120,7 @@ def employee_recipients(
 def hr_recipients(
     db: Session, client: Client, user: CurrentUser, purpose: str
 ) -> list[dict[str, Any]]:
-    if user.role not in ("broker_admin", "system_admin"):
+    if user.role not in ("broker_admin", "firm_admin", "system_admin"):
         raise HTTPException(403, "HR account details require broker administration access.")
     policy = get_auth_policy(db, client.id)
     rows = db.execute(
@@ -182,6 +183,23 @@ def recipients(
     return employee_recipients(db, client, year_id, content.purpose)
 
 
+def company_sign_in_url(client: Client, audience: str) -> str:
+    """The company's sign-in link for `audience` (`hr` or `employee`).
+
+    On the company's own broker address (`tenant_resolution.public_origin`):
+    `/hr/sign-in?company=<alias>` for HR, `portal_sign_in_url` for employees.
+    Raises `FirmOriginUnavailable` when the broker has no address yet, or when
+    `client` is not attached to a session the address could be read through.
+    """
+    db = object_session(client)
+    if db is None:
+        raise FirmOriginUnavailable(client.broker_firm_id)
+    if audience != "hr":
+        return portal_sign_in_url(db, client)
+    origin = public_origin(db, client.broker_firm_id, DOMAIN_SURFACE_CLIENT)
+    return f"{origin}/hr/sign-in?company={quote(client.slug or '')}"
+
+
 def context_values(
     client: Client | None,
     content: TemplateContent,
@@ -195,15 +213,13 @@ def context_values(
             warnings.append(
                 "Registered company name is missing; the company's display name is shown."
             )
-        portal_url = portal_sign_in_url(client.slug)
-        if content.audience == "hr":
-            settings = get_settings()
-            portal_url = (
-                f"https://{client.slug}.hr.{settings.base_domain}/hr/sign-in"
-                if settings.tenant_mode == "subdomain" and client.slug
-                else f"{settings.frontend_origin.rstrip('/')}/hr/sign-in"
-                f"?company={quote(client.slug or '')}"
-            )
+        try:
+            portal_url = company_sign_in_url(client, content.audience)
+        except FirmOriginUnavailable:
+            # Left blank: `validate_values` then refuses every template that
+            # uses `{{portal_url}}`, so nothing is prepared with a dead link.
+            portal_url = ""
+            warnings.append(FirmOriginUnavailable.message)
         if not client.slug:
             warnings.append("Company portal address is not configured.")
     else:

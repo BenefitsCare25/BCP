@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
 from app.core.auth import CurrentUser, get_current_user
-from app.core.deps import assert_policy_year_for_user, require_client_id
+from app.core.deps import assert_policy_year_for_user, policy_year_company
 from app.core.rate_limit import limiter
 from app.core.uploads import WORKBOOK_SUFFIXES, saved_upload
 from app.db.session import get_db
@@ -50,8 +50,7 @@ async def preview_employee_listing(
     db: Session = Depends(get_db),
 ) -> ListingPreviewOut:
     """Read the listing and suggest its mapping. No mutation."""
-    client_id = require_client_id(user)
-    assert_policy_year_for_user(policy_year_id, user, db)
+    client_id = policy_year_company(assert_policy_year_for_user(policy_year_id, user, db), user)
     decisions = _mapping(mapping)
     async with saved_upload(file, WORKBOOK_SUFFIXES) as tmp_path:
         try:
@@ -82,8 +81,7 @@ async def apply_employee_listing(
 ) -> ListingApplyOut:
     """Commit members, listed cover, mapping and joiner rules together, then
     re-match best-effort after the commit."""
-    client_id = require_client_id(user)
-    assert_policy_year_for_user(policy_year_id, user, db)
+    client_id = policy_year_company(assert_policy_year_for_user(policy_year_id, user, db), user)
     decisions = _mapping(mapping) or ListingMappingIn()
     async with saved_upload(file, WORKBOOK_SUFFIXES) as tmp_path:
         try:

@@ -12,6 +12,7 @@ import re
 import threading
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Any
 
 from fastapi import (
     APIRouter,
@@ -28,14 +29,16 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core import auth_events as EV
+from app.core import mfa
 from app.core import passwords as PW
 from app.core.audit import write_audit
 from app.core.auth import CurrentUser, get_current_user
 from app.core.breach_check import is_breached
-from app.core.credentials import credential_version, next_rotation_deadline
 from app.core.deps import (
+    assert_platform_firm_access,
     assert_policy_year_for_user,
     load_employee,
+    policy_year_company,
     require_client_id,
     user_owns,
 )
@@ -43,15 +46,20 @@ from app.core.hr_auth import get_auth_policy
 from app.core.portal_auth import (
     SET_PW_TTL_HOURS,
     generate_member_login_id,
-    issue_member_set_password_token,
+    issue_member_set_password_link,
 )
 from app.core.rate_limit import limiter
 from app.core.request_context import client_ip, user_agent
 from app.core.sessions import revoke_all_for_subject
 from app.core.settings import get_settings
+from app.core.tenant_resolution import (
+    FirmOriginUnavailable,
+    client_origin,
+    firm_origin_unavailable_error,
+)
 from app.db.session import SessionLocal, get_db
 from app.db.tenancy import set_search_path
-from app.models import Client, Employee, MemberAccount
+from app.models import AuthMfa, Client, Employee, MemberAccount
 from app.models.auth import SUBJECT_MEMBER
 from app.models.member_account import (
     MEMBER_STATUS_ACTIVE,
@@ -68,12 +76,14 @@ from app.schemas.portal import (
     PortalRolloutMember,
     PortalRolloutOut,
 )
+from app.services.brand import resolve_brand, resolve_client_brand
 from app.services.member_access import MemberAccess, access_for_account, access_map
 from app.services.member_invite import (
     clear_invite_expiry,
     issue_invite_credential,
     login_username,
     mail_deliverable,
+    portal_sign_in_url,
     restore_credential,
     send_member_invite,
     snapshot_credential,
@@ -86,17 +96,49 @@ router = APIRouter(tags=["member-accounts"])
 
 
 def _tenant_slug(db: Session, client_id: str | None) -> str | None:
-    """The client's subdomain label, for building absolute portal links."""
-    from app.models import Client
-
+    """The client's alias, for building absolute portal links."""
     client = db.get(Client, client_id) if client_id else None
     return client.slug if client else None
+
+
+def _company_origin(db: Session, client_id: str | None) -> str | None:
+    """The company's broker address for portal links (see `client_origin`)."""
+    client = db.get(Client, client_id) if client_id else None
+    return client_origin(db, client.broker_firm_id) if client else None
 
 
 def _broker_firm_for(db: Session, client_id: str | None) -> str | None:
     """The firm owning a company. `MemberAccount` has no firm of its own."""
     client = db.get(Client, client_id) if client_id else None
     return client.broker_firm_id if client else None
+
+
+def _invite_sign_in_url(db: Session, client_id: str) -> str:
+    """The sign-in link an invite for this company carries, or 409.
+
+    Resolved before any credential is issued or account created: a broker with
+    no web address yet (`firm_origin_unavailable`) gets no invite at all rather
+    than a mailed password behind a dead link.
+    """
+    client = db.get(Client, client_id)
+    try:
+        if client is None:
+            raise FirmOriginUnavailable(None)
+        return portal_sign_in_url(db, client)
+    except FirmOriginUnavailable as exc:
+        raise firm_origin_unavailable_error() from exc
+
+
+def _require_invite_delivery(db: Session, client_id: str) -> None:
+    """Refuse a bulk send that could not deliver, before any account is
+    provisioned or re-enabled: 503 when mail is not deliverable, 409 when the
+    company's broker has no web address for the link."""
+    if not mail_deliverable():
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "Email delivery is not configured. No invitations were queued or credentials changed.",
+        )
+    _invite_sign_in_url(db, client_id)
 
 
 def _login_source(db: Session, client_id: str | None) -> str | None:
@@ -124,6 +166,31 @@ def _with_access(
     return out
 
 
+def _mfa_enrolled_ids(
+    db: Session, client_id: str, account_id: str | None = None
+) -> set[str]:
+    """The company's member accounts (or just `account_id`) holding a CONFIRMED
+    authenticator — `mfa.status_for(...) == "confirmed"`, read in one query.
+
+    A pending enrolment signs nobody in, so it is not "enrolled": there is
+    nothing for the broker to reset yet. Batched for the list (one query for
+    the whole roster, not one per account) and lock-free, unlike `status_for`,
+    which reads the row FOR UPDATE for the enrolment flows.
+    """
+    stmt = (
+        select(AuthMfa.subject_id)
+        .join(MemberAccount, MemberAccount.id == AuthMfa.subject_id)
+        .where(
+            AuthMfa.subject_type == SUBJECT_MEMBER,
+            AuthMfa.confirmed_at.is_not(None),
+            MemberAccount.client_id == client_id,
+        )
+    )
+    if account_id is not None:
+        stmt = stmt.where(AuthMfa.subject_id == account_id)
+    return set(db.scalars(stmt))
+
+
 def _account_out(db: Session, account: MemberAccount) -> MemberAccountOut:
     """Serialize an account WITH its resolved sign-in username.
 
@@ -132,6 +199,7 @@ def _account_out(db: Session, account: MemberAccount) -> MemberAccountOut:
     """
     out = MemberAccountOut.model_validate(account)
     out.login_username = login_username(account, _login_source(db, account.client_id))
+    out.mfa_enrolled = account.id in _mfa_enrolled_ids(db, account.client_id, account.id)
     # `access_for_account`, not `access_map`: the batch loads the WHOLE current
     # roster in one query to amortise a page of accounts, which is the wrong
     # trade for one — and this runs on create / resend / disable / set-password
@@ -153,7 +221,40 @@ def _load_account(
     account = db.get(MemberAccount, account_id)
     if account is None or not user_owns(user, account.client_id):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Member account not found")
+    # Member accounts live in `public`, so schema routing doesn't bound a
+    # master admin here: confine the reach to firms they have access to. Every
+    # caller changes the account, so a read-only grant is refused.
+    client = db.get(Client, account.client_id)
+    if client is not None:
+        assert_platform_firm_access(
+            db, user, client.broker_firm_id, write=True, not_found="Member account not found"
+        )
     return account
+
+
+def _record_broker_credential(
+    db: Session, request: Request, actor: CurrentUser, account: MemberAccount,
+    *, detail: dict[str, Any], event_type: str = EV.EVENT_PASSWORD_RESET_REQUEST,
+) -> None:
+    """Security-trail row for a credential action a broker took on a member —
+    a password issued, or an authenticator removed.
+
+    The MEMBER is the subject and the broker who acted is `actor_user_id` in
+    `detail`, so a reset can be traced to a person; `write_audit` is the
+    separate, broker-facing record. Filed under the company's OWN firm, not the
+    actor's — `_load_account` lets a `system_admin` act across firms, and an
+    event filed under the actor's firm is invisible to the firm whose member
+    was actually reset.
+    """
+    EV.write_auth_event(
+        db, event_type=event_type, outcome=EV.OUTCOME_SUCCESS,
+        surface="portal", subject_type=SUBJECT_MEMBER, subject_id=account.id,
+        client_id=account.client_id,
+        broker_firm_id=_broker_firm_for(db, account.client_id),
+        ip=client_ip(request), user_agent=user_agent(request),
+        subdomain=request.headers.get("host"),
+        detail={**detail, "actor_user_id": actor.user_id},
+    )
 
 
 def _validated_email(raw: str) -> str:
@@ -234,14 +335,18 @@ def list_member_accounts(
     # company and the member is told their details weren't recognised —
     # indistinguishable from a wrong password.
     slug = _tenant_slug(db, client_id)
+    origin = _company_origin(db, client_id)
     source = _login_source(db, client_id)
     # Four queries for the whole page, not four per row — see `access_map`.
     access = access_map(db, client_id, rows)
+    enrolled = _mfa_enrolled_ids(db, client_id)
     items = []
     for row in rows:
         out = MemberAccountOut.model_validate(row)
         out.tenant_slug = slug
+        out.client_origin = origin
         out.login_username = login_username(row, source)
+        out.mfa_enrolled = row.id in enrolled
         items.append(_with_access(out, access.get(row.id)))
     return MemberAccountList(
         total=total,
@@ -272,11 +377,14 @@ def create_member_account(
         # set-password token (no OTP — they sign in with username + password).
         try:
             account = _create_account(db, employee, None, user.user_id)
-            token = issue_member_set_password_token(account.id, credential_version(account))
+            token = issue_member_set_password_link(account)
+            _record_broker_credential(
+                db, request, user, account, detail={"reason": "broker_link"}
+            )
             write_audit(
                 db, user, "member_account.invited", "member_account", account.id,
                 after={"staff_id": employee.staff_id, "emailless": True},
-                employee_id=employee.id,
+                employee_id=employee.id, client_id=employee.client_id,
             )
             db.commit()
         except IntegrityError:
@@ -288,6 +396,7 @@ def create_member_account(
         out = _account_out(db, account)
         out.set_password_token = token
         out.tenant_slug = _tenant_slug(db, account.client_id)
+        out.client_origin = _company_origin(db, account.client_id)
         return out
     email = _validated_email(raw_email)
     if _shared_roster_email(db, employee.client_id, email, employee.staff_id):
@@ -296,13 +405,14 @@ def create_member_account(
             "This email address is shared by employees. Use an individual activation link "
             "or the employee's own email address.",
         )
+    sign_in_url = _invite_sign_in_url(db, employee.client_id)
 
     try:
         account = _create_account(db, employee, email, user.user_id)
         write_audit(
             db, user, "member_account.invited", "member_account", account.id,
             after={"email": email, "staff_id": employee.staff_id},
-            employee_id=employee.id,
+            employee_id=employee.id, client_id=employee.client_id,
         )
         db.commit()
     except IntegrityError:
@@ -311,23 +421,25 @@ def create_member_account(
             status.HTTP_409_CONFLICT,
             "A portal account already exists for this email or staff ID.",
         ) from None
-    mail_sent = _issue_and_send_invite(db, account)
+    mail_sent = _issue_and_send_invite(db, account, sign_in_url)
     out = _account_out(db, account)
     out.mail_sent = mail_sent
     return out
 
 
-def _issue_and_send_invite(db: Session, account: MemberAccount) -> bool:
+def _issue_and_send_invite(db: Session, account: MemberAccount, sign_in_url: str) -> bool:
     """Mint a one-time password, mail it, and record delivery. Returns whether
     the mailer accepted it.
 
-    The single-account path (per-employee invite / resend). The credential is
-    committed before the send so it is live when the mail lands, and rolled back
-    if the send fails — an account is never left holding a password that was
-    never delivered, and `invite_sent_at` is stamped only on real delivery, so a
-    failure keeps the member in the bulk send's target set.
+    The single-account path (per-employee invite / resend). `sign_in_url` comes
+    from `_invite_sign_in_url`, resolved before anything changed. The credential
+    is committed before the send so it is live when the mail lands, and rolled
+    back if the send fails — an account is never left holding a password that
+    was never delivered, and `invite_sent_at` is stamped only on real delivery,
+    so a failure keeps the member in the bulk send's target set.
     """
     policy = get_auth_policy(db, account.client_id)
+    brand = resolve_client_brand(db, account.client_id)
     prior = snapshot_credential(account)
     password = issue_invite_credential(account, policy.password_min_entropy)
     # Revoke before publishing the reset, including the mail-delivery window.
@@ -337,8 +449,9 @@ def _issue_and_send_invite(db: Session, account: MemberAccount) -> bool:
     sent = send_member_invite(
         account,
         password,
-        _tenant_slug(db, account.client_id),
+        sign_in_url,
         _login_source(db, account.client_id),
+        brand=brand,
     )
     if sent:
         account.invite_sent_at = datetime.now(UTC)
@@ -378,11 +491,12 @@ def resend_invite(
             status.HTTP_409_CONFLICT,
             "This email address is shared by employees. Use a set-password link instead.",
         )
+    sign_in_url = _invite_sign_in_url(db, account.client_id)
     write_audit(
         db, user, "member_account.invite_resent", "member_account", account.id,
-        after={"email": account.email},
+        after={"email": account.email}, client_id=account.client_id,
     )
-    mail_sent = _issue_and_send_invite(db, account)
+    mail_sent = _issue_and_send_invite(db, account, sign_in_url)
     out = _account_out(db, account)
     out.mail_sent = mail_sent
     return out
@@ -409,27 +523,15 @@ def member_password_setup(
         raise HTTPException(status.HTTP_409_CONFLICT, "Account is disabled.")
     if not account.system_login_id:
         account.system_login_id = _unique_member_login_id(db, account.client_id)
-    token = issue_member_set_password_token(account.id, credential_version(account))
-    # Broker-initiated: the security trail records the MEMBER as subject and the
-    # staff member who asked for it in `detail`, so a reset can be traced to a
-    # person. `write_audit` below is the broker-facing log, a separate record.
-    EV.write_auth_event(
-        db, event_type=EV.EVENT_PASSWORD_RESET_REQUEST, outcome=EV.OUTCOME_SUCCESS,
-        surface="portal", subject_type=SUBJECT_MEMBER, subject_id=account.id,
-        client_id=account.client_id,
-        # The company's OWN firm, not the actor's — `_load_account` lets a
-        # `system_admin` act across firms, and an event filed under the actor's
-        # firm is invisible to the firm whose member was actually reset.
-        broker_firm_id=_broker_firm_for(db, account.client_id),
-        ip=client_ip(request), user_agent=user_agent(request),
-        subdomain=request.headers.get("host"),
-        detail={"reason": "broker_link", "actor_user_id": user.user_id},
-    )
-    write_audit(db, user, "member_account.password_setup", "member_account", account.id)
+    token = issue_member_set_password_link(account)
+    _record_broker_credential(db, request, user, account, detail={"reason": "broker_link"})
+    write_audit(db, user, "member_account.password_setup", "member_account", account.id,
+                client_id=account.client_id)
     db.commit()
     out = _account_out(db, account)
     out.set_password_token = token
     out.tenant_slug = _tenant_slug(db, account.client_id)
+    out.client_origin = _company_origin(db, account.client_id)
     return out
 
 
@@ -437,13 +539,18 @@ def member_password_setup(
     "/member-accounts/{account_id}/set-password", response_model=MemberAccountOut
 )
 def member_set_password_direct(
+    request: Request,
     account_id: str,
     body: MemberSetPasswordIn,
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> MemberAccountOut:
-    """Broker sets a member's password directly (email-less members). The
-    member changes it later from the portal if they wish."""
+    """Broker sets a member's password directly (email-less members).
+
+    The value is a handover, not the member's own password: like a mailed
+    invite it is made rotation-due whatever the company's rotation policy, so
+    the member's next sign-in goes straight to choosing their own and the
+    broker never knows a password the member is still using."""
     account = _load_account(account_id, user, db)
     if account.status == MEMBER_STATUS_DISABLED:
         raise HTTPException(status.HTTP_409_CONFLICT, "Account is disabled.")
@@ -458,26 +565,54 @@ def member_set_password_direct(
             status.HTTP_422_UNPROCESSABLE_CONTENT,
             "This password has appeared in a known data breach — choose another.",
         )
-    from datetime import UTC, datetime
-
     if not account.system_login_id:
         account.system_login_id = _unique_member_login_id(db, account.client_id)
+    now = datetime.now(UTC)
     account.password_hash = PW.hash_password(body.password)
     revoke_all_for_subject(db, SUBJECT_MEMBER, account.id)
-    account.password_updated_at = datetime.now(UTC)
-    account.must_rotate_after = next_rotation_deadline(
-        policy.password_rotation_days, account.password_updated_at
-    )
+    account.password_updated_at = now
+    # Already due (`rotation_due` is `deadline <= now`): the next sign-in
+    # returns `password_reset_required`.
+    account.must_rotate_after = now
     account.failed_attempts = 0
     account.locked_until = None
-    # A real password supersedes any mailed one-time value, so its deadline no
-    # longer applies — leaving it set would expire the password just chosen.
+    # This password supersedes any mailed one-time value, so the invite's
+    # deadline no longer applies — leaving it set would expire this handover.
     clear_invite_expiry(account)
     if account.status == MEMBER_STATUS_INVITED:
         account.status = MEMBER_STATUS_ACTIVE
-    write_audit(db, user, "member_account.password_set", "member_account", account.id)
+    _record_broker_credential(db, request, user, account, detail={"reason": "broker_set"})
+    write_audit(db, user, "member_account.password_set", "member_account", account.id,
+                client_id=account.client_id)
     db.commit()
     return _account_out(db, account)
+
+
+@router.post(
+    "/member-accounts/{account_id}/mfa/reset", status_code=status.HTTP_204_NO_CONTENT
+)
+def member_mfa_reset(
+    request: Request,
+    account_id: str,
+    user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> None:
+    """Remove a member's authenticator (a lost or replaced phone).
+
+    Their sessions end too: one may be on the lost device. They sign in again
+    with their password and, where the company requires two-factor, must enrol
+    a new authenticator before anything else.
+    """
+    account = _load_account(account_id, user, db)
+    mfa.disable(db, SUBJECT_MEMBER, account.id)
+    revoked = revoke_all_for_subject(db, SUBJECT_MEMBER, account.id)
+    _record_broker_credential(
+        db, request, user, account,
+        event_type=EV.EVENT_MFA_RESET, detail={"sessions_revoked": revoked},
+    )
+    write_audit(db, user, "mfa_reset", "member_account", account.id,
+                after={"sessions_revoked": revoked}, client_id=account.client_id)
+    db.commit()
 
 
 @router.post(
@@ -490,7 +625,8 @@ def member_regenerate_login_id(
 ) -> MemberAccountOut:
     account = _load_account(account_id, user, db)
     account.system_login_id = _unique_member_login_id(db, account.client_id)
-    write_audit(db, user, "member_account.login_id_regenerated", "member_account", account.id)
+    write_audit(db, user, "member_account.login_id_regenerated", "member_account", account.id,
+                client_id=account.client_id)
     db.commit()
     return _account_out(db, account)
 
@@ -513,6 +649,7 @@ def update_member_account(
     write_audit(
         db, user, "member_account.status_changed", "member_account", account.id,
         before={"status": before}, after={"status": body.status},
+        client_id=account.client_id,
     )
     db.commit()
     return _account_out(db, account)
@@ -526,8 +663,8 @@ def update_member_account(
 # which 32 were dropped or why.
 
 _BUCKET_PENDING = "pending"      # has an email, no invite delivered yet → target
-_BUCKET_INVITED = "invited"      # invite delivered, not signed in
-_BUCKET_SIGNED_IN = "signed_in"  # onboarded
+_BUCKET_INVITED = "invited"      # holds a credential (invite or handover), not signed in
+_BUCKET_SIGNED_IN = "signed_in"  # has signed in: using the portal
 _BUCKET_NO_EMAIL = "no_email"    # nowhere to send
 _BUCKET_DUPLICATE = "duplicate"  # its email/staff id belongs to another employee
 _BUCKET_DISABLED = "disabled"
@@ -665,14 +802,17 @@ def _bucket(entry: _RosterEntry) -> str:
     if account is not None:
         if account.status == MEMBER_STATUS_DISABLED:
             return _BUCKET_DISABLED
-        # Status flips to active on the first successful sign-in or set-password
-        # (`_issue_member_login`), so it — not `has_password` — is what marks a
-        # member as onboarded. An outstanding invite ALSO leaves a password
-        # hash on the row (the mailed one-time value), so testing that would
-        # class everyone mid-rollout as already done.
-        if account.status == MEMBER_STATUS_ACTIVE or account.last_sign_in_at:
+        # Only a sign-in means the member is using the portal. Status is not
+        # evidence: a broker's direct password set flips it to active before
+        # the member has ever signed in. Nor is `has_password`: an outstanding
+        # invite leaves the mailed one-time value's hash on the row too.
+        if account.last_sign_in_at:
             return _BUCKET_SIGNED_IN
-        if account.invite_sent_at:
+        # Not signed in yet but already handed a credential: a delivered invite,
+        # or a password the broker set directly (which activates the account).
+        # Neither is sent again — a fresh one-time password would replace the
+        # one the member was given.
+        if account.invite_sent_at or account.status == MEMBER_STATUS_ACTIVE:
             return _BUCKET_INVITED
     if entry.duplicate:
         return _BUCKET_DUPLICATE
@@ -703,7 +843,9 @@ def _deliver_invites(account_ids: list[str], client_id: str) -> None:
     was never delivered.
 
     Resolves the client's firm before rechecking roster ownership. The session
-    retains this tenant search path across the per-account commits.
+    retains this tenant search path across the per-account commits. A broker
+    that lost its web address since the run was queued gets nothing sent and
+    nothing changed: every target stays unstamped for the next run.
     """
     db = SessionLocal()
     try:
@@ -711,9 +853,18 @@ def _deliver_invites(account_ids: list[str], client_id: str) -> None:
         if client is None:
             return
         set_search_path(db, client.broker_firm_id)
-        slug = client.slug
+        try:
+            sign_in_url = portal_sign_in_url(db, client)
+        except FirmOriginUnavailable:
+            logger.error(
+                "Portal invites: none sent for client %s — its broker has no web "
+                "address yet; the %d targets stay unstamped for the next run",
+                client_id, len(account_ids),
+            )
+            return
         policy = get_auth_policy(db, client_id)
         source = policy.portal_login_source
+        brand = resolve_brand(db, client.broker_firm_id, client.id)
         sent = failed = 0
         for account_id in account_ids:
             account = db.get(MemberAccount, account_id)
@@ -730,7 +881,7 @@ def _deliver_invites(account_ids: list[str], client_id: str) -> None:
             password = issue_invite_credential(account, policy.password_min_entropy)
             revoke_all_for_subject(db, SUBJECT_MEMBER, account.id)
             db.commit()
-            if send_member_invite(account, password, slug, source):
+            if send_member_invite(account, password, sign_in_url, source, brand=brand):
                 account.invite_sent_at = datetime.now(UTC)
                 db.commit()
                 sent += 1
@@ -759,8 +910,7 @@ def portal_rollout(
     db: Session = Depends(get_db),
 ) -> PortalRolloutOut:
     """Portal-access state of the whole roster — the rollout card's data."""
-    client_id = require_client_id(user)
-    assert_policy_year_for_user(policy_year_id, user, db)
+    client_id = policy_year_company(assert_policy_year_for_user(policy_year_id, user, db), user)
 
     entries = _roster_entries(db, client_id, policy_year_id)
     counts = dict.fromkeys(
@@ -828,13 +978,10 @@ def bulk_invite(
     left untouched. Disabled accounts that have never signed in and have a
     valid unique email are included only with explicit re-enable approval.
     """
-    client_id = require_client_id(user)
-    assert_policy_year_for_user(body.policy_year_id, user, db)
-    if not mail_deliverable():
-        raise HTTPException(
-            status.HTTP_503_SERVICE_UNAVAILABLE,
-            "Email delivery is not configured. No invitations were queued or credentials changed.",
-        )
+    client_id = policy_year_company(
+        assert_policy_year_for_user(body.policy_year_id, user, db), user
+    )
+    _require_invite_delivery(db, client_id)
 
     # A run already in flight has targets it has not stamped yet; re-queueing
     # them here is how a member ends up with two emails.
@@ -858,7 +1005,8 @@ def bulk_invite(
             account.status = MEMBER_STATUS_INVITED
             account.invite_sent_at = None
             write_audit(db, user, "member_account.reenabled_for_invite", "member_account",
-                        account.id, before=before, after={"status": account.status})
+                        account.id, before=before, after={"status": account.status},
+                        client_id=account.client_id)
             reenabled += 1
             bucket = _BUCKET_PENDING
         if bucket in (_BUCKET_INVITED, _BUCKET_SIGNED_IN):
@@ -891,6 +1039,7 @@ def bulk_invite(
             "no_email": no_email,
             "duplicate": duplicate,
         },
+        client_id=client_id,
     )
     # Accounts must exist and be committed before delivery starts — the
     # background task opens its own session and looks them up by id.

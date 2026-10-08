@@ -1,4 +1,4 @@
-import { SystemAdminOnly } from "@/components/auth/SystemAdminOnly";
+import { FirmOwnerOnly } from "@/components/auth/FirmOwnerOnly";
 /** Orphaned plan overrides — overrides stranded by a re-match (the elected
  * product is no longer in the employee's cohort). They're inert (the coverage
  * resolver skips them) but surfaced here so brokers can reconcile instead of
@@ -82,7 +82,7 @@ export function OrphanOverridesPanel({
                   {o.source.replace(/_/g, " ")}
                 </span>
               </div>
-              <SystemAdminOnly><Button
+              <FirmOwnerOnly><Button
                 size="sm"
                 variant="outline"
                 className="text-error hover:text-error"
@@ -90,13 +90,13 @@ export function OrphanOverridesPanel({
                 onClick={() => setConfirmTarget(o)}
               >
                 <Trash2 className="size-3.5" /> Remove override
-              </Button></SystemAdminOnly>
+              </Button></FirmOwnerOnly>
             </li>
           ))}
         </ul>
       </CardContent>
 
-      <SystemAdminOnly><AlertDialog
+      <FirmOwnerOnly><AlertDialog
         open={!!confirmTarget}
         onOpenChange={(o) => !o && setConfirmTarget(null)}
         title="Remove this orphaned override?"
@@ -125,7 +125,7 @@ export function OrphanOverridesPanel({
             toast.error(formatError(err));
           }
         }}
-      /></SystemAdminOnly>
+      /></FirmOwnerOnly>
     </Card>
   );
 }

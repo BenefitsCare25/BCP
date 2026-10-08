@@ -31,6 +31,7 @@
     "reviewWorkerDbPoolSize": { "value": 8 },
     "reviewWorkerDbMaxOverflow": { "value": 4 },
     "corsOrigins": { "value": "https://inspro-portal.azurewebsites.net" },
+    "frontendOrigin": { "value": "https://inspro-portal.azurewebsites.net" },
     "forwardedAllowIps": { "value": "127.0.0.1,169.254.129.1" }
   }
 }

@@ -9,6 +9,7 @@ import os
 from datetime import UTC, date, datetime, timedelta
 from io import BytesIO
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 
@@ -20,7 +21,8 @@ from openpyxl import load_workbook  # noqa: E402
 from sqlalchemy import select  # noqa: E402
 
 from app.core.auth import DEMO_BROKER_FIRM_ID, CurrentUser, get_current_user  # noqa: E402
-from app.core.storage import get_storage  # noqa: E402
+from app.core.settings import clear_settings_cache  # noqa: E402
+from app.core.storage import LocalStorage, get_storage  # noqa: E402
 from app.db.base import Base  # noqa: E402
 from app.db.session import SessionLocal, engine  # noqa: E402
 from app.main import app  # noqa: E402
@@ -66,9 +68,12 @@ def _user() -> CurrentUser:
 
 
 @pytest.fixture(scope="module", autouse=True)
-def _setup_db():
+def _setup_db(tmp_path_factory):
     if TEST_DB.exists():
         TEST_DB.unlink()
+    # Retained blobs go to a temp store, never the developer's backend/var.
+    os.environ["INSPRO_STORAGE_DIR"] = str(tmp_path_factory.mktemp("report_versions_storage"))
+    clear_settings_cache()
     Base.metadata.create_all(bind=engine)
     from scripts.seed_demo import seed
     seed()
@@ -131,6 +136,8 @@ def _setup_db():
                         status="active"))
         s.commit()
     yield
+    os.environ.pop("INSPRO_STORAGE_DIR", None)
+    clear_settings_cache()
     engine.dispose()
     if TEST_DB.exists():
         TEST_DB.unlink()
@@ -582,3 +589,112 @@ def test_retention_keeps_only_the_newest_versions() -> None:
         s.rollback()
     assert len(remaining) <= 1
     assert RETENTION_KEEP == 24
+
+
+# ── Retained blobs are read and removed only under their own company ─────────
+
+
+@pytest.fixture
+def storage(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> LocalStorage:
+    """These tests plant blobs, so they get a temp store of their own."""
+    from app.api.v1 import report_versions as versions_api
+    from app.api.v1 import reports as reports_api
+    from app.services import report_versions as versions_service
+
+    local = LocalStorage(tmp_path)
+    for module in (versions_api, reports_api, versions_service):
+        monkeypatch.setattr(module, "get_storage", lambda: local)
+    return local
+
+
+def _our_key() -> str:
+    return f"{DEMO_BROKER_FIRM_ID}/{CLIENT_ID}/report_version/scope-test/{uuid4()}.xlsx"
+
+
+def _foreign_key() -> str:
+    return f"other-firm/other-client/report_version/scope-test/{uuid4()}.xlsx"
+
+
+def _retained_version(key: str) -> str:
+    """A version row of a series no other test reads, retained at ``key``."""
+    with SessionLocal() as s:
+        rv = ReportVersion(
+            client_id=CLIENT_ID, policy_year_id=PY_ID, report_type="placement_slip",
+            scope_key=f"scope-test-{uuid4()}", version_no=1, mode="latest",
+            params={"masked": True}, summary={}, file_name="placement-slip.xlsx",
+            mime_type="application/octet-stream", size_bytes=1, sha256="0" * 64,
+            storage_path=key,
+        )
+        s.add(rv)
+        s.commit()
+        return rv.id
+
+
+def test_a_missing_or_foreign_retained_file_is_not_found(
+    client: TestClient, storage: LocalStorage
+) -> None:
+    """Both used to escape as a 500: a blob that is gone, and a key outside the
+    version's own company (refused before any read)."""
+    present, missing, foreign = _our_key(), _our_key(), _foreign_key()
+    storage.save(BytesIO(b"our listing"), present)
+    storage.save(BytesIO(b"another tenant's listing"), foreign)
+    ids = [_retained_version(key) for key in (present, missing, foreign)]
+    try:
+        served, gone, refused = (
+            client.get(f"/api/v1/report-versions/{version_id}/download") for version_id in ids
+        )
+    finally:
+        with SessionLocal() as s:
+            for version_id in ids:
+                s.delete(s.get(ReportVersion, version_id))
+            s.commit()
+
+    assert served.status_code == 200 and served.content == b"our listing"
+    assert gone.status_code == 404
+    assert refused.status_code == 404
+    assert b"another tenant" not in refused.content
+
+
+def test_a_pruned_blob_outside_the_company_is_never_deleted(storage: LocalStorage) -> None:
+    from app.api.v1.reports import _drop_blobs
+
+    ours, foreign = _our_key(), _foreign_key()
+    for key in (ours, foreign):
+        storage.save(BytesIO(b"retained"), key)
+    with SessionLocal() as s:
+        _drop_blobs(s, s.get(PolicyYear, PY_ID), [foreign, ours])
+
+    assert storage.read(foreign) == b"retained"
+    with pytest.raises(FileNotFoundError):
+        storage.read(ours)
+
+
+def test_a_superseded_blob_outside_the_company_is_never_deleted(
+    client: TestClient, storage: LocalStorage
+) -> None:
+    """A latest-mode save deletes the superseded version's blob after commit —
+    only from under the version's own company."""
+    first = _create(client, "placement_slip")
+    assert first.status_code == 200, first.text
+    foreign = _foreign_key()
+    storage.save(BytesIO(b"another tenant's slip"), foreign)
+    extra_cohort = "00000000-0000-0000-0000-0000000r2025"
+    with SessionLocal() as s:
+        s.get(ReportVersion, first.json()["id"]).storage_path = foreign
+        s.add(Category(
+            id=extra_cohort, policy_year_id=PY_ID, product_id=LIF_PROD,
+            display_name="Supersede cohort", raw_description="Supersede cohort",
+            plan_assignments={"plan_code": "1", "basis": "30000"},
+            source="manual", status="confirmed",
+        ))
+        s.commit()
+    try:
+        second = _create(client, "placement_slip")
+        assert second.status_code == 200, second.text
+        assert second.json()["unchanged"] is False
+    finally:
+        with SessionLocal() as s:
+            s.delete(s.get(Category, extra_cohort))
+            s.commit()
+
+    assert storage.read(foreign) == b"another tenant's slip"

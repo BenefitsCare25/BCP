@@ -1,14 +1,17 @@
 """Durable PostgreSQL-backed claim-review worker."""
 from __future__ import annotations
 
+import itertools
 import logging
 import os
 import random
 import signal
 import socket
+import sys
 import threading
 import time
-from collections.abc import Collection
+from collections import Counter, defaultdict
+from collections.abc import Callable, Collection
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -19,12 +22,13 @@ from anthropic import (
     APITimeoutError,
     AuthenticationError,
     BadRequestError,
+    NotFoundError,
     PermissionDeniedError,
     RateLimitError,
 )
-from sqlalchemy import func, select, text
+from sqlalchemy import case, func, select, text
 from sqlalchemy.exc import OperationalError
-from sqlalchemy.orm import Session, aliased
+from sqlalchemy.orm import Session
 
 from app.db.session import SessionLocal, engine
 from app.db.tenancy import is_postgres, set_search_path
@@ -53,6 +57,9 @@ from app.services.claims_review.pipeline import (
     ReviewDeadlineExceeded,
     ReviewOwnershipLost,
     execute_leased_review,
+    review_age_exceeded,
+    review_deadline_seconds,
+    review_max_age_seconds,
 )
 from app.services.workflow_delivery import process_one_workflow_notification
 from app.workers.review_scheduler import ReviewScheduler, WorkerLimits
@@ -63,7 +70,6 @@ LEASE_SECONDS = int(os.environ.get("INSPRO_REVIEW_LEASE_SECONDS", "90"))
 HEARTBEAT_SECONDS = max(5, LEASE_SECONDS // 3)
 POLL_SECONDS = float(os.environ.get("INSPRO_REVIEW_POLL_SECONDS", "2"))
 REAPER_SECONDS = int(os.environ.get("INSPRO_REVIEW_REAPER_SECONDS", "30"))
-DEADLINE_SECONDS = int(os.environ.get("INSPRO_REVIEW_DEADLINE_SECONDS", "1200"))
 LOOP_STALE_SECONDS = max(
     30.0,
     POLL_SECONDS * 5,
@@ -76,6 +82,13 @@ _notification_heartbeat = time.monotonic()
 _worker_stopping = False
 _last_queue_warning = 0.0
 _CLAIM_CAPACITY_LOCK_ID = 724862559301834887
+# Per-firm loops start one firm further along each cycle (per task), so a firm
+# that keeps failing or runs slowly never always goes first.
+_firm_rotation: defaultdict[str, itertools.count[int]] = defaultdict(itertools.count)
+# A failing task/firm is logged at most once per interval; the metric counts all.
+_TASK_FAILURE_LOG_SECONDS = 60.0
+_last_task_failure_log: dict[tuple[str, str], float] = {}
+_task_failure_lock = threading.Lock()
 
 
 @dataclass(frozen=True)
@@ -112,7 +125,7 @@ def _aware(value: datetime) -> datetime:
 def _safe_error(exc: BaseException) -> str:
     if isinstance(exc, (AuthenticationError, PermissionDeniedError)):
         return "AI provider credentials were rejected."
-    if isinstance(exc, BadRequestError):
+    if isinstance(exc, (BadRequestError, NotFoundError)):
         return "AI provider configuration or request was rejected."
     if isinstance(exc, RateLimitError):
         return "AI provider rate limit reached; the review will retry."
@@ -153,12 +166,42 @@ def _record_queue_health(db: Session, now: datetime) -> None:
         _last_queue_warning = time.monotonic()
 
 
+def _running_counts(db: Session) -> tuple[Counter[str], Counter[str]]:
+    """Running reviews across the whole cluster, per firm and per company."""
+    by_firm: Counter[str] = Counter()
+    by_client: Counter[str] = Counter()
+    rows = db.execute(
+        select(
+            ClaimReviewJob.broker_firm_id,
+            ClaimReviewJob.client_id,
+            func.count(ClaimReviewJob.id),
+        )
+        .where(ClaimReviewJob.state == JOB_STATE_RUNNING)
+        .group_by(ClaimReviewJob.broker_firm_id, ClaimReviewJob.client_id)
+    ).all()
+    for firm_id, client_id, count in rows:
+        by_firm[firm_id] += count
+        by_client[client_id] += count
+    return by_firm, by_client
+
+
 def _claim_next(
     owner: str,
     excluded_client_ids: Collection[str] = (),
     max_per_client: int = 1,
     max_total: int = 1,
+    max_per_firm: int | None = None,
 ) -> JobLease | None:
+    """Lease the next available job, fairly across firms and then companies.
+
+    ``max_total`` and ``max_per_firm`` are CLUSTER-wide (every replica's running
+    jobs count), ``max_per_client`` caps one company, and the scheduler's
+    ``excluded_client_ids`` spread one replica's slots. Among eligible jobs the
+    firm with the fewest running reviews goes first, so one firm's backlog can
+    never starve another; the oldest available job breaks ties. Every leaser
+    reads the counts under the same advisory lock, so they cannot rise before
+    this commit; SKIP LOCKED steps over rows another transaction holds.
+    """
     now = _now()
     with SessionLocal() as db:
         _record_queue_health(db, now)
@@ -168,35 +211,32 @@ def _claim_next(
                 text("SELECT pg_advisory_xact_lock(:lock_id)"),
                 {"lock_id": _CLAIM_CAPACITY_LOCK_ID},
             )
-        running_total = db.scalar(
-            select(func.count(ClaimReviewJob.id)).where(
-                ClaimReviewJob.state == JOB_STATE_RUNNING
-            )
-        )
-        if (running_total or 0) >= max_total:
+        running_by_firm, running_by_client = _running_counts(db)
+        if sum(running_by_firm.values()) >= max_total:
             return None
-        running = aliased(ClaimReviewJob)
-        running_for_client = (
-            select(func.count(running.id))
-            .where(
-                running.client_id == ClaimReviewJob.client_id,
-                running.state == JOB_STATE_RUNNING,
-            )
-            .correlate(ClaimReviewJob)
-            .scalar_subquery()
+        blocked_clients = set(excluded_client_ids) | {
+            client_id
+            for client_id, count in running_by_client.items()
+            if count >= max_per_client
+        }
+        blocked_firms = {
+            firm_id
+            for firm_id, count in running_by_firm.items()
+            if max_per_firm is not None and count >= max_per_firm
+        }
+        stmt = select(ClaimReviewJob).where(
+            ClaimReviewJob.state.in_((JOB_STATE_QUEUED, JOB_STATE_RETRY_WAIT)),
+            ClaimReviewJob.available_at <= now,
         )
-        stmt = (
-            select(ClaimReviewJob)
-            .where(
-                ClaimReviewJob.state.in_((JOB_STATE_QUEUED, JOB_STATE_RETRY_WAIT)),
-                ClaimReviewJob.available_at <= now,
-                running_for_client < max_per_client,
-            )
-            .order_by(ClaimReviewJob.available_at, ClaimReviewJob.created_at)
-            .limit(1)
-        )
-        if excluded_client_ids:
-            stmt = stmt.where(ClaimReviewJob.client_id.notin_(excluded_client_ids))
+        if blocked_clients:
+            stmt = stmt.where(ClaimReviewJob.client_id.notin_(blocked_clients))
+        if blocked_firms:
+            stmt = stmt.where(ClaimReviewJob.broker_firm_id.notin_(blocked_firms))
+        if running_by_firm:
+            # A firm with nothing running sorts as 0, ahead of every busy firm.
+            firm_load = case(dict(running_by_firm), value=ClaimReviewJob.broker_firm_id, else_=0)
+            stmt = stmt.order_by(firm_load)
+        stmt = stmt.order_by(ClaimReviewJob.available_at, ClaimReviewJob.created_at).limit(1)
         if postgres:
             stmt = stmt.with_for_update(skip_locked=True)
         job = db.execute(stmt).scalar_one_or_none()
@@ -207,7 +247,9 @@ def _claim_next(
         job.lease_owner = owner
         job.heartbeat_at = now
         job.lease_expires_at = now + timedelta(seconds=LEASE_SECONDS)
-        job.started_at = job.started_at or now
+        # Every lease starts a fresh processing deadline: time spent queued or
+        # in retry backoff is not processing time (pipeline.review_deadline_reason).
+        job.started_at = now
         db.commit()
         review_metrics.job(JOB_STATE_RUNNING)
         return JobLease(
@@ -328,9 +370,13 @@ def _handle_failure(job_id: str, owner: str, exc: BaseException) -> None:
         job = db.get(ClaimReviewJob, job_id)
         if job is None or job.lease_owner != owner:
             return
-        age_seconds = (_aware(now) - _aware(job.created_at)).total_seconds()
-        expired_deadline = age_seconds >= DEADLINE_SECONDS
-        retry = _retryable(exc) and job.attempt < job.max_attempts and not expired_deadline
+        # Each retry gets its own processing deadline; only the age ceiling
+        # (and the attempt budget) stops retrying.
+        retry = (
+            _retryable(exc)
+            and job.attempt < job.max_attempts
+            and not review_age_exceeded(job, now)
+        )
         if isinstance(exc, ReviewOwnershipLost):
             job.state = JOB_STATE_CANCELLED
             job.finished_at = now
@@ -384,7 +430,7 @@ def reap_expired_jobs() -> int:
             stmt = stmt.with_for_update(skip_locked=True)
         jobs = db.execute(stmt).scalars().all()
         for job in jobs:
-            if job.attempt < job.max_attempts:
+            if job.attempt < job.max_attempts and not review_age_exceeded(job, now):
                 job.state = JOB_STATE_RETRY_WAIT
                 job.available_at = now
             else:
@@ -409,32 +455,99 @@ def reap_expired_jobs() -> int:
     return len(jobs)
 
 
+def _record_task_failure(task: str, firm_id: str | None = None) -> None:
+    """Count a failed worker-loop task and log it, at most once per interval
+    for each task and firm. Call from inside the ``except`` block."""
+    review_metrics.task_failure(task, broker_firm_id=firm_id)
+    key = (task, firm_id or "")
+    now = time.monotonic()
+    with _task_failure_lock:
+        last = _last_task_failure_log.get(key)
+        if last is not None and now - last < _TASK_FAILURE_LOG_SECONDS:
+            return
+        _last_task_failure_log[key] = now
+    error = sys.exc_info()[0]
+    logger.exception(
+        "Claim-review worker task failed; continuing",
+        extra={
+            "task": task,
+            "broker_firm_id": firm_id or "",
+            "error_code": error.__name__ if error else "unknown",
+        },
+    )
+
+
+def _firm_targets(rotation: int) -> list[str | None]:
+    """Every firm schema to visit, starting ``rotation`` firms along the list.
+
+    SQLite (dev/test) has the single schema, addressed as ``None``.
+    """
+    if not is_postgres(engine):
+        return [None]
+    with SessionLocal() as control_db:
+        firm_ids = list(
+            control_db.execute(select(BrokerFirm.id).order_by(BrokerFirm.id)).scalars()
+        )
+    if not firm_ids:
+        return []
+    start = rotation % len(firm_ids)
+    targets: list[str | None] = [*firm_ids[start:], *firm_ids[:start]]
+    return targets
+
+
+def _for_each_firm[ResultT](
+    task: str, work: Callable[[str | None], ResultT]
+) -> list[ResultT]:
+    """Run ``work`` once per firm schema with each firm's failure isolated.
+
+    A firm whose work raises is recorded and skipped; the firms after it still
+    run, and the starting firm rotates every cycle, so one broken firm (a
+    missing schema, a bad row) can neither stop nor permanently delay others.
+    """
+    results: list[ResultT] = []
+    for firm_id in _firm_targets(next(_firm_rotation[task])):
+        try:
+            results.append(work(firm_id))
+        except Exception:
+            _record_task_failure(task, firm_id)
+    return results
+
+
+def _firm_invariants(firm_id: str | None, active: list[ClaimReviewJob]) -> Counter[str]:
+    active_claim_ids = {job.claim_id for job in active}
+    counts: Counter[str] = Counter()
+    with SessionLocal() as db:
+        set_search_path(db, firm_id)
+        pending_ids = db.execute(
+            select(Claim.id).where(Claim.status == CLAIM_STATUS_AI_REVIEW_PENDING)
+        ).scalars().all()
+        counts["pending_without_job"] = sum(
+            claim_id not in active_claim_ids for claim_id in pending_ids
+        )
+        for job in active:
+            if firm_id is not None and job.broker_firm_id != firm_id:
+                continue
+            claim = db.get(Claim, job.claim_id)
+            review = db.get(ClaimAIReview, job.review_id)
+            if claim is None or review is None or review.superseded:
+                counts["active_missing_record"] += 1
+    return counts
+
+
 def check_invariants() -> dict[str, int]:
     """Continuously expose queue/tenant state mismatches without leaking PHI."""
     counts = {"pending_without_job": 0, "active_missing_record": 0}
     with SessionLocal() as control_db:
-        firm_ids = control_db.execute(select(BrokerFirm.id)).scalars().all()
-        active = control_db.execute(
-            select(ClaimReviewJob).where(ClaimReviewJob.state.in_(ACTIVE_JOB_STATES))
-        ).scalars().all()
-        active_by_claim = {job.claim_id: job for job in active}
-    target_firms = firm_ids if is_postgres(engine) else [None]
-    for firm_id in target_firms:
-        with SessionLocal() as db:
-            set_search_path(db, firm_id)
-            pending_ids = db.execute(
-                select(Claim.id).where(Claim.status == CLAIM_STATUS_AI_REVIEW_PENDING)
-            ).scalars().all()
-            counts["pending_without_job"] += sum(
-                claim_id not in active_by_claim for claim_id in pending_ids
-            )
-            for job in active:
-                if firm_id is not None and job.broker_firm_id != firm_id:
-                    continue
-                claim = db.get(Claim, job.claim_id)
-                review = db.get(ClaimAIReview, job.review_id)
-                if claim is None or review is None or review.superseded:
-                    counts["active_missing_record"] += 1
+        active = list(
+            control_db.execute(
+                select(ClaimReviewJob).where(ClaimReviewJob.state.in_(ACTIVE_JOB_STATES))
+            ).scalars()
+        )
+    for firm_counts in _for_each_firm(
+        "invariants", lambda firm_id: _firm_invariants(firm_id, active)
+    ):
+        for name, count in firm_counts.items():
+            counts[name] += count
     for name, count in counts.items():
         review_metrics.invariant(name, count)
         if count:
@@ -445,20 +558,27 @@ def check_invariants() -> dict[str, int]:
     return counts
 
 
+def _purge_firm_documents(firm_id: str | None) -> int:
+    with SessionLocal() as db:
+        set_search_path(db, firm_id)
+        deleted = retry_pending_document_deletes(db)
+        db.commit()
+    return deleted
+
+
 def purge_pending_document_deletes() -> int:
     """Retry deferred evidence deletion in every tenant schema."""
-    with SessionLocal() as control_db:
-        firm_ids = control_db.execute(select(BrokerFirm.id)).scalars().all()
-    target_firms = firm_ids if is_postgres(engine) else [None]
-    deleted = 0
-    for firm_id in target_firms:
-        with SessionLocal() as db:
-            set_search_path(db, firm_id)
-            deleted += retry_pending_document_deletes(db)
-            db.commit()
+    deleted = sum(_for_each_firm("document_cleanup", _purge_firm_documents))
     if deleted:
         logger.info("Pending document blobs deleted", extra={"count": deleted})
     return deleted
+
+
+def _deliver_notifications() -> bool:
+    """One delivery pass over every firm; a failing firm is skipped, not fatal."""
+    claims = _for_each_firm("claim_notifications", process_one_claim_notification)
+    workflow = _for_each_firm("workflow_notifications", process_one_workflow_notification)
+    return any(claims) or any(workflow)
 
 
 def _notification_loop(stopping: threading.Event) -> None:
@@ -466,16 +586,11 @@ def _notification_loop(stopping: threading.Event) -> None:
     global _notification_heartbeat
     while not stopping.is_set():
         _notification_heartbeat = time.monotonic()
-        delivered = False
         try:
-            with SessionLocal() as control_db:
-                firm_ids = control_db.execute(select(BrokerFirm.id)).scalars().all()
-            target_firms = firm_ids if is_postgres(engine) else [None]
-            for firm_id in target_firms:
-                delivered = process_one_claim_notification(firm_id) or delivered
-                delivered = process_one_workflow_notification(firm_id) or delivered
+            delivered = _deliver_notifications()
         except Exception:
-            logger.exception("Claim notification loop failed")
+            # Only listing the firms can land here (control database down).
+            _record_task_failure("notifications")
             stopping.wait(5)
             continue
         stopping.wait(0.5 if delivered else 2)
@@ -559,6 +674,25 @@ def process_one_job(owner: str) -> bool:
     return True
 
 
+def _run_task(task: str, run: Callable[[], object]) -> None:
+    """One maintenance pass; a failure is recorded and never stops leasing."""
+    try:
+        run()
+    except Exception:
+        _record_task_failure(task)
+
+
+def _fill(scheduler: ReviewScheduler[JobLease]) -> int:
+    """Lease into free slots; a failed lease attempt never stops the loop."""
+    try:
+        return scheduler.fill()
+    except Exception:
+        # A transient database fault must not take down in-flight reviews;
+        # the next poll tries again (and /readyz reports the database).
+        _record_task_failure("lease")
+        return 0
+
+
 def main() -> None:
     global _loop_heartbeat, _worker_stopping
     logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"))
@@ -570,10 +704,14 @@ def main() -> None:
         retry_failed_parse_reviews,
     )
 
+    # Read every review setting before doing any work, so a bad value stops the
+    # worker at start-up rather than failing each review at its first checkpoint.
+    limits = WorkerLimits.from_env()
+    deadline_seconds = review_deadline_seconds()
+    max_age_seconds = review_max_age_seconds()
     recovered_parse_reviews = retry_failed_parse_reviews()
     recovered_amendments = recover_unreviewed_amendments()
     owner = f"{socket.gethostname()}:{os.getpid()}"
-    limits = WorkerLimits.from_env()
     scheduler = ReviewScheduler(
         owner=owner,
         limits=limits,
@@ -600,6 +738,10 @@ def main() -> None:
             "lease_owner": owner,
             "concurrency": limits.concurrency,
             "max_concurrent_per_client": limits.max_concurrent_per_client,
+            "max_total_running": limits.total_running_cap,
+            "max_per_firm": limits.max_per_firm or 0,
+            "deadline_seconds": deadline_seconds,
+            "max_age_seconds": max_age_seconds,
             "recovered_parse_reviews": recovered_parse_reviews,
             "recovered_amendments": recovered_amendments,
         },
@@ -608,15 +750,15 @@ def main() -> None:
         while not stopping.is_set():
             _loop_heartbeat = time.monotonic()
             if time.monotonic() - last_reap >= REAPER_SECONDS:
-                reap_expired_jobs()
+                _run_task("reaper", reap_expired_jobs)
                 last_reap = time.monotonic()
             if time.monotonic() - last_invariant_check >= 60:
-                check_invariants()
+                _run_task("invariants", check_invariants)
                 last_invariant_check = time.monotonic()
             if time.monotonic() - last_document_cleanup >= 60:
-                purge_pending_document_deletes()
+                _run_task("document_cleanup", purge_pending_document_deletes)
                 last_document_cleanup = time.monotonic()
-            started = scheduler.fill()
+            started = _fill(scheduler)
             review_metrics.active_jobs(scheduler.active_count, scheduler.capacity)
             if started == 0:
                 wait_seconds = min(POLL_SECONDS, 0.5) if scheduler.active_count else POLL_SECONDS

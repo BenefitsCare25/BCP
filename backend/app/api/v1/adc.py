@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
 from app.core.auth import CurrentUser, get_current_user
-from app.core.deps import assert_policy_year_for_user, require_client_id
+from app.core.deps import assert_policy_year_for_user, policy_year_company
 from app.core.rate_limit import limiter
 from app.core.uploads import WORKBOOK_SUFFIXES, saved_upload
 from app.db.session import get_db
@@ -83,8 +83,7 @@ def get_roster_readiness(
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> RosterReadiness:
-    client_id = require_client_id(user)
-    assert_policy_year_for_user(policy_year_id, user, db)
+    client_id = policy_year_company(assert_policy_year_for_user(policy_year_id, user, db), user)
     return roster_readiness(
         db, client_id=client_id, policy_year_id=policy_year_id
     )
@@ -101,8 +100,7 @@ async def preview_listing_upload(
     db: Session = Depends(get_db),
 ) -> AdcPreview:
     """Diff an uploaded member listing against the roster. No mutation."""
-    client_id = require_client_id(user)
-    assert_policy_year_for_user(policy_year_id, user, db)
+    client_id = policy_year_company(assert_policy_year_for_user(policy_year_id, user, db), user)
     async with saved_upload(file, WORKBOOK_SUFFIXES) as tmp_path:
         # Off the event loop — see `apply_listing_upload` below.
         try:
@@ -138,8 +136,7 @@ async def apply_listing_upload(
     carrying a past leaving date, and — only with ``terminate_missing`` —
     those absent from the file. Then re-match + re-assign flex. Per-row audited.
     """
-    client_id = require_client_id(user)
-    assert_policy_year_for_user(policy_year_id, user, db)
+    client_id = policy_year_company(assert_policy_year_for_user(policy_year_id, user, db), user)
     async with saved_upload(file, WORKBOOK_SUFFIXES) as tmp_path:
         try:
             # A whole-roster apply is minutes of BLOCKING work (per-row inserts

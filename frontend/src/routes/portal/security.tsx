@@ -35,8 +35,10 @@ import { Strike } from "@/components/portal/leaf/Strike";
 import { Action, actionClass } from "@/components/portal/leaf/Action";
 import { LeafSkeleton } from "@/components/portal/leaf/LeafSkeleton";
 import { PortalErrorState } from "@/components/portal/PortalErrorState";
-import { errorStatus, formatError } from "@/lib/errors";
+import { errorCode, errorStatus, formatError } from "@/lib/errors";
 import { cn } from "@/lib/cn";
+import { PASSWORD_MAX_LENGTH } from "@/lib/loginValidation";
+import { markSignedOut } from "@/lib/surfaceSession";
 import { useDocumentTitle } from "@/lib/useDocumentTitle";
 import { usePortalSession } from "@/stores/portalSession";
 
@@ -96,18 +98,87 @@ function RecoveryCodes({
   );
 }
 
+/** Asked only when the server wants it (`reauth_required`): a sign-in that is
+ * no longer recent must prove the password before an authenticator is bound.
+ * The mandatory setup straight after sign-in never reaches this. */
+function ReauthForm({
+  pending,
+  error,
+  onSubmit,
+  onCancel,
+}: {
+  pending: boolean;
+  error: string | null;
+  onSubmit: (password: string) => void;
+  onCancel: () => void;
+}) {
+  const [password, setPassword] = useState("");
+  return (
+    <form
+      className="space-y-3"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (password && !pending) onSubmit(password);
+      }}
+    >
+      <Field
+        label="Confirm your password to set up two-step sign-in"
+        required
+        error={error}
+      >
+        {(props) => (
+          <input
+            {...props}
+            type="password"
+            autoComplete="current-password"
+            maxLength={PASSWORD_MAX_LENGTH}
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            autoFocus
+            className={cn(leafControl, "sm:max-w-72")}
+          />
+        )}
+      </Field>
+      <div className="flex flex-col gap-2 sm:flex-row">
+        <button type="submit" disabled={pending || !password} className={primaryAction}>
+          {pending && <Loader2 className="size-4 animate-spin" aria-hidden />}
+          Continue
+        </button>
+        <button type="button" onClick={onCancel} disabled={pending} className={action}>
+          Cancel
+        </button>
+      </div>
+    </form>
+  );
+}
+
 function EnrollFlow({ onEnrolled }: { onEnrolled: (codes: string[]) => void }) {
   const start = useMemberMfaEnrollStart();
   const confirm = useMemberMfaEnrollConfirm();
   const [setup, setSetup] = useState<MemberMfaStart | null>(null);
   const [code, setCode] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [reauth, setReauth] = useState(false);
 
-  const begin = () => {
+  const begin = (currentPassword?: string) => {
     setError(null);
-    start.mutate(undefined, {
-      onSuccess: setSetup,
-      onError: (e) => setError(formatError(e)),
+    start.mutate(currentPassword, {
+      onSuccess: (data) => {
+        setReauth(false);
+        setSetup(data);
+      },
+      onError: (e) => {
+        const reauthRequired = errorCode(e) === "reauth_required";
+        if (reauthRequired && !currentPassword) {
+          setReauth(true);
+          return;
+        }
+        // With a password: a 401, or being asked again, means it was wrong.
+        // Anything else (lockout, outage) keeps the server's own words.
+        const wrongPassword =
+          !!currentPassword && (reauthRequired || errorStatus(e) === 401);
+        setError(wrongPassword ? "That password wasn't right." : formatError(e));
+      },
     });
   };
 
@@ -127,6 +198,20 @@ function EnrollFlow({ onEnrolled }: { onEnrolled: (codes: string[]) => void }) {
     });
   };
 
+  if (reauth && !setup) {
+    return (
+      <ReauthForm
+        pending={start.isPending}
+        error={error}
+        onSubmit={(password) => begin(password)}
+        onCancel={() => {
+          setReauth(false);
+          setError(null);
+        }}
+      />
+    );
+  }
+
   if (!setup) {
     return (
       <div className="space-y-3">
@@ -137,7 +222,7 @@ function EnrollFlow({ onEnrolled }: { onEnrolled: (codes: string[]) => void }) {
         {error && <FormAlert>{error}</FormAlert>}
         <button
           type="button"
-          onClick={begin}
+          onClick={() => begin()}
           disabled={start.isPending}
           className={primaryAction}
         >
@@ -310,6 +395,9 @@ function ChangePasswordPanel() {
           setCurrent("");
           setNext("");
           setConfirm("");
+          // Every session of this account just ended. Sign-in must wait for the
+          // new password, not restore whoever else holds this company's cookie.
+          markSignedOut("portal");
           window.location.assign(`/portal/${encodeURIComponent(company)}/sign-in`);
         },
         onError: (e) => setError(credentialError(e, "Your current password is incorrect.")),

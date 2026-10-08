@@ -28,7 +28,8 @@ import sys
 
 from sqlalchemy import select
 
-from app.db.session import SessionLocal
+from app.core.settings import assert_local_dev_database
+from app.db.session import DATABASE_URL, SessionLocal
 from app.models import Client, Employee, MemberAccount, PolicyYear
 from app.models.member_account import MEMBER_STATUS_ACTIVE
 from app.models.policy_year import PolicyYearStatus
@@ -47,6 +48,7 @@ def _valid_email(raw: str | None) -> str | None:
 
 
 def main(count: int) -> int:
+    assert_local_dev_database(DATABASE_URL, tool="scripts/seed_cdl_portal_accounts.py")
     db = SessionLocal()
     try:
         client = db.execute(

@@ -31,6 +31,7 @@ from app.services.roster_attributes import (
     iso_date,
     mask_nric,
 )
+from app.services.xlsx_safe import append_safe
 
 
 def _active_employees(db: Session, policy_year_id: str) -> list[Employee]:
@@ -89,7 +90,7 @@ def build_employee_report_workbook(db: Session, policy_year_id: str) -> Workbook
         "Flex Tier",
         "Flex Wallet",
     ]
-    ws.append(header)
+    append_safe(ws, header)
 
     for emp in employees:
         attrs = emp.attribute_values or {}
@@ -116,7 +117,7 @@ def build_employee_report_workbook(db: Session, policy_year_id: str) -> Workbook
             codes = by_code.get(code)
             row.append(", ".join(dict.fromkeys(codes)) if codes else "")
         row.extend([flex_tier, flex_wallet])
-        ws.append(row)
+        append_safe(ws, row)
 
     _autosize(ws)
     return wb
@@ -155,7 +156,7 @@ def build_dependant_report_workbook(db: Session, policy_year_id: str) -> Workboo
     wb = Workbook()
     ws = wb.active
     ws.title = "Dependant coverage"
-    ws.append([
+    append_safe(ws, [
         "Employee Staff ID",
         "Employee Name",
         "Dependant Name",
@@ -173,7 +174,7 @@ def build_dependant_report_workbook(db: Session, policy_year_id: str) -> Workboo
         emp = employees.get(dep.employee_id) if dep.employee_id else None
         flex_tier, flex_wallet = _flex_summary(emp) if emp else ("", "")
         products = ", ".join(sorted(set(covered_by.get(dep.id, []))))
-        ws.append([
+        append_safe(ws, [
             emp.staff_id if emp else "",
             (emp.employee_name if emp else "") or "",
             first_value(attrs, ("dependant_name", "name", "full_name")) or "",

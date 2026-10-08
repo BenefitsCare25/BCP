@@ -9,6 +9,7 @@
  */
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { api } from "@/api/client";
+import { keepPreviousInScope } from "@/lib/scopedPlaceholder";
 import { useSession } from "@/stores/session";
 import type { EmployeeList } from "@/types";
 
@@ -158,8 +159,9 @@ export function useMemberQueryList(
       ),
     enabled: !!policyYearId,
     // Keep the previous page on screen while the next one loads, so changing a
-    // filter doesn't blank the table under the broker.
-    placeholderData: (prev) => prev,
+    // filter doesn't blank the table under the broker — but never another
+    // company's or benefit year's rows.
+    ...keepPreviousInScope(clientId, policyYearId),
   });
 }
 
@@ -193,8 +195,8 @@ export function useMemberQueryCount(
     enabled,
     // The headcount is a readout, not state to act on — keep the previous number
     // on screen while the next one loads instead of flashing a skeleton on every
-    // keystroke.
-    placeholderData: (prev) => prev,
+    // keystroke. Within one company and benefit year only.
+    ...keepPreviousInScope(clientId, policyYearId),
   });
 }
 

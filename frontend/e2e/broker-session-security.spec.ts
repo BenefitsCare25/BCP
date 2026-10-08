@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type BrowserContext, type Page } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 
 const session = {
@@ -8,27 +8,27 @@ const session = {
   mfa_required: true,
 };
 
+const TENANT = "11111111-1111-4111-8111-111111111111";
+const CLIENT = "22222222-2222-4222-8222-222222222222";
+const AUTHORITY = `https://login.microsoftonline.com/${TENANT}`;
+
+/** `/public/site` offers Microsoft 365 for this host, so the real sign-in code
+ *  is configured at runtime exactly as it is in production. */
+async function offerMicrosoft(target: Page | BrowserContext) {
+  await target.route("**/api/v1/public/site", route => route.fulfill({ json: {
+    firm: { name: "Review Brokerage", slug: "review" },
+    staff_sign_in: {
+      entra: {
+        tenant_id: TENANT, client_id: CLIENT, authority: AUTHORITY,
+        scopes: ["openid", "profile", "email", `api://${CLIENT}/access_as_user`],
+      },
+      local: false,
+    },
+  } }));
+}
+
 async function broker(page: Page, enrolled = false, required = true) {
-  await page.route("**/src/auth/msal.ts*", route => route.fulfill({
-    contentType: "application/javascript",
-    body: `
-      import { brokerAccount, useBrokerSession } from '/src/stores/brokerSession.ts';
-      import { brokerAccessToken, brokerAuthRequest, refreshBrokerSession } from '/src/auth/brokerSession.ts';
-      export const ENTRA_ENABLED = true;
-      export const getMsal = () => null;
-      export const getActiveAccount = brokerAccount;
-      export const acquireAccessToken = brokerAccessToken;
-      export const initializeMsal = async () => { await refreshBrokerSession(); return null; };
-      export const clearLocalSession = async () => useBrokerSession.getState().set(null);
-      export const signIn = async () => {};
-      export const signOut = async () => {
-        const token = useBrokerSession.getState().session?.access_token;
-        await brokerAuthRequest('/logout', {}, token);
-        useBrokerSession.getState().set(null);
-        window.location.assign('/sign-in');
-      };
-    `,
-  }));
+  await offerMicrosoft(page);
   let current = { ...session, mfa_required: required };
   let ended = false;
   await page.route("**/api/v1/broker/auth/**", async route => {
@@ -99,7 +99,7 @@ for (const operation of ["start", "confirm", "verify", "status-retry", "server-e
     if (operation !== "server-expiry") await expireLocalAccess(page);
     await page.getByRole("button", { name: operation === "status-retry" ? "Try again"
       : operation === "confirm" || operation === "verify" ? "Verify and continue" : "Set up authenticator", exact: true }).click();
-    await expect(page).toHaveURL(/\/sign-in$/);
+    await expect(page).toHaveURL(/\/sign-in(?:\?signed_out=1)?$/);
     await expect(page.getByRole("button", { name: "Sign in with Microsoft" })).toBeVisible();
     if (operation === "status-retry") expect(statusCalls).toBe(1);
   });
@@ -117,15 +117,7 @@ test(`broker real MSAL: explicit logout stays signed out while another tab retai
     }
   });
   const other = await context.newPage();
-  for (const tab of [page, other]) {
-    await tab.route("**/src/auth/msal.ts*", async route => {
-      const response = await route.fetch();
-      const source = (await response.text())
-        .replace(/const tenantId = .*?;/, "const tenantId = '11111111-1111-4111-8111-111111111111';")
-        .replace(/const clientId = .*?;/, "const clientId = '22222222-2222-4222-8222-222222222222';");
-      await route.fulfill({ response, body: source });
-    });
-  }
+  await offerMicrosoft(context);
   let loggedOut = false;
   let refreshesAfterLogout = 0;
   await context.route("**/api/v1/broker/auth/**", async route => {
@@ -196,17 +188,39 @@ test("broker session: restored enrolled account verifies and logout uses this ta
   const logout = page.waitForRequest(request => request.url().endsWith("/broker/auth/logout"));
   await page.getByRole("menuitem", { name: "Sign out" }).click();
   expect((await logout).headers().authorization).toBe("Bearer broker-memory-only-token");
-  await expect(page).toHaveURL(/\/sign-in$/);
+  await expect(page).toHaveURL(/\/sign-in(?:\?signed_out=1)?$/);
 });
 
 test("broker MSAL configuration uses supported redirect storage", async ({ page }) => {
-  await page.goto("/sign-in");
-  const config = await page.evaluate(async () => {
-    // Inspect the real application module, independently of the mocked MFA flows.
-    const module = await import(/* @vite-ignore */ "/src/auth/msal.ts");
-    return module.msalConfig.cache.cacheLocation;
+  await offerMicrosoft(page);
+  await page.route("**/api/v1/broker/auth/refresh", route => route.fulfill({ status: 401, json: { detail: "No session" } }));
+  let authorizeCalls = 0;
+  await page.route("https://login.microsoftonline.com/**", async route => {
+    const url = new URL(route.request().url());
+    if (url.pathname.endsWith("/authorize")) { authorizeCalls++; await route.fulfill({ status: 204 }); return; } // Stay on the page, as a redirect not yet arrived.
+    if (url.pathname.includes(".well-known")) {
+      await route.fulfill({ json: {
+        issuer: AUTHORITY + "/v2.0", authorization_endpoint: AUTHORITY + "/oauth2/v2.0/authorize",
+        token_endpoint: AUTHORITY + "/oauth2/v2.0/token", jwks_uri: AUTHORITY + "/discovery/v2.0/keys",
+      } });
+    } else {
+      await route.fulfill({ json: { tenant_discovery_endpoint: AUTHORITY + "/v2.0/.well-known/openid-configuration", metadata: [{
+        preferred_network: "login.microsoftonline.com", preferred_cache: "login.windows.net",
+        aliases: ["login.microsoftonline.com", "login.windows.net"],
+      }] } });
+    }
   });
-  expect(config).toBe("sessionStorage");
+  await page.goto("/sign-in");
+  await page.getByRole("button", { name: "Sign in with Microsoft" }).click();
+  await expect.poll(() => authorizeCalls).toBe(1);
+  // Judge the real configuration by where MSAL keeps its redirect state:
+  // tab-scoped sessionStorage, never the persistent localStorage.
+  const stored = await page.evaluate(() => ({
+    session: Object.keys(sessionStorage).filter(key => /msal/i.test(key)),
+    local: Object.keys(localStorage).filter(key => /msal/i.test(key)),
+  }));
+  expect(stored.session.length).toBeGreaterThan(0);
+  expect(stored.local).toEqual([]);
 });
 
 test("broker cookie writers use the same browser lock", async ({ page }) => {
@@ -235,22 +249,15 @@ test("broker cookie writers use the same browser lock", async ({ page }) => {
 for (const outcome of ["allowed", "refused"] as const) {
 test(`broker real MSAL: PKCE ${outcome} callback clears tokens and permits account switching`, async ({ page, baseURL }) => {
   await page.addInitScript(() => sessionStorage.setItem("inspro-broker-signed-out", "1"));
-  const tenant = "11111111-1111-4111-8111-111111111111";
-  const client = "22222222-2222-4222-8222-222222222222";
-  const authority = `https://login.microsoftonline.com/${tenant}`;
+  const tenant = TENANT;
+  const client = CLIENT;
+  const authority = AUTHORITY;
   let nonce = "";
   let exchanged = false;
   let tokenCalls = 0;
   let authorizeCalls = 0;
   let exchangeCalls = 0;
-  await page.route("**/src/auth/msal.ts*", async route => {
-    const response = await route.fetch();
-    const source = (await response.text())
-      .replace(/const tenantId = .*?;/, `const tenantId = '${tenant}';`)
-      .replace(/const clientId = .*?;/, `const clientId = '${client}';`)
-      .replace(/const audience = .*?;/, `const audience = 'api://${client}';`);
-    await route.fulfill({ response, body: source });
-  });
+  await offerMicrosoft(page);
   await page.route("https://login.microsoftonline.com/**", async route => {
     const url = new URL(route.request().url());
     if (url.pathname.includes(".well-known")) {

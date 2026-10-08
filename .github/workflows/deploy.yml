@@ -10,8 +10,10 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# Read-only by default. Only the jobs that sign in to Azure (`build`,
+# `deploy-prod`) add `id-token: write`, so no other job — including the ones
+# running third-party actions — can mint an Azure OIDC token.
 permissions:
-  id-token: write
   contents: read
 
 env:
@@ -22,6 +24,10 @@ env:
   PNPM_VERSION: "9"
   PROD_RG: rg-inspro-prod
   PROD_APP: inspro-portal
+  # Public base URL for app smoke checks. Set the repository variable to the
+  # platform host before turning on the Front Door origin lock, which makes
+  # the raw azurewebsites.net hostname answer 403.
+  PROD_APP_URL: ${{ vars.INSPRO_PROD_APP_URL || 'https://inspro-portal.azurewebsites.net' }}
   PROD_WORKER: inspro-portal-review-worker
   PROD_PG: inspro-prod-pg-recovery-20260825
   PROD_KV: inspro-prod-kv
@@ -236,6 +242,26 @@ jobs:
           az bicep build --file infra/bicep/migration-job.bicep --stdout > /dev/null
           bash -n infra/scripts/run-private-migrations.sh
 
+  # ── Release source guard ───────────────────────────────────────────────────
+  # A manual dispatch can target any branch or tag, and `build` + `deploy-prod`
+  # would then push that unreviewed ref's image and infrastructure to
+  # production. Only `main` is release source. Fail the run rather than skip the
+  # release jobs, so a dispatch from the wrong ref cannot pass for a green
+  # release. The CI jobs above still run on any ref.
+  release-ref:
+    name: Release ref guard
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require main
+        env:
+          RELEASE_REF: ${{ github.ref }}
+        run: |
+          if [ "$RELEASE_REF" != "refs/heads/main" ]; then
+            echo "::error::Only refs/heads/main builds or deploys production; this run is for $RELEASE_REF."
+            exit 1
+          fi
+
   # ── Build + push the prod container ────────────────────────────────────────
   # The SPA is baked into the image (single-host deployment — see
   # backend/app/core/spa.py) and Vite inlines env at build time, so the Entra
@@ -246,9 +272,13 @@ jobs:
     # ships it, and that job gates on tests and static checks — so building in parallel
     # takes ~90s off every release in exchange for occasionally building an
     # image for a commit that then fails its tests, which costs a few cheap ACR
-    # minutes and is never deployed.
+    # minutes and is never deployed. It does wait for the seconds-long ref guard.
+    needs: release-ref
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@v4
 
@@ -297,17 +327,21 @@ jobs:
   # ── Production ─────────────────────────────────────────────────────────────
   deploy-prod:
     name: Deploy to prod
-    # Gates on tests, strict typing, infrastructure validation and the image
-    # build before a release reaches members (there is no staging).
-    needs: [test, static-checks, build]
+    # Gates on the release ref, tests, strict typing, infrastructure validation
+    # and the image build before a release reaches members (there is no staging).
+    needs: [release-ref, test, static-checks, build]
     if: >-
       always() &&
       (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
+      needs.release-ref.result == 'success' &&
       needs.test.result == 'success' &&
       (needs.static-checks.result == 'success' || needs.static-checks.result == 'skipped') &&
       needs.build.result == 'success'
     runs-on: ubuntu-latest
     environment: prod
+    permissions:
+      contents: read
+      id-token: write
     # Serialise deploys. Two pushes in quick succession would otherwise run two
     # `alembic upgrade head` processes against the SAME production database at
     # once, and would race on the single private Container Apps migration job.
@@ -349,7 +383,7 @@ jobs:
               # The private migration stack is provisioned independently. Workflow
               # changes still run every CI gate, but do not restart the live stack.
               echo "$FILES" | grep '^infra/' | \
-                grep -vE '^infra/(bicep/migration-job\.(bicep|json)|scripts/run-private-migrations\.sh)$' \
+                grep -vE '^infra/(bicep/migration-job\.(bicep|json)|scripts/(run-private-migrations\.sh|onboard_domain\.py))$' \
                 | grep -q . && INFRA=true || INFRA=false
             fi
           fi
@@ -434,7 +468,7 @@ jobs:
             if git fetch --no-tags --depth=1 origin "$BASE_SHA" >/dev/null 2>&1 && \
                FILES=$(git diff --name-only "$BASE_SHA" "${{ github.sha }}"); then
               echo "$FILES" | grep '^infra/' | \
-                grep -vE '^infra/(bicep/migration-job\.(bicep|json)|scripts/run-private-migrations\.sh)$' \
+                grep -vE '^infra/(bicep/migration-job\.(bicep|json)|scripts/(run-private-migrations\.sh|onboard_domain\.py))$' \
                 | grep -q . && INFRA=true || true
             else
               # A compare failure must not hide infrastructure work.
@@ -460,7 +494,7 @@ jobs:
                git fetch --no-tags --depth=1 origin "$BASE_SHA" >/dev/null 2>&1 && \
                FILES=$(git diff --name-only "$BASE_SHA" "${{ github.sha }}"); then
             MIGRATIONS=false
-            echo "$FILES" | grep -qE '^backend/(alembic(/|\.ini$)|app/models/|app/db/(tenancy|migration_helpers)\.py$|scripts/(provision_tenants|run_private_migrations)\.py$|app/services/claims_review/recovery\.py$)' \
+            echo "$FILES" | grep -qE '^backend/(alembic(/|\.ini$)|app/models/|app/db/(tenancy|migration_helpers|roles|schema_drift)\.py$|scripts/(provision_tenants|run_private_migrations|check_schema_drift)\.py$|app/services/claims_review/recovery\.py$)' \
               && MIGRATIONS=true || true
           fi
           echo "migrations=$MIGRATIONS" >> "$GITHUB_OUTPUT"
@@ -499,12 +533,16 @@ jobs:
               "smtpUser=$SMTP_USER"
               "smtpFrom=$SMTP_FROM"
           )
+          # `--output none`: this repository's Actions logs are public, and the
+          # result JSON echoes every parameter value and template output. Errors
+          # and warnings go to stderr, so they still reach the log and the
+          # diagnostics artifact below.
           az deployment group validate \
             --name "${DEPLOYMENT_NAME}-validate" \
-            "${BICEP_ARGS[@]}" 2>&1 | tee /tmp/bicep-validate.log
+            "${BICEP_ARGS[@]}" --output none 2>&1 | tee /tmp/bicep-validate.log
           az deployment group create \
             --name "$DEPLOYMENT_NAME" \
-            "${BICEP_ARGS[@]}" 2>&1 | tee /tmp/bicep-create.log
+            "${BICEP_ARGS[@]}" --output none 2>&1 | tee /tmp/bicep-create.log
 
       - name: Preserve Bicep failure diagnostics
         if: failure() && steps.infra_pending.outputs.infra == 'true'
@@ -581,12 +619,16 @@ jobs:
           sleep 45
           curl -fsS --connect-timeout 5 --max-time 10 \
             --retry 40 --retry-delay 5 --retry-all-errors \
-            "https://${{ env.PROD_APP }}.azurewebsites.net/health" \
+            "${{ env.PROD_APP_URL }}/health" \
             || echo "::warning::Site not healthy after the Bicep restart; continuing — Smoke-test prod is the gate."
 
       # Execute the tested release image inside the private production network.
       # No database credentials or temporary PostgreSQL firewall rules on GitHub.
-      - name: Run private database migrations
+      # The job runs `alembic upgrade head`, `scripts.provision_tenants`, then
+      # `scripts.check_schema_drift` (backend/scripts/run_private_migrations.py);
+      # drift between the models and `public` or any firm schema fails the job,
+      # and this step with it, before the new image ships.
+      - name: Run private database migrations and drift check
         if: steps.pending.outputs.migrations == 'true'
         run: |
           ACCESS=$(az postgres flexible-server show -g "${{ env.PROD_RG }}" \
@@ -639,7 +681,7 @@ jobs:
           # rollout even though the previous container was still healthy.
           sleep 15
           wait_for_version portal \
-            "https://${{ env.PROD_APP }}.azurewebsites.net/health" &
+            "${{ env.PROD_APP_URL }}/health" &
           PORTAL_PID=$!
           wait_for_version worker \
             "https://${{ env.PROD_WORKER }}.azurewebsites.net/readyz" &
@@ -655,10 +697,10 @@ jobs:
           # the gate that catches a broken private DNS link.
           curl -fsS --connect-timeout 5 --max-time 15 \
             --retry 20 --retry-delay 5 --retry-all-errors \
-            "https://${{ env.PROD_APP }}.azurewebsites.net/health"
+            "${{ env.PROD_APP_URL }}/health"
           curl -fsS --connect-timeout 5 --max-time 15 \
             --retry 20 --retry-delay 5 --retry-all-errors \
-            "https://${{ env.PROD_APP }}.azurewebsites.net/readiness"
+            "${{ env.PROD_APP_URL }}/readiness"
           curl -fsS --connect-timeout 5 --max-time 15 \
             --retry 20 --retry-delay 5 --retry-all-errors \
             "https://${{ env.PROD_WORKER }}.azurewebsites.net/readyz"
@@ -668,8 +710,8 @@ jobs:
           # platform health endpoint green.
           sleep 30
           curl -fsS --connect-timeout 5 --max-time 15 \
-            "https://${{ env.PROD_APP }}.azurewebsites.net/health"
+            "${{ env.PROD_APP_URL }}/health"
           curl -fsS --connect-timeout 5 --max-time 15 \
-            "https://${{ env.PROD_APP }}.azurewebsites.net/readiness"
+            "${{ env.PROD_APP_URL }}/readiness"
           curl -fsS --connect-timeout 5 --max-time 15 \
             "https://${{ env.PROD_WORKER }}.azurewebsites.net/readyz"

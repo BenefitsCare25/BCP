@@ -1,4 +1,4 @@
-import { SystemAdminOnly } from "@/components/auth/SystemAdminOnly";
+import { FirmOwnerOnly } from "@/components/auth/FirmOwnerOnly";
 /** A drafted period: its rules, whether it can open, and the Open action.
  *
  * Readiness is shown up front (it used to appear only after Open failed), and
@@ -119,15 +119,15 @@ function DeleteDraft({ window: w }: { window: EnrollmentWindow }) {
   const [confirming, setConfirming] = useState(false);
   return (
     <>
-      <SystemAdminOnly><Button
+      <FirmOwnerOnly><Button
         variant="ghost"
         size="sm"
         aria-label={`Delete ${w.name}`}
         onClick={() => setConfirming(true)}
       >
         <Trash2 className="size-3.5" aria-hidden />
-      </Button></SystemAdminOnly>
-      <SystemAdminOnly><AlertDialog
+      </Button></FirmOwnerOnly>
+      <FirmOwnerOnly><AlertDialog
         open={confirming}
         onOpenChange={setConfirming}
         title={`Delete ${w.name}?`}
@@ -142,7 +142,7 @@ function DeleteDraft({ window: w }: { window: EnrollmentWindow }) {
             onError: (e) => toast.error(formatError(e)),
           })
         }
-      /></SystemAdminOnly>
+      /></FirmOwnerOnly>
     </>
   );
 }

@@ -21,6 +21,7 @@ import { familiarName, firstMemberId } from "../memberNames";
 import { BenefitSheet } from "./BenefitSheet";
 import { SkyStage, skyPeriod } from "./SkyStage";
 import { TemporaryCard } from "./TemporaryCard";
+import { useBrandOwner } from "@/components/brand/BrandProvider";
 
 function greeting(): string {
   const hour = new Date().getHours();
@@ -89,6 +90,7 @@ function NeedsYou({ company }: { company: string }) {
 }
 
 export function MemberHome() {
+  const owner = useBrandOwner();
   const company = useCompany();
   const navigate = useNavigate();
   const member = usePortalSession((state) => state.member);
@@ -288,7 +290,7 @@ export function MemberHome() {
         </nav>
       </div>
 
-      <footer className="clay-footer">© {new Date().getFullYear()} Inspro Insurance Brokers</footer>
+      <footer className="clay-footer">© {new Date().getFullYear()} {owner}</footer>
     </div>
   );
 }

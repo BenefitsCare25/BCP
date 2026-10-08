@@ -14,7 +14,9 @@ This module is deliberately split into two layers:
   never rejects, never hits the DB (so `/health` and the broker API on
   `localhost` are untouched).
 - `resolve_tenant_context()` — does the DB lookup, only for routes that ask for
-  it. A subdomain naming an unknown or disabled tenant 404s; no subdomain at all
+  it, within the broker firm the request's host names (`tenant_resolution`):
+  company aliases are unique per firm, not globally. A subdomain naming an
+  unknown or disabled tenant 404s; no subdomain at all
   (dev, direct API on localhost) yields `None`, so existing flows that resolve
   the client from the token keep working. Enforcement (token.client_id ==
   subdomain tenant) lives in the surface auth code (e.g. `require_hr_tenant` /
@@ -28,6 +30,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from fastapi import HTTPException, Request, status
 from sqlalchemy import select
@@ -35,6 +38,9 @@ from sqlalchemy.orm import Session
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.responses import Response
 from starlette.types import ASGIApp
+
+if TYPE_CHECKING:
+    from app.core.tenant_resolution import FirmContext
 
 SURFACE_BROKER = "broker"
 SURFACE_HR = "hr"
@@ -184,23 +190,31 @@ class TenantContext:
     broker_firm_id: str
 
 
-def resolve_tenant_context(host_info: HostInfo | None, db: Session) -> TenantContext | None:
+def resolve_tenant_context(
+    host_info: HostInfo | None, db: Session, firm: FirmContext | None = None,
+) -> TenantContext | None:
     """Resolve a `HostInfo` to a live tenant, or 404 for a bad/disabled slug.
 
     - broker surface / no host info → None (no tenant binding).
-    - hr/portal with a slug → look up `clients.slug`; 404 if missing or the
-      surface's kill-switch is off. Returns a `TenantContext` otherwise.
+    - hr/portal with a slug → look up `clients.slug` WITHIN the broker firm
+      the request's host names (`firm`, from `tenant_resolution`); aliases are
+      unique per firm only, so another broker's "acme" is not this host's. 404
+      if missing or the surface's kill-switch is off.
+    - No firm context (local tools, multi-firm tests) searches every firm and
+      404s an alias that more than one firm uses rather than guess.
     """
     if host_info is None or host_info.surface == SURFACE_BROKER or not host_info.slug:
         return None
 
     from app.models import Client  # lazy: avoid import cost at module load
 
-    client = db.execute(
-        select(Client).where(Client.slug == host_info.slug)
-    ).scalar_one_or_none()
-    if client is None:
+    stmt = select(Client).where(Client.slug == host_info.slug)
+    if firm is not None:
+        stmt = stmt.where(Client.broker_firm_id == firm.firm_id)
+    matches = db.execute(stmt.limit(2)).scalars().all()
+    if len(matches) != 1:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Unknown tenant.")
+    client = matches[0]
     enabled = (
         client.portal_enabled
         if host_info.surface == SURFACE_PORTAL

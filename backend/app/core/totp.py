@@ -9,6 +9,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import re
 import secrets
 import struct
 import time
@@ -16,6 +17,9 @@ import time
 _STEP_SECONDS = 30
 _DIGITS = 6
 _SECRET_BYTES = 20  # 160-bit, per RFC 4226 recommendation
+# Built-in brand name (services/brand.DEFAULT_PRODUCT_NAME), kept stdlib-only here.
+DEFAULT_ISSUER = "Inspro"
+_ISSUER_MAX = 80
 
 
 def generate_secret() -> str:
@@ -23,14 +27,22 @@ def generate_secret() -> str:
     return base64.b32encode(secrets.token_bytes(_SECRET_BYTES)).decode("ascii").rstrip("=")
 
 
-def provisioning_uri(secret: str, account: str, issuer: str = "Inspro") -> str:
+def clean_issuer(issuer: str | None) -> str:
+    """The issuer an authenticator app shows: one line, no colon (the label's
+    issuer/account separator), bounded, never empty."""
+    cleaned = " ".join(re.sub(r"[:\x00-\x1f\x7f]", " ", issuer or "").split())
+    return cleaned[:_ISSUER_MAX] or DEFAULT_ISSUER
+
+
+def provisioning_uri(secret: str, account: str, issuer: str | None = None) -> str:
     """otpauth:// URI for QR enrolment."""
     from urllib.parse import quote
 
-    label = quote(f"{issuer}:{account}")
+    name = clean_issuer(issuer)
+    label = f"{quote(name, safe='')}%3A{quote(account)}"
     return (
         f"otpauth://totp/{label}?secret={secret}"
-        f"&issuer={quote(issuer)}&digits={_DIGITS}&period={_STEP_SECONDS}"
+        f"&issuer={quote(name, safe='')}&digits={_DIGITS}&period={_STEP_SECONDS}"
     )
 
 

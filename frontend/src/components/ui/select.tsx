@@ -2,6 +2,7 @@ import * as React from "react";
 import * as SelectPrimitive from "@radix-ui/react-select";
 import { Check, ChevronDown, ChevronUp } from "lucide-react";
 import { cn } from "@/lib/cn";
+import { labelClass } from "@/components/ui/section-label";
 
 export const Select = SelectPrimitive.Root;
 export const SelectGroup = SelectPrimitive.Group;
@@ -89,3 +90,16 @@ export const SelectItem = React.forwardRef<
   </SelectPrimitive.Item>
 ));
 SelectItem.displayName = "SelectItem";
+
+/** Heading for a `SelectGroup` — the app's one label tier. */
+export const SelectLabel = React.forwardRef<
+  React.ElementRef<typeof SelectPrimitive.Label>,
+  React.ComponentPropsWithoutRef<typeof SelectPrimitive.Label>
+>(({ className, ...props }, ref) => (
+  <SelectPrimitive.Label
+    ref={ref}
+    className={cn("px-2 pb-1 pt-2", labelClass, className)}
+    {...props}
+  />
+));
+SelectLabel.displayName = "SelectLabel";

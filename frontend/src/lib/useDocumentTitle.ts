@@ -2,6 +2,18 @@ import { useEffect } from "react";
 
 const SUFFIX = "My Benefits";
 
+/** The bare title shown when no page names itself: the brand's product name.
+ *  The server already injects it into `index.html`; `setBaseDocumentTitle`
+ *  keeps it right when the brand read in the browser differs (a company's
+ *  override on the portals). */
+let baseTitle: string | null = null;
+let pageTitles = 0;
+
+export function setBaseDocumentTitle(title: string): void {
+  baseTitle = title;
+  if (pageTitles === 0) document.title = title;
+}
+
 /**
  * Names the page in the browser's title bar, history and tab list.
  *
@@ -14,15 +26,17 @@ const SUFFIX = "My Benefits";
  * utilization / dependants) deliberately do NOT call it — they are not routed
  * on their own, and `coverage.tsx` sets the title per tab; a second call would
  * race the parent's. A new portal ROUTE that omits this inherits the bare
- * `index.html` title and silently reopens the failure.
+ * brand title and silently reopens the failure.
  */
 export function useDocumentTitle(title: string | null | undefined) {
   useEffect(() => {
     if (!title) return;
     const previous = document.title;
+    pageTitles += 1;
     document.title = `${title} · ${SUFFIX}`;
     return () => {
-      document.title = previous;
+      pageTitles -= 1;
+      document.title = pageTitles === 0 && baseTitle ? baseTitle : previous;
     };
   }, [title]);
 }

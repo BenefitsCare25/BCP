@@ -29,11 +29,18 @@ import { portalApi } from "@/api/portalClient";
 import type { BenefitStatement, Dependant, Utilization } from "@/types";
 import type { PortalMember } from "@/stores/portalSession";
 import { usePortalSession } from "@/stores/portalSession";
+import { useNotifications } from "@/stores/notifications";
 import { queryClient } from "@/lib/queryClient";
+import { clearSignedOut } from "@/lib/surfaceSession";
 
+/** A new sign-in must not reuse another identity's cached data or alerts. It
+ *  is also the member's own credentials succeeding, which ends this tab's
+ *  explicit sign-out. */
 function adoptMemberSession(out: MemberTokenResult): void {
   void queryClient.cancelQueries({ queryKey: ["portal"] });
   queryClient.removeQueries({ queryKey: ["portal"] });
+  useNotifications.getState().clear();
+  clearSignedOut("portal");
   usePortalSession.getState().setSession(out.token, out.expires_at, out.member, out.mfa_enrollment_required);
 }
 
@@ -161,10 +168,18 @@ export function useMemberSecurityStatus() {
   });
 }
 
+/** Without a password first. When the sign-in is no longer recent the server
+ *  answers 403 `reauth_required` and the page retries WITH the password — via
+ *  `verify`, so a mistyped password (401) stays on the form instead of signing
+ *  the member out. */
 export function useMemberMfaEnrollStart() {
   return useMutation({
-    mutationFn: () =>
-      portalApi.post<MemberMfaStart>("/portal/auth/mfa/enroll/start", {}),
+    mutationFn: (currentPassword?: string) =>
+      currentPassword
+        ? portalApi.verify<MemberMfaStart>("/portal/auth/mfa/enroll/start", {
+            current_password: currentPassword,
+          })
+        : portalApi.post<MemberMfaStart>("/portal/auth/mfa/enroll/start", {}),
     meta: { localErrorHandling: true },
   });
 }

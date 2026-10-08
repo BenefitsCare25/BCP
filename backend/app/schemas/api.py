@@ -8,6 +8,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
 
+from app.core.ai_config import assert_service_account_endpoints
 from app.schemas.coverage_limits import CoverageLimitAlert
 from app.schemas.policy_numbers import PolicyNumberAssignment
 
@@ -1203,6 +1204,8 @@ class AIConfigUpsert(BaseModel):
                 "api_key for provider='vertex' must be the service-account JSON "
                 "key (with type='service_account', private_key and client_email)."
             )
+        # google-auth posts token requests to the key's own token_uri (SSRF).
+        assert_service_account_endpoints(json.loads(self.api_key))
         return self
 
 
@@ -1219,6 +1222,15 @@ class AIConfigTestPayload(BaseModel):
     def _check_endpoint(self) -> AIConfigTestPayload:
         if self.endpoint and len(self.endpoint) > 512:
             raise ValueError("endpoint must be at most 512 chars")
+        if self.api_key is not None:
+            # The probe would make the token request; refuse a foreign token_uri
+            # before anything is sent.
+            try:
+                draft = json.loads(self.api_key)
+            except ValueError:
+                draft = None
+            if isinstance(draft, dict):
+                assert_service_account_endpoints(draft)
         return self
 
 
@@ -1308,6 +1320,8 @@ class PlatformAICredentialsUpsert(BaseModel):
                 "service_account_json must be the Vertex service-account JSON "
                 "key (with type='service_account', private_key and client_email)."
             )
+        # google-auth posts token requests to the key's own token_uri (SSRF).
+        assert_service_account_endpoints(json.loads(self.service_account_json))
         return self
 
 
@@ -1318,3 +1332,16 @@ class PlatformAICredentialsTestPayload(BaseModel):
     model: str | None = Field(default=None, max_length=128)
     capacity_mode: Literal["standard_paygo", "provisioned_throughput"] | None = None
     service_account_json: str | None = Field(default=None, min_length=8, max_length=8192)
+
+    @model_validator(mode="after")
+    def _check_key(self) -> PlatformAICredentialsTestPayload:
+        if self.service_account_json is not None:
+            # The probe would make the token request; refuse a foreign token_uri
+            # before anything is sent.
+            try:
+                draft = json.loads(self.service_account_json)
+            except ValueError:
+                draft = None
+            if isinstance(draft, dict):
+                assert_service_account_endpoints(draft)
+        return self

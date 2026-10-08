@@ -3,11 +3,13 @@ audit log) while keeping the seed (broker firm, client, policy year,
 attribute schema, product catalog).
 
 Use during spike testing when you want to re-upload a placement slip without
-manually deleting categories one-by-one in the UI.
+manually deleting categories one-by-one in the UI. Refuses to run unless
+INSPRO_ENV=dev against a SQLite database.
 """
 from __future__ import annotations
 
-from app.db.session import SessionLocal
+from app.core.settings import assert_local_dev_database
+from app.db.session import DATABASE_URL, SessionLocal
 from app.models import (
     AuditLog,
     Category,
@@ -18,6 +20,7 @@ from app.models import (
 
 
 def reset() -> None:
+    assert_local_dev_database(DATABASE_URL, tool="scripts/reset_data.py")
     db = SessionLocal()
     try:
         deleted = {

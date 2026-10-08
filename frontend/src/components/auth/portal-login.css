@@ -1,4 +1,6 @@
 .portal-login {
+  /* Brand-following: a custom firm brand re-derives the red family (end of
+     file). --color-error and the error wash stay as status colours. */
   --color-primary: #df0024;
   --color-primary-foreground: #fff;
   --color-foreground: #101e30;
@@ -14,6 +16,8 @@
   --login-red-soft: #f6bec8;
   --login-red-ink: #803044;
   --login-selection: #ffd8de;
+  --login-red-text: #b00020;
+  --login-error-wash: #ffe9ed;
   --login-panel-corner: 64px;
   --login-scene-width: min(62%, max(720px, 100svh));
   font-family: "Figtree Variable", Figtree, sans-serif;
@@ -26,7 +30,8 @@
 .portal-login *, .portal-login *::before, .portal-login *::after { letter-spacing: 0; }
 .portal-login ::selection { background: var(--login-selection); color: var(--login-red-ink); }
 .portal-login__brand { height: 64px; margin-bottom: 24px; display: flex; align-items: center; }
-.portal-login__logo { width: 200px; height: 64px; object-fit: contain; }
+.portal-login__logo { width: 200px; height: 64px; object-fit: contain; object-position: left center; }
+.portal-login__wordmark { font-size: 26px; font-weight: 700; line-height: 1.2; color: var(--color-foreground); }
 .portal-login__stage { position: relative; display: flow-root; isolation: isolate; min-height: 100svh; overflow: clip; }
 .portal-login__scenery { position: absolute; inset: 0 auto 0 0; width: calc(var(--login-scene-width) + var(--login-panel-corner)); }
 .portal-login__landscape { position: absolute; inset: 0; overflow: hidden; }
@@ -42,7 +47,7 @@
 .portal-login__roles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); margin: 28px 0; border: 1px solid var(--login-line); border-radius: 8px; background: var(--login-wash); overflow: hidden; }
 .portal-login__roles a { min-height: 48px; padding: 12px; display: grid; place-items: center; text-align: center; font-size: 16px; font-weight: 600; color: var(--color-muted-foreground); transition: background-color 160ms, color 160ms; }
 .portal-login__roles a[aria-current] { background: var(--color-primary); color: var(--color-primary-foreground); }
-.portal-login__roles a:not([aria-current]):hover { background: var(--login-hover); color: var(--color-error); }
+.portal-login__roles a:not([aria-current]):hover { background: var(--login-hover); color: var(--login-red-text); }
 .portal-login :is(a, button):focus-visible { outline: 3px solid var(--color-ring); outline-offset: 3px; }
 .portal-login__roles a:focus-visible { outline-offset: -4px; }
 .portal-login__roles a[aria-current]:focus-visible { outline-color: var(--color-primary-foreground); }
@@ -55,9 +60,9 @@
 .portal-login input:focus-visible { border-color: var(--color-ring); outline: 2px solid var(--color-ring); outline-offset: 2px; box-shadow: none; }
 .portal-login input.portal-login__password { padding-left: 14px; padding-right: 52px; }
 .portal-login__reveal { position: absolute; right: 3px; top: 3px; width: 44px; height: 44px; display: grid; place-items: center; color: var(--color-muted-foreground); border-radius: 6px; }
-.portal-login__reveal:hover { background: var(--login-hover); color: var(--color-error); }
+.portal-login__reveal:hover { background: var(--login-hover); color: var(--login-red-text); }
 .portal-login form p { font-size: 13px; line-height: 1.5; }
-.portal-login form [role="alert"] { padding: 10px 12px; border-radius: 6px; background: var(--login-hover); color: var(--color-error); overflow-wrap: anywhere; }
+.portal-login form [role="alert"] { padding: 10px 12px; border-radius: 6px; background: var(--login-error-wash); color: var(--color-error); overflow-wrap: anywhere; }
 .portal-login form button[type="submit"] { position: relative; min-height: 54px; height: auto; width: 100%; padding: 12px 52px; font-size: 18px; font-weight: 600; border-radius: 8px; background: var(--color-primary); color: var(--color-primary-foreground); margin-top: 4px; white-space: normal; }
 .portal-login form button[type="submit"]:hover:not(:disabled) { background: var(--login-red-hover); }
 .portal-login form button[type="submit"]:disabled { opacity: 1; background: var(--login-red-soft); color: var(--login-red-ink); }
@@ -65,7 +70,21 @@
 .portal-login form button[type="button"]:not(.portal-login__reveal) { min-height: 44px; font-size: 14px; }
 .portal-login__support { font-size: 14px; text-align: center; color: var(--color-muted-foreground); margin-top: 28px; line-height: 1.6; }
 .portal-login__support span { color: var(--color-foreground); }
-.portal-login__footer { position: absolute; bottom: 28px; left: 44px; right: 48px; display: flex; justify-content: center; align-items: center; gap: 7px; font-size: 12px; color: var(--color-muted-foreground); }
+.portal-login__footer { position: absolute; bottom: 28px; left: 44px; right: 48px; display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 4px 16px; font-size: 12px; color: var(--color-muted-foreground); }
+.portal-login__secure { display: inline-flex; align-items: center; gap: 7px; }
+.portal-login__attribution { margin: 0; font-size: 12px; color: var(--color-muted-foreground); }
+/* A custom firm brand (lib/brand.ts). */
+:root[data-brand="custom"] .portal-login {
+  --color-primary: var(--brand-primary);
+  --color-primary-foreground: var(--brand-primary-foreground);
+  --color-ring: color-mix(in srgb, var(--brand-primary) 90%, #000);
+  --login-hover: color-mix(in srgb, var(--brand-primary) 9%, #fff);
+  --login-red-hover: color-mix(in srgb, var(--brand-primary) 84%, #000);
+  --login-red-soft: color-mix(in srgb, var(--brand-primary) 28%, #fff);
+  --login-red-ink: color-mix(in oklab, var(--brand-primary) 55%, #000);
+  --login-selection: color-mix(in srgb, var(--brand-primary) 17%, #fff);
+  --login-red-text: color-mix(in oklab, var(--brand-primary) 78%, #000);
+}
 @media (min-width: 1800px) {
   .portal-login__form { max-width: 430px; }
   .portal-login__content { padding-right: 72px; }

@@ -6,6 +6,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/client";
 import { useSession } from "@/stores/session";
 import { downloadResponseAsFile } from "@/lib/download";
+import { keepPreviousInScope } from "@/lib/scopedPlaceholder";
 
 // ── Setup ────────────────────────────────────────────────────────────────────
 
@@ -290,7 +291,8 @@ export function useFormRegister(policyYearId: string | undefined, filters: Regis
         `/policy-years/${policyYearId}/enrollment-forms${registerQuery(filters)}`,
       ),
     enabled: !!policyYearId,
-    placeholderData: (previous) => previous,
+    // Previous rows bridge a filter change, never a company or year.
+    ...keepPreviousInScope(cid, policyYearId),
   });
 }
 
@@ -328,13 +330,21 @@ export async function downloadBrokerFormPdf(item: { id: string; reference_no: st
   await downloadResponseAsFile(res, `Enrolment form ${item.reference_no}.pdf`);
 }
 
+/** The register's bulk exports. The Excel summary masks NRIC/FIN unless
+ * `fullIds` asks otherwise, which the server allows broker_admin, firm_admin and
+ * system_admin only; `masked` is always sent so the file never depends on a
+ * server default. The PDF ZIP is refused for broker_viewer. */
 export async function exportBrokerForms(
   policyYearId: string,
   filters: RegisterFilters,
   kind: "zip" | "xlsx",
+  { fullIds = false }: { fullIds?: boolean } = {},
 ): Promise<void> {
+  const params = new URLSearchParams(registerQuery(filters, false));
+  if (kind === "xlsx") params.set("masked", fullIds ? "false" : "true");
+  const qs = params.toString();
   const res = await api.downloadResponse(
-    `/policy-years/${policyYearId}/enrollment-forms/export.${kind}${registerQuery(filters, false)}`,
+    `/policy-years/${policyYearId}/enrollment-forms/export.${kind}${qs ? `?${qs}` : ""}`,
   );
   await downloadResponseAsFile(res, `Enrolment forms.${kind}`);
 }

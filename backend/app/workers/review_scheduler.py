@@ -17,6 +17,9 @@ class Lease(Protocol):
     def client_id(self) -> str: ...
 
 
+_CLUSTER_MAXIMUM = 256
+
+
 def _positive_env(name: str, default: int, maximum: int = 16) -> int:
     raw = os.environ.get(name, str(default)).strip()
     try:
@@ -28,10 +31,25 @@ def _positive_env(name: str, default: int, maximum: int = 16) -> int:
     return value
 
 
+def _optional_positive_env(name: str, maximum: int) -> int | None:
+    if not os.environ.get(name, "").strip():
+        return None
+    return _positive_env(name, 1, maximum)
+
+
 @dataclass(frozen=True)
 class WorkerLimits:
     concurrency: int
     max_concurrent_per_client: int
+    # Cluster-wide caps, counted across every worker replica. An unset total
+    # is this replica's concurrency — the cap the cluster always ran under; an
+    # unset per-firm cap leaves firms bounded only by the total.
+    max_total_running: int | None = None
+    max_per_firm: int | None = None
+
+    @property
+    def total_running_cap(self) -> int:
+        return self.max_total_running or self.concurrency
 
     @classmethod
     def from_env(cls) -> WorkerLimits:
@@ -42,18 +60,30 @@ class WorkerLimits:
                 "INSPRO_REVIEW_MAX_CONCURRENT_PER_CLIENT cannot exceed "
                 "INSPRO_REVIEW_WORKER_CONCURRENCY"
             )
-        return cls(concurrency, per_client)
+        total = _optional_positive_env("INSPRO_REVIEW_MAX_TOTAL_RUNNING", _CLUSTER_MAXIMUM)
+        per_firm = _optional_positive_env("INSPRO_REVIEW_MAX_PER_FIRM", _CLUSTER_MAXIMUM)
+        if per_firm is not None and per_firm > (total or concurrency):
+            raise RuntimeError(
+                "INSPRO_REVIEW_MAX_PER_FIRM cannot exceed INSPRO_REVIEW_MAX_TOTAL_RUNNING "
+                "(which defaults to INSPRO_REVIEW_WORKER_CONCURRENCY)"
+            )
+        return cls(concurrency, per_client, total, per_firm)
 
 
 class ReviewScheduler[LeaseT: Lease]:
-    """Fill worker slots while preventing one company from consuming the pool."""
+    """Fill worker slots while preventing one company from consuming the pool.
+
+    Firm fairness and the cluster-wide caps are enforced where a job is
+    leased (``claim_review._claim_next``), across every replica; this class
+    spreads one replica's own slots across companies.
+    """
 
     def __init__(
         self,
         *,
         owner: str,
         limits: WorkerLimits,
-        claim_next: Callable[[str, Collection[str], int, int], LeaseT | None],
+        claim_next: Callable[[str, Collection[str], int, int, int | None], LeaseT | None],
         process_lease: Callable[[LeaseT, str], None],
     ) -> None:
         self._owner = owner
@@ -91,30 +121,29 @@ class ReviewScheduler[LeaseT: Lease]:
                 )
         return len(completed)
 
+    def _lease(self, excluded_client_ids: Collection[str]) -> LeaseT | None:
+        return self._claim_next(
+            self._owner,
+            excluded_client_ids,
+            self._limits.max_concurrent_per_client,
+            self._limits.total_running_cap,
+            self._limits.max_per_firm,
+        )
+
     def fill(self) -> int:
         """Lease jobs into free slots, preferring a different company first."""
         self.reap_completed()
         started = 0
         while self.active_count < self.capacity:
             counts = self.active_client_counts
-            lease = self._claim_next(
-                self._owner,
-                frozenset(counts),
-                self._limits.max_concurrent_per_client,
-                self._limits.concurrency,
-            )
+            lease = self._lease(frozenset(counts))
             if lease is None:
                 saturated = frozenset(
                     client_id
                     for client_id, count in counts.items()
                     if count >= self._limits.max_concurrent_per_client
                 )
-                lease = self._claim_next(
-                    self._owner,
-                    saturated,
-                    self._limits.max_concurrent_per_client,
-                    self._limits.concurrency,
-                )
+                lease = self._lease(saturated)
             if lease is None:
                 break
             future = self._executor.submit(self._process_lease, lease, self._owner)

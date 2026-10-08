@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy import Boolean, ForeignKey, String
+from sqlalchemy import Boolean, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import JSON, Base, TimestampMixin, new_uuid
@@ -13,9 +13,12 @@ class AuditLog(Base, TimestampMixin):
     __tablename__ = "audit_log"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)
-    client_id: Mapped[str | None] = mapped_column(
-        ForeignKey("clients.id", ondelete="SET NULL"), nullable=True, index=True
-    )
+    # Plain String, not an FK — for the same reason as user_id below. An FK with
+    # ON DELETE SET NULL would make Postgres UPDATE these rows when a company is
+    # deleted, and the append-only trigger (db/tenancy.py) rejects every UPDATE,
+    # so deleting any company with audit history failed. Audit rows must outlive
+    # the company they describe.
+    client_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
     user_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     # Who acted: "user" (broker/HR platform user) or "member" (portal member).
     # NULL means "user" (rows predating the portal).

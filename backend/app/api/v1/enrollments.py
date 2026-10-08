@@ -25,7 +25,7 @@ from sqlalchemy.orm import Session
 
 from app.core.audit import write_audit
 from app.core.auth import CurrentUser, get_current_user
-from app.core.deps import load_enrollment, load_enrollment_window, require_system_admin
+from app.core.deps import load_enrollment, load_enrollment_window, require_firm_owner
 from app.core.pagination import DEFAULT_LIMIT, MAX_LIMIT
 from app.db.session import get_db
 from app.models import (
@@ -263,7 +263,7 @@ def submit_enrollment(
     if (
         body
         and body.acknowledge_unpriced
-        and user.role not in ("broker_admin", "system_admin")
+        and user.role not in ("broker_admin", "firm_admin", "system_admin")
     ):
         raise HTTPException(
             status.HTTP_403_FORBIDDEN,
@@ -389,7 +389,7 @@ def reopen_enrollment(
 @router.post(
     "/enrollments/{enrollment_id}/reset",
     response_model=EnrollmentOut,
-    dependencies=[Depends(require_system_admin)],
+    dependencies=[Depends(require_firm_owner)],
 )
 def reset_enrollment(
     enrollment_id: str,

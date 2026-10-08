@@ -16,6 +16,7 @@ listings.
 """
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 from typing import Annotated
 
@@ -32,6 +33,7 @@ from fastapi.responses import Response
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.api.v1.panel_listings import require_library_scope
 from app.core.audit import write_audit
 from app.core.auth import CurrentUser, get_current_user
 from app.core.deps import (
@@ -39,11 +41,19 @@ from app.core.deps import (
     assert_policy_year_for_user,
     load_panel_card,
     load_policy_year,
+    policy_year_company,
     require_client_id,
     tenant_or_global,
 )
 from app.core.rate_limit import limiter
-from app.core.storage import document_path, get_storage
+from app.core.storage import (
+    LIBRARY_SEGMENT,
+    StorageScopeError,
+    assert_key_in_scope,
+    company_firm_id,
+    document_path,
+    get_storage,
+)
 from app.core.uploads import saved_upload
 from app.db.base import new_uuid
 from app.db.session import get_db
@@ -71,10 +81,14 @@ from app.schemas.panel_card import (
 )
 from app.services.panel_cards import load_year_cards
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/panel-cards", tags=["panel-cards"])
 
 # Assignment rides the policy-year path, registered alongside.
 year_router = APIRouter(prefix="/policy-years", tags=["panel-cards"])
+
+# Storage "company" segment for library cards, which belong to the firm.
 
 _MIME_BY_SUFFIX = {
     ".png": "image/png",
@@ -236,6 +250,7 @@ def create_panel_card(
     db: Session = Depends(get_db),
 ) -> PanelCardOut:
     """Create a shared library card — artwork is uploaded separately."""
+    require_library_scope(user)
     _assert_unique_combo(db, payload)
     card = PanelCard(
         client_id=None,
@@ -265,6 +280,7 @@ def update_panel_card(
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> PanelCardOut:
+    require_library_scope(user, card.client_id)
     changes = payload.model_dump(exclude_unset=True)
     if not changes:
         return _card_out(card, _assigned_year_ids(db, card.id))
@@ -302,7 +318,9 @@ def delete_panel_card(
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> None:
+    require_library_scope(user, card.client_id)
     blobs = [p for p in (card.artwork_front_path, card.artwork_back_path) if p]
+    scope = _artwork_scope(db, card, user)
     write_audit(
         db,
         user,
@@ -321,9 +339,8 @@ def delete_panel_card(
     # Bytes go only AFTER the row is gone (same ordering as the artwork
     # upload/delete paths): a failed commit would otherwise leave a live card
     # pointing at deleted blobs, 502-ing for every member holding it.
-    storage = get_storage()
     for path in blobs:
-        storage.delete(path)
+        _delete_artwork(path, scope)
 
 
 @router.put("/{card_id}/placements", response_model=PanelCardOut)
@@ -334,6 +351,7 @@ def set_card_placements(
     db: Session = Depends(get_db),
 ) -> PanelCardOut:
     """Replace the card's field placements (the drag-editor's save)."""
+    require_library_scope(user, card.client_id)
     before = _placements_of(card).model_dump()
     card.placements = payload.model_dump()
     write_audit(
@@ -357,6 +375,37 @@ def _artwork_fields(face: str) -> tuple[str, str]:
     return (f"artwork_{face}_path", f"artwork_{face}_mime")
 
 
+def _artwork_scope(db: Session, card: PanelCard, user: CurrentUser) -> tuple[str, str]:
+    """(firm, company segment) that owns the card's artwork bytes.
+
+    A company card belongs to its company's firm. A library card belongs to
+    the firm whose schema holds it — the request's firm, which for a firm-less
+    system admin is the active company's — never to whoever uploads.
+    """
+    if card.client_id is not None:
+        return company_firm_id(db, card.client_id), card.client_id
+    if user.broker_firm_id:
+        return user.broker_firm_id, LIBRARY_SEGMENT
+    if user.client_id:
+        return company_firm_id(db, user.client_id), LIBRARY_SEGMENT
+    raise HTTPException(
+        status.HTTP_409_CONFLICT, "Select a company before managing library card artwork."
+    )
+
+
+def _delete_artwork(path: str, scope: tuple[str, str]) -> None:
+    """Remove artwork bytes, but only ever this card's own (in-scope) blob."""
+    try:
+        assert_key_in_scope(path, *scope)
+    except StorageScopeError:
+        logger.error(
+            "Refusing to delete card artwork outside its firm and company",
+            extra={"error_code": "storage_scope_violation"},
+        )
+        return
+    get_storage().delete(path)
+
+
 @router.post("/{card_id}/artwork/{face}", response_model=PanelCardOut)
 @limiter.limit("20/minute")
 async def upload_card_artwork(
@@ -374,8 +423,10 @@ async def upload_card_artwork(
     jump on first paint.
     """
     _validate_face(face)
+    require_library_scope(user, card.client_id)
     path_field, mime_field = _artwork_fields(face)
     previous = getattr(card, path_field)
+    scope = _artwork_scope(db, card, user)
 
     async with saved_upload(
         file, set(CARD_IMAGE_SUFFIXES), max_bytes=MAX_CARD_ARTWORK_BYTES
@@ -395,10 +446,11 @@ async def upload_card_artwork(
                 status.HTTP_422_UNPROCESSABLE_CONTENT, "Artwork has no dimensions."
             )
         suffix = tmp_path.suffix.lower()
+        firm_id, owner_segment = scope
         storage_path = document_path(
-            user.broker_firm_id,
+            firm_id,
             # Library cards belong to the firm, not a company.
-            card.client_id or "library",
+            owner_segment,
             "panel_card",
             card.id,
             f"{face}-{new_uuid()}",
@@ -433,7 +485,7 @@ async def upload_card_artwork(
     # Replaced bytes are removed only after the new path is committed, so a
     # failed commit can never leave the card pointing at a deleted blob.
     if previous and previous != storage_path:
-        get_storage().delete(previous)
+        _delete_artwork(previous, scope)
     return _card_out(card, _assigned_year_ids(db, card.id))
 
 
@@ -441,6 +493,8 @@ async def upload_card_artwork(
 def get_card_artwork(
     face: str,
     card: PanelCard = Depends(load_panel_card),
+    user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
 ) -> Response:
     """Serve card artwork to the broker UI (config editor + employee view)."""
     _validate_face(face)
@@ -448,6 +502,17 @@ def get_card_artwork(
     path = getattr(card, path_field)
     if not path:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No artwork uploaded")
+    scope = _artwork_scope(db, card, user)
+    try:
+        assert_key_in_scope(path, *scope)
+    except StorageScopeError:
+        # Not a storage fault: the row points outside the card's own firm and
+        # company, so there is nothing of this card's to serve.
+        logger.error(
+            "Refusing to serve card artwork outside its firm and company",
+            extra={"error_code": "storage_scope_violation"},
+        )
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Artwork not found") from None
     try:
         content = get_storage().read(path)
     except Exception as exc:
@@ -469,10 +534,12 @@ def delete_card_artwork(
     db: Session = Depends(get_db),
 ) -> PanelCardOut:
     _validate_face(face)
+    require_library_scope(user, card.client_id)
     path_field, mime_field = _artwork_fields(face)
     path = getattr(card, path_field)
     if not path:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No artwork uploaded")
+    scope = _artwork_scope(db, card, user)
     setattr(card, path_field, None)
     setattr(card, mime_field, None)
     if face == "front":
@@ -486,7 +553,7 @@ def delete_card_artwork(
         before={"face": face},
     )
     db.commit()
-    get_storage().delete(path)
+    _delete_artwork(path, scope)
     db.refresh(card)
     return _card_out(card, _assigned_year_ids(db, card.id))
 
@@ -599,6 +666,7 @@ def create_policy_year_card(
     panel listings.
     """
     policy_year = assert_policy_year_for_user(policy_year_id, user, db)
+    policy_year_company(policy_year, user)
     card, product = _resolve_assignment_refs(db, payload, policy_year, user)
     existing = db.execute(
         select(PolicyYearCard.id).where(
@@ -671,6 +739,7 @@ def update_policy_year_card(
     db: Session = Depends(get_db),
 ) -> PolicyYearCardOut:
     policy_year = assert_policy_year_for_user(policy_year_id, user, db)
+    policy_year_company(policy_year, user)
     assignment = _load_assignment(db, policy_year, assignment_id, user)
     card, product = _resolve_assignment_refs(db, payload, policy_year, user)
     if product.id != assignment.product_id:
@@ -733,6 +802,7 @@ def delete_policy_year_card(
     db: Session = Depends(get_db),
 ) -> None:
     policy_year = assert_policy_year_for_user(policy_year_id, user, db)
+    policy_year_company(policy_year, user)
     assignment = _load_assignment(db, policy_year, assignment_id, user)
     write_audit(
         db,

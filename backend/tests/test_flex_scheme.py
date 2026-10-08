@@ -12,9 +12,13 @@ os.environ["INSPRO_DATABASE_URL"] = f"sqlite:///{TEST_DB}"
 os.environ.setdefault("INSPRO_AI_PROVIDER", "vertex")
 os.environ.setdefault("VERTEX_PROJECT", "test-project")
 
+from io import BytesIO  # noqa: E402
+
+from openpyxl import load_workbook  # noqa: E402
 from sqlalchemy import select  # noqa: E402
 
 from app.api.v1.flex_schemes import (  # noqa: E402
+    _build_coverage_workbook,
     _merge_schemes,
     _section_shape_errors,
     validate_scheme,
@@ -26,6 +30,10 @@ from app.models import AISpendLog  # noqa: E402
 from app.services import ai_breaker, ai_cache  # noqa: E402
 from app.services.ai_gateway import extract_flex_scheme  # noqa: E402
 from app.services.flex_membership import (  # noqa: E402
+    CoverageBucket,
+    CoverageRow,
+    FlexCoverage,
+    ResolvedEmployee,
     RosterVocab,
     VocabValue,
     classify_relationship,
@@ -706,3 +714,32 @@ def test_extract_flex_scheme_records_spend_and_caches():
             assert sum(1 for r in rows if r.cache_hit) == 1
         finally:
             db.close()
+
+
+def test_coverage_export_writes_roster_text_as_text() -> None:
+    """Names, designations and raw roster values starting with = + - @ are
+    written as text, never as formulas the broker's Excel would run."""
+    employee = ResolvedEmployee(
+        employee_id="e-1", staff_id="F-1", name="=HYPERLINK(\"http://x\")",
+        designation="+Manager", grade="-3", nationality="@SG", marital_raw=None,
+        family_status=None, source="roster", spouse_count=0, child_count=0,
+        dependant_count=0, tier_idx=None, tier_name=None, currency=None,
+        wallet_amount=None, overlap_tiers=[],
+    )
+    bucket = CoverageBucket(
+        key="no_family_status", label="No family status", kind="employee", count=1,
+        rows=[CoverageRow(staff_id="F-1", name="=1+1", label="@x", detail="-unknown")],
+    )
+    coverage = FlexCoverage(
+        employees_total=1, employees_ok=0, dependants_total=0, dependants_ok=0,
+        has_tiers=True, scheme_status="draft", buckets=[bucket],
+    )
+
+    workbook = load_workbook(
+        BytesIO(_build_coverage_workbook(coverage, [employee], "2026-01-01 to 2026-12-31"))
+    )
+
+    roster = list(workbook["Full roster"].iter_rows(values_only=True))[1]
+    assert roster[1:5] == ("'=HYPERLINK(\"http://x\")", "'+Manager", "'-3", "'@SG")
+    exception = list(workbook["No family status"].iter_rows(values_only=True))[1]
+    assert exception == ("F-1", "'=1+1", "'@x", "'-unknown")

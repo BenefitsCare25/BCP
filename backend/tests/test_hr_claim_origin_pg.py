@@ -17,7 +17,7 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.orm import sessionmaker
 
 from app.db.tenancy import provision_firm_schema, schema_for_firm
-from app.models import BrokerFirm
+from tests.test_schema_isolation_pg import insert_base_firm
 
 BACKEND = Path(__file__).parents[1]
 DATABASE_NAME = "inspro_task20_test"
@@ -130,7 +130,7 @@ def test_hr_origin_constraint_round_trip_in_public_and_firm_schemas(
     firm_id = str(uuid4())
     factory = sessionmaker(engine, expire_on_commit=False)
     with factory() as db:
-        db.add(BrokerFirm(id=firm_id, name="Task 20 migration firm"))
+        insert_base_firm(db, firm_id, "Task 20 migration firm")
         db.commit()
     provision_firm_schema(engine, firm_id)
     firm_schema = schema_for_firm(firm_id)

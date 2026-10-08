@@ -12,9 +12,9 @@ import { PreviewPanel } from "./PreviewPanel";
 import { fieldsFor, validate } from "./validation";
 import { apiPath, clientOptions, BLANK, fieldClass, PURPOSE_LABELS, type Content, type Scope, type Template } from "./types";
 
-export function TemplateEditor({ item, initial, scope, fields, editable, systemAdmin, onBack, onSaved, onDirty }: {
+export function TemplateEditor({ item, initial, scope, fields, editable, firmOwner, onBack, onSaved, onDirty }: {
   item?: Template; initial?: Content; scope: Scope; fields: Record<string, string>; editable: boolean;
-  systemAdmin: boolean; onBack: () => void; onSaved: (row: Template) => void; onDirty: (value: boolean) => void;
+  firmOwner: boolean; onBack: () => void; onSaved: (row: Template) => void; onDirty: (value: boolean) => void;
 }) {
   const [content, setContent] = useState<Content>(initial ?? item?.content ?? BLANK);
   const [baseline, setBaseline] = useState(content);
@@ -127,7 +127,7 @@ export function TemplateEditor({ item, initial, scope, fields, editable, systemA
             <p className="font-medium">Version {version.version} · {new Date(version.created_at).toLocaleString()}</p>
             <p className="break-words text-muted-foreground">{version.content.subject}</p>
             <details><summary className="cursor-pointer text-xs">View content</summary><p className="mt-2 whitespace-pre-wrap break-words">{version.content.body}</p></details>
-            {systemAdmin && <Button variant="link" size="sm" onClick={() => setContent(version.content)}>Use this version as draft</Button>}
+            {firmOwner && <Button variant="link" size="sm" onClick={() => setContent(version.content)}>Use this version as draft</Button>}
           </li>)}</ul></details>}
       </section>
       <PreviewPanel content={content} scope={scope} canReadHr={editable} />

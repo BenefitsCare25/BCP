@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session
 from app.core.audit import write_audit
 from app.core.auth import CurrentUser
 from app.core.clock import today as business_today
-from app.core.hr_auth import get_current_hr_user
+from app.core.hr_auth import get_current_hr_user, require_hr_enabled
 from app.core.rate_limit import limiter
 from app.db.session import get_db
 from app.models import (
@@ -89,6 +89,8 @@ def delegated_hr(
         or client.broker_firm_id != user.broker_firm_id
     ):
         raise HTTPException(403, "HR company access is not available.")
+    # Re-checked here too, like the grant: this dependency must hold on its own.
+    require_hr_enabled(client)
     return user
 
 

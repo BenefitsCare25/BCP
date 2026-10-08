@@ -58,6 +58,30 @@ export class ConflictDetailError extends Error {
   }
 }
 
+/** 409 `firm_origin_unavailable`: the broker has no active web address, so
+ * nothing that emails a sign-in or set-password link can be sent. Retrying
+ * cannot help until an address is active, so send flows close their
+ * confirmation and show the server's message. */
+export function isFirmOriginUnavailable(error: unknown): boolean {
+  return (
+    (error instanceof ConflictDetailError &&
+      error.detail.code === "firm_origin_unavailable") ||
+    (error instanceof ApiError && error.code === "firm_origin_unavailable")
+  );
+}
+
+/** The message to show for a refused send: the server's own sentence, with
+ * the contract's wording when a proxy stripped it. */
+export function sendErrorMessage(error: unknown): string {
+  if (isFirmOriginUnavailable(error)) {
+    const message = formatError(error);
+    return message && message !== "The request conflicts with the current state."
+      ? message
+      : "This broker has no active web address yet.";
+  }
+  return formatError(error);
+}
+
 export function isStaleConfigurationError(error: unknown): boolean {
   return (
     error instanceof ConflictDetailError &&
@@ -74,7 +98,10 @@ export function errorFromText(
 ): Error {
   if (status === 409 && text) {
     try {
-      const detail = (JSON.parse(text) as { detail?: unknown }).detail;
+      // A coded conflict arrives as FastAPI's `{detail: {code, message}}`, or
+      // as a bare `{code, message}` body from middleware.
+      const body = JSON.parse(text) as { detail?: unknown } | null;
+      const detail = body && typeof body === "object" && "detail" in body ? body.detail : body;
       if (
         detail &&
         typeof detail === "object" &&
@@ -99,6 +126,74 @@ export function errorFromText(
     if (typeof detail?.code === "string") code = detail.code;
   } catch { /* A gateway response need not be JSON. */ }
   return new ApiError(message, status, code);
+}
+
+/** The parsed JSON body of a refusal, or null when it is not JSON (a proxy's
+ *  HTML page, an empty body). */
+function jsonBody(text: string): { detail?: unknown; code?: unknown } | null {
+  try {
+    const body: unknown = JSON.parse(text);
+    return body && typeof body === "object" ? (body as { detail?: unknown; code?: unknown }) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The server states its own limit — 50 MB for a whole request ("Uploads are
+ *  limited to 50 MB per request."), less for some single files ("File exceeds
+ *  15 MB") — so the number is read from its sentence, never assumed. A proxy's
+ *  413 states none and arrives as markup or nothing, so it gets no number. */
+function tooLargeMessage(text: string): string {
+  const detail = jsonBody(text)?.detail;
+  if (typeof detail !== "string" || !detail.trim()) {
+    return "That upload is too large. Use a smaller file, or fewer files at once, and try again.";
+  }
+  const limit = /(\d+(?:\.\d+)?)\s*MB/i.exec(detail)?.[1];
+  if (!limit) return `That upload is too large. ${detail.trim()}`;
+  return /per request/i.test(detail)
+    ? `That upload is too large — uploads are limited to ${limit} MB at a time. Use smaller files, or send fewer at once, and try again.`
+    : `That file is too large — the limit is ${limit} MB. Choose a smaller file and try again.`;
+}
+
+/** "Try again …" from a `Retry-After` header in seconds; HTTP dates and
+ *  absent headers fall back to a plain "in a moment". */
+function retryHint(retryAfter: string | null): string {
+  const seconds = Number(retryAfter);
+  if (!retryAfter || !Number.isFinite(seconds) || seconds <= 0) {
+    return "Try again in a moment.";
+  }
+  if (seconds <= 60) return `Try again in about ${Math.ceil(seconds)} seconds.`;
+  const minutes = Math.ceil(seconds / 60);
+  return `Try again in about ${minutes} minute${minutes === 1 ? "" : "s"}.`;
+}
+
+/** The two upload refusals that need their own sentence, or null for any other.
+ *
+ * - **413**: the file (or the whole request) is over a size limit. It can come
+ *   from a proxy in front of the API with an HTML or empty body, which used to
+ *   reach the person as raw markup or "Request failed".
+ * - **503 `document_scanner_busy`**: the malware scanner had no free slot and
+ *   the file was not stored. `Retry-After` says when a slot is likely.
+ *
+ * Neither is retried automatically; the person decides when to send the file
+ * again. */
+export function uploadRefusal(
+  status: number,
+  text: string,
+  retryAfter: string | null,
+): ApiError | null {
+  if (status === 413) return new ApiError(tooLargeMessage(text), 413);
+  if (status !== 503) return null;
+  const body = jsonBody(text);
+  const detail = body?.detail;
+  const code =
+    detail && typeof detail === "object" ? (detail as { code?: unknown }).code : body?.code;
+  if (code !== "document_scanner_busy") return null;
+  return new ApiError(
+    `The document scanner is busy, so your file wasn't uploaded. ${retryHint(retryAfter)}`,
+    503,
+    "document_scanner_busy",
+  );
 }
 
 /** One FastAPI validation item ({loc, msg, type}) → its message. */

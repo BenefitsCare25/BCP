@@ -74,6 +74,7 @@ import { cn } from "@/lib/cn";
 import { LeafScopeContext } from "@/lib/leaf-scope";
 import { isNotFoundError } from "@/lib/errors";
 import { holds } from "@/components/portal/capabilities";
+import { BrandLogo } from "@/components/brand/BrandLogo";
 
 // Mirrors the live shell nav in components/portal/PortalShell — change both
 // together. Labels are the shell's short set, because the live bar is one row.
@@ -752,12 +753,12 @@ export function PortalFrame({ employeeId }: { employeeId: string }) {
             in the bar — see PortalShell. */}
         <header className="border-b border-hairline bg-bar">
           <div className="flex flex-wrap items-center gap-y-2 px-5 py-3">
-            <img
-              src="/inspro-logo-header.png"
-              alt="Inspro Insurance Brokers"
+            <BrandLogo
+              variant="header"
               width={140}
               height={45}
               className="h-11 w-auto shrink-0"
+              wordmarkClassName="shrink-0 text-lg text-record"
             />
             <span aria-hidden className="mx-4 h-7 w-px shrink-0 bg-hairline" />
             {/* NO dot on the Enrolment tab, and the comment that used to sit

@@ -20,7 +20,12 @@ from app.core.portal_auth import (
     get_current_member,
     resolve_member_employee,
 )
-from app.core.storage import get_storage
+from app.core.storage import (
+    LIBRARY_SEGMENT,
+    StorageScopeError,
+    company_firm_id,
+    get_storage,
+)
 from app.db.session import get_db
 from app.models import Client, Dependant, PanelCard, PolicyYearCard
 from app.models.panel_card import CARD_FACES
@@ -36,6 +41,7 @@ from app.schemas.portal import (
     PortalMemberOut,
     PortalPolicyYearOut,
 )
+from app.services.claims import assert_document_scope
 from app.services.enrollment_elections import member_window_for
 from app.services.member_access import (
     Capability,
@@ -186,6 +192,15 @@ def portal_cards(
     )
 
 
+def _card_artwork_scope(db: Session, card: PanelCard, client_id: str) -> tuple[str, str]:
+    """(firm, company segment) a card's artwork is filed under, by the broker
+    surface's convention (`panel_cards._artwork_scope`): a company card under
+    its company, a library card under the library of the member's firm."""
+    if card.client_id is not None:
+        return company_firm_id(db, card.client_id), card.client_id
+    return company_firm_id(db, client_id), LIBRARY_SEGMENT
+
+
 @router.get("/cards/{card_id}/artwork/{face}")
 def portal_card_artwork(
     card_id: str,
@@ -213,10 +228,13 @@ def portal_card_artwork(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Artwork not found")
     card = db.get(PanelCard, card_id)
     path = getattr(card, f"artwork_{face}_path", None) if card is not None else None
-    if not path:
+    if card is None or not path:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Artwork not found")
     try:
+        assert_document_scope(path, *_card_artwork_scope(db, card, employee.client_id))
         content = get_storage().read(path)
+    except StorageScopeError:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Artwork not found") from None
     except Exception as exc:
         raise HTTPException(
             status.HTTP_502_BAD_GATEWAY, "Artwork could not be retrieved"

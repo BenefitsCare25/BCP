@@ -9,6 +9,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.ai_config import load_ai_config
+from app.core.settings import get_settings
+from app.core.storage import company_firm_id
 from app.models import Claim, ClaimAIReview, ClaimReviewJob, ClientAIConfig, PlatformAISetting
 from app.models.claim import (
     CASE_TYPE_CLAIM,
@@ -70,8 +72,7 @@ def _stored_config_is_validated(db: Session, client_id: str) -> bool:
 
 def configuration_ready(db: Session, client_id: str) -> bool:
     """Fail closed in production; local/test may exercise the queue without Vertex."""
-    env = os.environ.get("INSPRO_ENV", "dev").strip().lower()
-    return env not in {"prod", "production"} or _stored_config_is_validated(db, client_id)
+    return get_settings().env != "prod" or _stored_config_is_validated(db, client_id)
 
 
 def active_job(db: Session, claim_id: str) -> ClaimReviewJob | None:
@@ -83,16 +84,34 @@ def active_job(db: Session, claim_id: str) -> ClaimReviewJob | None:
     ).scalar_one_or_none()
 
 
+def _job_firm_id(db: Session, claim: Claim, caller_firm_id: str | None) -> str:
+    """The firm a review job is filed under: the claim's company's own firm.
+
+    The job routes the worker to the schema holding the claim, so it is never
+    taken from the actor — a firm-less system admin's amendment is reviewed
+    like anyone else's. A caller firm that disagrees is a tenancy fault.
+    """
+    firm_id = company_firm_id(db, claim.client_id)
+    if caller_firm_id is not None and caller_firm_id != firm_id:
+        raise RuntimeError(f"Claim {claim.id} belongs to a different broker firm")
+    return firm_id
+
+
 def enqueue_claim_review(
     db: Session,
     claim: Claim,
-    broker_firm_id: str,
+    broker_firm_id: str | None,
     *,
     supersede: bool,
     available_at: datetime | None = None,
     mark_pending: bool = True,
 ) -> EnqueueResult:
-    """Create the review and public job in the caller's single transaction."""
+    """Create the review and public job in the caller's single transaction.
+
+    ``broker_firm_id`` is the caller's firm (None for a firm-less system
+    admin); the job itself is filed under the claim company's firm.
+    """
+    firm_id = _job_firm_id(db, claim, broker_firm_id)
     locked = db.get(Claim, claim.id, with_for_update=True)
     if locked is None:
         raise RuntimeError(f"Claim {claim.id} disappeared while enqueueing review")
@@ -148,7 +167,7 @@ def enqueue_claim_review(
     if mark_pending:
         claim.status = CLAIM_STATUS_AI_REVIEW_PENDING
     job = ClaimReviewJob(
-        broker_firm_id=broker_firm_id,
+        broker_firm_id=firm_id,
         client_id=claim.client_id,
         claim_id=claim.id,
         review_id=review.id,
@@ -172,13 +191,11 @@ def enqueue_amended_claim_review(
 
     Each later amendment cancels the active delayed job before replacing it,
     so a receipt replacement (add new, then remove old) produces one provider
-    call for the final document set rather than one call per click.
+    call for the final document set rather than one call per click. The job is
+    filed under the claim company's firm, so an amendment by a firm-less system
+    admin (``broker_firm_id`` None) is reviewed too.
     """
-    if (
-        not broker_firm_id
-        or claim.case_type != CASE_TYPE_CLAIM
-        or claim.status != CLAIM_STATUS_SUBMITTED
-    ):
+    if claim.case_type != CASE_TYPE_CLAIM or claim.status != CLAIM_STATUS_SUBMITTED:
         return None
     # Persist cancellation of the previous active row before inserting its
     # replacement. Both dialects enforce one active job per claim with a

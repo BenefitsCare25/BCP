@@ -1,4 +1,4 @@
-import { SystemAdminOnly } from "@/components/auth/SystemAdminOnly";
+import { FirmOwnerOnly } from "@/components/auth/FirmOwnerOnly";
 /** One primary action for where the member stands, with the reason when an
  * action is unavailable — instead of four equal buttons (Save · Submit ·
  * Confirm · Discard) that each worked in some states only. */
@@ -64,9 +64,9 @@ export function ElectionActionBar({
         <Button variant="outline" disabled={a.busy} onClick={() => openReview("returnForCorrection")}>Return for correction</Button>
       )}
       {editable && status !== "not_started" && (
-        <SystemAdminOnly><Button variant="ghost" onClick={() => openReview("discard")} disabled={a.busy}>
+        <FirmOwnerOnly><Button variant="ghost" onClick={() => openReview("discard")} disabled={a.busy}>
           <RotateCcw className="size-4" aria-hidden /> Cancel and clear choices
-        </Button></SystemAdminOnly>
+        </Button></FirmOwnerOnly>
       )}
       {status === "confirmed" && phase === "open" && (
         <Button variant="outline" disabled={a.busy} onClick={() => openReview("reopen")}>

@@ -2,7 +2,9 @@
 forms, read by the broker (any company they serve) and HR (their own company).
 
 Exports: a ZIP of the PDFs, and an Excel summary (one row per form plus a
-family-members sheet laid out like the insurer renewal listing).
+family-members sheet laid out like the insurer renewal listing). The summary
+masks NRIC/FIN unless the caller asks otherwise; who may ask is the endpoint's
+decision (`reports.assert_masking_allowed`; HR never may).
 """
 from __future__ import annotations
 
@@ -12,6 +14,7 @@ import tempfile
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from functools import partial
 from typing import IO, Any
 
 from fastapi.responses import StreamingResponse
@@ -22,14 +25,16 @@ from sqlalchemy.sql.elements import ColumnElement
 from starlette.background import BackgroundTask
 
 from app.core.downloads import attachment_header
-from app.core.storage import get_storage
+from app.core.storage import StorageScopeError, company_firm_id, get_storage
 from app.models import Employee, Enrollment, EnrollmentWindow, StoredDocument
 from app.models.enrollment_form import FORM_STATUS_SUPERSEDED, EnrollmentFormSubmission
 from app.models.stored_document import DOC_ENTITY_ENROL_FORM, STORAGE_AVAILABLE
 from app.schemas.enrollment_forms import FormRegisterItem, FormRegisterOut
+from app.services.claims import assert_document_scope
 from app.services.enrollment_forms.submission import count_changes
-from app.services.insurer_reports import append_safe, autosize, bold_header, naive
+from app.services.insurer_reports import autosize, bold_header, naive
 from app.services.roster_attributes import EMPLOYEE_ID_KEYS, first_value, mask_nric
+from app.services.xlsx_safe import append_safe
 
 MAX_EXPORT_FORMS = 1000
 
@@ -156,7 +161,11 @@ def submission_pdf(
     doc = db.get(StoredDocument, sub.document_id)
     if doc is None or not _valid_doc(sub, doc):
         return None
-    content = _read_blob(doc.storage_path)
+    content = _read_blob(
+        doc.storage_path,
+        broker_firm_id=company_firm_id(db, sub.client_id),
+        client_id=sub.client_id,
+    )
     return (content, doc) if content is not None else None
 
 
@@ -187,10 +196,13 @@ def _valid_doc(sub: EnrollmentFormSubmission, doc: StoredDocument | None) -> boo
     )
 
 
-def _read_blob(path: str) -> bytes | None:
+def _read_blob(path: str, *, broker_firm_id: str, client_id: str) -> bytes | None:
+    """A form's bytes, or None when they are gone or the key is filed outside
+    the form's own firm and company (never another tenant's bytes)."""
     try:
+        assert_document_scope(path, broker_firm_id, client_id)
         return get_storage().read(path)
-    except FileNotFoundError:
+    except (FileNotFoundError, StorageScopeError):
         return None
 
 
@@ -215,6 +227,11 @@ def build_zip(db: Session, f: RegisterFilter) -> tuple[IO[bytes], int]:
         label = _SAFE_NAME.sub("", f"{emp.staff_id} {emp.employee_name or ''}").strip()
         items.append((f"{sub.reference_no} {label} v{sub.version}.{suffix}", doc))
 
+    # Every listed form is the filter's company's (`_conditions`, `_valid_doc`);
+    # its firm is resolved here because the session cannot cross threads.
+    read = partial(
+        _read_blob, broker_firm_id=company_firm_id(db, f.client_id), client_id=f.client_id
+    )
     spool: IO[bytes] = tempfile.SpooledTemporaryFile(max_size=_SPOOL_IN_MEMORY)
     written = 0
     with (
@@ -223,7 +240,7 @@ def build_zip(db: Session, f: RegisterFilter) -> tuple[IO[bytes], int]:
     ):
         for start in range(0, len(items), _FETCH_BATCH):
             batch = items[start:start + _FETCH_BATCH]
-            contents = pool.map(_read_blob, [doc.storage_path for _, doc in batch])
+            contents = pool.map(read, [doc.storage_path for _, doc in batch])
             for (name, _doc), content in zip(batch, contents, strict=True):
                 if content is not None:
                     archive.writestr(name, content)
@@ -265,7 +282,14 @@ def _selections_text(snapshot: dict[str, Any]) -> str:
     return "; ".join(parts)
 
 
-def build_workbook(db: Session, f: RegisterFilter) -> bytes:
+@dataclass(frozen=True)
+class RegisterWorkbook:
+    content: bytes
+    forms: int
+    family_members: int
+
+
+def build_workbook(db: Session, f: RegisterFilter, *, masked: bool = True) -> RegisterWorkbook:
     wb = Workbook()
     summary = wb.active
     assert summary is not None
@@ -273,14 +297,17 @@ def build_workbook(db: Session, f: RegisterFilter) -> bytes:
     summary.append(_SUMMARY_HEADER)
     family = wb.create_sheet("Family members")
     family.append(_FAMILY_HEADER)
+    forms = family_members = 0
     for sub, emp, window_name, enr_status in _export_rows(db, f):
         snap = sub.snapshot or {}
         p = snap.get("particulars") or {}
         leave = snap.get("leave") or {}
+        id_no = p.get("id_no") or first_value(emp.attribute_values or {}, EMPLOYEE_ID_KEYS) or ""
+        forms += 1
         append_safe(summary, [
             sub.reference_no, sub.version, sub.source.title(), sub.status.title(),
             window_name or "", emp.staff_id, emp.employee_name or "",
-            p.get("id_no") or first_value(emp.attribute_values or {}, EMPLOYEE_ID_KEYS) or "",
+            mask_nric(id_no) if masked else id_no,
             naive(sub.signed_at or sub.created_at), sub.signature_name or "",
             naive(sub.acknowledged_at), (enr_status or "").replace("_", " "),
             count_changes(snap),
@@ -293,10 +320,13 @@ def build_workbook(db: Session, f: RegisterFilter) -> bytes:
             p.get("contact_no") or "", p.get("email") or "",
         ])
         for dep in snap.get("dependants") or []:
+            dep_id_no = dep.get("id_no") or ""
+            family_members += 1
             append_safe(family, [
                 sub.reference_no, emp.staff_id, emp.employee_name or "",
                 dep.get("relationship") or "", dep.get("name") or "", dep.get("gender") or "",
-                dep.get("id_no") or "", dep.get("occupation") or "", dep.get("dob") or "",
+                mask_nric(dep_id_no) if masked else dep_id_no,
+                dep.get("occupation") or "", dep.get("dob") or "",
                 ", ".join(dep.get("covered_on") or []),
                 "Pending verification" if dep.get("status") == "pending" else "On record",
             ])
@@ -305,4 +335,4 @@ def build_workbook(db: Session, f: RegisterFilter) -> bytes:
         autosize(ws)
     out = io.BytesIO()
     wb.save(out)
-    return out.getvalue()
+    return RegisterWorkbook(out.getvalue(), forms, family_members)

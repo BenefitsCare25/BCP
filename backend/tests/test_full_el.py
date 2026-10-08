@@ -235,3 +235,27 @@ def test_accepted_si_basis_bills_the_underwritten_amount() -> None:
     }
     # A product on the default Eligible SI basis is unaffected by underwriting.
     assert "MIN" not in ws[f"{gtl['premium']}4"].value
+
+
+def test_system_category_sheet_is_named_for_the_firms_brand(monkeypatch) -> None:
+    from sqlalchemy import delete
+
+    import app.services.full_el as full_el
+    from app.models.brand import BrandProfile
+
+    monkeypatch.setattr(full_el, "write_system_category", lambda ws, ctx: True)
+    assert "Inspro Use - System Category" in _build()[0].sheetnames
+    with SessionLocal() as s:
+        s.add_all([
+            BrandProfile(broker_firm_id=DEMO_BROKER_FIRM_ID, scope_key="firm", short_name="Acme"),
+            # A company override is for that company's portals, not broker sheets.
+            BrandProfile(broker_firm_id=DEMO_BROKER_FIRM_ID, client_id=CLIENT_ID,
+                         scope_key=CLIENT_ID, short_name="Co Portal"),
+        ])
+        s.commit()
+    try:
+        assert "Acme Use - System Category" in _build()[0].sheetnames
+    finally:
+        with SessionLocal() as s:
+            s.execute(delete(BrandProfile))
+            s.commit()

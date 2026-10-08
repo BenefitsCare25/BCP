@@ -414,6 +414,42 @@ def test_delete_card_removes_it(client_as_a: TestClient, system_admin_request) -
     assert all(c["id"] != card["id"] for c in listed)
 
 
+def test_platform_admin_card_write_needs_a_company() -> None:
+    """A firm-less system_admin reaches a firm's card library only through its
+    selected company. With none selected the session stays on `public`, so the
+    create is refused until a company is chosen — and then it succeeds."""
+    payload = {"insurer": "Platform Insurer", "panel_provider": "Scope", "name": "Scope"}
+
+    def as_platform_admin(client_id: str | None) -> TestClient:
+        app.dependency_overrides[get_current_user] = lambda: CurrentUser(
+            user_id="00000000-0000-0000-0000-0000000000d0",
+            broker_firm_id=None,
+            client_id=client_id,
+            role="system_admin",
+        )
+        return TestClient(app)
+
+    try:
+        refused = as_platform_admin(None).post("/api/v1/panel-cards", json=payload)
+        assert refused.status_code == 409, refused.text
+        assert refused.json()["detail"]["code"] == "client_selection_required"
+        with SessionLocal() as session:
+            assert session.query(PanelCard).filter_by(name="Scope").count() == 0
+
+        created = as_platform_admin(DEMO_CLIENT_ID).post("/api/v1/panel-cards", json=payload)
+        assert created.status_code == 201, created.text
+        renamed = as_platform_admin(None).patch(
+            f"/api/v1/panel-cards/{created.json()['id']}", json={"name": "Renamed"}
+        )
+        assert renamed.status_code == 409
+        assert renamed.json()["detail"]["code"] == "client_selection_required"
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+        with SessionLocal() as session:
+            session.query(PanelCard).filter_by(name="Scope").delete()
+            session.commit()
+
+
 def test_card_options_expose_vocabulary(client_as_a: TestClient) -> None:
     res = client_as_a.get("/api/v1/panel-cards/options")
     assert res.status_code == 200

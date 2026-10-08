@@ -32,6 +32,7 @@ from openpyxl import Workbook
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.audit import PLATFORM_ENTITY_TYPES
 from app.models import AuditLog, AuthEvent, MemberAccount, PolicyYear, User
 from app.models.auth import SUBJECT_MEMBER, SUBJECT_USER
 from app.services.insurer_reports import (
@@ -53,6 +54,7 @@ _ACTIVITY_LABELS: dict[str, str] = {
     "mfa_challenge": "Two-Factor Challenge",
     "mfa_success": "Two-Factor Passed",
     "mfa_fail": "Two-Factor Failed",
+    "mfa_reset": "Authenticator Reset",
     "lockout": "Account Locked",
     "password_reset_request": "Password Reset Requested",
     "password_reset_complete": "Password Reset Completed",
@@ -302,6 +304,10 @@ def build_company_activity_workbook(
     generated, so there is no layout to match. This is the ``audit_log`` — who
     changed what, when — which is the strictly richer answer to the same
     question.
+
+    Platform records (firm users, invitations, the firm itself) are left out
+    whatever company they were stamped with, as in the activity feed: they are
+    not this company's data.
     """
     lo, hi = range_bounds(start, end)
     rows = list(
@@ -310,6 +316,7 @@ def build_company_activity_workbook(
             .where(
                 AuditLog.client_id == py.client_id,
                 AuditLog.action != "claim.intake_suggested",
+                AuditLog.entity_type.not_in(sorted(PLATFORM_ENTITY_TYPES)),
                 AuditLog.created_at >= lo,
                 AuditLog.created_at < hi,
             )

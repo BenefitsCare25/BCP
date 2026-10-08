@@ -30,6 +30,7 @@ from sqlalchemy.orm import Session
 from app.core.audit import write_audit
 from app.core.auth import (
     ROLE_BROKER_VIEWER,
+    ROLE_FIRM_ADMIN,
     ROLE_SYSTEM_ADMIN,
     CurrentUser,
     get_current_user,
@@ -37,9 +38,10 @@ from app.core.auth import (
 from app.core.clock import today as business_today
 from app.core.deps import assert_policy_year_for_user
 from app.core.rate_limit import limiter
-from app.core.storage import get_storage
+from app.core.storage import assert_key_in_scope, company_firm_id, get_storage
 from app.db.session import get_db
 from app.models import PolicyYear
+from app.services.brand import resolve_client_brand
 from app.services.built_in_listings import normalize_employee_status
 from app.services.insurer_listings import (
     build_dependant_listing,
@@ -66,6 +68,7 @@ from app.services.report_versions import create_version, prune_series
 from app.services.report_workbooks import (
     WORKBOOKS,
     BuildContext,
+    branded_title,
     build_workbook,
     spec_for,
     workbook_filename,
@@ -79,7 +82,9 @@ def _slug(insurer: str) -> str:
 
 router = APIRouter(prefix="/policy-years/{policy_year_id}/reports", tags=["reports"])
 
-_BROKER_REPORT_ROLES = frozenset({"broker_admin", ROLE_BROKER_VIEWER, ROLE_SYSTEM_ADMIN})
+_BROKER_REPORT_ROLES = frozenset(
+    {"broker_admin", ROLE_BROKER_VIEWER, ROLE_FIRM_ADMIN, ROLE_SYSTEM_ADMIN}
+)
 
 
 def require_broker_report_access(
@@ -115,6 +120,7 @@ def download_premium_breakdown(
         year.id,
         after={"report": "premium-breakdown", "format": "xlsx"},
         request=request,
+        client_id=year.client_id,
     )
     db.commit()
     return Response(content.getvalue(), media_type=_XLSX_MEDIA_TYPE, headers={
@@ -268,18 +274,22 @@ def _retain_download(
         return {"retention_error": True}, []
 
 
-def _drop_blobs(paths: list[str]) -> None:
+def _drop_blobs(db: Session, py: PolicyYear, paths: list[str]) -> None:
     """Remove pruned blobs — only ever called AFTER the caller's commit, so a
     rollback can never leave a live row pointing at a deleted file. A failure
-    leaves an orphan, which is inert; nothing references it."""
+    leaves an orphan, which is inert; nothing references it.
+
+    Every pruned version is ``py``'s, so a key filed outside its company and
+    that company's firm is left alone rather than deleted."""
     if not paths:
         return
     storage = get_storage()
     for path in paths:
         try:
+            assert_key_in_scope(path, company_firm_id(db, py.client_id), py.client_id)
             storage.delete(path)
-        except Exception:  # pragma: no cover - storage backend specific
-            log.warning("Could not delete pruned report blob %s", path)
+        except Exception:
+            log.warning("Could not delete pruned report blob %s", path, exc_info=True)
 
 
 @router.get("/benefit-selection")
@@ -311,9 +321,10 @@ def download_benefit_selection_report(
             "window_id": window_id,
             **retained,
         },
+        client_id=py.client_id,
     )
     db.commit()
-    _drop_blobs(pruned)
+    _drop_blobs(db, py, pruned)
     return _bytes_response(
         data,
         "benefit-selection-status-with-buy-sell-leave-report-"
@@ -340,6 +351,7 @@ def download_placement_slip_export(
     write_audit(
         db, user, action="export", entity_type="placement_slip",
         entity_id=policy_year_id, after={"report": "placement-slip"},
+        client_id=py.client_id,
     )
     db.commit()
     return _xlsx_response(
@@ -366,6 +378,7 @@ def download_quotation_slip_export(
     write_audit(
         db, user, action="export", entity_type="placement_slip",
         entity_id=policy_year_id, after={"report": "quotation-slip"},
+        client_id=py.client_id,
     )
     db.commit()
     return _bytes_response(
@@ -405,6 +418,7 @@ def download_employee_listing(
         db, user, action="export", entity_type="insurer_report",
         entity_id=policy_year_id,
         after={"report": "employee-listing", "insurer": insurer, "masked": masked},
+        client_id=py.client_id,
     )
     db.commit()
     return _xlsx_response(
@@ -433,6 +447,7 @@ def download_dependant_listing(
         db, user, action="export", entity_type="insurer_report",
         entity_id=policy_year_id,
         after={"report": "dependant-listing", "insurer": insurer, "masked": masked},
+        client_id=py.client_id,
     )
     db.commit()
     return _xlsx_response(
@@ -484,6 +499,8 @@ def list_report_workbooks(
     """
     py = assert_policy_year_for_user(policy_year_id, user, db)
     insurers = configured_insurers_for_year(db, py)
+    # Broker-facing sheet names carry the firm's brand, not the company's.
+    brand_name = resolve_client_brand(db, py.client_id, company=False).short_name
     return [
         {
             "key": spec.key,
@@ -503,7 +520,7 @@ def list_report_workbooks(
             "insurers": insurers if spec.requires_insurer else [],
             "sheets": [
                 {
-                    "title": s.title,
+                    "title": branded_title(s.title, brand_name),
                     "description": s.description,
                     "columns": list(s.columns),
                 }
@@ -590,8 +607,9 @@ def download_report_workbook(
             ),
             **retained,
         },
+        client_id=py.client_id,
     )
     db.commit()
-    _drop_blobs(pruned)
+    _drop_blobs(db, py, pruned)
     return _bytes_response(data, workbook_filename(spec, py, insurer), retained)
 

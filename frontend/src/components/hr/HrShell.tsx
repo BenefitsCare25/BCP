@@ -10,13 +10,14 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import { useHrMe } from "@/api/hr";
-import { hrApi } from "@/api/hrClient";
+import { clearLocalHrSession, hrApi } from "@/api/hrClient";
 import { useHrSession } from "@/stores/hrSession";
 import { NotificationBell } from "@/components/shell/NotificationBell";
 import { LeafScopeContext } from "@/lib/leaf-scope";
+import { markSignedOut } from "@/lib/surfaceSession";
 import { cn } from "@/lib/cn";
 import { toast } from "sonner";
-import { queryClient } from "@/lib/queryClient";
+import { BrandLogo, PoweredBy } from "@/components/brand/BrandLogo";
 
 const HR_NAV = [
   { to: "/hr/dashboard", label: "Overview", icon: LayoutDashboard },
@@ -28,7 +29,6 @@ export function HrShell() {
   const navigate = useNavigate();
   const path = useRouterState({ select: (state) => state.location.pathname });
   const me = useHrSession((s) => s.me);
-  const clearSession = useHrSession((s) => s.clearSession);
   const { data } = useHrMe();
   const company = data?.company_name ?? me?.company_name;
   const restricted = useHrSession(s => s.mfaEnrollmentRequired);
@@ -37,9 +37,10 @@ export function HrShell() {
   const signOut = async () => {
     try {
       await hrApi.logout();
-      clearSession();
-      void queryClient.cancelQueries({ predicate: query => query.queryKey[0] === "hr" || query.queryKey[0] === "hr-me" });
-      queryClient.removeQueries({ predicate: query => query.queryKey[0] === "hr" || query.queryKey[0] === "hr-me" });
+      // Before leaving: sign-in's guard must not restore a session from the
+      // shared cookie, which another tab may hold for someone else.
+      markSignedOut("hr");
+      clearLocalHrSession();
       void navigate({ to: "/hr/sign-in" });
     } catch { toast.error("Couldn't complete sign-out. Check your connection and try again."); }
   };
@@ -56,7 +57,13 @@ export function HrShell() {
               aria-label="HR dashboard"
               className="portal-nav-brand leaf-focus hidden min-h-11 shrink-0 items-center rounded-pill lg:flex"
             >
-              <img src="/inspro-logo-header.png" alt="Inspro Insurance Brokers" width={125} height={40} className="portal-nav-logo hidden h-10 w-auto lg:block" />
+              <BrandLogo
+                variant="header"
+                width={125}
+                height={40}
+                className="portal-nav-logo hidden h-10 w-auto lg:block"
+                wordmarkClassName="hidden text-lg text-record lg:inline-flex"
+              />
             </Link>
             <span aria-hidden className="portal-nav-divider mx-5 hidden h-8 w-px shrink-0 bg-hairline lg:block" />
             <nav aria-label="HR navigation" className="hr-navigation flex items-center gap-0.5">
@@ -102,6 +109,7 @@ export function HrShell() {
           <p className="text-sm text-label">{me?.display_name || me?.email}</p>
         </div>}
         <Outlet />
+        <PoweredBy className="pb-2 pt-8 text-center" />
       </main>
     </div>
     </LeafScopeContext.Provider>

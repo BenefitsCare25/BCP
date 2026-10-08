@@ -10,7 +10,7 @@ from app.core.ai_config import load_ai_config
 from app.core.auth import CurrentUser, get_current_user
 from app.db.session import get_db
 from app.models import Client
-from app.services.ai_breaker import get_breaker
+from app.services.ai_breaker import breaker_scope, get_breaker
 from app.services.ai_cache import get_cache
 from app.services.ai_gateway import month_to_date_tokens
 
@@ -22,14 +22,19 @@ def ai_status(
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    """Whether the AI provider is configured + cache/breaker/budget state."""
+    """Whether the AI provider is configured + cache/breaker/budget state.
+
+    The breaker reported is the one this company's calls count against: its
+    own when it runs on its own key, else the shared platform key's.
+    """
     cfg = load_ai_config(db, user.client_id)
+    breaker = get_breaker(breaker_scope(cfg.source, user.client_id)) if cfg else get_breaker()
     out: dict[str, Any] = {
         "configured": cfg is not None,
         "source": cfg.source if cfg else "none",
         "model": cfg.model if cfg else None,
         "cache_kind": get_cache().kind,
-        "breaker_state": get_breaker().state,
+        "breaker_state": breaker.state,
     }
     if user.client_id:
         client = db.get(Client, user.client_id)

@@ -302,3 +302,25 @@ def test_live_grant_revocation_and_non_hr_roles_fail_closed(
 
     active["user"] = _principal(USER_HR_A, CLIENT_A, "broker_admin")
     assert client.get("/api/v1/hr/claims").status_code == 403
+
+
+def test_switched_off_hr_portal_refuses_delegated_claims(
+    api: tuple[TestClient, dict[str, CurrentUser]],
+) -> None:
+    """The company switch must stop a live HR session, not only new sign-ins —
+    checked here as well as in `get_current_hr_user`."""
+    client, _ = api
+    assert client.get("/api/v1/hr/claims").status_code == 200
+    with SessionLocal() as db:
+        company = db.get(Client, CLIENT_A)
+        assert company is not None
+        company.hr_enabled = False
+        db.commit()
+
+    response = client.get("/api/v1/hr/claims")
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == {
+        "code": "hr_disabled",
+        "message": "HR portal access for this company is switched off.",
+    }

@@ -15,6 +15,7 @@ from datetime import UTC, datetime
 
 import jwt
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -22,6 +23,7 @@ from sqlalchemy.orm import Session
 from app.core import auth_events as EV
 from app.core import credentials as CRED
 from app.core import hr_auth as HR
+from app.core import mfa
 from app.core import passwords as PW
 from app.core import sessions as SESS
 from app.core.auth import CurrentUser
@@ -31,14 +33,33 @@ from app.core.rate_limit import limiter
 from app.core.request_context import client_ip, user_agent
 from app.core.session_logout import revoke_tab_session
 from app.core.tenancy_host import TenantContext
+from app.core.tenant_resolution import require_client_surface
 from app.db.session import get_db
-from app.models import User
+from app.models import AuthCredential, User
 from app.models.auth import SUBJECT_USER
 from app.models.user import USER_STATUS_ACTIVE
+from app.services.brand import resolve_client_brand
 
-router = APIRouter(prefix="/hr/auth", tags=["hr-auth"])
+# Only hosts that serve the client portals; the company resolves within the
+# host's broker firm (`require_hr_tenant`, `get_current_hr_user`).
+router = APIRouter(
+    prefix="/hr/auth", tags=["hr-auth"], dependencies=[Depends(require_client_surface)],
+)
 
-_INVALID = HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid credentials.")
+
+def _invalid() -> HTTPException:
+    """The generic credential 401 — a FRESH instance per raise.
+
+    A shared module-level instance collected every raise's traceback, and with
+    it each request's frames and locals (plaintext passwords included), for the
+    life of the process.
+    """
+    return HTTPException(status.HTTP_401_UNAUTHORIZED, _INVALID_CREDENTIALS)
+
+
+_INVALID_CREDENTIALS = "Invalid credentials."
+_LOCKED = "Account temporarily locked. Try again later."
+_SUPERSEDED_LINK = "A newer reset link has been issued. Use the latest one."
 
 
 # Aliased rather than re-implemented — see core/request_context.
@@ -50,6 +71,61 @@ def _current_client_id(current: CurrentUser) -> str:
     if current.client_id is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Not authenticated")
     return current.client_id
+
+
+def _credential(db: Session, user_id: str) -> AuthCredential | None:
+    return db.execute(
+        select(AuthCredential).where(AuthCredential.user_id == user_id)
+    ).scalar_one_or_none()
+
+
+def _session_id(request: Request) -> str:
+    """The session id of the bearer token `get_current_hr_user` already accepted.
+
+    The signature is checked again, with the HR access-token key, but the
+    expiry is not: the dependency enforced it moments ago, and a token that
+    lapses between the two decodes must not surface as a 500.
+    """
+    claims = HR._decode_hr_access_token(
+        request.headers.get("authorization", "")[7:], verify_exp=False
+    )
+    return str(claims["sid"])
+
+
+def _reverify_password(
+    db: Session, request: Request, current: CurrentUser, cred: AuthCredential,
+    password: str, *, action: str,
+) -> bool:
+    """Whether `password` is the signed-in HR user's current one.
+
+    A re-verification is a password guess like any other, so it shares the
+    sign-in lockout: a locked account gets 423 without a check, and a wrong
+    password counts as a failed attempt — committed here, because the caller
+    raises next. `action` names the change being confirmed in the trail.
+    """
+    if CRED.is_locked(cred):
+        EV.write_auth_event(
+            db, event_type=EV.EVENT_LOCKOUT, outcome=EV.OUTCOME_BLOCKED, surface="hr",
+            subject_type=SUBJECT_USER, subject_id=current.user_id,
+            client_id=current.client_id, broker_firm_id=current.broker_firm_id,
+            ip=_client_ip(request), user_agent=_ua(request),
+            subdomain=request.headers.get("host"), detail={"action": action},
+        )
+        db.commit()
+        raise HTTPException(status.HTTP_423_LOCKED, _LOCKED)
+    if PW.verify_password(cred.password_hash, password):
+        return True
+    CRED.register_failure(db, cred)
+    EV.write_auth_event(
+        db, event_type=EV.EVENT_LOGIN_FAIL, outcome=EV.OUTCOME_FAIL, surface="hr",
+        subject_type=SUBJECT_USER, subject_id=current.user_id,
+        client_id=current.client_id, broker_firm_id=current.broker_firm_id,
+        ip=_client_ip(request), user_agent=_ua(request),
+        subdomain=request.headers.get("host"),
+        detail={"reason": "reauth_failed", "action": action},
+    )
+    db.commit()
+    return False
 
 
 # ── Schemas ────────────────────────────────────────────────────────────────────
@@ -68,6 +144,11 @@ class HrMeOut(BaseModel):
     mfa_status: str = "none"  # none | pending | confirmed
     mfa_available: bool = False  # broker has enabled 2FA for the HR surface
     mfa_required: bool = False
+
+
+class MfaStartIn(BaseModel):
+    # Needed only once the session's sign-in is older than the re-auth window.
+    current_password: str | None = Field(default=None, max_length=256)
 
 
 class MfaStartOut(BaseModel):
@@ -145,8 +226,6 @@ def _issue_login(
 ) -> TokenOut:
     """Mint access + refresh for a fully-authenticated HR user. Commits."""
     policy = HR.get_auth_policy(db, tenant.client_id)
-    from app.models import AuthCredential
-
     cred = db.query(AuthCredential).filter(AuthCredential.user_id == user.id).one()
     HR.reset_failures(cred)
     cred.last_login_at = datetime.now(UTC)
@@ -213,7 +292,7 @@ def login(
             subdomain=request.headers.get("host"), detail={"reason": "no_user"},
         )
         db.commit()
-        raise _INVALID
+        raise _invalid()
 
     user, cred = resolved
 
@@ -232,7 +311,7 @@ def login(
 
     password_ok = PW.verify_password(cred.password_hash, body.password)
     if not password_ok or user.status != USER_STATUS_ACTIVE:
-        HR.register_failure(cred)
+        HR.register_failure(db, cred)
         EV.write_auth_event(
             db, event_type=EV.EVENT_LOGIN_FAIL, outcome=EV.OUTCOME_FAIL, surface="hr",
             subject_type=SUBJECT_USER, subject_id=user.id, client_id=tenant.client_id,
@@ -241,15 +320,16 @@ def login(
             subdomain=request.headers.get("host"), detail={"reason": "bad_password"},
         )
         db.commit()
-        raise _INVALID
+        raise _invalid()
 
     # Password correct.
     if PW.needs_rehash(cred.password_hash):
         cred.password_hash = PW.hash_password(body.password)
 
     # Forced rotation — the password is past its configured rotation deadline.
+    # Minting the link cancels any earlier one, as every other issuer does.
     if HR.rotation_due(cred, now):
-        token = HR.issue_set_password_token(user.id, HR.credential_version(cred))
+        token = HR.issue_set_password_link(cred)
         EV.write_auth_event(
             db,
             event_type=EV.EVENT_PASSWORD_RESET_REQUEST,
@@ -312,18 +392,14 @@ def verify_mfa(
     if cid != tenant.client_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Unknown tenant.")
 
-    from app.models import AuthCredential
-
     user = db.get(User, user_id)
     if user is None or user.role not in HR.HR_ROLES or user.status != USER_STATUS_ACTIVE:
-        raise _INVALID
+        raise _invalid()
     # The lockout counters live on AuthCredential, not User (the login step uses
     # the same row).
-    cred = db.execute(
-        select(AuthCredential).where(AuthCredential.user_id == user.id)
-    ).scalar_one_or_none()
+    cred = _credential(db, user.id)
     if cred is None:
-        raise _INVALID
+        raise _invalid()
     # The second factor needs the SAME lockout as the first. Without it the only
     # brake was per-IP rate limiting, and `verify_user_totp` accepts a +/-1 step
     # window (three live codes), so an attacker holding a breached password
@@ -336,15 +412,13 @@ def verify_mfa(
             user_agent=_ua(request), subdomain=request.headers.get("host"),
         )
         db.commit()
-        raise HTTPException(
-            status.HTTP_423_LOCKED, "Account temporarily locked. Try again later."
-        )
+        raise HTTPException(status.HTTP_423_LOCKED, _LOCKED)
     # A TOTP code OR a single-use recovery code satisfies the challenge.
     ok = HR.verify_user_totp(db, user_id, body.code) or HR.consume_recovery_code(
         db, user_id, body.code
     )
     if not ok:
-        CRED.register_failure(cred)
+        CRED.register_failure(db, cred)
         EV.write_auth_event(
             db, event_type=EV.EVENT_MFA_FAIL, outcome=EV.OUTCOME_FAIL, surface="hr",
             subject_type=SUBJECT_USER, subject_id=user_id, client_id=tenant.client_id,
@@ -359,17 +433,33 @@ def verify_mfa(
 # ── MFA enrolment (authenticated, self-service) ────────────────────────────────
 @router.post("/mfa/enroll/start", response_model=MfaStartOut)
 def mfa_enroll_start(
+    request: Request,
+    body: MfaStartIn | None = None,
     current: CurrentUser = Depends(HR.get_current_hr_user),
     db: Session = Depends(get_db),
 ) -> MfaStartOut:
+    """Begin authenticator enrolment.
+
+    A fresh sign-in is enough (so mandatory setup straight after sign-in asks
+    for nothing more); an older session must confirm the password, or a
+    borrowed unlocked device could bind its own authenticator to the account.
+    """
     client_id = _current_client_id(current)
     if not HR.get_auth_policy(db, client_id).mfa_hr_enabled:
         raise HTTPException(
             status.HTTP_403_FORBIDDEN,
             "Two-factor authentication isn't enabled for your company.",
         )
+    if not mfa.signed_in_recently(db, _session_id(request)):
+        cred = _credential(db, current.user_id)
+        password = body.current_password if body else None
+        if cred is None or not password or not _reverify_password(
+            db, request, current, cred, password, action="mfa_enroll",
+        ):
+            raise mfa.reauth_required()
     secret, uri = HR.start_user_mfa_enrollment(
-        db, current.user_id, current.email or current.user_id
+        db, current.user_id, current.email or current.user_id,
+        resolve_client_brand(db, client_id).product_name,
     )
     db.commit()
     return MfaStartOut(secret=secret, otpauth_uri=uri)
@@ -386,8 +476,7 @@ def mfa_enroll_confirm(
     recovery = HR.confirm_user_mfa_enrollment(db, current.user_id, body.code.strip())
     if recovery is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "That code didn't match — try again.")
-    claims = HR._decode_hr_access_token(request.headers.get("authorization", "")[7:])
-    SESS.confirm_session_mfa(db, str(claims["sid"]))
+    SESS.confirm_session_mfa(db, _session_id(request))
     EV.write_auth_event(
         db, event_type=EV.EVENT_MFA_SUCCESS, outcome=EV.OUTCOME_SUCCESS, surface="hr",
         subject_type=SUBJECT_USER, subject_id=current.user_id, client_id=client_id,
@@ -401,24 +490,21 @@ def mfa_enroll_confirm(
 
 @router.post("/mfa/disable", status_code=200)
 def mfa_disable(
+    request: Request,
     body: MfaDisableIn,
     current: CurrentUser = Depends(HR.get_current_hr_user),
     db: Session = Depends(get_db),
 ) -> dict[str, str]:
-    from app.models import AuthCredential
-
     if HR.get_auth_policy(db, _current_client_id(current)).mfa_hr_required:
         raise HTTPException(
             status.HTTP_403_FORBIDDEN, "Your company requires two-factor authentication.",
         )
 
     # Re-authenticate with the password before removing a security factor.
-    cred = (
-        db.query(AuthCredential)
-        .filter(AuthCredential.user_id == current.user_id)
-        .one_or_none()
-    )
-    if cred is None or not PW.verify_password(cred.password_hash, body.password):
+    cred = _credential(db, current.user_id)
+    if cred is None or not _reverify_password(
+        db, request, current, cred, body.password, action="mfa_disable",
+    ):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Password incorrect.")
     HR.disable_user_mfa(db, current.user_id)
     db.commit()
@@ -426,6 +512,19 @@ def mfa_disable(
 
 
 # ── Refresh ────────────────────────────────────────────────────────────────────
+def _refuse_refresh(status_code: int, detail: str, client_id: str) -> JSONResponse:
+    """A refresh refusal that also drops the dead refresh cookie.
+
+    Returned, not raised: FastAPI discards headers set on the injected
+    `Response` when the handler raises, so the cookie survived the refusal and
+    every later refresh replayed it — and a revoked token replayed is filed as
+    token reuse. The body is the one the `HTTPException` would have sent.
+    """
+    refused = JSONResponse({"detail": detail}, status_code=status_code)
+    HR.clear_refresh_cookie(refused, client_id)
+    return refused
+
+
 @router.post("/refresh", response_model=TokenOut)
 @limiter.limit("30/minute")
 def refresh(
@@ -433,14 +532,31 @@ def refresh(
     response: Response,
     tenant: TenantContext = Depends(HR.require_hr_tenant),
     db: Session = Depends(get_db),
-) -> TokenOut:
-    from app.models import User
+) -> TokenOut | JSONResponse:
+    from app.models import AuthSession
 
     require_same_origin(request)
 
     token = request.cookies.get(HR.refresh_cookie_name(tenant.client_id))
     if not token:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "No session.")
+    # Validate the presented token BEFORE rotating it. Rotation spends the
+    # token, so an employee-portal or another company's refresh token sent here
+    # used to be consumed on its way to a refusal — signing that session out,
+    # and revoking its family as a "replay" when its owner next refreshed.
+    row = db.execute(select(AuthSession).where(
+        AuthSession.refresh_hash == SESS.hash_refresh(token),
+    )).scalar_one_or_none()
+    if row is None or row.subject_type != SUBJECT_USER or row.client_id != tenant.client_id:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid session.")
+    user = db.get(User, row.subject_id)
+    if (user is None or user.role not in HR.HR_ROLES or user.status != USER_STATUS_ACTIVE
+            or HR.resolve_hr_credential(db, tenant, user.email) is None):
+        SESS.revoke_family(db, row.family_id)
+        db.commit()
+        return _refuse_refresh(
+            status.HTTP_401_UNAUTHORIZED, _INVALID_CREDENTIALS, tenant.client_id,
+        )
     policy = HR.get_auth_policy(db, tenant.client_id)
     result = SESS.rotate_session(
         db, token, absolute_hours=policy.session_absolute_hours,
@@ -449,44 +565,33 @@ def refresh(
         subdomain=request.headers.get("host"),
     )
     if result.reuse_detected:
+        # Filed against the session's own subject and company, so the trail
+        # says whose family was revoked.
         EV.write_auth_event(
             db, event_type=EV.EVENT_TOKEN_REUSE, outcome=EV.OUTCOME_BLOCKED, surface="hr",
-            client_id=tenant.client_id, broker_firm_id=tenant.broker_firm_id,
+            subject_type=row.subject_type, subject_id=row.subject_id,
+            client_id=row.client_id, broker_firm_id=row.broker_firm_id,
             ip=_client_ip(request), user_agent=_ua(request),
             subdomain=request.headers.get("host"),
         )
         db.commit()
-        HR.clear_refresh_cookie(response, tenant.client_id)
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Session revoked. Sign in again.")
+        return _refuse_refresh(
+            status.HTTP_401_UNAUTHORIZED, "Session revoked. Sign in again.", tenant.client_id,
+        )
     if result.session is None:
         db.commit()
-        HR.clear_refresh_cookie(response, tenant.client_id)
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Session expired.")
-
-    from app.models import AuthSession
+        return _refuse_refresh(status.HTTP_401_UNAUTHORIZED, "Session expired.", tenant.client_id)
 
     child = result.session
-    # Resolve the subject from the freshly-issued child row and re-verify the
-    # session is pinned to the subdomain's tenant.
-    row = db.get(AuthSession, child.session_id)
-    if row is None or row.client_id != tenant.client_id or row.subject_type != SUBJECT_USER:
-        db.commit()
-        HR.clear_refresh_cookie(response, tenant.client_id)
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Unknown tenant.")
-    user = db.get(User, row.subject_id)
-    if user is None or user.role not in HR.HR_ROLES or user.status != USER_STATUS_ACTIVE:
-        db.commit()
-        HR.clear_refresh_cookie(response, tenant.client_id)
-        raise _INVALID
-    if HR.resolve_hr_credential(db, tenant, user.email) is None:
-        SESS.revoke_family(db, row.family_id)
-        db.commit()
-        raise _INVALID
-    if (policy.mfa_hr_required and not row.mfa_verified
+    child_row = db.get(AuthSession, child.session_id)
+    mfa_verified = bool(child_row and child_row.mfa_verified)
+    if (policy.mfa_hr_required and not mfa_verified
             and HR.user_has_confirmed_mfa(db, user.id)):
         SESS.revoke_family(db, row.family_id)
         db.commit()
-        raise _INVALID
+        return _refuse_refresh(
+            status.HTTP_401_UNAUTHORIZED, _INVALID_CREDENTIALS, tenant.client_id,
+        )
 
     access, exp = HR.issue_hr_access_token(
         user_id=user.id, client_id=tenant.client_id,
@@ -503,7 +608,7 @@ def refresh(
     HR.set_refresh_cookie(response, child.token, child.expires_at, client_id=tenant.client_id)
     return TokenOut(
         access_token=access, expires_at=exp, me=_me(db, user, tenant.client_id),
-        mfa_enrollment_required=policy.mfa_hr_required and not row.mfa_verified,
+        mfa_enrollment_required=policy.mfa_hr_required and not mfa_verified,
     )
 
 
@@ -552,14 +657,15 @@ def set_password(
     tenant: TenantContext = Depends(HR.require_hr_tenant),
     db: Session = Depends(get_db),
 ) -> TokenOut | LoginChallengeOut:
-    from app.models import AuthCredential, User, UserClientAccess
+    from app.models import UserClientAccess
     from app.models.user import USER_STATUS_DISABLED, USER_STATUS_INVITED
 
     try:
-        user_id, version = HR.verify_set_password_token(body.token)
+        claim = HR.verify_set_password_token(body.token)
     except jwt.InvalidTokenError as exc:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Reset link expired or invalid.") from exc
 
+    user_id = claim.subject_id
     user = db.get(User, user_id)
     cred = (
         db.query(AuthCredential).filter(AuthCredential.user_id == user_id).one_or_none()
@@ -584,8 +690,11 @@ def set_password(
             status.HTTP_409_CONFLICT, "Account is disabled — re-enable it first."
         )
     # Single-use: the token's version must match the credential's current stamp.
-    if HR.credential_version(cred) != version:
+    if HR.credential_version(cred) != claim.version:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Reset link already used.")
+    # Newest link wins: reissuing a link cancels the ones issued before it.
+    if not CRED.password_token_current(cred, claim.issued_at):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, _SUPERSEDED_LINK)
 
     policy = HR.get_auth_policy(db, tenant.client_id)
     ok, reason = PW.password_meets_policy(body.password, policy.password_min_entropy)

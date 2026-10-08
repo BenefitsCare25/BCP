@@ -15,7 +15,7 @@ from app.core.auth import DEMO_BROKER_FIRM_ID, CurrentUser, get_current_user
 from app.core.storage import LocalStorage
 from app.db.session import SessionLocal
 from app.main import app
-from app.models import AuditLog, Claim, ClaimNotification, Client
+from app.models import AuditLog, Claim, ClaimNotification, Client, StoredDocument
 
 
 @pytest.fixture()
@@ -463,6 +463,61 @@ def test_pack_integrity_failure_and_unknown_upload_type(ctx, monkeypatch):
 
     monkeypatch.setattr(wica, "get_storage", TamperedStorage)
     assert client.get(base + f"/packs/{pack['id']}/download").status_code == 409
+
+
+def _stored(incident_id: str) -> StoredDocument:
+    with SessionLocal() as db:
+        stored = db.scalar(select(StoredDocument).where(StoredDocument.entity_id == incident_id))
+    assert stored is not None
+    return stored
+
+
+def test_firm_less_admin_upload_is_filed_under_the_company_firm(ctx, tmp_path):
+    """A platform admin belongs to no firm, so building the key from the actor's
+    firm failed its upload. The key follows the incident's company, and the
+    admin's download lands in that company's trail."""
+    client, user, ids = ctx
+    row, _ = new_incident(client)
+    app.dependency_overrides[get_current_user] = lambda: replace(
+        user, role="system_admin", broker_firm_id=None
+    )
+    row = upload(client, row)
+    stored = _stored(row["id"])
+    assert stored.storage_path.startswith(f"{DEMO_BROKER_FIRM_ID}/{ids[0]}/wica/{row['id']}/")
+    assert (tmp_path / stored.storage_path).is_file()
+
+    doc = row["documents"][0]
+    res = client.get(f"/api/v1/wica/incidents/{row['id']}/documents/{doc['id']}/download")
+    assert res.status_code == 200 and res.content == b"%PDF-1.4 test"
+    with SessionLocal() as db:
+        audit = db.scalars(
+            select(AuditLog).where(
+                AuditLog.action == "wica.document_downloaded", AuditLog.entity_id == row["id"]
+            )
+        ).one()
+    assert audit.client_id == ids[0] and audit.cross_tenant_access is True
+
+
+def test_a_row_pointing_at_another_tenant_is_never_served(ctx, tmp_path):
+    """Even with matching bytes at the foreign key (so the integrity check would
+    pass), a row filed outside its company's firm is "not found"."""
+    client, _, _ = ctx
+    row, _ = new_incident(client)
+    row = tag(client, upload(client, row))
+    doc_id = row["documents"][0]["id"]
+    row = action(client, row, doc_id, "pending_insurer").json()
+    base = f"/api/v1/wica/incidents/{row['id']}"
+    pack = {"id": str(uuid4()), "revision": row["revision"], "document_ids": [doc_id]}
+    assert client.post(base + "/packs", json=pack).status_code == 201
+
+    foreign = f"other-firm/other-client/wica/{uuid4()}/{uuid4()}.pdf"
+    LocalStorage(tmp_path).save(BytesIO(b"%PDF-1.4 test"), foreign)
+    with SessionLocal() as db:
+        db.get(StoredDocument, _stored(row["id"]).id).storage_path = foreign
+        db.commit()
+
+    assert client.get(base + f"/documents/{doc_id}/download").status_code == 404
+    assert client.get(base + f"/packs/{pack['id']}/download").status_code == 404
 
 
 def test_new_company_defaults_disabled_and_no_portal_routes(ctx):

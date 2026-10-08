@@ -3,9 +3,11 @@
  *
  * Acknowledging a form records that the broker received and checked it.
  * Applying the choices to live cover stays the Members tab's Confirm. */
+import { isBrokerAdminRole } from "@/lib/roles";
 import { FilePlus2 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useEnrollmentWindows } from "@/api/enrollment";
+import { useMe } from "@/api/hooks";
 import {
   type RegisterFilters,
   downloadBrokerFormPdf,
@@ -43,6 +45,11 @@ export function EnrollmentFormsPage({ readOnly = false }: { readOnly?: boolean }
   const register = useFormRegister(policyYearId, effective);
   const acknowledge = useAcknowledgeForm();
   const [paperOpen, setPaperOpen] = useState(false);
+  // The bulk PDFs and full NRIC/FIN numbers are for the write roles only, so
+  // both stay hidden until the role is known rather than flashing for a viewer.
+  const { data: me } = useMe();
+  const canWrite = isBrokerAdminRole(me?.role);
+  const [fullIds, setFullIds] = useState(false);
 
   if (!policyYearId) {
     return <p className="text-sm text-muted-foreground">Select a benefit year first.</p>;
@@ -75,7 +82,11 @@ export function EnrollmentFormsPage({ readOnly = false }: { readOnly?: boolean }
         onFiltersChange={setFilters}
         windows={sorted.map((w) => ({ id: w.id, name: w.name }))}
         onDownload={downloadBrokerFormPdf}
-        onExport={(kind) => exportBrokerForms(policyYearId, effective, kind)}
+        onExport={(kind) =>
+          exportBrokerForms(policyYearId, effective, kind, { fullIds: canWrite && fullIds })
+        }
+        canExportPdfs={canWrite}
+        idNumbers={canWrite ? { full: fullIds, onChange: setFullIds } : undefined}
         onAcknowledge={readOnly ? undefined : (item) => acknowledge.mutateAsync({ id: item.id })}
         emptyHint="No forms yet. They appear here as members sign them during an open enrolment period."
       />

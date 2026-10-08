@@ -16,7 +16,8 @@ for (const [surface, url, scenery] of [
     // A real right-click on the scenery must cancel the browser's media menu.
     await page.locator(scenery).click({ button: "right", position: { x: 20, y: 20 } });
     await expect(page.locator("html")).toHaveAttribute("data-media-menu-prevented", "true");
-    const logo = page.locator("img[alt='Inspro Insurance Brokers']");
+    // The brand logo's alt text is the product name (built-in brand: "Inspro").
+    const logo = page.locator("img[alt='Inspro']");
     const allowed = await logo.evaluate(element => ({
       menu: element.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true })),
       drag: element.dispatchEvent(new DragEvent("dragstart", { bubbles: true, cancelable: true })),

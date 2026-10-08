@@ -79,7 +79,7 @@ export function usePolicyYears() {
 
 // Identity types + the query key live in api/me.ts so the router guard (which
 // resolves /me before the shell renders) shares them.
-export type { AccessibleClient, MeResponse } from "./me";
+export type { AccessibleClient, MeFirm, MeResponse } from "./me";
 
 export function useMe() {
   const activeClientId = useActiveClientId();
@@ -1081,6 +1081,10 @@ export interface AdminClient {
    *  links — see `PATCH /admin/clients/{id}`, which never moves it on a plain
    *  rename. */
   slug: string | null;
+  /** Kill switches for the company's employee portal and HR portal. Turning
+   *  one off signs out everyone on that surface for this company. */
+  portal_enabled: boolean;
+  hr_enabled: boolean;
 }
 
 export interface AdminUser {
@@ -1101,28 +1105,26 @@ export interface AdminInvitation {
   role: string;
   status: string;
   broker_firm_id: string;
-  token: string;
   user_id: string;
   expires_at: string | null;
 }
 
-/** Firms are internal plumbing on a single-firm platform — the only consumer is
- *  FirmPicker, which renders nothing unless several somehow exist. There is no
- *  create-firm UI; bootstrap is scripts/create_system_admin.py --firm-name. */
+/** `POST /admin/invitations` also returns the single-use acceptance link,
+ *  shown once. `invite_url` is absolute (`https://<staff host>/sign-in#invite=…`)
+ *  and null while the firm has no web address for its staff site. */
+export interface CreatedInvitation extends AdminInvitation {
+  invite_url: string | null;
+  invite_token: string;
+}
+
+/** The firm list behind FirmPicker (system_admin only), which renders nothing
+ *  unless there are several firms to choose between. Firms are created and
+ *  managed in the platform console (`api/platform.ts`). */
 export function useBrokerFirms(enabled = true) {
   return useQuery({
     queryKey: ["admin", "broker-firms"],
     queryFn: () => api.get<BrokerFirmOut[]>("/admin/broker-firms"),
     enabled,
-  });
-}
-
-export function useCreateBrokerFirm() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (name: string) =>
-      api.post<BrokerFirmOut>("/admin/broker-firms", { name }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["admin", "broker-firms"] }),
   });
 }
 
@@ -1166,8 +1168,15 @@ export function usePatchClient() {
       name?: string;
       legal_name?: string | null;
       slug?: string;
+      portal_enabled?: boolean;
+      hr_enabled?: boolean;
     }) => api.patch<AdminClient>(`/admin/clients/${id}`, body),
-    onSuccess: () => {
+    onSuccess: (client) => {
+      // The saved row at once, so a switch never shows its old position while
+      // the list refetches.
+      qc.setQueryData<AdminClient[]>(["admin", "clients"], (list) =>
+        list?.map((c) => (c.id === client.id ? client : c)),
+      );
       qc.invalidateQueries({ queryKey: ["admin", "clients"] });
       qc.invalidateQueries({ queryKey: ["me"] });
       qc.invalidateQueries({ queryKey: ["dashboard-summary"] });
@@ -1204,6 +1213,9 @@ export function usePatchUser() {
       id: string;
       patch: Partial<Pick<AdminUser, "display_name" | "role" | "status" | "external_id" | "broker_mfa_required">> & {
         client_ids?: string[];
+        /** Required when a system_admin moves to a firm role (a platform
+         *  admin has no firm); refused with any other change. */
+        broker_firm_id?: string;
       };
     }) => api.patch<AdminUser>(`/admin/users/${id}`, patch),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["admin", "users"] }),
@@ -1227,7 +1239,7 @@ export function useCreateInvitation() {
       client_ids?: string[];
       broker_firm_id?: string; // system_admin only; see useCreateClient
       external_id?: string;
-    }) => api.post<AdminInvitation>("/admin/invitations", body),
+    }) => api.post<CreatedInvitation>("/admin/invitations", body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["admin", "invitations"] });
       qc.invalidateQueries({ queryKey: ["admin", "users"] });

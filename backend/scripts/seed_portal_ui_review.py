@@ -23,8 +23,9 @@ sys.path.insert(0, str(ROOT))
 
 from sqlalchemy import select
 
+from app.core.settings import assert_local_dev_database
 from app.core.storage import LocalStorage, document_path
-from app.db.session import SessionLocal, engine
+from app.db.session import DATABASE_URL, SessionLocal, engine
 from app.models import (
     Claim,
     Client,
@@ -45,6 +46,7 @@ MARKER = "UI REVIEW SAMPLE"
 
 
 def main() -> None:
+    assert_local_dev_database(DATABASE_URL, tool="scripts/seed_portal_ui_review.py")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--employee-id", required=True)
     parser.add_argument("--cleanup", action="store_true")

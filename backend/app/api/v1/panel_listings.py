@@ -24,13 +24,19 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from app.core.audit import write_audit
-from app.core.auth import CurrentUser, get_current_user
+from app.core.auth import (
+    ROLE_SYSTEM_ADMIN,
+    CurrentUser,
+    client_selection_stale,
+    get_current_user,
+)
 from app.core.clock import today as business_today
 from app.core.deps import (
     _deny_cross_tenant,
     assert_policy_year_for_user,
     load_panel_listing,
     load_policy_year,
+    policy_year_company,
     require_client_id,
     tenant_or_global,
 )
@@ -111,6 +117,24 @@ def _tagged_year_ids(db: Session, listing_id: str) -> list[str]:
     )
 
 
+def require_library_scope(user: CurrentUser, owner_id: str | None = None) -> None:
+    """Refuse a platform admin's panel-library write without the right company.
+
+    Library rows (listings here, e-cards in `panel_cards`) live in the firm's
+    schema, which a firm-less system_admin reaches only through its selected
+    company — with none selected the session stays on `public` and the row
+    would land there (409 `client_selection_required`). A legacy row pinned to
+    a company (`owner_id`) is that company's, so a selection of any other is
+    stale. Firm roles are pinned to their own firm, and `user_owns` already
+    confines them to their company.
+    """
+    if user.role != ROLE_SYSTEM_ADMIN:
+        return
+    active = require_client_id(user)
+    if owner_id is not None and owner_id != active:
+        raise client_selection_stale()
+
+
 def _assert_unique_combo(
     db: Session, payload: PanelListingIn, exclude_id: str | None = None
 ) -> None:
@@ -183,6 +207,7 @@ def create_panel_listing(
 ) -> PanelListingOut:
     """Create a shared library entry — uploaded once, selectable by every
     company via its policy-year panel tags."""
+    require_library_scope(user)
     _assert_unique_combo(db, payload)
     listing = PanelListing(
         client_id=None,
@@ -214,6 +239,7 @@ def update_panel_listing(
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> PanelListingOut:
+    require_library_scope(user, listing.client_id)
     changes = payload.model_dump(exclude_unset=True)
     if not changes:
         return _listing_out(
@@ -261,6 +287,7 @@ def delete_panel_listing(
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> None:
+    require_library_scope(user, listing.client_id)
     write_audit(
         db,
         user,
@@ -290,6 +317,7 @@ async def upload_panel_clinics(
 ) -> PanelUploadResult:
     """Replace the listing's clinics with the uploaded workbook (atomic —
     a parse failure leaves the previous list untouched)."""
+    require_library_scope(user, listing.client_id)
     async with saved_upload(file, WORKBOOK_SUFFIXES) as tmp_path:
         try:
             parsed = parse_panel_workbook(tmp_path)
@@ -492,6 +520,7 @@ def set_listing_companies(
     """Enable this listing for exactly the given companies (on each company's
     target policy year). Companies not listed are disabled on their target
     year only — historical years keep their tags."""
+    require_library_scope(user, listing.client_id)
     companies = _listing_companies(db, listing, user)
     by_client = {c.client_id: c for c in companies}
     wanted = set(payload.client_ids)
@@ -585,6 +614,7 @@ def set_policy_year_panels(
     reference data, not priced configuration, and networks change mid-year.
     """
     policy_year = assert_policy_year_for_user(policy_year_id, user, db)
+    policy_year_company(policy_year, user)
     wanted = list(dict.fromkeys(payload.panel_listing_ids))  # dedupe, keep order
     if wanted:
         # A listing is taggable when it's a shared library entry (client_id

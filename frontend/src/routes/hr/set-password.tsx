@@ -1,11 +1,12 @@
 /** HR set / reset password: redeem a single-use token (from the emailed link
  * or a forced-rotation redirect) and choose a password. */
-import { useMemo, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { Lock, ShieldCheck } from "lucide-react";
 import { adoptSession, isTokenResult, useHrMfa, useHrSetPassword } from "@/api/hr";
 import { errorCode, formatError } from "@/lib/errors";
 import { PASSWORD_MAX_LENGTH } from "@/lib/loginValidation";
+import { useSetPasswordToken } from "@/lib/setPasswordToken";
 import { hrPath } from "@/lib/tenant";
 import { MFA_CODE_MAX_LENGTH, canSubmitMfaCode, normalizeMfaCode } from "@/lib/mfa";
 import { AuthScene } from "@/components/auth/AuthScene";
@@ -31,10 +32,9 @@ export function HrSetPasswordPage() {
   const setPw = useHrSetPassword();
   const mfa = useHrMfa();
 
-  const token = useMemo(
-    () => new URLSearchParams(window.location.search).get("token") ?? "",
-    [],
-  );
+  // From the link's `#token=` (or a legacy `?token=`), else the sign-in
+  // hand-over; scrubbed from the address bar once read.
+  const token = useSetPasswordToken("hr");
   const [step, setStep] = useState<"password" | "mfa">("password");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");

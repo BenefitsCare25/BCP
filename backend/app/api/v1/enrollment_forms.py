@@ -5,7 +5,7 @@
 - POST /enrollment-windows/{id}/form-config/documents    upload a document to read
 - GET  /enrollment-windows/{id}/form-config/documents/{doc_id}
 - GET  /policy-years/{id}/enrollment-forms               register (filters + paging)
-- GET  /policy-years/{id}/enrollment-forms/export.zip    PDFs
+- GET  /policy-years/{id}/enrollment-forms/export.zip    PDFs (write-capable roles)
 - GET  /policy-years/{id}/enrollment-forms/export.xlsx   summary + family sheet
 - POST /policy-years/{id}/enrollment-forms/paper         file a scanned paper form
 - GET  /enrollment-forms/{id}/pdf
@@ -13,7 +13,12 @@
 
 Tenant scoping rides on ``load_enrollment_window`` / ``load_policy_year`` and,
 for a submission id, on the caller's client. Registered inside the broker
-``require_write_access`` loop, so broker viewers stay read-only.
+``require_write_access`` loop, so broker viewers stay read-only. The Excel
+summary masks NRIC/FIN unless a write-capable role asks for ``masked=false``
+(the Reports Center rule, `reports.assert_masking_allowed`). The PDF ZIP has no
+masked form — signed forms carry the full identification numbers — so it is
+for write-capable roles only; a viewer keeps the masked summary and the single
+form view.
 """
 from __future__ import annotations
 
@@ -33,12 +38,13 @@ from fastapi import (
 )
 from sqlalchemy.orm import Session
 
+from app.api.v1.reports import assert_masking_allowed
 from app.core.audit import write_access_audit, write_audit
 from app.core.auth import CurrentUser, get_current_user
-from app.core.deps import load_enrollment_window, load_policy_year
+from app.core.deps import load_enrollment_window, load_policy_year, require_broker_admin
 from app.core.downloads import attachment_header
 from app.core.rate_limit import limiter
-from app.core.storage import get_storage
+from app.core.storage import StorageScopeError, company_firm_id, get_storage
 from app.db.session import get_db
 from app.models import Client, Employee, EnrollmentWindow, PolicyYear, StoredDocument
 from app.models.enrollment_form import (
@@ -54,7 +60,7 @@ from app.schemas.enrollment_forms import (
     FormSettings,
     FormSubmissionSummary,
 )
-from app.services.claims import attach_document
+from app.services.claims import assert_document_scope, attach_document
 from app.services.enrollment_forms.config import config_out, save_settings
 from app.services.enrollment_forms.context import submission_summary
 from app.services.enrollment_forms.register import (
@@ -144,8 +150,11 @@ def download_form_document(
     ):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Document not found")
     try:
+        assert_document_scope(
+            doc.storage_path, company_firm_id(db, window.client_id), window.client_id
+        )
         content = get_storage().read(doc.storage_path)
-    except FileNotFoundError:
+    except (FileNotFoundError, StorageScopeError):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Document not found") from None
     return Response(
         content=content,
@@ -204,14 +213,19 @@ def export_forms_zip(
     source: str | None = _SOURCE_Q,
     q: str | None = _TEXT_Q,
     year: PolicyYear = Depends(load_policy_year),
-    user: CurrentUser = Depends(get_current_user),
+    user: CurrentUser = Depends(require_broker_admin),
     db: Session = Depends(get_db),
 ) -> Response:
+    """Every matching signed form in one archive — write-capable roles only
+    (see the module docstring)."""
     spool, written = build_zip(db, _filter(year, window_id, status_, source, q, False))
     if not written:
         spool.close()
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No forms match these filters.")
-    write_access_audit(db, user, request, "enrollment_form.export_zip", "policy_year", year.id)
+    write_audit(
+        db, user, "enrollment_form.export_zip", "policy_year", year.id,
+        after={"forms": written}, request=request, client_id=year.client_id,
+    )
     db.commit()
     return zip_response(spool, f"Enrolment forms {year.year}.zip")
 
@@ -223,15 +237,28 @@ def export_forms_xlsx(
     status_: str | None = _STATUS_Q,
     source: str | None = _SOURCE_Q,
     q: str | None = _TEXT_Q,
+    masked: bool = True,
     year: PolicyYear = Depends(load_policy_year),
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> Response:
-    content = build_workbook(db, _filter(year, window_id, status_, source, q, False))
-    write_access_audit(db, user, request, "enrollment_form.export_xlsx", "policy_year", year.id)
+    assert_masking_allowed(user, masked)
+    workbook = build_workbook(
+        db, _filter(year, window_id, status_, source, q, False), masked=masked
+    )
+    write_audit(
+        db, user, "enrollment_form.export_xlsx", "policy_year", year.id,
+        after={
+            "masked": masked,
+            "forms": workbook.forms,
+            "family_members": workbook.family_members,
+        },
+        request=request,
+        client_id=year.client_id,
+    )
     db.commit()
     return Response(
-        content=content,
+        content=workbook.content,
         media_type=_XLSX,
         headers={"Content-Disposition": attachment_header(f"Enrolment forms {year.year}.xlsx")},
     )
@@ -297,7 +324,7 @@ def download_form_pdf(
     content, doc = found
     write_access_audit(
         db, user, request, "enrollment_form.download", "enrollment_form", sub.id,
-        employee_id=sub.employee_id,
+        employee_id=sub.employee_id, client_id=sub.client_id,
     )
     db.commit()
     return Response(

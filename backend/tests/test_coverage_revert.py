@@ -472,7 +472,9 @@ def test_revert_to_default_is_undoable(client: TestClient, system_admin_request)
     with SessionLocal() as s:  # gone
         assert (EMP1, PROD_ID) not in load_overrides(s, PY_ID, [EMP1])
 
-    undo = client.post(f"/api/v1/bulk-plan-updates/{batch_id}/undo", json={})
+    undo = system_admin_request(
+        client, "POST", f"/api/v1/bulk-plan-updates/{batch_id}/undo", json={}
+    )
     assert undo.status_code == 200, undo.text
     with SessionLocal() as s:  # back, with its plan
         ov = load_overrides(s, PY_ID, [EMP1]).get((EMP1, PROD_ID))
@@ -493,8 +495,8 @@ def test_revert_to_baseline_is_undoable(client: TestClient, system_admin_request
     with SessionLocal() as s:
         assert load_overrides(s, PY_ID, [EMP1])[(EMP1, PROD_ID)].plan_code == "GOLD"
 
-    assert client.post(
-        f"/api/v1/bulk-plan-updates/{batch_id}/undo", json={}
+    assert system_admin_request(
+        client, "POST", f"/api/v1/bulk-plan-updates/{batch_id}/undo", json={}
     ).status_code == 200
     with SessionLocal() as s:  # the pre-revert override is restored
         assert load_overrides(s, PY_ID, [EMP1])[(EMP1, PROD_ID)].plan_code == "SILVER"
@@ -519,7 +521,9 @@ def test_undo_refuses_to_clobber_a_later_change(client: TestClient, system_admin
     ).json()["batch_id"]
     _add_override(plan_code="SILVER")  # somebody moves them again afterwards
 
-    undo = client.post(f"/api/v1/bulk-plan-updates/{batch_id}/undo", json={})
+    undo = system_admin_request(
+        client, "POST", f"/api/v1/bulk-plan-updates/{batch_id}/undo", json={}
+    )
     assert undo.status_code == 200, undo.text
     assert undo.json()["counts"].get("skipped") == 1
     with SessionLocal() as s:  # the later change stands
@@ -570,8 +574,8 @@ def test_undoing_a_revert_shows_in_the_coverage_timeline(
     batch_id = system_admin_request(
         client, "POST", f"/api/v1/employees/{EMP1}/coverage/revert", json={"target": "default"}
     ).json()["batch_id"]
-    assert client.post(
-        f"/api/v1/bulk-plan-updates/{batch_id}/undo", json={}
+    assert system_admin_request(
+        client, "POST", f"/api/v1/bulk-plan-updates/{batch_id}/undo", json={}
     ).status_code == 200
 
     actions = [

@@ -27,6 +27,13 @@ from app.schemas.enrollment_forms import (
     FormRule,
     FormSettings,
 )
+from app.services.brand import (
+    DEFAULT_BRAND,
+    DEFAULT_PRODUCT_NAME,
+    DEFAULT_SUPPORT_EMAIL,
+    Brand,
+    resolve_client_brand,
+)
 from app.services.cohort_tiers import list_product_tiers
 from app.services.flex_pricing_resolver import dependant_age_limits, get_pricing
 
@@ -83,12 +90,26 @@ DEFAULT_ELIGIBILITY_NOTES: tuple[str, ...] = (
     "Dependants must be residing with the employee in Singapore.",
 )
 
-# The single broker firm's helpline, as printed on every paper form it issued.
-# Editable per period in the form setup.
+# The built-in brand's helpline, as printed on every paper form the platform
+# owner issued. Editable per period in the form setup.
 DEFAULT_HELPLINE = (
     "For any queries on this form, please contact Inspro Insurance Brokers at "
     "6448 7707 (helpdesk@inspro.com.sg)."
 )
+
+
+def default_helpline(brand: Brand) -> str:
+    """The generated helpline: the built-in wording until the brand names its
+    own product or support contacts."""
+    builtin = (DEFAULT_PRODUCT_NAME, DEFAULT_SUPPORT_EMAIL, None)
+    if (brand.product_name, brand.support_email, brand.support_phone) == builtin:
+        return DEFAULT_HELPLINE
+    contact = (
+        f"{brand.support_phone} ({brand.support_email})"
+        if brand.support_phone
+        else brand.support_email
+    )
+    return f"For any queries on this form, please contact {brand.product_name} at {contact}."
 
 DEFAULT_SUBMISSION_NOTE = (
     "Thank you for your submission. Your broker will acknowledge your enrolment "
@@ -164,7 +185,9 @@ def default_contributions(products: list[FormProductOut]) -> dict[str, FormContr
     return out
 
 
-def default_settings(products: list[FormProductOut]) -> FormSettings:
+def default_settings(
+    products: list[FormProductOut], brand: Brand = DEFAULT_BRAND
+) -> FormSettings:
     codes = {p.product_code for p in products}
     rules = [
         FormRule(product_code=code, requires_product_code="GHS")
@@ -175,7 +198,7 @@ def default_settings(products: list[FormProductOut]) -> FormSettings:
         clauses=list(DEFAULT_CLAUSES),
         eligibility_notes=list(DEFAULT_ELIGIBILITY_NOTES),
         submission_note=DEFAULT_SUBMISSION_NOTE,
-        helpline=DEFAULT_HELPLINE,
+        helpline=default_helpline(brand),
         rules=rules,
         contributions=default_contributions(products),
     )
@@ -199,7 +222,10 @@ def resolve_settings(
             return FormSettings.model_validate(row.settings or {}), row
         except ValidationError:
             pass
-    return default_settings(products if products is not None else form_products(db, window)), row
+    return default_settings(
+        products if products is not None else form_products(db, window),
+        resolve_client_brand(db, window.client_id),
+    ), row
 
 
 def scheme_age_limits(db: Session, policy_year_id: str) -> dict[str, dict[str, int]]:

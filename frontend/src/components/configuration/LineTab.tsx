@@ -1,4 +1,4 @@
-import { SystemAdminOnly } from "@/components/auth/SystemAdminOnly";
+import { FirmOwnerOnly } from "@/components/auth/FirmOwnerOnly";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Pencil, Trash2, Upload, X } from "lucide-react";
 import {
@@ -313,7 +313,7 @@ export function LineTab({
                           )}
                           {isEditing ? "Close edit" : "Edit"}
                         </Button>
-                        <SystemAdminOnly><Button
+                        <FirmOwnerOnly><Button
                           variant="outline"
                           size="sm"
                           disabled={removeProduct.isPending}
@@ -321,7 +321,7 @@ export function LineTab({
                           className="text-error hover:text-error"
                         >
                           <Trash2 className="size-3.5" /> Remove
-                        </Button></SystemAdminOnly>
+                        </Button></FirmOwnerOnly>
                       </div>}
                     </div>
                   </CardHeader>
@@ -386,7 +386,7 @@ export function LineTab({
         </Card>
       )}
 
-      <SystemAdminOnly><AlertDialog
+      <FirmOwnerOnly><AlertDialog
         open={removeTarget !== null}
         onOpenChange={(open) => !open && setRemoveTarget(null)}
         title={`Remove ${removeTarget?.display_name ?? "product"}?`}
@@ -397,7 +397,7 @@ export function LineTab({
         onConfirm={async () => {
           if (removeTarget) await doRemove(removeTarget);
         }}
-      /></SystemAdminOnly>
+      /></FirmOwnerOnly>
       <AlertDialog
         open={unsavedPromptOpen}
         onOpenChange={(open) => {

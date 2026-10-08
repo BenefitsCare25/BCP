@@ -1,8 +1,9 @@
 /** The enrolment-form register, shared by the broker's Enrolment page and the
  * HR portal: filters, exports, and one row per signed (or scanned) form.
  *
- * The two surfaces differ only in what they may DO to a row — HR downloads,
- * the broker also acknowledges — so that is the one thing passed in. */
+ * The two surfaces differ only in what they may DO — HR downloads, the broker
+ * also acknowledges — and in which roles may pull the bulk PDF ZIP or (broker
+ * only) full ID numbers in the Excel summary, so those are what is passed in. */
 import { CheckCircle2, Download, FileArchive, FileSpreadsheet, Loader2, Search } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -18,6 +19,7 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/native-select";
 import { PaginationControls } from "@/components/ui/pagination-controls";
+import { Segmented } from "@/components/ui/segmented";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatError } from "@/lib/errors";
 import { fmtDateTime } from "@/lib/format";
@@ -62,6 +64,8 @@ export function FormRegisterView({
   showSource = true,
   onDownload,
   onExport,
+  canExportPdfs,
+  idNumbers,
   onAcknowledge,
   emptyHint,
 }: {
@@ -75,6 +79,12 @@ export function FormRegisterView({
   showSource?: boolean;
   onDownload: (item: FormRegisterItem) => Promise<unknown>;
   onExport: (kind: "zip" | "xlsx") => Promise<unknown>;
+  /** The bulk ZIP holds every signed form unredacted, so each surface offers
+   *  it to its write/administrator roles only; the server refuses the rest. */
+  canExportPdfs: boolean;
+  /** Whether the Excel summary carries full NRIC/FIN numbers. Passed only for
+   *  roles the server lets unmask; without it the summary is always masked. */
+  idNumbers?: { full: boolean; onChange: (full: boolean) => void };
   onAcknowledge?: (item: FormRegisterItem) => Promise<unknown>;
   emptyHint: string;
 }) {
@@ -89,7 +99,22 @@ export function FormRegisterView({
       <div className="flex flex-wrap items-center gap-2">
         <Badge variant="warn">{counts.submitted ?? 0} awaiting review</Badge>
         <Badge variant="info">{counts.acknowledged ?? 0} acknowledged</Badge>
-        <div className="ml-auto flex gap-2">
+        <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
+          {/* Beside the one download it qualifies, as on the Reports Center's
+              workbook rows. Masked unless deliberately switched. */}
+          {idNumbers && (
+            <div role="group" aria-label="NRIC/FIN numbers in the Excel summary">
+              <Segmented
+                value={idNumbers.full ? "full" : "masked"}
+                onChange={(v) => idNumbers.onChange(v === "full")}
+                disabled={busy === "xlsx"}
+                options={[
+                  { value: "masked", label: "Masked" },
+                  { value: "full", label: "Unmasked" },
+                ]}
+              />
+            </div>
+          )}
           <Button
             variant="outline"
             size="sm"
@@ -100,16 +125,18 @@ export function FormRegisterView({
             {busy === "xlsx" ? <Loader2 className="size-4 animate-spin" /> : <FileSpreadsheet className="size-4" />}
             Excel summary
           </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            className="h-11 sm:h-9"
-            disabled={!data?.total || busy === "zip"}
-            onClick={() => void run("zip", () => onExport("zip"))}
-          >
-            {busy === "zip" ? <Loader2 className="size-4 animate-spin" /> : <FileArchive className="size-4" />}
-            All PDFs (.zip)
-          </Button>
+          {canExportPdfs && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-11 sm:h-9"
+              disabled={!data?.total || busy === "zip"}
+              onClick={() => void run("zip", () => onExport("zip"))}
+            >
+              {busy === "zip" ? <Loader2 className="size-4 animate-spin" /> : <FileArchive className="size-4" />}
+              All PDFs (.zip)
+            </Button>
+          )}
         </div>
       </div>
 

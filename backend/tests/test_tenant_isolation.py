@@ -1153,9 +1153,13 @@ def test_bulk_detail_cross_tenant_404(client_as_a: TestClient) -> None:
     assert res.status_code == 404
 
 
-def test_bulk_undo_cross_tenant_404(client_as_a: TestClient) -> None:
+def test_bulk_undo_cross_tenant_refused(client_as_a: TestClient) -> None:
+    # Undo is system_admin only, so a broker is refused before the batch is
+    # even looked up: 403 for any id, which reveals nothing about B's batch.
     res = client_as_a.post(f"/api/v1/bulk-plan-updates/{BULK_B}/undo")
-    assert res.status_code == 404
+    assert res.status_code == 403
+    with SessionLocal() as session:
+        assert session.query(BulkPlanUpdate).filter(BulkPlanUpdate.undo_of == BULK_B).count() == 0
 
 
 def test_member_facets_cross_tenant_404(client_as_a: TestClient) -> None:
@@ -1777,6 +1781,59 @@ def test_dependant_documents_cross_tenant_404(client_as_a: TestClient) -> None:
     assert res.status_code == 404
 
 
+
+class _RecordingStorage:
+    """Storage stub that records which keys a handler asked to read."""
+
+    def __init__(self) -> None:
+        self.reads: list[str] = []
+
+    def read(self, path: str) -> bytes:
+        self.reads.append(path)
+        return b"%PDF-1.4 proof"
+
+
+def test_dependant_document_outside_its_company_is_never_read(monkeypatch) -> None:
+    """A document row whose key is filed under another company is a 404 — the
+    bytes are never read — while the dependant's own document still serves."""
+    from app.api.v1 import dependants as dependants_api
+    from app.models import StoredDocument
+    from app.models.stored_document import DOC_ENTITY_DEPENDANT
+
+    storage = _RecordingStorage()
+    monkeypatch.setattr(dependants_api, "get_storage", lambda: storage)
+    keys = {
+        "own": f"{DEMO_BROKER_FIRM_ID}/{CLIENT_B_ID}/dependant/{DEP_B}/own.pdf",
+        "foreign": f"{DEMO_BROKER_FIRM_ID}/{DEMO_CLIENT_ID}/dependant/{DEP_B}/a.pdf",
+    }
+    ids: dict[str, str] = {}
+    with SessionLocal() as session:
+        for label, key in keys.items():
+            doc = StoredDocument(
+                client_id=CLIENT_B_ID, entity_type=DOC_ENTITY_DEPENDANT, entity_id=DEP_B,
+                file_name=f"{label}.pdf", size_bytes=14, sha256="0" * 64, storage_path=key,
+            )
+            session.add(doc)
+            session.flush()
+            ids[label] = doc.id
+        session.commit()
+    app.dependency_overrides[get_current_user] = _user_b
+    try:
+        client = TestClient(app)
+        base = f"/api/v1/dependants/{DEP_B}/documents"
+        refused = client.get(f"{base}/{ids['foreign']}/download")
+        assert refused.status_code == 404
+        assert storage.reads == []
+        served = client.get(f"{base}/{ids['own']}/download")
+        assert served.status_code == 200, served.text
+        assert storage.reads == [keys["own"]]
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+        with SessionLocal() as session:
+            session.query(StoredDocument).filter(StoredDocument.id.in_(ids.values())).delete()
+            session.commit()
+
+
 # ── Panel clinic listings (clinic locator) ───────────────────────────────────
 def test_panel_listing_clinics_cross_tenant_404(client_as_a: TestClient) -> None:
     res = client_as_a.get(f"/api/v1/panel-listings/{PANEL_B}/clinics")
@@ -1851,6 +1908,23 @@ def test_panel_card_cross_tenant_404(client_as_a: TestClient) -> None:
     assert client_as_a.put(
         f"/api/v1/panel-cards/{CARD_B}/placements", json={"fields": []}
     ).status_code == 404
+
+
+def test_card_artwork_outside_its_company_is_a_404(monkeypatch) -> None:
+    """B's card points at a key outside B's firm and company: there is nothing
+    of this card's to serve (404, not a storage-outage 502), and it is never
+    read."""
+    from app.api.v1 import panel_cards as panel_cards_api
+
+    storage = _RecordingStorage()
+    monkeypatch.setattr(panel_cards_api, "get_storage", lambda: storage)
+    app.dependency_overrides[get_current_user] = _user_b
+    try:
+        res = TestClient(app).get(f"/api/v1/panel-cards/{CARD_B}/artwork/front")
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+    assert res.status_code == 404
+    assert storage.reads == []
 
 
 def test_panel_card_list_excludes_other_tenant(client_as_a: TestClient) -> None:

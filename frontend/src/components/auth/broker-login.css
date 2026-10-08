@@ -2,12 +2,19 @@
   --broker-surface: #fff;
   --broker-ink: #19202c;
   --broker-muted: #5d6574;
+  /* Brand-following: a custom firm brand re-derives these (end of file). */
   --broker-red: #cf2030;
   --broker-red-hover: #ae1525;
   --broker-red-soft: #f5cbd1;
   --broker-red-ink: #762331;
+  --broker-red-wash: #fff0f2;
+  --broker-on-red: #fff;
+  /* Error status: alerts, field errors and invalid inputs keep these. */
   --broker-alert: #fff0f2;
+  --broker-error-ink: #762331;
+  --broker-error-line: #cf2030;
   --broker-line: #e2e4e8;
+  --broker-input-line: #858c99;
   --broker-scene-width: 62%;
   --broker-curve-width: 64px;
   position: relative;
@@ -31,23 +38,64 @@
 .broker-login__content { position: relative; z-index: 2; min-height: 100svh; margin-left: var(--broker-scene-width); padding: 72px 48px 100px 34px; display: flex; flex-direction: column; justify-content: center; background: var(--broker-surface); }
 .broker-login__curve { position: absolute; inset: 0 auto 0 calc(-1 * var(--broker-curve-width)); width: calc(var(--broker-curve-width) + 1px); height: 100%; fill: var(--broker-surface); pointer-events: none; }
 .broker-login__form { width: 100%; max-width: 380px; margin-inline: auto; }
-.broker-login__logo { display: block; width: 210px; height: auto; margin-bottom: 54px; }
-.broker-login h1 { font-size: clamp(30px, 2.5vw, 40px); font-weight: 700; line-height: 1.15; letter-spacing: -0.02em; text-wrap: balance; margin: 0; }
-.broker-login__subtitle { margin: 10px 0 0; font-size: 17px; line-height: 1.5; color: var(--broker-muted); }
+.broker-login__logo { display: block; width: 210px; height: auto; max-height: 80px; object-fit: contain; object-position: left center; margin-bottom: 54px; }
+.broker-login__wordmark { display: flex; margin-bottom: 54px; font-size: 26px; font-weight: 700; line-height: 1.2; color: var(--broker-ink); overflow-wrap: anywhere; }
+.broker-login h1 { font-size: clamp(30px, 2.5vw, 40px); font-weight: 700; line-height: 1.15; letter-spacing: -0.02em; text-wrap: balance; overflow-wrap: anywhere; margin: 0; }
+.broker-login__subtitle { margin: 10px 0 0; font-size: 17px; line-height: 1.5; color: var(--broker-muted); overflow-wrap: anywhere; }
 .broker-login__actions { margin-top: 36px; }
 .broker-login__explanation { margin: 0 0 18px; font-size: 15px; line-height: 1.6; color: var(--broker-muted); }
-.broker-login .broker-login__submit { position: relative; width: 100%; min-height: 54px; height: auto; padding: 13px 42px; border-radius: 7px; background: var(--broker-red); color: var(--broker-surface); font-size: 16px; font-weight: 600; white-space: normal; line-height: 1.5; box-shadow: none; transition: background-color 160ms; }
+.broker-login .broker-login__submit { position: relative; width: 100%; min-height: 54px; height: auto; padding: 13px 42px; border-radius: 7px; background: var(--broker-red); color: var(--broker-on-red); font-size: 16px; font-weight: 600; white-space: normal; line-height: 1.5; box-shadow: none; transition: background-color 160ms; }
 .broker-login .broker-login__submit:hover:not(:disabled) { background: var(--broker-red-hover); }
 .broker-login .broker-login__submit:disabled { opacity: 1; background: var(--broker-red-soft); color: var(--broker-red-ink); }
 .broker-login__arrow { position: absolute; right: 16px; }
 .broker-login :is(button, a):focus-visible { outline: 3px solid var(--broker-red); outline-offset: 4px; box-shadow: none; }
-.broker-login__alert { display: flex; align-items: flex-start; gap: 10px; padding: 14px; border-radius: 7px; margin-bottom: 18px; background: var(--broker-alert); color: var(--broker-red-ink); font-size: 14px; line-height: 1.5; overflow-wrap: anywhere; }
+.broker-login__alert { display: flex; align-items: flex-start; gap: 10px; padding: 14px; border-radius: 7px; margin-bottom: 18px; background: var(--broker-alert); color: var(--broker-error-ink); font-size: 14px; line-height: 1.5; overflow-wrap: anywhere; }
 .broker-login__alert svg { flex: none; margin-top: 2px; }
 .broker-login__alert p { margin: 0; }
 .broker-login__error { margin-top: 16px; margin-bottom: 0; }
 .broker-login__support { font-size: 13px; line-height: 1.7; text-align: center; margin: 30px 0 0; color: var(--broker-muted); }
 .broker-login__support span { color: var(--broker-red-hover); }
-.broker-login__footer { position: absolute; bottom: 30px; left: 34px; right: 48px; display: flex; align-items: center; justify-content: center; gap: 7px; font-size: 12px; color: var(--broker-muted); }
+.broker-login__footer { position: absolute; bottom: 30px; left: 34px; right: 48px; display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 4px 16px; font-size: 12px; color: var(--broker-muted); }
+.broker-login__secure { display: inline-flex; align-items: center; gap: 7px; }
+.broker-login__attribution { margin: 0; font-size: 12px; color: var(--broker-muted); }
+/* Email and password, invitation and two-factor forms. */
+.broker-login .broker-login__submit--secondary { background: var(--broker-surface); color: var(--broker-ink); border: 1px solid var(--broker-input-line); }
+.broker-login .broker-login__submit--secondary:hover:not(:disabled) { background: var(--broker-red-wash); border-color: var(--broker-red); color: var(--broker-red-ink); }
+.broker-login .broker-login__submit--secondary:disabled { background: var(--broker-surface); color: var(--broker-muted); }
+.broker-login__fields { display: flex; flex-direction: column; gap: 18px; margin: 0; }
+.broker-login__fields > .broker-login__alert { margin: 0; }
+.broker-login__field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.broker-login .broker-login__field label { font-size: 15px; font-weight: 500; line-height: 1.4; letter-spacing: 0; text-transform: none; color: var(--broker-ink); }
+.broker-login__optional { font-weight: 400; color: var(--broker-muted); }
+.broker-login__control { position: relative; }
+.broker-login input { height: 50px; padding: 0 14px; border: 1px solid var(--broker-input-line); border-radius: 7px; background: var(--broker-surface); color: var(--broker-ink); font-size: 16px; box-shadow: none; caret-color: var(--broker-red); transition: border-color 160ms; }
+.broker-login input::placeholder { color: var(--broker-muted); opacity: 1; }
+.broker-login input:hover { border-color: var(--broker-muted); }
+.broker-login input:focus-visible { border-color: var(--broker-red); outline: 2px solid var(--broker-red); outline-offset: 2px; box-shadow: none; }
+.broker-login input[aria-invalid="true"] { border-color: var(--broker-error-line); }
+.broker-login input.broker-login__input--revealable { padding-right: 52px; }
+.broker-login input.broker-login__code { text-align: center; font-size: 20px; font-weight: 600; letter-spacing: 0.3em; }
+.broker-login__reveal { position: absolute; top: 3px; right: 3px; width: 44px; height: 44px; display: grid; place-items: center; border-radius: 6px; background: transparent; color: var(--broker-muted); }
+.broker-login__reveal:hover { background: var(--broker-red-wash); color: var(--broker-red-ink); }
+.broker-login__hint { margin: 0; font-size: 13px; line-height: 1.5; color: var(--broker-muted); }
+.broker-login__field-error { margin: 0; font-size: 13px; line-height: 1.5; color: var(--broker-error-ink); overflow-wrap: anywhere; }
+.broker-login__divider { display: flex; align-items: center; gap: 14px; margin: 26px 0; font-size: 13px; line-height: 1; color: var(--broker-muted); }
+.broker-login__divider::before, .broker-login__divider::after { content: ""; flex: 1; height: 1px; background: var(--broker-line); }
+.broker-login__text-button { display: block; min-height: 44px; margin: 12px auto 0; padding: 10px 12px; border-radius: 6px; background: transparent; font-size: 14px; font-weight: 500; color: var(--broker-red-hover); text-decoration: underline; text-underline-offset: 3px; }
+.broker-login__text-button:hover:not(:disabled) { color: var(--broker-red-ink); }
+.broker-login__text-button:disabled { cursor: not-allowed; color: var(--broker-muted); }
+.broker-login__text-button.broker-login__retry { margin: -6px auto 18px; }
+.broker-login__status { margin: 0 0 18px; font-size: 15px; line-height: 1.6; color: var(--broker-muted); }
+/* A custom firm brand (lib/brand.ts): the brand-following tokens derive from
+   the brand primary. Error status tokens above are untouched. */
+:root[data-brand="custom"] .broker-login {
+  --broker-red: var(--brand-primary);
+  --broker-red-hover: color-mix(in srgb, var(--brand-primary) 84%, #000);
+  --broker-red-soft: color-mix(in srgb, var(--brand-primary) 24%, #fff);
+  --broker-red-ink: color-mix(in oklab, var(--brand-primary) 58%, #000);
+  --broker-red-wash: color-mix(in srgb, var(--brand-primary) 6%, #fff);
+  --broker-on-red: var(--brand-primary-foreground);
+}
 @media (min-width: 1600px) {
   .broker-login__content { padding-inline: 60px 76px; }
   .broker-login__footer { left: 60px; right: 76px; }
@@ -64,6 +112,7 @@
   .broker-login__content { margin-left: 0; min-height: calc(100svh - clamp(250px, 48vw, 420px)); padding: 38px 28px 76px; }
   .broker-login__curve { display: none; }
   .broker-login__logo { width: 178px; margin-bottom: 30px; }
+  .broker-login__wordmark { margin-bottom: 30px; font-size: 24px; }
   .broker-login h1 { font-size: 32px; }
   .broker-login__actions { margin-top: 26px; }
   .broker-login__support { margin-top: 24px; }

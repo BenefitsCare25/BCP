@@ -1,11 +1,16 @@
 import {
-  ENTRA_ENABLED,
   acquireAccessToken,
   getActiveAccount,
   clearLocalSession,
 } from "@/auth/msal";
-import { errorFromText, parseErrorText } from "@/lib/errors";
+import { brokerAuthEnabled } from "@/auth/staffSignIn";
+import { ApiError, errorFromText, parseErrorText, uploadRefusal } from "@/lib/errors";
+import { toast } from "sonner";
 import { useSession } from "@/stores/session";
+import {
+  CLIENT_SELECTION_CODES,
+  recoverClientSelection,
+} from "@/stores/clientSelection";
 
 // Re-exported for existing imports; the classes live in lib/errors so the
 // portal fetch wrapper can throw them too.
@@ -23,6 +28,9 @@ function policyYearHeader(): Record<string, string> {
   return policyYearId ? { "X-Inspro-Policy-Year-ID": policyYearId } : {};
 }
 
+/** Read synchronously when a call STARTS, before any await. A token refresh can
+ * take a while, and a company switch during it must not retarget a write the
+ * user made for the previous company. */
 function scopeHeaders(): Record<string, string> {
   return { ...tenantHeader(), ...policyYearHeader() };
 }
@@ -70,22 +78,43 @@ export class NoAccessError extends Error {
   }
 }
 
-/** The coded detail of an identity-level 403, or null for any other body. */
-function noAccessDetail(text: string): { code: string; message: string } | null {
+/** 409 `client_selection_stale` / `client_selection_required`: the write was
+ * refused because of the company selection. By the time this is thrown the
+ * selection is cleared and the shell is asking for a new one, so the global
+ * error reporter stays quiet; nothing retries the write. */
+export class ClientSelectionError extends ApiError {
+  constructor(message: string, code: string) {
+    super(message, 409, code);
+    this.name = "ClientSelectionError";
+  }
+}
+
+const PLATFORM_READ_ONLY_MESSAGE =
+  "Your access to this broker's data is read-only, so that change was not saved. Start write access under Platform → Access to make changes.";
+
+/** 403 `platform_access_read_only`: a platform admin holding a read-only grant
+ * tried to change another broker's data. The refusal is announced once, here,
+ * as a toast; like a selection refusal it is never retried or re-reported. */
+export class PlatformReadOnlyError extends ApiError {
+  constructor(message: string) {
+    super(message, 403, "platform_access_read_only");
+    this.name = "PlatformReadOnlyError";
+  }
+}
+
+/** A FastAPI `detail` carrying a machine-readable `code` (or the same
+ * `{code, message}` sent as the whole body), or null for any other body (plain
+ * text, a string detail, a gateway page). */
+function codedDetail(text: string): { code: string; message: string | null } | null {
   try {
-    const detail = (JSON.parse(text) as { detail?: unknown }).detail;
+    const body = JSON.parse(text) as { detail?: unknown } | null;
+    const detail = body && typeof body === "object" && "detail" in body ? body.detail : body;
     if (!detail || typeof detail !== "object") return null;
     const { code, message } = detail as { code?: unknown; message?: unknown };
-    if (typeof code !== "string" || !NO_ACCESS_CODES.has(code)) return null;
-    return {
-      code,
-      message:
-        typeof message === "string" && message
-          ? message
-          : "User has no access — contact your administrator.",
-    };
+    if (typeof code !== "string") return null;
+    return { code, message: typeof message === "string" && message ? message : null };
   } catch {
-    return null; // not JSON — an ordinary 403
+    return null;
   }
 }
 
@@ -111,11 +140,13 @@ export class PeriodMismatchError extends Error {
   }
 }
 
-function uploadError(text: string, statusText: string, status: number): Error {
+function uploadError(text: string, res: Response): Error {
+  const refusal = uploadRefusal(res.status, text, res.headers.get("Retry-After"));
+  if (refusal) return refusal;
   try {
     const detail = (JSON.parse(text) as { detail?: unknown }).detail;
     if (
-      status === 409 &&
+      res.status === 409 &&
       detail &&
       typeof detail === "object" &&
       (detail as { code?: unknown }).code === "period_mismatch"
@@ -127,11 +158,11 @@ function uploadError(text: string, statusText: string, status: number): Error {
   }
   // Keeps the status and any coded `detail` ({code, message}) so callers can
   // branch on errorCode(), and never renders an object detail as "[object Object]".
-  return errorFromText(status, text, statusText);
+  return errorFromText(res.status, text, res.statusText);
 }
 
 async function authHeader(): Promise<Record<string, string>> {
-  if (!ENTRA_ENABLED) return {};
+  if (!brokerAuthEnabled()) return {};
   const account = getActiveAccount();
   if (!account) return {};
   const token = await acquireAccessToken(account);
@@ -141,12 +172,13 @@ async function authHeader(): Promise<Record<string, string>> {
 async function handleUnauthorized(): Promise<never> {
   // End the local session after a rejected token. The user starts sign-in
   // explicitly, so Microsoft SSO cannot silently undo platform idle expiry.
-  if (ENTRA_ENABLED) {
+  const authEnabled = brokerAuthEnabled();
+  if (authEnabled) {
     await clearLocalSession();
     window.location.assign("/sign-in");
   }
   throw new UnauthorizedError(
-    ENTRA_ENABLED
+    authEnabled
       ? "Session expired — redirecting to sign-in"
       : "Authentication required",
   );
@@ -155,43 +187,64 @@ async function handleUnauthorized(): Promise<never> {
 /**
  * Single exit for every non-OK response. 401 → sign-in redirect; an
  * identity-level 403 → `NoAccessError` (the app bounces to the refused
- * sign-in page and suppresses the notification); anything else → the caller's
- * error shape.
+ * sign-in page and suppresses the notification); a company-selection 409 →
+ * the selection is reset and `ClientSelectionError`; a read-only platform
+ * grant's 403 → one toast and `PlatformReadOnlyError`; anything else → the
+ * caller's error shape. `read` marks a GET/HEAD: the server refuses a read for
+ * its company selection only when a platform admin has no company at all to
+ * fall back on — see `recoverClientSelection`.
  * Always throws.
  */
 async function fail(
   res: Response,
   toError: (text: string) => Error = (text) =>
     errorFromText(res.status, text, res.statusText),
+  read = true,
 ): Promise<never> {
   if (res.status === 401) return handleUnauthorized();
   const text = await res.text();
-  if (res.status === 403) {
-    try {
-      if ((JSON.parse(text) as { detail?: { code?: string } }).detail?.code === "broker_mfa_required") {
-        window.location.assign("/broker/security");
-        throw new UnauthorizedError("Two-factor verification required");
-      }
-    } catch (error) { if (error instanceof UnauthorizedError) throw error; }
-    const denied = noAccessDetail(text);
-    if (denied) throw new NoAccessError(denied.message, denied.code);
+  const coded = codedDetail(text);
+  if (res.status === 403 && coded?.code === "broker_mfa_required") {
+    window.location.assign("/broker/security");
+    throw new UnauthorizedError("Two-factor verification required");
+  }
+  if (res.status === 403 && coded && NO_ACCESS_CODES.has(coded.code)) {
+    throw new NoAccessError(
+      coded.message ?? "User has no access — contact your administrator.",
+      coded.code,
+    );
+  }
+  if (res.status === 403 && coded?.code === "platform_access_read_only") {
+    const message = coded.message ?? PLATFORM_READ_ONLY_MESSAGE;
+    // One toast however many in-flight writes were refused together.
+    toast.error(message, { id: "platform-access-read-only" });
+    throw new PlatformReadOnlyError(message);
+  }
+  if (res.status === 409 && coded && CLIENT_SELECTION_CODES.has(coded.code)) {
+    recoverClientSelection(coded.code, { read });
+    throw new ClientSelectionError(
+      coded.message ?? "Choose a company to continue.",
+      coded.code,
+    );
   }
   throw toError(text);
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const scope = scopeHeaders();
   const auth = await authHeader();
   const res = await fetch(`${API_BASE}${path}`, {
     ...init,
     headers: {
       "Content-Type": "application/json",
       ...auth,
-      ...scopeHeaders(),
+      ...scope,
       ...init.headers,
     },
   });
   if (!res.ok) {
-    return fail(res);
+    const method = (init.method ?? "GET").toUpperCase();
+    return fail(res, undefined, method === "GET" || method === "HEAD");
   }
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
@@ -216,9 +269,10 @@ export const api = {
   delete: <T>(path: string, init: RequestInit = {}) => request<T>(path, { ...init, method: "DELETE" }),
   /** Fetch a binary response (e.g. an .xlsx export) as a Blob. */
   download: async (path: string, headers: Record<string, string> = {}): Promise<Blob> => {
+    const scope = scopeHeaders();
     const auth = await authHeader();
     const res = await fetch(`${API_BASE}${path}`, {
-      headers: { ...auth, ...scopeHeaders(), ...headers },
+      headers: { ...auth, ...scope, ...headers },
     });
     if (!res.ok) {
       return fail(res, (text) => new Error(parseErrorText(text, res.statusText)));
@@ -227,9 +281,10 @@ export const api = {
   },
   /** Like `download`, but returns the raw Response so callers can read headers. */
   downloadResponse: async (path: string): Promise<Response> => {
+    const scope = scopeHeaders();
     const auth = await authHeader();
     const res = await fetch(`${API_BASE}${path}`, {
-      headers: { ...auth, ...scopeHeaders() },
+      headers: { ...auth, ...scope },
     });
     if (!res.ok) {
       return fail(res, (text) => new Error(parseErrorText(text, res.statusText)));
@@ -237,14 +292,15 @@ export const api = {
     return res;
   },
   upload: async <T>(path: string, formData: FormData, headers: Record<string, string> = {}): Promise<T> => {
+    const scope = scopeHeaders();
     const auth = await authHeader();
     const res = await fetch(`${API_BASE}${path}`, {
       method: "POST",
       body: formData,
-      headers: { ...auth, ...scopeHeaders(), ...headers },
+      headers: { ...auth, ...scope, ...headers },
     });
     if (!res.ok) {
-      return fail(res, (text) => uploadError(text, res.statusText, res.status));
+      return fail(res, (text) => uploadError(text, res), false);
     }
     return (await res.json()) as T;
   },

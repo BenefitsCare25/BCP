@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 
 from app.core.audit import write_audit
 from app.core.auth import CurrentUser, get_current_user
+from app.core.deps import is_firm_owner, platform_access_read_only
 from app.core.settings import get_settings
 from app.db.session import get_db
 from app.db.tenancy import set_search_path
@@ -58,7 +59,7 @@ DELIVERY_REASON = (
 
 def actor(response: Response, user: CurrentUser = Depends(get_current_user)) -> CurrentUser:
     response.headers["Cache-Control"] = "no-store"
-    if user.role not in ("broker_admin", "broker_viewer", "system_admin"):
+    if user.role not in ("broker_admin", "broker_viewer", "firm_admin", "system_admin"):
         raise HTTPException(403, "Email setup requires a broker role.")
     return user
 
@@ -66,6 +67,10 @@ def actor(response: Response, user: CurrentUser = Depends(get_current_user)) -> 
 def writer(user: CurrentUser = Depends(actor)) -> CurrentUser:
     if user.role == "broker_viewer":
         raise HTTPException(403, "The broker_viewer role is read-only.")
+    # Registered outside the broker router loop, so `require_write_access`
+    # does not refuse a master admin's read-only grant here.
+    if user.platform_access == "read":
+        raise platform_access_read_only()
     return user
 
 
@@ -123,7 +128,8 @@ def save_branding(
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     firm_id, client = context(db, user, scope)
-    errors = validate_branding(body.content)
+    content = store.with_brand_defaults(db, firm_id, client.id if client else None, body.content)
+    errors = validate_branding(content)
     if errors:
         raise HTTPException(422, {"message": "Correct the branding fields.", "fields": errors})
     key = client.id if client else "firm"
@@ -139,7 +145,7 @@ def save_branding(
                 EmailBranding.id == row.id,
                 EmailBranding.revision == body.revision,
             )
-            .values(content=body.content.model_dump(), revision=body.revision + 1)
+            .values(content=content.model_dump(), revision=body.revision + 1)
             .returning(EmailBranding.id)
         )
         if not changed.scalar_one_or_none():
@@ -151,7 +157,7 @@ def save_branding(
             broker_firm_id=firm_id,
             client_id=client.id if client else None,
             scope_key=key,
-            content=body.content.model_dump(),
+            content=content.model_dump(),
             revision=1,
         )
         db.add(row)
@@ -209,8 +215,8 @@ def get_recipients(
 def reset_branding(
     scope: Scope = "company", user: CurrentUser = Depends(writer), db: Session = Depends(get_db)
 ) -> Response:
-    if user.role != "system_admin":
-        raise HTTPException(403, "Resetting saved branding requires system_admin role.")
+    if not is_firm_owner(user):
+        raise HTTPException(403, "Resetting saved branding requires a firm administrator.")
     firm_id, client = context(db, user, scope)
     row = db.scalar(
         select(EmailBranding).where(
@@ -595,8 +601,8 @@ def remove_template(
     user: CurrentUser = Depends(writer),
     db: Session = Depends(get_db),
 ) -> Response:
-    if user.role != "system_admin":
-        raise HTTPException(403, "Removing saved templates requires system_admin role.")
+    if not is_firm_owner(user):
+        raise HTTPException(403, "Removing saved templates requires a firm administrator.")
     firm_id, client = context(db, user, scope)
     row = store.exact_row(db, firm_id, client.id if client else "firm", key)
     if not row:

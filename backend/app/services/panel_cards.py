@@ -48,7 +48,9 @@ _PLATFORM_ID_CHARS = 8
 _DEPENDANT_TOKEN_CHARS = 4
 
 
-def platform_member_id(client_id: str, staff_id: str) -> str:
+def platform_member_id(
+    client_id: str, staff_id: str, prefix: str | None = None
+) -> str:
     """A stable card number derived from the member's identity, not their row.
 
     Deliberately keyed on (client, staff id) rather than the Employee row id:
@@ -58,7 +60,7 @@ def platform_member_id(client_id: str, staff_id: str) -> str:
     """
     digest = hashlib.sha256(f"{client_id}:{staff_id}".encode()).digest()
     token = base64.b32encode(digest).decode("ascii")[:_PLATFORM_ID_CHARS]
-    return f"{PLATFORM_ID_PREFIX}-{token}"
+    return f"{prefix or PLATFORM_ID_PREFIX}-{token}"
 
 
 def dependant_key(national_id: str | None, name: str | None, relationship: str | None) -> str:
@@ -71,7 +73,9 @@ def dependant_key(national_id: str | None, name: str | None, relationship: str |
     return raw.strip().lower()
 
 
-def platform_dependant_id(client_id: str, staff_id: str, dep_key: str) -> str:
+def platform_dependant_id(
+    client_id: str, staff_id: str, dep_key: str, prefix: str | None = None
+) -> str:
     """A dependant's platform card number: the employee's number plus a token
     derived from the DEPENDANT's own identity.
 
@@ -80,7 +84,7 @@ def platform_dependant_id(client_id: str, staff_id: str, dep_key: str) -> str:
     silently renumber every other dependant's card between renewals — the exact
     failure `platform_member_id` avoids for the employee.
     """
-    base = platform_member_id(client_id, staff_id)
+    base = platform_member_id(client_id, staff_id, prefix)
     digest = hashlib.sha256(f"{client_id}:{staff_id}:{dep_key}".encode()).digest()
     token = base64.b32encode(digest).decode("ascii")[:_DEPENDANT_TOKEN_CHARS]
     return f"{base}-{token}"
@@ -123,6 +127,7 @@ def resolve_member_id(
     email: str | None,
     national_id: str | None,
     client_id: str,
+    card_prefix: str | None = None,
 ) -> str:
     """Resolve the configured identifier. Returns "" when unavailable — the
     card still renders (blank field) rather than 500ing on a roster gap."""
@@ -135,7 +140,7 @@ def resolve_member_id(
     if source == "national_id_masked":
         return mask_nric(national_id)
     if source == "platform_id":
-        return platform_member_id(client_id, staff_id or "")
+        return platform_member_id(client_id, staff_id or "", card_prefix)
     return ""
 
 
@@ -223,6 +228,7 @@ def _cards_for_assignment(
     # The insurer this BENEFIT YEAR places the product with; the card artwork's
     # own insurer stands in when the product has none configured.
     insurer = product_insurer or card.insurer
+    card_prefix = client.card_id_prefix if client is not None else None
 
     shared = _shared_values(
         assignment, card, product, coverage, term, year, client, remarks,
@@ -261,7 +267,9 @@ def _cards_for_assignment(
             employee.employee_name,
             {
                 **shared,
-                **_employee_values(employee, assignment, insurer, member_email),
+                **_employee_values(
+                    employee, assignment, insurer, member_email, card_prefix
+                ),
             },
         )
     ]
@@ -289,7 +297,7 @@ def _cards_for_assignment(
                 {
                     **shared,
                     **_dependant_values(
-                        employee, row, summary, assignment, insurer
+                        employee, row, summary, assignment, insurer, card_prefix
                     ),
                 },
             )
@@ -302,6 +310,7 @@ def _employee_values(
     assignment: PolicyYearCard,
     insurer: str | None,
     member_email: str | None,
+    card_prefix: str | None,
 ) -> dict[str, str]:
     """The member-specific values printed on the employee's own card."""
     email = _employee_email(employee, member_email)
@@ -320,6 +329,7 @@ def _employee_values(
             email=email,
             national_id=employee.national_id_normalized,
             client_id=employee.client_id,
+            card_prefix=card_prefix,
         ),
     }
 
@@ -330,6 +340,7 @@ def _dependant_values(
     summary: DependantSummary,
     assignment: PolicyYearCard,
     insurer: str | None,
+    card_prefix: str | None,
 ) -> dict[str, str]:
     """The member-specific values printed on one dependant's card."""
     attrs = row.attribute_values or {}
@@ -342,6 +353,7 @@ def _dependant_values(
             dependant_key(
                 row.national_id_normalized, summary.name, summary.relationship
             ),
+            card_prefix,
         )
     else:
         member_id = resolve_member_id(
@@ -352,6 +364,7 @@ def _dependant_values(
             email=dep_email,
             national_id=row.national_id_normalized,
             client_id=employee.client_id,
+            card_prefix=card_prefix,
         )
         if not member_id and source == "insurer_member_id":
             # Rosters routinely carry the insurer's number on the EMPLOYEE row

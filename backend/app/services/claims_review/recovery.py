@@ -88,6 +88,12 @@ def _retry_failed_parse_reviews() -> int:
             job.state = JOB_STATE_RETRY_WAIT
             job.available_at = now
             job.finished_at = None
+            # A requeue is a fresh enqueue. Restart the age ceiling and drop the
+            # failed attempt's start, or a job older than the ceiling (any
+            # failure from before a deployment) would be retired at its first
+            # checkpoint. The attempt counter still bounds how often this runs.
+            job.created_at = now
+            job.started_at = None
             db.commit()
             recovered += 1
     if recovered:

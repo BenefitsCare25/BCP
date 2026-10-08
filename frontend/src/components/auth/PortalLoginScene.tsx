@@ -3,6 +3,7 @@ import { LockKeyhole } from "lucide-react";
 import { currentHrTenantSlug, currentPortalTenantSlug, tenantSurfaceUrl } from "@/lib/tenant";
 import { LoginScenery } from "./LoginScenery";
 import "./portal-login.css";
+import { BrandLogo, PoweredBy } from "@/components/brand/BrandLogo";
 
 export function PortalLoginScene({
   role, company, title, subtitle, children,
@@ -25,7 +26,13 @@ export function PortalLoginScene({
         <section className="portal-login__content">
           <div className="portal-login__form">
             <header className="portal-login__brand">
-              <img className="portal-login__logo" src="/inspro-logo-mark.png" alt="Inspro Insurance Brokers" width="200" height="64" />
+              <BrandLogo
+                variant="lockup"
+                className="portal-login__logo"
+                width={200}
+                height={64}
+                wordmarkClassName="portal-login__wordmark"
+              />
             </header>
             <h1 id={headingId}>{title}</h1>
             <p className="portal-login__subtitle">{subtitle}</p>
@@ -36,7 +43,10 @@ export function PortalLoginScene({
             {children}
             <p className="portal-login__support">Need access? <span>Contact your {role === "employee" ? "HR team" : "company administrator"}.</span></p>
           </div>
-          <footer className="portal-login__footer"><LockKeyhole size={14} aria-hidden="true" /> Secure sign-in</footer>
+          <footer className="portal-login__footer">
+            <span className="portal-login__secure"><LockKeyhole size={14} aria-hidden="true" /> Secure sign-in</span>
+            <PoweredBy className="portal-login__attribution" />
+          </footer>
         </section>
       </div>
     </main>

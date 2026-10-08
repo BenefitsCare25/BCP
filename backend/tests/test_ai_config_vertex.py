@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
+import httpx
 import pytest
 
 from app.core.ai_config import (
@@ -27,8 +28,24 @@ _SA_JSON = json.dumps(
         "project_id": "inspro-ai",
         "private_key": "-----BEGIN PRIVATE KEY-----\nx\n-----END PRIVATE KEY-----\n",
         "client_email": "inspro-vertex@inspro-ai.iam.gserviceaccount.com",
+        "token_uri": "https://oauth2.googleapis.com/token",
     }
 )
+
+
+def _force_prod(monkeypatch) -> None:
+    """Resolve settings as production for the residency guard.
+
+    `core.ai_config` reads the cached, validated settings rather than the raw
+    INSPRO_ENV, so the environment variable alone no longer flips the mode.
+    """
+    import dataclasses
+
+    import app.core.ai_config as ai_config_module
+    from app.core.settings import get_settings
+
+    prod = dataclasses.replace(get_settings(), env="prod")
+    monkeypatch.setattr(ai_config_module, "get_settings", lambda: prod)
 
 
 # ── Residency guard ───────────────────────────────────────────────────────────
@@ -39,7 +56,7 @@ def test_residency_allows_singapore():
 
 
 def test_residency_refuses_non_approved_in_prod(monkeypatch):
-    monkeypatch.setenv("INSPRO_ENV", "prod")
+    _force_prod(monkeypatch)
     with pytest.raises(RuntimeError, match="approved residency"):
         assert_vertex_residency("us-central1")
 
@@ -399,13 +416,103 @@ def test_adapter_translates_429_to_ratelimit():
         )
 
 
+def _adapter_raising(exc: Exception) -> vg.GeminiClient:
+    def _boom(*, model, contents, config):
+        raise exc
+
+    fake_client = SimpleNamespace(models=SimpleNamespace(generate_content=_boom))
+    return vg.GeminiClient(_client=fake_client, _types=_FakeTypes, _errors=_FakeErrors)
+
+
+def _create(adapter: vg.GeminiClient) -> None:
+    adapter.messages.create(
+        model="gemini-2.5-flash", max_tokens=1, messages=[{"role": "user", "content": "ping"}]
+    )
+
+
+@pytest.mark.parametrize(
+    ("code", "expected"),
+    [
+        (400, "BadRequestError"),
+        (401, "AuthenticationError"),
+        (403, "PermissionDeniedError"),
+        (404, "NotFoundError"),
+        (408, "APITimeoutError"),
+        (409, "APIStatusError"),
+        (429, "RateLimitError"),
+        (500, "InternalServerError"),
+        (503, "InternalServerError"),
+    ],
+)
+def test_adapter_translates_status_codes(code, expected):
+    """The gateway's breaker and the worker's retries classify on these types:
+    a 404 (model not enabled) or 400 must not look like a provider outage, and
+    a 5xx must — it used to surface as an untyped google error the worker
+    never retried."""
+    err = _FakeErrors.APIError("provider error")
+    err.code = code
+    with pytest.raises(Exception) as caught:
+        _create(_adapter_raising(err))
+    assert type(caught.value).__name__ == expected
+    assert caught.value.__cause__ is err
+
+
+def test_adapter_translates_network_and_token_failures():
+    from anthropic import APIConnectionError, APITimeoutError, AuthenticationError
+    from google.auth import exceptions as auth_errors
+
+    cases = [
+        (httpx.ReadTimeout("slow"), APITimeoutError),
+        (httpx.ConnectError("refused"), APIConnectionError),
+        (auth_errors.TransportError("dns failure"), APIConnectionError),
+        (auth_errors.RefreshError("invalid_grant"), AuthenticationError),
+        (auth_errors.RefreshError("server_error", retryable=True), vg.CredentialRefreshError),
+    ]
+    for raised, expected in cases:
+        with pytest.raises(expected) as caught:
+            _create(_adapter_raising(raised))
+        assert type(caught.value) is expected
+    # A token refresh hiccup is retryable but never a provider outage.
+    assert issubclass(vg.CredentialRefreshError, APIConnectionError)
+
+    with pytest.raises(KeyError):  # anything else passes through untouched
+        _create(_adapter_raising(KeyError("bug")))
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"token_uri": "http://169.254.169.254/computeMetadata/v1/token"},
+        {"token_uri": None},
+        {"universe_domain": "evil.example"},
+    ],
+)
+def test_build_credentials_refuses_foreign_endpoints_before_google_auth(override):
+    """google-auth would POST the signed assertion to the key's token_uri; the
+    check runs before any credential object (or request) exists."""
+    built: list[dict] = []
+    auth_mod = SimpleNamespace(
+        Credentials=SimpleNamespace(
+            from_service_account_info=lambda info, scopes: built.append(info)
+        )
+    )
+    key = {**json.loads(_SA_JSON), **override}
+    key = {k: v for k, v in key.items() if v is not None}
+    with pytest.raises(ValueError, match=r"token_uri|universe_domain"):
+        vg._build_credentials(json.dumps(key), auth_mod)
+    assert built == []
+
+    vg._build_credentials(_SA_JSON, auth_mod)  # Google's own endpoint builds
+    assert len(built) == 1
+
+
 def test_vertex_from_secret_refuses_non_resident_location_in_prod(monkeypatch):
     """Fail-closed, but DEGRADE — never raise out of the resolution path.
 
     The platform key is fleet-wide, so raising here would 500 /system/ai-status
     and every AI path for every company at once.
     """
-    monkeypatch.setenv("INSPRO_ENV", "prod")
+    _force_prod(monkeypatch)
     secret = pack_vertex_secret("inspro-ai", _SA_JSON)
     assert (
         _vertex_from_secret(

@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 
 from app.core.audit import write_audit
 from app.core.auth import CurrentUser, get_current_user
-from app.core.deps import load_policy_year, require_client_id
+from app.core.deps import load_policy_year, policy_year_company, require_client_id
 from app.core.portal_auth import active_policy_year
 from app.db.session import get_db
 from app.models import PolicyYear
@@ -424,7 +424,7 @@ def copy_policy_year(
     db: Session = Depends(get_db),
 ) -> PolicyYearCopyResult:
     """Create a new benefit year and clone this year's configuration into it."""
-    client_id = require_client_id(user)
+    client_id = policy_year_company(py, user)
     _lock_policy_year_scope(db, client_id)
     _assert_no_overlap(db, client_id, payload.start_date, payload.end_date)
 

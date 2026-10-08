@@ -15,6 +15,7 @@ _queue_depth: Any | None = None
 _active_jobs: Any | None = None
 _invariants: Any | None = None
 _leases: Any | None = None
+_task_failures: Any | None = None
 
 try:
     from opentelemetry import metrics
@@ -32,6 +33,7 @@ try:
     _active_jobs = _meter.create_histogram("claim_review.active")
     _invariants = _meter.create_counter("claim_review.invariant_failures")
     _leases = _meter.create_counter("claim_review.lease_expirations")
+    _task_failures = _meter.create_counter("claim_review.worker.task_failures")
 except Exception:  # pragma: no cover - telemetry is optional in local/test
     pass
 
@@ -96,3 +98,9 @@ def invariant(name: str, count: int) -> None:
 def lease_expired(count: int) -> None:
     if _leases is not None and count:
         _leases.add(count)
+
+
+def task_failure(task: str, *, broker_firm_id: str | None = None) -> None:
+    """A worker loop task (maintenance, leasing, delivery) failed and was skipped."""
+    if _task_failures is not None:
+        _task_failures.add(1, {"task": task, "broker_firm_id": broker_firm_id or ""})

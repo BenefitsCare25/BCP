@@ -1,4 +1,4 @@
-import { SystemAdminOnly } from "@/components/auth/SystemAdminOnly";
+import { FirmOwnerOnly } from "@/components/auth/FirmOwnerOnly";
 import { Plus, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -71,7 +71,7 @@ export function ColumnManager({
                 ? "no plans — unreachable"
                 : `${col.plan_codes.length} plan${col.plan_codes.length === 1 ? "" : "s"}`}
             </span>
-            <SystemAdminOnly><Button
+            <FirmOwnerOnly><Button
               size="icon-sm"
               variant="ghost"
               disabled={columns.length <= 1}
@@ -80,7 +80,7 @@ export function ColumnManager({
               className="text-error hover:text-error"
             >
               <X className="size-3.5" />
-            </Button></SystemAdminOnly>
+            </Button></FirmOwnerOnly>
           </div>
         ))}
       </div>

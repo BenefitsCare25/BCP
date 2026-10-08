@@ -17,6 +17,7 @@ import {
   SheetBody,
 } from "@/components/ui/sheet";
 import { formatError } from "@/lib/errors";
+import { isSystemAdminRole } from "@/lib/roles";
 
 export interface PolicyVersion {
   id: string;
@@ -55,7 +56,7 @@ function dateLabel(value: string | null) {
 
 export function PolicyLibrary() {
   const { data: me } = useMe();
-  const canManage = me?.role === "system_admin";
+  const canManage = isSystemAdminRole(me?.role);
   const queryClient = useQueryClient();
   const [offset, setOffset] = useState(0);
   const [history, setHistory] = useState(false);

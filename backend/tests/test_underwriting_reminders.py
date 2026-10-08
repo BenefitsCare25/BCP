@@ -61,7 +61,7 @@ def reminders(monkeypatch):
             sent.append((email, subject, body))
 
     monkeypatch.setattr(workflow_delivery, "SessionLocal", factory)
-    monkeypatch.setattr(workflow_delivery, "get_mailer", Mailer)
+    monkeypatch.setattr(workflow_delivery, "get_mailer", lambda *_: Mailer())
     yield factory, sent
     engine.dispose()
 
@@ -189,7 +189,7 @@ def test_failed_delivery_retries_without_inflating_reminder_count(reminders, mon
         def send_workflow_notice(self, *_):
             raise RuntimeError("private details")
 
-    monkeypatch.setattr(workflow_delivery, "get_mailer", Broken)
+    monkeypatch.setattr(workflow_delivery, "get_mailer", lambda *_: Broken())
     assert workflow_delivery.process_one_workflow_notification(None)
     with factory() as db:
         result = list_reminders("review", user(), db)
@@ -203,3 +203,28 @@ def test_failed_delivery_retries_without_inflating_reminder_count(reminders, mon
     assert workflow_delivery.process_one_workflow_notification(None)
     with factory() as db:
         assert list_reminders("review", user(), db)["items"][0]["status"] == "dead"
+
+
+def test_delivery_is_sent_as_the_companys_brand(reminders, monkeypatch):
+    from app.models.brand import BrandProfile
+
+    factory, sent = reminders
+    with factory() as db:
+        db.add(BrandProfile(broker_firm_id="firm", scope_key="firm",
+                            product_name="Firm Benefits", email_sender_name="Firm Benefits"))
+        db.commit()
+        queue_reminder(http_request(), "review", reminder_input(), user(), db)
+    brands = []
+
+    class Mailer:
+        def send_workflow_notice(self, email, subject, body):
+            sent.append((email, subject, body))
+
+    def get_mailer(brand=None):
+        brands.append(brand)
+        return Mailer()
+
+    monkeypatch.setattr(workflow_delivery, "get_mailer", get_mailer)
+    assert workflow_delivery.process_one_workflow_notification(None)
+    assert len(sent) == 1
+    assert [b.email_sender_name for b in brands] == ["Firm Benefits"]

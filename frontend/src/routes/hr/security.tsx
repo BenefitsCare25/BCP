@@ -10,7 +10,8 @@ import {
   useHrMfaEnrollStart,
   type MfaStart,
 } from "@/api/hr";
-import { errorStatus, formatError } from "@/lib/errors";
+import { errorCode, errorStatus, formatError } from "@/lib/errors";
+import { PASSWORD_MAX_LENGTH } from "@/lib/loginValidation";
 import { useNavigate } from "@tanstack/react-router";
 import { refreshHrSession } from "@/api/hrClient";
 import { useHrSession } from "@/stores/hrSession";
@@ -68,18 +69,84 @@ function RecoveryCodes({ codes, onDone }: { codes: string[]; onDone: () => void 
   );
 }
 
+/** Asked only when the server wants it (`reauth_required`): a sign-in that is
+ * no longer recent must prove the password before an authenticator is bound.
+ * The mandatory setup straight after sign-in never reaches this. */
+function ReauthForm({
+  pending,
+  error,
+  onSubmit,
+  onCancel,
+}: {
+  pending: boolean;
+  error: string | null;
+  onSubmit: (password: string) => void;
+  onCancel: () => void;
+}) {
+  const [password, setPassword] = useState("");
+  return (
+    <form
+      className="space-y-3 sm:max-w-xs"
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (password && !pending) onSubmit(password);
+      }}
+    >
+      <div className="space-y-1.5">
+        <Label htmlFor="hr-reauth-pw">Confirm your password to set up two-factor</Label>
+        <Input
+          id="hr-reauth-pw"
+          type="password"
+          autoComplete="current-password"
+          maxLength={PASSWORD_MAX_LENGTH}
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          aria-invalid={!!error}
+          aria-describedby={error ? "hr-reauth-error" : undefined}
+          autoFocus
+        />
+        {error && <p id="hr-reauth-error" role="alert" className="text-sm text-error">{error}</p>}
+      </div>
+      <div className="flex gap-2">
+        <Button type="submit" disabled={pending || !password}>
+          {pending ? <Loader2 className="size-4 animate-spin" /> : null}
+          Continue
+        </Button>
+        <Button type="button" variant="ghost" onClick={onCancel} disabled={pending}>
+          Cancel
+        </Button>
+      </div>
+    </form>
+  );
+}
+
 function EnrollFlow({ onEnrolled }: { onEnrolled: (codes: string[]) => void }) {
   const start = useHrMfaEnrollStart();
   const confirm = useHrMfaEnrollConfirm();
   const [setup, setSetup] = useState<MfaStart | null>(null);
   const [code, setCode] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [reauth, setReauth] = useState(false);
 
-  const begin = () => {
+  const begin = (currentPassword?: string) => {
     setError(null);
-    start.mutate(undefined, {
-      onSuccess: (data) => setSetup(data),
-      onError: (e) => setError(formatError(e)),
+    start.mutate(currentPassword, {
+      onSuccess: (data) => {
+        setReauth(false);
+        setSetup(data);
+      },
+      onError: (e) => {
+        const reauthRequired = errorCode(e) === "reauth_required";
+        if (reauthRequired && !currentPassword) {
+          setReauth(true);
+          return;
+        }
+        // With a password: a 401, or being asked again, means it was wrong.
+        // Anything else (lockout, outage) keeps the server's own words.
+        const wrongPassword =
+          !!currentPassword && (reauthRequired || errorStatus(e) === 401);
+        setError(wrongPassword ? "That password wasn't right." : formatError(e));
+      },
     });
   };
 
@@ -95,6 +162,20 @@ function EnrollFlow({ onEnrolled }: { onEnrolled: (codes: string[]) => void }) {
     });
   };
 
+  if (reauth && !setup) {
+    return (
+      <ReauthForm
+        pending={start.isPending}
+        error={error}
+        onSubmit={(password) => begin(password)}
+        onCancel={() => {
+          setReauth(false);
+          setError(null);
+        }}
+      />
+    );
+  }
+
   if (!setup) {
     return (
       <div className="space-y-3">
@@ -103,7 +184,7 @@ function EnrollFlow({ onEnrolled }: { onEnrolled: (codes: string[]) => void }) {
           (Google Authenticator, 1Password, Authy…).
         </p>
         {error && <p className="text-sm text-error">{error}</p>}
-        <Button onClick={begin} disabled={start.isPending}>
+        <Button onClick={() => begin()} disabled={start.isPending}>
           {start.isPending ? <Loader2 className="size-4 animate-spin" /> : null}
           Begin setup
         </Button>

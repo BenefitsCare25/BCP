@@ -4,6 +4,11 @@ HR sees every form filed for its own company (online and scanned paper) and
 can download a single PDF, all PDFs as a ZIP, or the Excel summary. Reviewing
 and acknowledging stays with the broker (user decision). Every download is
 written to the access trail.
+
+The Excel summary always masks NRIC/FIN for HR. The bulk ZIP holds every
+member's signed form unredacted, so only an HR administrator may pull it; a
+single signed form stays the original legal document for either HR role.
+Both bulk exports are rate limited and audited with their row counts.
 """
 
 from __future__ import annotations
@@ -16,9 +21,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.v1.hr_claims import delegated_hr
-from app.core.audit import write_access_audit
+from app.core.audit import write_access_audit, write_audit
 from app.core.auth import CurrentUser
 from app.core.downloads import attachment_header
+from app.core.rate_limit import limiter
 from app.db.session import get_db
 from app.models import EnrollmentWindow, PolicyYear
 from app.schemas.enrollment_forms import FormRegisterOut
@@ -35,6 +41,8 @@ from app.services.enrollment_forms.register import (
 router = APIRouter(prefix="/hr/enrollment-forms", tags=["hr-enrollment-forms"])
 
 _XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+_BULK_EXPORT_LIMIT = "5/minute"
+_HR_ADMIN = "client_admin"
 
 
 class HrFormWindow(BaseModel):
@@ -102,6 +110,7 @@ def list_forms(
 
 
 @router.get("/export.zip")
+@limiter.limit(_BULK_EXPORT_LIMIT)
 def export_zip(
     request: Request,
     window_id: str | None = _WINDOW_Q,
@@ -110,18 +119,25 @@ def export_zip(
     user: CurrentUser = Depends(delegated_hr),
     db: Session = Depends(get_db),
 ) -> Response:
+    if user.role != _HR_ADMIN:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Only an HR administrator can download every signed form at once.",
+        )
     spool, written = build_zip(db, _filter(user, window_id, status_, q))
     if not written:
         spool.close()
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No forms match these filters.")
-    write_access_audit(
-        db, user, request, "enrollment_form.export_zip", "client", user.client_id or ""
+    write_audit(
+        db, user, "enrollment_form.export_zip", "client", user.client_id or "",
+        after={"forms": written}, request=request,
     )
     db.commit()
     return zip_response(spool, "Enrolment forms.zip")
 
 
 @router.get("/export.xlsx")
+@limiter.limit(_BULK_EXPORT_LIMIT)
 def export_xlsx(
     request: Request,
     window_id: str | None = _WINDOW_Q,
@@ -130,13 +146,19 @@ def export_xlsx(
     user: CurrentUser = Depends(delegated_hr),
     db: Session = Depends(get_db),
 ) -> Response:
-    content = build_workbook(db, _filter(user, window_id, status_, q))
-    write_access_audit(
-        db, user, request, "enrollment_form.export_xlsx", "client", user.client_id or ""
+    workbook = build_workbook(db, _filter(user, window_id, status_, q), masked=True)
+    write_audit(
+        db, user, "enrollment_form.export_xlsx", "client", user.client_id or "",
+        after={
+            "masked": True,
+            "forms": workbook.forms,
+            "family_members": workbook.family_members,
+        },
+        request=request,
     )
     db.commit()
     return Response(
-        content=content,
+        content=workbook.content,
         media_type=_XLSX,
         headers={"Content-Disposition": attachment_header("Enrolment forms.xlsx")},
     )

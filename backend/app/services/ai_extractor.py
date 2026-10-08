@@ -17,6 +17,7 @@ from anthropic.types import ToolUseBlock
 from app.core.ai_config import AIConfig, load_ai_config
 from app.schemas.api import AttributeSchemaOut
 from app.schemas.rule import RuleEnvelope
+from app.services.roster_profiler import ai_column_payload
 
 # Provider call timeout — bound it explicitly so an AI call can't outlast any
 # FastAPI request budget.
@@ -27,12 +28,6 @@ _PROVIDER_TIMEOUT_SECONDS = 30.0
 # Under-budgeting truncates the tool JSON mid-array → an unparseable payload.
 _DERIVATION_MAX_TOKENS = 4096
 _DERIVATION_TIMEOUT_SECONDS = 60.0
-# Cap sample values sent per column to keep the prompt (and spend) bounded;
-# high-cardinality / free-text columns get fewer — a handful is enough for the
-# model to recognise the shape without shipping hundreds of names or salaries.
-_AI_SAMPLES_PER_COLUMN = 20
-_AI_SAMPLES_HIGH_CARDINALITY = 6
-_HIGH_CARDINALITY_THRESHOLD = 60
 
 
 def _dict_list(value: object) -> list[dict[str, Any]]:
@@ -511,7 +506,9 @@ rules for an insurance employee roster.
 
 You will receive:
 1. Target attributes the system needs to derive (id, type, enum values, description).
-2. The roster's raw columns, each with a sample of its distinct values.
+2. The roster's raw columns, each with its inferred value type and distinct-value \
+count. Sample values are included only for categorical columns that hold no personal \
+data; for every other column the values are withheld.
 
 For each target attribute, decide which raw column (if any) it derives from and \
 emit a derivation rule using ONLY these three ops:
@@ -527,6 +524,9 @@ Rules:
 - Patterns are Python regex, applied case-insensitively. Keep them simple and robust.
 - For enum targets, map ONLY to the provided enum values; cover the sample values you see.
 - For integer/float targets use regex_extract with the matching cast.
+- A column whose values are withheld can still be a source: rely on its name and type \
+(e.g. passthrough, or regex_extract with a cast for a numeric column). Never guess at \
+values you were not shown.
 - If NO column can produce the attribute, set mappable=false, rule=null, and say why \
 in reasoning (e.g. "no column contains occupation information"). Do NOT invent a source.
 - confidence reflects how sure you are the rule is correct (cap 0.85).
@@ -585,23 +585,20 @@ def _build_derivation_prompt(
         target_lines.append(line)
 
     column_lines = []
-    for c in columns:
-        # Trim sample volume per column — fewer for high-cardinality columns
-        # whose individual values (names, salaries) don't help infer a rule.
-        cap = (
-            _AI_SAMPLES_HIGH_CARDINALITY
-            if c.get("distinct_count", 0) > _HIGH_CARDINALITY_THRESHOLD
-            else _AI_SAMPLES_PER_COLUMN
+    # Re-applied at the egress point: whatever the caller passed, only allowlisted
+    # categorical, non-personal columns carry values into the prompt.
+    for c in ai_column_payload(columns):
+        described = (
+            f"- {c['key']} ({c['inferred_type']}; {c['distinct_count']} distinct, "
+            f"{c['total']} filled)"
         )
-        samples = ", ".join(repr(s) for s in c["samples"][:cap])
-        column_lines.append(
-            f"- {c['key']} ({c['distinct_count']} distinct, {c['total']} filled): {samples}"
-        )
+        values = ", ".join(repr(s) for s in c["samples"])
+        column_lines.append(f"{described}: {values}" if values else f"{described}: values withheld")
 
     return (
         "Target attributes to derive:\n"
         + "\n".join(target_lines)
-        + "\n\nRaw roster columns and sample values:\n"
+        + "\n\nRaw roster columns (inferred type; counts) and their values where shared:\n"
         + "\n".join(column_lines)
         + "\n\nCall emit_derivation_rules with one proposal per target attribute."
     )

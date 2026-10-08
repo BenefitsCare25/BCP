@@ -28,7 +28,7 @@ from app.core.auth import CurrentUser, get_current_user
 from app.core.deps import (
     assert_policy_year_editable,
     load_policy_year,
-    require_client_id,
+    policy_year_company,
     tenant_or_global,
 )
 from app.core.rate_limit import limiter
@@ -64,7 +64,11 @@ from app.services.ai_gateway import (
     propose_derivation_for_roster,
     recommend_schema_for_slip,
 )
-from app.services.derivation_engine import apply_rule, resolve_attribute_schemas
+from app.services.derivation_engine import (
+    apply_rule,
+    resolve_attribute_schemas,
+    rule_pattern_error,
+)
 from app.services.eligibility_mapping import auto_map_policy_year
 from app.services.insurance_lines import infer_line
 from app.services.matching_engine import match_policy_year
@@ -75,7 +79,6 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/policy-years", tags=["recommendations"])
 
 _DERIVATION_OPS = ("regex_extract", "regex_case", "passthrough")
-_MAX_PATTERN_LEN = 200
 _VALID_PARTICIPATION = ("standard", "extended", "eo_only")
 # Sample category descriptions surfaced per product candidate (prompt + UI).
 _MAX_SAMPLE_CATEGORIES = 6
@@ -104,32 +107,23 @@ def _sheet_from_source_ref(ref: str | None) -> str | None:
     return sheet or None
 
 
-def _rule_patterns(rule: dict[str, Any]) -> list[str]:
-    """All regex pattern strings a rule will compile (for length/validity guards)."""
-    pats: list[str] = []
-    if isinstance(rule.get("pattern"), str):
-        pats.append(rule["pattern"])
-    for case in rule.get("cases") or []:
-        if isinstance(case, dict) and isinstance(case.get("pattern"), str):
-            pats.append(case["pattern"])
-    return pats
-
-
 def _validate_proposal(
     rule: dict[str, Any] | None, source: str | None, samples: list[str]
 ) -> tuple[bool, int, list[DerivationSample], str | None]:
     """Run a proposed derivation rule against the source column's sample values.
 
-    A rule is only `valid` if it compiles AND produces a value for at least one
-    sample — so a pattern that silently matches nothing can't slip through review.
+    A rule is only `valid` if its patterns pass the store-time checks
+    (`rule_pattern_error`: length, syntax, catastrophic backtracking) AND it
+    produces a value for at least one sample — so neither a pattern that could
+    stall derivation nor one that silently matches nothing slips through review.
     """
     if not isinstance(rule, dict) or rule.get("op") not in _DERIVATION_OPS:
         return False, 0, [], "unsupported or missing derivation op"
     if not source:
         return False, 0, [], "no source column"
-    for pat in _rule_patterns(rule):
-        if len(pat) > _MAX_PATTERN_LEN:
-            return False, 0, [], "proposed pattern is implausibly long — rejected"
+    problem = rule_pattern_error(rule)
+    if problem:
+        return False, 0, [], problem
 
     results: list[DerivationSample] = []
     match_count = 0
@@ -243,9 +237,12 @@ def _attach_derivations(
     returned without derivation rules rather than failing the whole request.
     """
     profile = profile_roster(employee_rows)
+    # `shareable` + `inferred_type` carry the profiler's own verdict to the AI
+    # boundary (`roster_profiler.ai_column_payload`), which would otherwise
+    # re-infer both from the samples alone.
     columns_payload = [
         {"key": c.key, "samples": list(c.samples), "distinct_count": c.distinct_count,
-         "total": c.total}
+         "total": c.total, "inferred_type": c.inferred_type, "shareable": c.shareable}
         for c in profile.columns
     ]
     samples_by_key = {c.key: list(c.samples) for c in profile.columns}
@@ -301,7 +298,7 @@ def recommend_config(
     Persists nothing except the AI spend-log row — recommendations are
     recomputable and must be reviewed before being applied via `apply-config`.
     """
-    client_id = require_client_id(user)
+    client_id = policy_year_company(py, user)
     categories = list(
         db.execute(
             select(Category).where(Category.policy_year_id == policy_year_id)
@@ -508,19 +505,12 @@ def _validate_attribute(item: ApplyAttributeItem) -> None:
                 status.HTTP_422_UNPROCESSABLE_CONTENT,
                 f"regex_case rule for {item.attribute_id!r} needs at least one case.",
             )
-        for pat in _rule_patterns(item.derivation_rule):
-            if len(pat) > _MAX_PATTERN_LEN:
-                raise HTTPException(
-                    status.HTTP_422_UNPROCESSABLE_CONTENT,
-                    f"Derivation pattern for {item.attribute_id!r} is too long.",
-                )
-            try:
-                re.compile(pat)
-            except re.error as exc:
-                raise HTTPException(
-                    status.HTTP_422_UNPROCESSABLE_CONTENT,
-                    f"Invalid regex for {item.attribute_id!r}: {exc}",
-                ) from exc
+        # The same store-time check as every other derivation-rule write:
+        # length, syntax and catastrophic backtracking (ReDoS).
+        if (problem := rule_pattern_error(rule)):
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_CONTENT, f"{item.attribute_id!r}: {problem}"
+            )
 
 
 def _relink_categories(
@@ -684,7 +674,7 @@ def apply_config(
     categories are re-linked to newly created products.
     """
     assert_policy_year_editable(py)
-    client_id = require_client_id(user)
+    client_id = policy_year_company(py, user)
     if not payload.attributes and not payload.products:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Nothing to apply.")
 

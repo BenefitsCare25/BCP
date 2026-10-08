@@ -1,5 +1,11 @@
 import { QueryCache, QueryClient, MutationCache } from "@tanstack/react-query";
-import { NoAccessError, UnauthorizedError } from "@/api/client";
+import {
+  ClientSelectionError,
+  NoAccessError,
+  PlatformReadOnlyError,
+  UnauthorizedError,
+} from "@/api/client";
+import { HrUnauthorizedError } from "@/api/hrClient";
 import { PortalUnauthorizedError } from "@/api/portalClient";
 import { errorStatus, formatError } from "@/lib/errors";
 import { notify } from "@/stores/notifications";
@@ -12,11 +18,23 @@ export function setNoAccessHandler(handler: () => void): void {
   onNoAccess = handler;
 }
 
+/** Refusals the API clients have already acted on: a sign-in redirect is in
+ *  flight (any of the three surfaces), the company selection was reset and
+ *  the shell is explaining why beside the picker, or a read-only platform
+ *  grant refused a change and said so in a toast. Repeating the request cannot
+ *  succeed and reporting it again would only duplicate the explanation. */
+function isHandledRefusal(error: unknown): boolean {
+  return (
+    error instanceof UnauthorizedError ||
+    error instanceof PortalUnauthorizedError ||
+    error instanceof HrUnauthorizedError ||
+    error instanceof ClientSelectionError ||
+    error instanceof PlatformReadOnlyError
+  );
+}
+
 function reportError(scope: "query" | "mutation", error: unknown) {
-  // UnauthorizedError is already handled by the API client (a sign-in
-  // redirect is in flight). Don't double-surface it as a toast.
-  if (error instanceof UnauthorizedError) return;
-  if (error instanceof PortalUnauthorizedError) return;
+  if (isHandledRefusal(error)) return;
   // The account isn't provisioned on this platform — the sign-in page's own
   // banner IS the message, so don't also log a notification they can't act on.
   if (error instanceof NoAccessError) {
@@ -32,11 +50,12 @@ function reportError(scope: "query" | "mutation", error: unknown) {
 }
 
 /** Retry only what a retry can fix. A 4xx is the server's considered answer;
- * repeating it just doubles the latency and the error noise. */
+ * repeating it just doubles the latency and the error noise. Refusals already
+ * acted on are named rather than left to their status: the HR and portal
+ * session errors carry none, so each was retried once — a second request
+ * against a session that had just ended, racing its sign-in redirect. */
 function retryQuery(failureCount: number, error: unknown): boolean {
-  if (error instanceof NoAccessError || error instanceof UnauthorizedError) {
-    return false;
-  }
+  if (error instanceof NoAccessError || isHandledRefusal(error)) return false;
   const status = errorStatus(error);
   if (status !== null && status >= 400 && status < 500) return false;
   return failureCount < 1;

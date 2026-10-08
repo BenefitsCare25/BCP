@@ -1,4 +1,6 @@
+import { toast } from "sonner";
 import { useEnrollmentEvents, useRetryEnrollmentEmail } from "@/api/enrollmentEvents";
+import { sendErrorMessage } from "@/lib/errors";
 import { Button } from "@/components/ui/button";
 import { fmtWhen } from "@/components/enrollment/period/periodMeta";
 
@@ -22,7 +24,7 @@ export function EnrollmentActivity({ id, readOnly }: { id: string; readOnly: boo
         <p className="text-xs text-muted-foreground">{fmtWhen(event.created_at)} · Portal notice recorded · {EMAIL_STATUS[event.email_status] ?? event.email_status}</p>
         {event.email_detail && <p className="text-xs text-muted-foreground">{event.email_detail}</p>}
         {!readOnly && ["dead", "cancelled", "unavailable"].includes(event.email_status) &&
-          <Button variant="outline" size="sm" disabled={retryEmail.isPending} onClick={() => retryEmail.mutate(event.id)}>Retry email notification</Button>}
+          <Button variant="outline" size="sm" disabled={retryEmail.isPending} onClick={() => retryEmail.mutate(event.id, { onError: (error) => toast.error(sendErrorMessage(error)) })}>Retry email notification</Button>}
       </li>)}
     </ol>
   </section>;

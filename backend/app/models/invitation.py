@@ -30,6 +30,7 @@ class Invitation(Base, TimestampMixin):
         ForeignKey("broker_firms.id", ondelete="CASCADE"), nullable=False, index=True
     )
     role: Mapped[str] = mapped_column(String(32), nullable=False)
+    # SHA-256 hex of the single-use invite token; the raw token is shown once.
     token: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
     status: Mapped[str] = mapped_column(
         String(32), nullable=False, default=INVITE_STATUS_PENDING, index=True

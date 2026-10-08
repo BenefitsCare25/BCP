@@ -1,4 +1,4 @@
-import { SystemAdminOnly } from "@/components/auth/SystemAdminOnly";
+import { FirmOwnerOnly } from "@/components/auth/FirmOwnerOnly";
 /** Panel e-cards — a SHARED library of card artwork, assigned per benefit year.
  *
  * Two layers, mirroring panel clinic locations: a library card holds the
@@ -307,14 +307,14 @@ function LibrarySection({
                 >
                   <Pencil className="size-4" />
                 </Button>
-                <SystemAdminOnly><Button
+                <FirmOwnerOnly><Button
                   variant="ghost"
                   size="sm"
                   onClick={() => onDelete(card)}
                   title="Delete card"
                 >
                   <Trash2 className="size-4 text-error" />
-                </Button></SystemAdminOnly>
+                </Button></FirmOwnerOnly>
               </div>
             </TableCell>
           </TableRow>
@@ -468,7 +468,7 @@ export function PanelCardsPanel({
                         >
                           <Pencil className="size-4" />
                         </Button>
-                        <SystemAdminOnly><Button
+                        <FirmOwnerOnly><Button
                           variant="ghost"
                           size="sm"
                           disabled={removeAssignment.isPending}
@@ -489,7 +489,7 @@ export function PanelCardsPanel({
                           title="Withdraw this card"
                         >
                           <Trash2 className="size-4 text-error" />
-                        </Button></SystemAdminOnly>
+                        </Button></FirmOwnerOnly>
                       </div>
                     </TableCell>
                   </TableRow>
@@ -535,7 +535,7 @@ export function PanelCardsPanel({
         </Sheet>
       )}
 
-      <SystemAdminOnly><AlertDialog
+      <FirmOwnerOnly><AlertDialog
         open={deleting !== null}
         onOpenChange={(open) => !open && setDeleting(null)}
         title="Delete card?"
@@ -546,7 +546,7 @@ export function PanelCardsPanel({
         }
         loading={removeCard.isPending}
         onConfirm={() => void confirmDelete()}
-      /></SystemAdminOnly>
+      /></FirmOwnerOnly>
     </div>
   );
 }

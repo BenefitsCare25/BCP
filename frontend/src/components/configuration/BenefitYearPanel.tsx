@@ -1,4 +1,4 @@
-import { SystemAdminOnly } from "@/components/auth/SystemAdminOnly";
+import { FirmOwnerOnly } from "@/components/auth/FirmOwnerOnly";
 import { useState } from "react";
 import {
   CalendarPlus,
@@ -316,7 +316,7 @@ export function BenefitYearPanel({ years, viewingId, onViewYear, readOnly = fals
                       >
                         {selected ? "Viewing" : "View setup"}
                       </Button>}
-                      {!readOnly && <SystemAdminOnly><Button
+                      {!readOnly && <FirmOwnerOnly><Button
                         size="icon-sm"
                         variant="ghost"
                         className="text-error"
@@ -331,7 +331,7 @@ export function BenefitYearPanel({ years, viewingId, onViewYear, readOnly = fals
                       >
                         <Trash2 className="size-4" />
                         <span className="sr-only">Delete benefit year</span>
-                      </Button></SystemAdminOnly>}
+                      </Button></FirmOwnerOnly>}
                     </div>
                   </div>
                 </section>
@@ -345,7 +345,7 @@ export function BenefitYearPanel({ years, viewingId, onViewYear, readOnly = fals
         )}
       </CardContent>
 
-      <SystemAdminOnly><AlertDialog
+      <FirmOwnerOnly><AlertDialog
         open={Boolean(confirmDelete)}
         onOpenChange={(open) => {
           if (!open) {
@@ -407,7 +407,7 @@ export function BenefitYearPanel({ years, viewingId, onViewYear, readOnly = fals
             toast.error(message);
           }
         }}
-      /></SystemAdminOnly>
+      /></FirmOwnerOnly>
     </Card>
   );
 }

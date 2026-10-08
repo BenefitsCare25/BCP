@@ -1,81 +1,79 @@
-import { useRef, useState } from "react";
-import { useRouterState } from "@tanstack/react-router";
-import { ArrowRight, ShieldAlert } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { useState } from "react";
+import { useNavigate, useRouterState } from "@tanstack/react-router";
+import { ShieldAlert } from "lucide-react";
 import { BrokerLoginScene } from "@/components/auth/BrokerLoginScene";
-import { ENTRA_ENABLED, signIn } from "@/auth/msal";
-import { formatError } from "@/lib/errors";
+import { BrokerSignInOptions } from "@/components/auth/broker/BrokerSignInOptions";
+import { signInNoticeMessage } from "@/components/auth/broker/signInMessages";
+import { usePendingBrokerInvite } from "@/auth/brokerInvite";
+import { acceptBrokerSession, needsTwoFactor } from "@/auth/brokerSession";
+import { useSignInNotice } from "@/auth/signInNotice";
+import { useStaffSignIn } from "@/auth/staffSignIn";
+import type { BrokerSession } from "@/stores/brokerSession";
 
 /**
- * Visible sign-in page. The root guard sends users here when Entra is enabled
- * and no account is active; a sibling `beforeLoad` in the route definition
- * bounces signed-in users back to / so this page never flashes.
+ * Broker staff sign-in. The firm this host serves chooses the methods
+ * (`/public/site`): Microsoft 365, email and password with mandatory two-factor
+ * verification, or both. The root guard sends signed-out users here; the
+ * route's `beforeLoad` bounces signed-in users back to / so this page never
+ * flashes.
  *
- * `?denied=1` means the opposite happened: Microsoft authenticated them fine,
- * but the platform's user list grants them nothing, so they were bounced back
- * here. Saying so is the whole point — a silent return to the login screen
- * right after a successful sign-in reads as a bug, and they just retry.
+ * `/sign-in#invite=<token>` turns the page into the invitation: the boot
+ * sequence has already moved the token into tab storage and out of the URL.
+ *
+ * `?denied=1` means Microsoft (or a password) authenticated the person but the
+ * platform's user list grants them nothing. Saying so is the whole point — a
+ * silent return to the login screen right after a successful sign-in reads as
+ * a bug, and they just retry.
  */
 export function SignInPage() {
-  // signIn() triggers a full-page redirect; the local flag exists only to
-  // disable the button between click and navigate. If the redirect never
-  // happens (signIn rejected), re-enable the button and show why.
-  const [submitting, setSubmitting] = useState(false);
-  const submittingRef = useRef(false);
-  const [error, setError] = useState<string | null>(null);
+  const navigate = useNavigate();
   const denied = useRouterState({
     select: (s) => Boolean((s.location.search as { denied?: unknown }).denied),
   });
+  const { site, methods } = useStaffSignIn();
+  const [inviteToken, dismissInvite] = usePendingBrokerInvite();
+  const notice = useSignInNotice();
+  const [inviteRefusal, setInviteRefusal] = useState<string | null>(null);
+  const firmName = site.data?.firm?.name ?? null;
 
-  const handleSignIn = async () => {
-    if (submittingRef.current) return;
-    submittingRef.current = true;
-    setSubmitting(true);
-    setError(null);
-    try {
-      // After a refusal, force the account picker: the browser still holds a
-      // Microsoft session, so the default flow would silently sign the SAME
-      // rejected account back in and they could never switch.
-      await signIn({ selectAccount: denied });
-    } catch (err) {
-      submittingRef.current = false;
-      setSubmitting(false);
-      setError(formatError(err));
-    }
+  const finish = (session: BrokerSession) => {
+    acceptBrokerSession(session);
+    if (inviteToken) dismissInvite();
+    void navigate({ to: needsTwoFactor(session) ? "/broker/security" : "/", replace: true });
   };
 
+  const title = inviteToken
+    ? firmName ? `You've been invited to ${firmName}` : "You've been invited"
+    : "Welcome back";
+  const subtitle = inviteToken
+    ? "Choose how you'll sign in to accept your invitation."
+    : firmName ? `Sign in to ${firmName}.` : "Sign in to your broker portal.";
+
   return (
-    <BrokerLoginScene>
-      <p className="broker-login__explanation">
-        {ENTRA_ENABLED
-          ? "Continue with your Microsoft work account."
-          : "Authentication is not configured for this build."}
-      </p>
+    <BrokerLoginScene title={title} subtitle={subtitle}>
       {denied && (
-        <div
-          role="alert"
-          className="broker-login__alert"
-        >
+        <div role="alert" className="broker-login__alert">
           <ShieldAlert size={18} aria-hidden="true" />
           <p>
-            This account does not have access. Contact your administrator or sign in with another Microsoft account.
+            This account does not have access. Contact your administrator
+            {methods.entra ? " or sign in with another Microsoft account." : "."}
           </p>
         </div>
       )}
-      <Button
-        onClick={() => void handleSignIn()}
-        disabled={!ENTRA_ENABLED || submitting}
-        loading={submitting}
-        className="broker-login__submit"
-      >
-        <ArrowRight size={18} className="broker-login__arrow" aria-hidden="true" />
-        {submitting ? "Redirecting…" : "Sign in with Microsoft"}
-      </Button>
-      {error && (
-        <p role="alert" className="broker-login__alert broker-login__error">
-          Sign-in failed: {error} — try again.
-        </p>
-      )}
+      {notice && <p role="alert" className="broker-login__alert">{signInNoticeMessage(notice)}</p>}
+      {inviteRefusal && <p role="alert" className="broker-login__alert">{inviteRefusal}</p>}
+      <BrokerSignInOptions
+        site={site}
+        methods={methods}
+        firmName={firmName}
+        inviteToken={inviteToken}
+        denied={denied}
+        onSignedIn={finish}
+        onInviteInvalid={(message) => {
+          dismissInvite();
+          setInviteRefusal(message);
+        }}
+      />
     </BrokerLoginScene>
   );
 }

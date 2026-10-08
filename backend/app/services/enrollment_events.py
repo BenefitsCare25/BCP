@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, SessionTransaction
 
 from app.core.settings import get_settings
+from app.core.tenant_resolution import FirmOriginUnavailable
 from app.models import Client, Employee, Enrollment, MemberAccount, WorkflowNotification
 from app.models.enrollment_event import EnrollmentEvent
 from app.models.enrollment_form import EnrollmentFormSubmission
@@ -165,7 +166,6 @@ def enqueue_email(db: Session, enrollment: Enrollment, event: EnrollmentEvent) -
     if not recipient:
         event.email_unavailable_reason = "No active account with an individual email address."
     else:
-        client = db.get(Client, enrollment.client_id)
         event.email_unavailable_reason = None
         if notice:
             notice.recipient_email = recipient
@@ -176,6 +176,15 @@ def enqueue_email(db: Session, enrollment: Enrollment, event: EnrollmentEvent) -
             notice.lease_token = None
             notice.lease_expires_at = None
             return
+        client = db.get(Client, enrollment.client_id)
+        try:
+            if client is None:
+                raise FirmOriginUnavailable(None)
+            portal_url = portal_sign_in_url(db, client)
+        except FirmOriginUnavailable:
+            # No mail with a dead link; the notice itself still reaches the portal.
+            event.email_unavailable_reason = FirmOriginUnavailable.message
+            return
         notice = WorkflowNotification(
             client_id=enrollment.client_id,
             policy_year_id=enrollment.policy_year_id,
@@ -183,7 +192,7 @@ def enqueue_email(db: Session, enrollment: Enrollment, event: EnrollmentEvent) -
             subject_id=event.id,
             dedup_key=f"enrollment:{event.id}",
             recipient_email=recipient,
-            payload={"portal_url": portal_sign_in_url(client.slug if client else None)},
+            payload={"portal_url": portal_url},
             created_by=event.actor_id,
             available_at=datetime.now(UTC),
         )

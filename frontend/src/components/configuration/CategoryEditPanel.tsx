@@ -1,4 +1,4 @@
-import { SystemAdminOnly } from "@/components/auth/SystemAdminOnly";
+import { FirmOwnerOnly } from "@/components/auth/FirmOwnerOnly";
 import { useState } from "react";
 import { Loader2, Save, Sparkles, Trash2 } from "lucide-react";
 import { AlertDialog } from "@/components/ui/alert-dialog";
@@ -510,13 +510,13 @@ function EditForm({
         )}
       </SheetBody>
       <SheetFooter>
-        <SystemAdminOnly><Button
+        <FirmOwnerOnly><Button
           variant="ghost"
           onClick={() => setShowDelete(true)}
           className="text-error hover:text-error mr-auto"
         >
           <Trash2 className="size-4" /> Delete
-        </Button></SystemAdminOnly>
+        </Button></FirmOwnerOnly>
         <SheetClose asChild>
           <Button variant="outline">Cancel</Button>
         </SheetClose>
@@ -543,7 +543,7 @@ function EditForm({
         </Button>
       </SheetFooter>
 
-      <SystemAdminOnly><AlertDialog
+      <FirmOwnerOnly><AlertDialog
         open={showDelete}
         onOpenChange={setShowDelete}
         title="Delete this category?"
@@ -565,7 +565,7 @@ function EditForm({
             toast.error(formatError(reason));
           }
         }}
-      /></SystemAdminOnly>
+      /></FirmOwnerOnly>
     </>
   );
 }

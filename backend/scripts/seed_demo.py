@@ -7,13 +7,16 @@ from __future__ import annotations
 from datetime import date
 from typing import Any
 
+from sqlalchemy.orm import Session
+
 from app.core.auth import (
     DEMO_BROKER_FIRM_ID,
     DEMO_CLIENT_ID,
     DEMO_USER_EMAIL,
     DEMO_USER_ID,
 )
-from app.db.session import SessionLocal, engine
+from app.core.settings import assert_local_dev_database
+from app.db.session import DATABASE_URL, SessionLocal, engine
 from app.db.tenancy import provision_firm_schema, set_search_path
 from app.models import (
     BrokerFirm,
@@ -30,6 +33,9 @@ from scripts.seed_insurers import seed_insurers
 # A second client under the same demo firm so the in-app client switcher has
 # somewhere to switch to in local dev.
 DEMO_CLIENT_2_ID = "00000000-0000-0000-0000-000000000021"
+# The demo firm is the platform owner locally: the platform hosts serve it and
+# the master admin has standing access to it. `<slug>.localhost` reaches it too.
+DEMO_FIRM_SLUG = "demo-broker-firm"
 
 # Derive `role` from the employee's raw `category` text using the SAME patterns
 # the rule generator extracts category-side role conditions from. The symmetry
@@ -460,7 +466,24 @@ PRODUCT_CODE_ALIASES: dict[str, str] = {
 }
 
 
+def _mark_platform_owner(db: Session, firm: BrokerFirm) -> None:
+    """Give the demo firm its slug and the platform-owner flag, unless another
+    firm already holds either (exactly one firm owns the platform)."""
+    if not firm.slug and db.query(BrokerFirm.id).filter(
+        BrokerFirm.slug == DEMO_FIRM_SLUG
+    ).first() is None:
+        firm.slug = DEMO_FIRM_SLUG
+    if not firm.is_platform_owner and db.query(BrokerFirm.id).filter(
+        BrokerFirm.is_platform_owner.is_(True)
+    ).first() is None:
+        firm.is_platform_owner = True
+
+
 def seed() -> None:
+    # Creates a demo firm, clients and a broker_admin user, so it runs only on a
+    # local dev database. The module itself still ships in the image: app startup
+    # (app/core/drift_checks.py) and seed_firm_library.py import its catalogs.
+    assert_local_dev_database(DATABASE_URL, tool="scripts/seed_demo.py")
     db = SessionLocal()
     try:
         # Broker firm
@@ -468,6 +491,7 @@ def seed() -> None:
         if firm is None:
             firm = BrokerFirm(id=DEMO_BROKER_FIRM_ID, name="Demo Broker Firm")
             db.add(firm)
+        _mark_platform_owner(db, firm)
 
         # Client
         client = db.get(Client, DEMO_CLIENT_ID)

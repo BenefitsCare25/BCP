@@ -1,4 +1,4 @@
-import { SystemAdminOnly } from "@/components/auth/SystemAdminOnly";
+import { FirmOwnerOnly } from "@/components/auth/FirmOwnerOnly";
 import { useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
@@ -152,14 +152,14 @@ function TokenField({
             className="inline-flex min-h-8 items-center gap-1 rounded-md border border-border bg-muted pl-2.5 pr-1 text-xs text-foreground"
           >
             {item}
-            <SystemAdminOnly><button
+            <FirmOwnerOnly><button
               type="button"
               className="grid size-6 place-items-center rounded text-muted-foreground hover:bg-card hover:text-error focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               aria-label={`Remove ${item}`}
               onClick={() => onChange(values.filter((_, i) => i !== index))}
             >
               <X className="size-3" aria-hidden />
-            </button></SystemAdminOnly>
+            </button></FirmOwnerOnly>
           </span>
         ))}
         <div className="flex items-center gap-1">
@@ -292,7 +292,7 @@ function DocumentEditor({
           >
             <ChevronDown className="size-3.5" aria-hidden />
           </Button>
-          <SystemAdminOnly><Button
+          <FirmOwnerOnly><Button
             type="button"
             variant="ghost"
             size="sm"
@@ -301,7 +301,7 @@ function DocumentEditor({
             onClick={onRemove}
           >
             <Trash2 className="size-3.5" aria-hidden />
-          </Button></SystemAdminOnly>
+          </Button></FirmOwnerOnly>
         </div>
       </div>
 
@@ -391,7 +391,7 @@ function DocumentEditor({
                   />
                   {field.optional ? "Optional field" : "Required field"}
                 </label>
-                <SystemAdminOnly><Button
+                <FirmOwnerOnly><Button
                   type="button"
                   variant="ghost"
                   size="sm"
@@ -405,7 +405,7 @@ function DocumentEditor({
                   }
                 >
                   <Trash2 className="size-3.5" aria-hidden />
-                </Button></SystemAdminOnly>
+                </Button></FirmOwnerOnly>
               </div>
             ))}
           </div>

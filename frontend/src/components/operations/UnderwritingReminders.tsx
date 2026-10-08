@@ -7,6 +7,7 @@ import { useMe } from "@/api/hooks";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useSession } from "@/stores/session";
+import { isBrokerAdminRole } from "@/lib/roles";
 
 type ReminderItem = {
   id: string;
@@ -147,7 +148,7 @@ export function UnderwritingReminders({
 }) {
   const clientId = useSession((state) => state.activeClientId);
   const { data: me } = useMe();
-  const editable = me?.role === "broker_admin" || me?.role === "system_admin";
+  const editable = isBrokerAdminRole(me?.role);
   const headers = { "X-Inspro-Client": clientId ?? "" };
   const path = `/underwriting/reviews/${reviewId}/reminders`;
   const queryKey = ["underwriting-reminders", clientId, reviewId];

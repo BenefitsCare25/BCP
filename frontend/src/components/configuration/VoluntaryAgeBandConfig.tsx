@@ -1,4 +1,4 @@
-import { SystemAdminOnly } from "@/components/auth/SystemAdminOnly";
+import { FirmOwnerOnly } from "@/components/auth/FirmOwnerOnly";
 import { useEffect, useState } from "react";
 import { Plus, Save, X } from "lucide-react";
 import { toast } from "sonner";
@@ -143,7 +143,7 @@ export function VoluntaryAgeBandConfig({
               placeholder="0.00"
               className="h-8 text-sm"
             />
-            <SystemAdminOnly><Button
+            <FirmOwnerOnly><Button
               size="icon"
               variant="ghost"
               aria-label="Remove band"
@@ -151,7 +151,7 @@ export function VoluntaryAgeBandConfig({
               onClick={() => removeRow(i)}
             >
               <X className="size-4" />
-            </Button></SystemAdminOnly>
+            </Button></FirmOwnerOnly>
           </div>
         ))}
       </div>

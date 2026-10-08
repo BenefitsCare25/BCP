@@ -13,7 +13,7 @@ from app.core.deps import (
     can_write_global,
     load_editable_global,
     require_client_id,
-    require_system_admin,
+    require_firm_owner,
     tenant_or_global,
 )
 from app.db.session import get_db
@@ -27,6 +27,7 @@ from app.schemas.api import (
     ProductPatch,
 )
 from app.services import product_registry
+from app.services.derivation_engine import rule_pattern_error
 from app.services.form_profiles import infer_profile
 from app.services.matching_engine import insured_names
 from app.services.product_variants import variant_traits
@@ -96,6 +97,14 @@ def _load_editable_attribute(
 
 def _load_editable_product(product_id: str, user: CurrentUser, db: Session) -> Product:
     return load_editable_global(Product, product_id, user, db, "Product")
+
+
+def _validate_derivation_patterns(rule: object) -> None:
+    """422 for a regex rule whose patterns are too long, invalid, or able to
+    backtrack exponentially — they run against every employee's roster text."""
+    problem = rule_pattern_error(rule)
+    if problem is not None:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, problem)
 
 
 def _validate_value_mapping(row: EmployeeAttributeSchema, db: Session) -> None:
@@ -196,6 +205,7 @@ def create_employee_attribute(
             status.HTTP_409_CONFLICT,
             f"Attribute {payload.attribute_id!r} already exists in {where}",
         )
+    _validate_derivation_patterns(payload.derivation_rule)
     row = EmployeeAttributeSchema(client_id=client_id, **payload.model_dump())
     _validate_value_mapping(row, db)
     if row.is_pii:
@@ -241,6 +251,8 @@ def update_employee_attribute(
         "derivation_rule": row.derivation_rule,
     }
     patch = payload.model_dump(exclude_unset=True)
+    if "derivation_rule" in patch:
+        _validate_derivation_patterns(patch["derivation_rule"])
     previous_rule = row.derivation_rule
     if (
         "derivation_rule" in patch
@@ -256,7 +268,7 @@ def update_employee_attribute(
                 and len(next_rule["mappings"]) < len(previous_rule.get("mappings") or [])
             )
         ):
-            require_system_admin(user)
+            require_firm_owner(user)
     if patch.get("is_pii") is True:
         patch["allow_ai_values"] = False
     effective_pii = bool(patch.get("is_pii", row.is_pii))

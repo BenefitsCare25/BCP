@@ -56,6 +56,18 @@ def safe_title(title: str) -> str:
     return cleaned.strip()[:_MAX_TITLE] or "Sheet"
 
 
+# A sheet for the broker's own staff, named for the firm's brand.
+BRAND_TOKEN = "{brand}"
+SYSTEM_CATEGORY_SHEET = f"{BRAND_TOKEN} Use - System Category"
+
+
+def branded_title(title: str, brand_name: str) -> str:
+    """`title` with the brand's name in place of `BRAND_TOKEN`, if it has one."""
+    if BRAND_TOKEN not in title:
+        return title
+    return safe_title(title.replace(BRAND_TOKEN, brand_name))
+
+
 def graft(target: Workbook, title: str, source: Workbook) -> Worksheet:
     """Copy ``source``'s active worksheet into ``target`` under ``title``."""
     src = source.active
@@ -340,7 +352,7 @@ WORKBOOKS: dict[str, WorkbookSpec] = {
                       columns=("Employee", "Dependants", "Product blocks")),
             SheetSpec("Declaration - Please Read",
                       description="Company declaration for completion before submission."),
-            SheetSpec("Inspro Use - System Category",
+            SheetSpec(SYSTEM_CATEGORY_SHEET,
                       description="Grade and work pass against each product's category."),
             SheetSpec("Headcount Summary",
                       description="Live counts, sums insured and premiums by category."),

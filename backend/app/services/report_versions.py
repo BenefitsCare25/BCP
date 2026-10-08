@@ -19,13 +19,15 @@ from openpyxl import Workbook
 from openpyxl.styles import Font
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, object_session
 
 from app.core.auth import CurrentUser
 from app.core.pagination import MAX_LIMIT
 from app.core.storage import (
     MAX_REPORT_BYTES,
     REPORT_SUFFIXES,
+    assert_key_in_scope,
+    company_firm_id,
     document_path,
     get_storage,
 )
@@ -365,7 +367,8 @@ def create_version(
         else "_"
     )
     path = document_path(
-        user.broker_firm_id,
+        # The company's own firm, whoever generates it (a firm-less admin too).
+        company_firm_id(db, py.client_id),
         py.client_id,
         "report_version",
         f"{report_type}-{scope_seg}",
@@ -463,6 +466,11 @@ def _series_holds(
 
 
 def load_version_blob(rv: ReportVersion) -> bytes:
+    """The retained bytes, read only from under the version's own company."""
+    db = object_session(rv)
+    if db is None:
+        raise RuntimeError("A report version must be session-bound to read its blob.")
+    assert_key_in_scope(rv.storage_path, company_firm_id(db, rv.client_id), rv.client_id)
     return get_storage().read(rv.storage_path)
 
 

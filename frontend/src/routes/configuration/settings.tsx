@@ -14,6 +14,7 @@ import { HrAdminSettings } from "@/components/settings/HrAdminSettings";
 import { WicaSettings } from "@/components/wica/WicaSettings";
 import { SchemaEntityAliasesPage } from "@/routes/schema/entity-aliases";
 import { EmailSettings } from "@/features/email-settings";
+import { isBrokerAdminRole } from "@/lib/roles";
 
 // Standing, company-scoped configuration: entity-matching aliases (moved out
 // of the firm-wide Schema page, where they were the only company-scoped tab)
@@ -38,7 +39,7 @@ export function CompanySettingsPage() {
   const navigate = useNavigate();
   const search = useSearch({ strict: false }) as { tab?: string };
   const { data: me } = useMe();
-  const canAdmin = me?.role === "broker_admin" || me?.role === "system_admin";
+  const canAdmin = isBrokerAdminRole(me?.role);
   const requested: SettingsTab = isTab(search.tab) ? search.tab : "aliases";
   // The Authentication tab is admin-only (firm-admin `/hr-admin` endpoints);
   // fall back to aliases if a viewer deep-links it.

@@ -73,9 +73,15 @@ for (const role of ["broker_admin", "broker_viewer", "system_admin"]) {
       await expect(page.getByText("Review User", { exact: true })).toBeVisible();
       await expect(page.getByRole("button", { name: "Bind Microsoft identity" })).toBeVisible();
       const invite = page.getByRole("button", { name: "Invite", exact: true });
-      await page.getByLabel("Email", { exact: true }).fill("new-broker@example.test");
       await expect(invite).toBeDisabled();
-      await page.getByLabel("Microsoft object ID", { exact: true }).fill("11111111-1111-4111-8111-111111111111");
+      await page.getByLabel("Email", { exact: true }).fill("new-broker@example.test");
+      // The Microsoft object ID is optional; only a malformed one blocks the invite.
+      await expect(invite).toBeEnabled();
+      const objectId = page.getByLabel("Microsoft object ID", { exact: true });
+      await objectId.fill("not-an-object-id");
+      await expect(invite).toBeDisabled();
+      await expect(page.getByRole("alert").filter({ hasText: "A Microsoft object ID looks like" })).toBeVisible();
+      await objectId.fill("11111111-1111-4111-8111-111111111111");
       await expect(invite).toBeEnabled();
       await page.screenshot({ path: testInfo.outputPath("broker-identity-invitation.png"), fullPage: true });
       expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBeLessThanOrEqual(1);
@@ -89,6 +95,36 @@ for (const role of ["broker_admin", "broker_viewer", "system_admin"]) {
     }
   });
 }
+
+test("system admin invites by email alone and is shown the one-time invitation link", async ({ page, request }) => {
+  const me = await (await request.get("/api/v1/me")).json();
+  await page.route("**/api/v1/me", route => route.fulfill({ json: { ...me, role: "system_admin" } }));
+  await page.route("**/api/v1/admin/users**", route => route.fulfill({ json: [] }));
+  await page.route("**/api/v1/admin/broker-firms", route => route.fulfill({ json: [
+    { id: "review-firm", name: "Review Brokerage", client_count: 1 },
+  ] }));
+  const inviteUrl = "https://staff.review.example/sign-in#invite=review-one-time-token-123";
+  const posted: unknown[] = [];
+  await page.route("**/api/v1/admin/invitations**", route => {
+    if (route.request().method() !== "POST") return route.fulfill({ json: [] });
+    posted.push(route.request().postDataJSON());
+    return route.fulfill({ status: 201, json: {
+      id: "review-invitation", email: "new-broker@example.test", role: "broker_viewer", status: "pending",
+      broker_firm_id: "review-firm", user_id: "review-invited-user", expires_at: "2100-01-01T00:00:00Z",
+      invite_token: "review-one-time-token-123", invite_url: inviteUrl,
+    } });
+  });
+  await page.goto("/firm/access");
+  await page.getByLabel("Email", { exact: true }).fill("new-broker@example.test");
+  await page.getByRole("button", { name: "Invite", exact: true }).click();
+  const link = page.getByRole("textbox", { name: "Invitation link for new-broker@example.test" });
+  await expect(link).toHaveValue(inviteUrl);
+  expect(posted).toHaveLength(1);
+  expect(posted[0]).toMatchObject({ email: "new-broker@example.test" });
+  expect(posted[0]).not.toHaveProperty("external_id");
+  await page.getByRole("button", { name: "Dismiss invitation link" }).click();
+  await expect(link).toHaveCount(0);
+});
 
 test("system admin binds an unlinked Microsoft identity through the account control", async ({ page, request }) => {
   const me = await (await request.get("/api/v1/me")).json();

@@ -1335,6 +1335,49 @@ def test_referral_letter_member_isolation(anon: TestClient):
     assert res.status_code == 404
 
 
+_FLEX_DENTAL = {
+    "claim_kind": "flex",
+    "product_code": None,
+    "sub_type": None,
+    "flex_category_name": "Dental",
+    "claim_type": "dental",
+}
+
+
+def test_flex_claim_cannot_name_another_members_referral_letter(anon: TestClient):
+    """Flex claims skip the insured intake rules, but the claim payload still
+    serves the named letter back — so its ownership is checked all the same."""
+    letter = _upload_referral(anon, b" ref-flex-iso", account=ACC_A)
+
+    res = _draft_res(anon, account=ACC_C, referral_document_id=letter["id"], **_FLEX_DENTAL)
+
+    assert res.status_code == 404
+    assert "referral_document" not in res.text
+
+
+def test_flex_claim_cannot_be_amended_onto_another_members_letter(anon: TestClient):
+    letter = _upload_referral(anon, b" ref-flex-amend", account=ACC_A)
+    claim = _draft(anon, account=ACC_C, **_FLEX_DENTAL)
+
+    res = anon.patch(
+        f"/api/v1/portal/claims/{claim['id']}",
+        json={"referral_document_id": letter["id"], "expected_revision": claim["revision"]},
+        headers=_auth(ACC_C),
+    )
+
+    assert res.status_code == 404
+    reread = anon.get(f"/api/v1/portal/claims/{claim['id']}", headers=_auth(ACC_C))
+    assert reread.json()["referral_document"] is None
+
+
+def test_flex_claim_may_carry_the_members_own_letter(anon: TestClient):
+    letter = _upload_referral(anon, b" ref-flex-own", account=ACC_A)
+
+    claim = _draft(anon, account=ACC_A, referral_document_id=letter["id"], **_FLEX_DENTAL)
+
+    assert claim["referral_document"]["id"] == letter["id"]
+
+
 # ── Dependant eligibility ────────────────────────────────────────────────────
 
 

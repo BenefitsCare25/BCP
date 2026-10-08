@@ -22,8 +22,8 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { usePortalMe, useMemberSecurityStatus } from "@/api/portal";
-import { portalApi } from "@/api/portalClient";
-import { queryClient } from "@/lib/queryClient";
+import { clearLocalPortalSession, portalApi } from "@/api/portalClient";
+import { markSignedOut } from "@/lib/surfaceSession";
 import { toast } from "sonner";
 import { usePortalConversations } from "@/api/portalMessages";
 import { UnreadBadge, messagesLabel } from "./leaf/MessageMount";
@@ -39,6 +39,7 @@ import { useCompany } from "@/components/portal/useCompany";
 import { AccessNotice } from "./AccessNotice";
 import { holds, type Capability } from "./capabilities";
 import { familiarName } from "./memberNames";
+import { BrandLogo, PoweredBy } from "@/components/brand/BrandLogo";
 
 /** Six destinations on desktop, five in the phone dock — "Home" is the dock's
  * first slot and Coverage is reached from the tiles that summarise it, so the
@@ -119,9 +120,8 @@ export function PortalShell() {
   const signOut = async () => {
     try {
       await portalApi.logout();
-      usePortalSession.getState().clearSession();
-      void queryClient.cancelQueries({ queryKey: ["portal"] });
-      queryClient.removeQueries({ queryKey: ["portal"] });
+      markSignedOut("portal");
+      clearLocalPortalSession();
       void navigate({ to: "/portal/$company/sign-in", params: { company } });
     } catch {
       toast.error("Couldn't complete sign-out. Try again.");
@@ -151,7 +151,6 @@ function PortalMainShell() {
   const { location } = useRouterState();
   const navigate = useNavigate();
   const member = usePortalSession((s) => s.member);
-  const clearSession = usePortalSession((s) => s.clearSession);
   const { data: me } = usePortalMe();
   const company = useCompany();
   const { data: security } = useMemberSecurityStatus();
@@ -188,9 +187,10 @@ function PortalMainShell() {
   const signOut = async () => {
     try {
       await portalApi.logout();
-      clearSession();
-      void queryClient.cancelQueries({ queryKey: ["portal"] });
-      queryClient.removeQueries({ queryKey: ["portal"] });
+      // Before leaving: sign-in's guard must not restore a session from the
+      // shared cookie, which another tab may hold for someone else.
+      markSignedOut("portal");
+      clearLocalPortalSession();
       void navigate({ to: "/portal/$company/sign-in", params: { company } });
     } catch { toast.error("Couldn't complete sign-out. Check your connection and try again."); }
   };
@@ -317,12 +317,12 @@ function PortalMainShell() {
           <div className="portal-nav-row hidden items-center gap-0 py-2.5 pl-5 pr-3 lg:flex">
             {/* Used whole and uncropped. Served from a 50 KB derivative — the
                 source asset is 792 KB and has no business in a header. */}
-            <img
-              src="/inspro-logo-header.png"
-              alt="Inspro Insurance Brokers"
+            <BrandLogo
+              variant="header"
               width={125}
               height={40}
               className="portal-nav-logo h-10 w-auto shrink-0"
+              wordmarkClassName="shrink-0 text-lg text-record"
             />
             <span aria-hidden className="portal-nav-divider mx-5 h-8 w-px shrink-0 bg-hairline" />
 
@@ -449,6 +449,7 @@ function PortalMainShell() {
             <HeadRailProvider value={rail}>
         {security?.mfa_enrollment_required && !location.pathname.endsWith("/security") ? null : <Outlet />}
             </HeadRailProvider>
+            <PoweredBy className="pt-8 text-center" />
           </div>
         </main>
 

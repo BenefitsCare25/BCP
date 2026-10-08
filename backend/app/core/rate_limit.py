@@ -15,13 +15,14 @@ from slowapi.errors import RateLimitExceeded
 
 
 def _key_func(request: Request) -> str:
-    """Use the ASGI peer, resolved only by the server's trusted-proxy policy.
+    """Use the ASGI peer (resolved only by the server's trusted-proxy policy),
+    or behind Front Door the socket address it saw (`request_context.client_ip`).
 
     Never let anonymous callers select a bucket with tenant or forwarding headers.
     """
-    if request.client and request.client.host:
-        return f"ip:{request.client.host}"
-    return "ip:unknown"
+    from app.core.request_context import client_ip
+
+    return f"ip:{client_ip(request) or 'unknown'}"
 
 
 limiter = Limiter(

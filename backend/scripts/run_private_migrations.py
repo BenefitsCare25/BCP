@@ -90,7 +90,13 @@ def main() -> None:
                 print(
                     "Private database connectivity verified; migration lock acquired.", flush=True
                 )
-                for args in (["alembic", "upgrade", "head"], ["scripts.provision_tenants"]):
+                # Drift check last: it must see the schemas exactly as the new
+                # image will, and a non-zero exit blocks the release.
+                for args in (
+                    ["alembic", "upgrade", "head"],
+                    ["scripts.provision_tenants"],
+                    ["scripts.check_schema_drift"],
+                ):
                     result = subprocess.run(
                         [sys.executable, "-m", *args],
                         capture_output=True,
@@ -101,7 +107,10 @@ def main() -> None:
                     print(redact(result.stdout + result.stderr, secrets), flush=True)
                     if result.returncode:
                         raise RuntimeError(f"Migration stage {args[0]} failed")
-                print("Release migrations and tenant provisioning succeeded.", flush=True)
+                print(
+                    "Release migrations, tenant provisioning and drift check succeeded.",
+                    flush=True,
+                )
             finally:
                 lock.execute(text("SELECT pg_advisory_unlock(710219, 1)"))
     finally:

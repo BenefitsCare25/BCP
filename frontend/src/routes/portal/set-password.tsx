@@ -1,11 +1,12 @@
 /** Employee-portal set / reset password: redeem a single-use token and choose
  * a password, then land in the portal. */
-import { useMemo, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { Lock, ShieldCheck } from "lucide-react";
 import { isMemberToken, useMemberMfa, useMemberSetPassword } from "@/api/portal";
 import { errorCode, formatError } from "@/lib/errors";
 import { PASSWORD_MAX_LENGTH } from "@/lib/loginValidation";
+import { useSetPasswordToken } from "@/lib/setPasswordToken";
 import { portalPath } from "@/lib/tenant";
 import { MFA_CODE_MAX_LENGTH, canSubmitMfaCode, normalizeMfaCode } from "@/lib/mfa";
 import { AuthScene } from "@/components/auth/AuthScene";
@@ -34,10 +35,9 @@ export function PortalSetPasswordPage() {
   const setPw = useMemberSetPassword();
   const mfa = useMemberMfa();
 
-  const token = useMemo(
-    () => new URLSearchParams(window.location.search).get("token") ?? "",
-    [],
-  );
+  // From the link's `#token=` (or a legacy `?token=`), else the sign-in
+  // hand-over; scrubbed from the address bar once read.
+  const token = useSetPasswordToken("portal");
   const [step, setStep] = useState<"password" | "mfa">("password");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");

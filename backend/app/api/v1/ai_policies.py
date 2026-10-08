@@ -57,7 +57,7 @@ class PolicyPage(BaseModel):
 
 
 def reader(user: CurrentUser = Depends(get_current_user)) -> CurrentUser:
-    if user.role not in {"system_admin", "broker_admin", "broker_viewer"}:
+    if user.role not in {"system_admin", "firm_admin", "broker_admin", "broker_viewer"}:
         raise HTTPException(403, "AI policies require a broker or system administrator role.")
     return user
 

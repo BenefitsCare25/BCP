@@ -24,7 +24,12 @@ from app.core.deps import (
     user_owns,
 )
 from app.core.rate_limit import limiter
-from app.core.storage import get_storage
+from app.core.storage import (
+    StorageScopeError,
+    assert_key_in_scope,
+    company_firm_id,
+    get_storage,
+)
 from app.db.session import get_db
 from app.models.report_version import ReportVersion
 from app.services.insurer_listings import configured_insurers_for_year
@@ -150,12 +155,19 @@ def create_report_version(
         # Only now that the new row is committed is it safe to remove the
         # superseded latest-mode blob. A failure here leaves an orphan file
         # (harmless — the DB no longer references it), never a dangling row.
+        # The superseded version was this company's, so a key filed anywhere
+        # else is refused rather than deleted.
         if superseded_path:
             try:
+                assert_key_in_scope(
+                    superseded_path, company_firm_id(db, rv.client_id), rv.client_id
+                )
                 get_storage().delete(superseded_path)
             except Exception:
                 logger.warning(
-                    "Failed to delete superseded report blob %s", superseded_path
+                    "Failed to delete superseded report blob %s",
+                    superseded_path,
+                    exc_info=True,
                 )
     return {**version_out(rv), "unchanged": not created}
 
@@ -245,10 +257,23 @@ def download_report_version(
     db: Session = Depends(get_db),
 ) -> Response:
     _assert_version_readable(user, rv)
-    content = load_version_blob(rv)
+    try:
+        content = load_version_blob(rv)
+    except StorageScopeError:
+        logger.error(
+            "Report version %s is filed outside its firm and company",
+            rv.id,
+            extra={"error_code": "storage_scope_violation"},
+        )
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Report version not found") from None
+    except FileNotFoundError:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, "The retained report file is no longer available"
+        ) from None
     write_audit(
         db, user, action="export", entity_type="report_version", entity_id=rv.id,
         after={"report_type": rv.report_type, "version_no": rv.version_no},
+        client_id=rv.client_id,
     )
     db.commit()
     return _blob_response(rv, content)
@@ -357,6 +382,7 @@ def download_movement(
             "report_type": rv.report_type, "version_no": rv.version_no,
             "movement": True, "since": since or "previous",
         },
+        client_id=rv.client_id,
     )
     db.commit()
 

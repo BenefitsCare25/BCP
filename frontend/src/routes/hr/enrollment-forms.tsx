@@ -1,6 +1,7 @@
 /** HR — every enrolment form filed for the company (online and scanned paper),
- * downloadable one at a time, as a ZIP, or as an Excel summary. Read-only:
- * the broker reviews and acknowledges. */
+ * downloadable one at a time or as a (masked) Excel summary, and — for the HR
+ * administrator only — all at once as a ZIP. Read-only: the broker reviews and
+ * acknowledges. */
 import { useState } from "react";
 import type { RegisterFilters } from "@/api/enrollmentForms";
 import {
@@ -15,6 +16,7 @@ import {
 } from "@/components/enrollmentForms/FormRegister";
 import { useDebouncedValue } from "@/lib/use-debounced-value";
 import { useDocumentTitle } from "@/lib/useDocumentTitle";
+import { useHrSession } from "@/stores/hrSession";
 
 export function HrEnrollmentFormsPage() {
   useDocumentTitle("Enrolment forms");
@@ -23,6 +25,9 @@ export function HrEnrollmentFormsPage() {
   const effective = { ...filters, query };
   const forms = useHrForms(effective);
   const windows = useHrFormWindows();
+  // The ZIP holds every member's signed form unredacted; the server refuses it
+  // to an HR officer, so it is offered to the HR administrator only.
+  const isHrAdmin = useHrSession((s) => s.me?.role === "client_admin");
 
   return (
     <div className="space-y-3">
@@ -43,6 +48,7 @@ export function HrEnrollmentFormsPage() {
         showSource={false}
         onDownload={downloadHrFormPdf}
         onExport={(kind) => exportHrForms(effective, kind)}
+        canExportPdfs={isHrAdmin}
         emptyHint={filters.query || filters.status || filters.windowId
           ? "No forms match these filters. Change the filters or clear your search."
           : "No enrolment forms yet. Signed online forms and filed paper forms appear here."}
