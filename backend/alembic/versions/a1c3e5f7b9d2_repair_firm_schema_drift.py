@@ -119,10 +119,13 @@ def _make_series_unique(bind: sa.engine.Connection, schema: str) -> None:
     if unique:
         return
     columns = ", ".join(_SERIES_COLUMNS)
+    # The unique index treats NULLs as distinct (models/report_version.py), so
+    # only fully keyed rows can collide.
+    keyed = " AND ".join(f"{c} IS NOT NULL" for c in _SERIES_COLUMNS)
     duplicates = bind.execute(
         sa.text(
             f'SELECT count(*) FROM (SELECT 1 FROM "{schema}".report_versions '
-            f"GROUP BY {columns} HAVING count(*) > 1) d"
+            f"WHERE {keyed} GROUP BY {columns} HAVING count(*) > 1) d"
         )
     ).scalar()
     if duplicates:
