@@ -59,6 +59,7 @@ export type InsuredGroupKey = keyof typeof GROUP_LABELS;
 export interface TypeEntry {
   value: string;
   label: string;
+  productLabel?: string;
   product: InsuredClaimOption;
 }
 

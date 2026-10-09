@@ -121,13 +121,13 @@ export function TierDifferences({
       <h4 className="leaf-label">{pt("What changes")}</h4>
       {!compact && <p className="text-row text-label">
         {currentLabel
-          ? pt("compared with {0}, your current plan", [currentLabel])
+          ? pt("compared with {0}, your current plan", [pt(currentLabel)])
           : pt("compared with your current plan")}
       </p>}
       {compact && <div className="enrolment-comparison-head text-row text-label" aria-hidden="true">
         <span>{pt("Benefit")}</span>
-        <span>{currentLabel ?? pt("Your plan")} · {settled ? pt("Before") : pt("Current")}</span>
-        <span>{electedLabel ?? pt("New plan")} · {settled ? pt("Current") : pt("If you switch")}</span>
+        <span>{pt(currentLabel ?? "Your plan")} · {settled ? pt("Before") : pt("Current")}</span>
+        <span>{pt(electedLabel ?? "New plan")} · {settled ? pt("Current") : pt("If you switch")}</span>
       </div>}
 
       {/* The rule between items is the thing that makes this a list rather
@@ -148,14 +148,14 @@ export function TierDifferences({
           >
             <dt>
               {d.group && (
-                <span className="block text-row text-label">{d.group}</span>
+                <span className="block text-row text-label" title={d.group}>{pt(d.group)}</span>
               )}
               <span className="block text-row font-medium text-record">
-                {d.benefit}
+                {pt(d.benefit)}
               </span>
               {d.qualifier && (
                 <span className="mt-0.5 block text-row text-label">
-                  {d.qualifier}
+                  {pt(d.qualifier)}
                 </span>
               )}
             </dt>
@@ -171,26 +171,26 @@ export function TierDifferences({
               <div className={pairRow}>
                 <span className={pairLabel}>
                   {currentLabel
-                    ? `${currentLabel} — ${pt(settled ? "before" : "now")}`
+                    ? `${pt(currentLabel)} — ${pt(settled ? "before" : "now")}`
                     : settled
                       ? pt("Your plan before")
                       : pt("Your plan now")}
                 </span>
                 <span className={cn(pairValue, "text-label")}>
-                  {cell(d.current, d.kind)}
+                  {pt(cell(d.current, d.kind))}
                 </span>
               </div>
               <div className={pairRow}>
                 <span className={pairLabel}>
                   {electedLabel
-                    ? `${electedLabel} — ${pt(settled ? "now" : "if you switch")}`
+                    ? `${pt(electedLabel)} — ${pt(settled ? "now" : "if you switch")}`
                     : settled
                       ? pt("Your plan now")
                       : pt("If you switch")}
                 </span>
                 {/* Full ink and weight: this is the outcome being offered. */}
                 <span className={cn(pairValue, "font-semibold text-record")}>
-                  {cell(d.elected, d.kind)}
+                  {pt(cell(d.elected, d.kind))}
                 </span>
               </div>
             </dd>

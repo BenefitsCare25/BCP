@@ -122,7 +122,7 @@ export function FlexMount({
         <dl>
           {family && <MountRow term="Covers">{family}</MountRow>}
           {flex.tier_name && (
-            <MountRow term="Flex dollar band">{flex.tier_name}</MountRow>
+            <MountRow term="Flex dollar band">{pt(flex.tier_name)}</MountRow>
           )}
         </dl>
       )}

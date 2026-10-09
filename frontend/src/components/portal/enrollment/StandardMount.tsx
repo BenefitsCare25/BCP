@@ -46,7 +46,7 @@ export function StandardMount({
       <dl>
         {lines.map((l) => (
           <MountRow key={l.code} term={l.name} gloss={l.familyNote ?? undefined}>
-            {l.plan ?? pt("Included")}
+            {pt(l.plan ?? "Included")}
           </MountRow>
         ))}
       </dl>

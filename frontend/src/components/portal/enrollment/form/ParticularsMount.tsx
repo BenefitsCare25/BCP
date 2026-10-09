@@ -51,7 +51,7 @@ export function ParticularsMount({
         <MountRow term="Name">{particulars.name ?? "—"}</MountRow>
         <MountRow term="NRIC / FIN">{particulars.id_masked || "—"}</MountRow>
         <MountRow term="Staff ID">{particulars.staff_id}</MountRow>
-        {particulars.gender && <MountRow term="Sex">{particulars.gender}</MountRow>}
+        {particulars.gender && <MountRow term="Sex">{pt(particulars.gender === "M" ? "Male" : particulars.gender === "F" ? "Female" : particulars.gender)}</MountRow>}
         {particulars.dob && (
           <MountRow term="Date of birth">{formatDay(particulars.dob)}</MountRow>
         )}

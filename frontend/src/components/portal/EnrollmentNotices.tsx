@@ -23,7 +23,7 @@ export function EnrollmentNoticeList({ compact = false }: { compact?: boolean })
   return <ol className="divide-y divide-hairline">
     {items.slice(0, compact ? 10 : 50).map((event) => <li key={event.id} className="space-y-1.5 p-3 text-row">
       <p className="font-semibold text-record">{pt(event.title)}{!event.read_at && <span className="ml-2 text-action-ink">{pt("· Unread")}</span>}</p>
-      <p className="text-label">{event.window_name} · {formatDay(event.created_at)}</p>
+      <p className="text-label">{pt(event.window_name)} · {formatDay(event.created_at)}</p>
       <p className="text-record">{pt(event.message)}</p>
       {event.reason && <p className="whitespace-pre-wrap break-words text-record"><span className="font-semibold">{pt("Reason:")} </span>{event.reason}</p>}
       {["returned", "cancelled", "reopened", "revised"].includes(event.kind) && <p className="text-label">{pt("Period deadline:")} {deadline(event.closes_at)}{pt(". If it has passed, contact HR.")}</p>}

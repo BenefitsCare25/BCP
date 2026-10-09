@@ -1,4 +1,4 @@
-import { usePortalTranslation } from "@/i18n/portal";
+import { usePortalTranslation, type PortalTranslator } from "@/i18n/portal";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { AlertTriangle, ArrowLeft, Check, Loader2, Search, UserRound } from "lucide-react";
 import {
@@ -49,11 +49,11 @@ interface ClaimChoice {
   to: string | null;
 }
 
-function choicesFrom(options: CoverageOptions): ClaimChoice[] {
+function choicesFrom(options: CoverageOptions, pt: PortalTranslator): ClaimChoice[] {
   const insured = options.insured.flatMap((product) =>
     product.claim_types.map((claimType) => ({
       id: `insured:${product.product_code}:${claimType.scope_key}`,
-      label: `${claimType.label} · ${product.product_name ?? product.product_code}${product.plan_display_name ? ` · ${product.plan_display_name}` : ""}`,
+      label: `${pt(claimType.label)} · ${pt(product.product_name ?? product.product_code)}${product.plan_display_name ? ` · ${pt(product.plan_display_name)}` : ""}`,
       kind: "insured" as const,
       productCode: product.product_code,
       flexCategory: null,
@@ -69,7 +69,7 @@ function choicesFrom(options: CoverageOptions): ClaimChoice[] {
   );
   const flex = (options.flex?.categories ?? []).map((category) => ({
     id: `flex:${category.name}`,
-    label: `${category.name} · Flexible benefits`,
+    label: `${pt(category.name)} · ${pt("Flexible benefits")}`,
     kind: "flex" as const,
     productCode: null,
     flexCategory: category.name,
@@ -140,8 +140,8 @@ export function HrNewClaimPage() {
   const employees = useHrEmployees(employeeSearch);
   const options = useHrCoverageOptions(employee?.id ?? null);
   const choices = useMemo(
-    () => (options.data ? choicesFrom(options.data) : []),
-    [options.data],
+    () => (options.data ? choicesFrom(options.data, pt) : []),
+    [options.data, pt],
   );
   const choice = choices.find((item) => item.id === choiceId) ?? null;
   const planLabel = choice?.kind === "insured"
@@ -390,7 +390,7 @@ export function HrNewClaimPage() {
                   ))}
                 </NativeSelect>
               </Field>
-              {planLabel && <p className="break-words text-sm text-muted-foreground">{pt("Plan:")} {planLabel}</p>}
+              {planLabel && <p className="break-words text-sm text-muted-foreground">{pt("Plan:")} {pt(planLabel)}</p>}
 
               {choice && (
                 <>

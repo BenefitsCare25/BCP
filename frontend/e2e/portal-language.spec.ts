@@ -1,6 +1,8 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
 import type { PortalTranslator } from "../src/i18n/portal";
+import { readFileSync } from "node:fs";
+const insuranceCopy = JSON.parse(readFileSync("e2e/fixtures/portal-insurance-copy.json", "utf8")) as { diagnosis: string[] };
 
 const member = { id: "language-member", staff_id: "LANG-001", email: "language@example.test", display_name: "Alex Tan" };
 const hr = { user_id: "language-hr", email: member.email, display_name: "Jamie Lim", role: "client_admin", client_id: "language-company", company_name: "Language Review Company", mfa_available: false, mfa_status: "none" };
@@ -21,7 +23,23 @@ const claim = {
   submission_channel: "hr", submitted_by_name: hr.display_name,
 };
 
-async function mockPortals(page: Page, authenticated = true) {
+const comparison = [
+  { group: "Specialist Care", benefit: "Panel Specialists", qualifier: "on cashless basis · including Specialist Outpatient Clinics in Govt Restructured hospitals - on reimbursement basis", current: "500", elected: "As charged", kind: "currency" },
+  { group: "Specialist Care", benefit: "Non Panel Specialists", qualifier: null, current: "500", elected: "3000", kind: "currency" },
+  { group: "Diagnostic X-ray & Lab Test", benefit: "Panel", qualifier: null, current: "Refer to 1a", elected: "Refer to 1a", kind: "currency" },
+  { group: "Diagnostic X-ray & Lab Test", benefit: "Non Panel", qualifier: null, current: null, elected: "Refer to 1b", kind: "currency" },
+];
+const tier = (n: number) => ({ key: `specialist::${n}`, tier_category_id: `specialist-${n}`, plan_code: String(n), label: `Plan${n}`, participation: "compulsory", dependant_participation: null, direction: n === 1 ? "same" : "upgrade", is_baseline: n === 1, is_current: n === 1, financials: null, price_tag: null, differences: n === 1 ? [] : comparison, differences_total: n === 1 ? 0 : 4 });
+const enrollmentWindow = { id: "language-window", name: "Annual enrolment", status: "open", window_type: "open", opens_at: "2026-01-01T00:00:00Z", closes_at: "2030-12-31T00:00:00Z", allow_leave: false, allow_dependant_changes: false, member_self_service: true, allow_overdraft: false, product_scope: ["GCSP"], default_behavior: "deemed_keep_current" };
+const claimProduct = (code: string, category: string, labels: string[]) => ({ product_code: code, product_name: code === "GCSP" ? "Group Clinical Specialist" : code === "GHS" ? "Group Hospital & Surgical" : "Group Clinical General Practitioner", plan_code: "1", plan_display_name: "Plan1", annual_policy_limit: "50000", covers_dependants: false, covered_dependant_ids: [], insurer: "Original Insurer", insurer_member_id: "LANG-001", sub_types: [], requires_referral: false, diagnosis_group: "gp", diagnosis_required: true, category,
+  claim_types: labels.map((label, i) => ({ label, sub_type: category === "inpatient" ? label : null, scope_code: `scope-${i}`, scope_key: `${code}-${i}`, benefit_key: null, requires_doctor_name: false, supports_stay_dates: false, anchor_mode: null, doc_slots: [], doc_slots_by_sector: null })) });
+const populatedOptions = { policy_year_start: "2026-01-01", policy_year_end: "2026-12-31", claimable_from: "2026-01-01", claimable_to: "2026-12-31", policy_currency: "SGD", currencies: ["SGD"], hospitals: [], flex: null, insured: [
+  claimProduct("GCGP", "outpatient", ["GP (General Practitioner)", "TCM (Traditional Chinese Medicine)", "Physiotherapy"]),
+  claimProduct("GCSP", "outpatient", ["SP (Specialist)"]),
+  claimProduct("GHS", "inpatient", ["Follow up Pre-/Post-Hospitalisation", "Hospitalisation/Day Surgery/Other Inpatient Treatment", "Emergency Accidental Outpatient Treatment", "Kidney Dialysis/Cancer Treatment"]),
+] };
+
+async function mockPortals(page: Page, authenticated = true, populated = false) {
   const writes: string[] = [];
   await page.route("**/api/v1/**", async route => {
     const request = route.request();
@@ -43,21 +61,24 @@ async function mockPortals(page: Page, authenticated = true) {
       employee: { id: "language-employee", employee_name: member.display_name }, policy_year_id: policyYear.id,
       is_matched: true, attributes: [], dependants: [], flex: null,
       coverage: [line("GCGP", "gp", [item("Panel consultation", "As charged", { per_visit: "As charged", co_payment: "5" })]),
-        line("GHS", "hospital", [item("Daily Room & Board", "250"), item("Intensive Care Unit", "500")])],
+        line("GHS", "hospital", [item("Daily Room & Board", "250"), item("Intensive Care Unit", "500")]),
+        ...(populated ? [line("GCSP", "specialist", [item("Specialist Care", "As charged"), item("Diagnostic X-ray & Lab Test", "Refer to 1a"), item("Outpatient Kidney Dialysis / Cancer Treatment (Per Policy Year)", "20000")])] : [])],
     } });
     if (path.endsWith("/conversations")) return route.fulfill({ json: { items: [], total: 0, offset: 0, limit: 20, unread_total: 0 } });
     if (path.endsWith("/enrollment/notices")) return route.fulfill({ json: { items: [], unread: 0 } });
-    if (path.endsWith("/enrollment")) return route.fulfill({ json: { window: null, enrollment: null, options: null } });
+    if (path.endsWith("/enrollment")) return route.fulfill({ json: populated ? { window: enrollmentWindow, enrollment: null, options: { products: [{ product_id: "specialist", product_code: "GCSP", product_name: "Group Clinical Specialist", employee_participation: "compulsory", dependant_participation: null, baseline_tier_category_id: "specialist-1", baseline_plan_code: "1", allow_plan_change: true, can_decline: false, dependant: null, tiers: [tier(1), tier(2)] }], flex_wallet: null, leave: null } } : { window: null, enrollment: null, options: null } });
+    if (path.endsWith("/enrollment/form")) return route.fulfill({ json: { company_name: "Language Review Company", title: "Enrolment", closes_at: enrollmentWindow.closes_at, policy_start: "2026-01-01", policy_end: "2026-12-31", window_type: "open", intro_lines: [], eligibility_notes: [], clauses: [], documents: [], rules: [], compulsory: [], contributions: [], plans: [], dependants: [], latest: null, particulars: { name: member.display_name, staff_id: member.staff_id, id_masked: "****", email: member.email, contact_no: "", gender: "Male" } } });
     if (path.endsWith("/enrollment-forms/windows")) return route.fulfill({ json: [] });
     if (path.endsWith("/enrollment-forms")) return route.fulfill({ json: path.includes("/hr/")
       ? { items: [], total: 0, counts: { submitted: 0, acknowledged: 0 }, offset: 0, limit: 25 } : [] });
     if (path.endsWith("/dependants")) return route.fulfill({ json: [] });
-    if (path.endsWith("/employees")) return route.fulfill({ json: { items: [], total: 0 } });
+    if (path.endsWith("/employees")) return route.fulfill({ json: { items: populated ? [{ id: "language-employee", name: member.display_name, staff_id: member.staff_id, period: "2026", dependants: [] }] : [], total: populated ? 1 : 0 } });
     if (path.endsWith("/claims/language-claim")) return route.fulfill({ json: claim });
     if (path.endsWith("/claims")) return route.fulfill({ json: { items: [claim], total: 1, offset: 0, limit: 50 } });
     if (path.endsWith("/utilization")) return route.fulfill({ json: { insured: [], flex: null } });
     if (path.endsWith("/claim-years")) return route.fulfill({ json: [policyYear] });
-    if (path.endsWith("/coverage-options")) return route.fulfill({ json: { insured: [], flex: null, currencies: ["SGD"], hospitals: [] } });
+    if (path.endsWith("/coverage-options") || path.endsWith("/hr/claims/employees/language-employee/options")) return route.fulfill({ json: populated ? populatedOptions : { insured: [], flex: null, currencies: ["SGD"], hospitals: [] } });
+    if (path.endsWith("/claim-diagnoses")) return route.fulfill({ json: { group: "gp", items: insuranceCopy.diagnosis.map(label => ({ label, icd10: "J06" })) } });
     return route.fulfill({ status: 404, json: { detail: "No active coverage." } });
   });
   return writes;
@@ -71,6 +92,92 @@ async function chooseLanguage(page: Page, value: "zh-SG" | "en-SG") {
 async function noOverflow(page: Page) {
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 }
+
+test("populated employee claims translate every insurance choice and search diagnoses in both languages", async ({ page }, info) => {
+  const writes = await mockPortals(page, true, true);
+  await page.goto("/portal/language/claims/new");
+  await chooseLanguage(page, "zh-SG");
+  const select = page.getByRole("combobox", { name: /^(理赔类型|Claim type)/ });
+  const options = await select.locator("option").allTextContents();
+  expect(options).toEqual(expect.arrayContaining(["全科门诊（GP）", "中医（TCM）", "物理治疗", "专科门诊（SP）", "住院前／出院后复诊", "住院／日间手术／其他住院治疗", "意外受伤紧急门诊治疗", "肾脏透析／癌症治疗"]));
+  await select.selectOption("insured:GCGP:0");
+  const search = page.getByPlaceholder("输入关键词搜索选项");
+  await search.fill("上呼吸道");
+  await page.getByRole("button", { name: "上呼吸道感染（URTI）／普通感冒", exact: true }).click();
+  await expect(page.getByText("上呼吸道感染（URTI）／普通感冒", { exact: true })).toBeVisible();
+  const before = writes.length;
+  await chooseLanguage(page, "en-SG");
+  await expect(select).toHaveValue("insured:GCGP:0");
+  await expect(page.getByText("Upper respiratory tract infection (URTI) / Common cold", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Clear diagnosis" }).click();
+  await page.getByPlaceholder("Start typing to search for options").fill("upper respiratory");
+  await expect(page.getByRole("button", { name: "Upper respiratory tract infection (URTI) / Common cold", exact: true })).toBeVisible();
+  await chooseLanguage(page, "zh-SG");
+  await expect(select).toHaveValue("insured:GCGP:0");
+  expect(writes.length).toBe(before);
+  await noOverflow(page);
+  await page.screenshot({ path: info.outputPath("populated-claims-zh.png"), fullPage: true });
+});
+
+test("populated enrolment translates comparison headings, qualifiers, values and references without changing elections", async ({ page }, info) => {
+  const errors: string[] = [];
+  page.on("pageerror", error => errors.push(error.message));
+  const writes = await mockPortals(page, true, true);
+  await page.goto("/portal/language/enrollment?p=GCSP");
+  await chooseLanguage(page, "zh-SG");
+  const current = page.getByRole("radio", { name: /计划 1/ });
+  const upgrade = page.getByRole("radio", { name: /计划 2/ });
+  await expect(current).toBeChecked();
+  await expect(upgrade).toBeVisible();
+  await expect(page.getByText("增加保障", { exact: true })).toBeVisible();
+  const comparison = page.locator(".enrolment-comparison");
+  await expect(comparison.getByText("专科医疗", { exact: true }).first()).toBeVisible();
+  await expect(comparison.getByText("指定专科医生", { exact: true })).toBeVisible();
+  await expect(comparison.getByText("非指定专科医生", { exact: true })).toBeVisible();
+  await expect(comparison.getByText("免现金结算；包括公立重组医院专科门诊（报销制）", { exact: true })).toBeVisible();
+  await expect(comparison.getByText("按实际费用赔付", { exact: true })).toBeVisible();
+  await expect(comparison.getByText("不受保", { exact: true })).toBeVisible();
+  await expect(comparison.getByText("参见 1a", { exact: true })).toHaveCount(2);
+  await expect(comparison.getByText("参见 1b", { exact: true })).toHaveCount(1);
+  await expect(comparison.getByText("S$3,000", { exact: true })).toBeVisible();
+  for (const text of ["Specialist Care", "Diagnostic X-ray & Lab Test", "As charged", "Not covered", "Refer to 1a", "Plan1"]) await expect(comparison.getByText(text, { exact: true })).toHaveCount(0);
+  await upgrade.check();
+  const before = writes.length;
+  await chooseLanguage(page, "en-SG");
+  await expect(page.getByRole("radio", { name: /Plan2/ })).toBeChecked();
+  await expect(comparison.getByText("Panel Specialists", { exact: true })).toBeVisible();
+  await expect(comparison.getByText("Refer to 1b", { exact: true })).toBeVisible();
+  await chooseLanguage(page, "zh-SG");
+  await expect(upgrade).toBeChecked();
+  expect(writes.length).toBe(before);
+  for (const width of info.project.name.startsWith("desktop") ? [1440, 1024, 940] : [393, 320]) {
+    await page.setViewportSize({ width, height: 960 });
+    await noOverflow(page);
+  }
+  await page.screenshot({ path: info.outputPath("populated-enrolment-comparison-zh.png"), fullPage: true });
+  expect(errors).toEqual([]);
+});
+
+test("populated HR claim choices translate each fragment and retain the original selected value", async ({ page }, info) => {
+  await mockPortals(page, true, true);
+  await page.goto("/hr/claims/new");
+  await chooseLanguage(page, "zh-SG");
+  await page.getByText(member.display_name, { exact: true }).click();
+  const select = page.getByRole("combobox", { name: /^(理赔类型|Claim type)/ });
+  await expect(select.locator("option").filter({ hasText: "住院／日间手术／其他住院治疗" })).toHaveCount(1);
+  const gp = select.locator("option").filter({ hasText: "全科门诊（GP）" });
+  await expect(gp).toContainText("计划 1");
+  await expect(gp).toContainText("团体全科门诊保险");
+  await expect(gp).not.toContainText("Group Clinical General Practitioner");
+  const value = await gp.getAttribute("value");
+  await select.selectOption(value!);
+  await chooseLanguage(page, "en-SG");
+  await expect(select).toHaveValue(value!);
+  await expect(select.locator("option:checked")).toContainText("GP (General Practitioner)");
+  await chooseLanguage(page, "zh-SG");
+  await noOverflow(page);
+  await page.screenshot({ path: info.outputPath("populated-hr-claim-zh.png"), fullPage: true });
+});
 
 for (const role of ["portal", "hr"] as const) {
   test(`${role}: language switching preserves credentials, errors and preference`, async ({ page }) => {

@@ -83,6 +83,7 @@ function ChoiceRow({
   children?: React.ReactNode;
 }) {
   const pt = usePortalTranslation();
+  const detailsId = useId();
   return (
     <label className={choiceRowClass(checked, "enrolment-plan-option")}>
       <input
@@ -91,6 +92,8 @@ function ChoiceRow({
         value={value}
         checked={checked}
         onChange={onSelect}
+        aria-label={pt(title)}
+        aria-describedby={children ? detailsId : undefined}
         className={cn(choiceControl, "mt-0.5")}
       />
       <div className="min-w-0 flex-1">
@@ -105,7 +108,7 @@ function ChoiceRow({
           </span>
           {note && <span className="shrink-0 text-row text-label">{pt(note)}</span>}
         </div>
-        {children && <div className="mt-1">{children}</div>}
+        {children && <div id={detailsId} className="mt-1">{children}</div>}
       </div>
     </label>
   );
@@ -165,7 +168,7 @@ function TierFigureRows({
   row: typeof ChoiceFigure;
   siTerm: string;
 }) {
-  usePortalTranslation();
+  const pt = usePortalTranslation();
   const si = tier.financials?.sum_insured ?? null;
   const basis = coverWording(tier.financials?.basis, tier.financials?.max_sum_insured);
   const price = priceTerm(tier, flexOnChange);
@@ -176,7 +179,7 @@ function TierFigureRows({
           <Money value={si} currency={currency} />
         </Row>
       ) : basis ? (
-        <Row term={siTerm}>{basis}</Row>
+        <Row term={siTerm}>{pt(basis)}</Row>
       ) : null}
       {price?.amount != null && (
         <Row term={price.term}>
@@ -293,11 +296,11 @@ function tierOptionLabel(
   currency: string | null,
   premium?: TierPrice | null,
 ): string {
-  const parts = [t.label];
-  if (isCurrent) parts.push("your current plan");
+  const parts = [pt(t.label)];
+  if (isCurrent) parts.push(pt("your current plan"));
   else {
     const dir = directionLabel(t.direction, true);
-    if (dir) parts.push(dir);
+    if (dir) parts.push(pt(dir));
   }
   const price = priceTerm(t, flexOnChange);
   if (price) {
@@ -387,7 +390,7 @@ export function PlanChoice({
               value={t.key}
               checked={!ps.declined && ps.tierKey === t.key}
               onSelect={() => selectTier(t.key)}
-              title={`${t.label}${tierIsCurrent(t) ? compact ? pt(" · Current") : pt(" — your current plan") : ""}`}
+              title={`${pt(t.label)}${tierIsCurrent(t) ? compact ? pt(" · Current") : pt(" — your current plan") : ""}`}
               // Neutral ink, deliberately. The strike ramp belongs to claim
               // verdicts (The Status-Is-Not-Brand Rule), and a green "upgrade"
               // beside an approved claim's green would ask the member to decide

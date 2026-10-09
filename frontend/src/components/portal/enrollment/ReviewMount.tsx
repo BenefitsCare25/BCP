@@ -290,11 +290,11 @@ export function ReviewMount({
         <dl className="divide-y divide-hairline/75 border-t border-hairline/75">
           {changes.map((c) => (
             <div key={c.key} className="py-2.5">
-              <dt className="text-row font-medium text-record">{c.product}</dt>
+              <dt className="text-row font-medium text-record">{pt(c.product)}</dt>
               <dd className="mt-1.5">
-                <Pair term="Now">{c.from}</Pair>
+                <Pair term="Now">{pt(c.from)}</Pair>
                 <Pair term="You've chosen" strong>
-                  {c.to}
+                  {pt(c.to)}
                 </Pair>
                 {c.family && (
                   <p className="mt-1 text-row text-label">{c.family}</p>

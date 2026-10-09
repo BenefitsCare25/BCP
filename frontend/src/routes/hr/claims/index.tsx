@@ -123,7 +123,7 @@ export function HrClaimsPage() {
                       <ClaimStatus status={claim.status} />
                     </div>
                     <p className="mt-1 truncate text-sm text-muted-foreground">
-                      {claim.claim_type}
+                      {pt(claim.claim_type)}
                       {claim.provider_name ? ` · ${claim.provider_name}` : ""}
                     </p>
                     <p className="mt-1 text-xs text-muted-foreground">

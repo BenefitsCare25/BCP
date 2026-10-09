@@ -18,7 +18,7 @@ function sources(node: ts.Node | undefined): string[] {
 }
 
 test("portal copy has Chinese entries and valid interpolation placeholders", () => {
-  const catalog: Record<string, string> = JSON.parse(readFileSync("src/i18n/zh-SG.json", "utf8"));
+  const catalog: Record<string, string> = Object.assign({}, ...["zh-SG", "insurance.zh-SG", "diagnoses.zh-SG"].map(name => JSON.parse(readFileSync(`src/i18n/${name}.json`, "utf8"))));
   const known = new Set(Object.keys(catalog).map(key => key.trim().toLowerCase()));
   const missing: string[] = [];
   for (const file of files("src")) {

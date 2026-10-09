@@ -342,7 +342,7 @@ export function ClinicFinder({
         </div>
         {status.kind === "error" && (
           <p role="alert" className="mt-2 text-row text-strike-pending">
-            {status.message}
+            {pt(status.message)}
           </p>
         )}
       </div>

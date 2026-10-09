@@ -4,6 +4,10 @@ import type { PortalMessage } from "./portal";
  * contact details, amounts and plan codes are interpolated without translation. */
 export function generatedPortalCopy(source: string): PortalMessage | null {
   const rules: readonly [RegExp, string][] = [
+    [/^We could not get an exchange rate for ([A-Z]{3}) on (\d{4}-\d{2}-\d{2})\. Your claim can still be sent — it will be converted by hand when it is reviewed\.$/, "We could not get an exchange rate for {0} on {1}. Your claim can still be sent — it will be converted by hand when it is reviewed."],
+    [/^([A-Z]{3}) ([\d,.]+) is ([A-Z]{3}) ([\d,.]+), using the rate published on (\d{4}-\d{2}-\d{2}) — no rate is published for (\d{4}-\d{2}-\d{2})\.$/, "{0} {1} is {2} {3}, using the rate published on {4} — no rate is published for {5}."],
+    [/^([A-Z]{3}) ([\d,.]+) is ([A-Z]{3}) ([\d,.]+) at the (\d{4}-\d{2}-\d{2}) rate\.$/, "{0} {1} is {2} {3} at the {4} rate."],
+    [/^((?:[A-Z]{3}|S\$|\$))([\d,.]+) confirmed balance$/, "{0}{1} confirmed balance"],
     [/^(\d+(?:\.\d+)?) visits?$/, "{0} visits"],
     [/^(\d+(?:\.\d+)?) days?$/, "{0} days"],
     [/^Request failed \(HTTP (\d{3})\)$/, "Request failed (HTTP {0})"],

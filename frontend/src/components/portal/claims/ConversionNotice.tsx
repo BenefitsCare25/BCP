@@ -91,7 +91,7 @@ export function ConversionNotice({
     return (
       <p className="flex items-start gap-2 rounded-control bg-bar/70 px-3 py-2.5 text-row text-strike-pending">
         <AlertTriangle className="mt-0.5 size-3.5 shrink-0" aria-hidden />
-        {quote.note ??
+        {quote.note ? pt(quote.note) :
           pt("We could not get an exchange rate for {0}. Your claim can ", [currency]) +
             pt("still be sent — it will be converted by hand when it is reviewed.")}
       </p>

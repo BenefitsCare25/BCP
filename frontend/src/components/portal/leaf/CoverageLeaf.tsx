@@ -51,7 +51,7 @@ function PlanDetail({ line, routeKey, person, compact = false, showLabel = true 
   // rather than shown nothing.
   if (line.published === false) {
     return (
-      <Mount as="article" label={pt(showLabel ? label : undefined)} gloss={planLabel}>
+      <Mount as="article" label={pt(showLabel ? label : undefined)} gloss={pt(planLabel)}>
         <p className="text-row text-label">
           {pt("Your plan details are being checked and will appear here once they're confirmed. Your HR team can help in the meantime.")} </p>
       </Mount>
@@ -62,7 +62,7 @@ function PlanDetail({ line, routeKey, person, compact = false, showLabel = true 
   // rather than presenting it as cover the member can claim against.
   if (line.enrolment === "eligible") {
     return (
-      <Mount as="article" label={pt(showLabel ? label : undefined)} gloss={planLabel}>
+      <Mount as="article" label={pt(showLabel ? label : undefined)} gloss={pt(planLabel)}>
         <p className="text-row text-label">
           {pt("You're eligible for this voluntary cover but not enrolled, so it can't be claimed yet. Your HR team can tell you how to join.")} </p>
       </Mount>
@@ -71,9 +71,9 @@ function PlanDetail({ line, routeKey, person, compact = false, showLabel = true 
 
   const facts = careFacts(line, routeKey);
   return (
-    <Mount as="article" label={pt(showLabel ? label : undefined)} gloss={planLabel}>
+    <Mount as="article" label={pt(showLabel ? label : undefined)} gloss={pt(planLabel)}>
       <p className="text-row text-label">
-        {compact && !showLabel && planLabel && <span className="mr-4 font-semibold text-record">{planLabel}</span>}
+        {compact && !showLabel && planLabel && <span className="mr-4 font-semibold text-record">{pt(planLabel)}</span>}
         {pt("Covered person:")} <span className="font-medium text-record">{person ? dependantName(person) : pt("You")}</span>
       </p>
       {additionalMedical && (
@@ -87,7 +87,7 @@ function PlanDetail({ line, routeKey, person, compact = false, showLabel = true 
               <div key={fact.label} className="grid gap-1 py-3 sm:grid-cols-[minmax(0,12rem)_1fr] sm:gap-4">
                 <dt className="text-row text-label">{pt(fact.label)}</dt>
                 <dd className="text-row font-medium text-record">
-                  {fact.value}
+                  {pt(fact.value)}
                   {fact.note && <span className="mt-1 block font-normal text-label">{pt(fact.note)}</span>}
                 </dd>
               </div>

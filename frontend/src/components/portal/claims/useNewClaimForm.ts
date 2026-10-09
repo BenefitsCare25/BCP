@@ -440,7 +440,7 @@ export function useNewClaimForm() {
     if (flexCategoryLimit?.sub_limit != null) {
       limitRows.push({
         key: `flex:${flexCategoryLimit.name}`,
-        label: `${flexCategoryLimit.name} sub-limit`,
+        label: pt("{0} sub-limit", [pt(flexCategoryLimit.name)]),
         limit: flexCategoryLimit.sub_limit,
         limitDisplay: null,
         approved: flexCategoryLimit.approved,
@@ -527,7 +527,7 @@ export function useNewClaimForm() {
         (counts.get(e.label) ?? 0) > 1
           ? {
               ...e,
-              label: `${e.label} — ${e.product.product_name || e.product.product_code}`,
+              productLabel: e.product.product_name || e.product.product_code,
             }
           : e,
       );

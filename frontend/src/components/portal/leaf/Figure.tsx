@@ -114,7 +114,7 @@ export function Limit({
   if (display) {
     return (
       <span className={cn("text-record", className)}>
-        {formatValue(display, undefined, currency ?? undefined) ?? display}
+        {pt(formatValue(display, undefined, currency ?? undefined) ?? display)}
       </span>
     );
   }

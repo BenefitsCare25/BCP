@@ -120,7 +120,7 @@ export function HrClaimDetailPage() {
               {data.claim_ref ?? pt("Draft claim")}
             </h1>
             <p className="mt-1 text-sm text-muted-foreground">
-              {data.employee_name ?? pt("Employee")} · {data.claim_type}
+              {data.employee_name ?? pt("Employee")} · {pt(data.claim_type)}
             </p>
           </div>
           <div className="self-start">

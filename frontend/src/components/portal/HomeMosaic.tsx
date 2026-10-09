@@ -583,7 +583,7 @@ export function HomeMosaicView({
             // and it must never restate it, which would read as two different
             // amounts.
             <p className="text-row text-label">
-              {hero.note ?? pt("No yearly cap on this benefit")}
+              {pt(hero.note ?? "No yearly cap on this benefit")}
             </p>
           )}
           <Go dest="usage" onGo={onGo}>

@@ -1,6 +1,9 @@
 import { useSyncExternalStore } from "react";
 import chinese from "./zh-SG.json";
+import insuranceChinese from "./insurance.zh-SG.json";
+import diagnosisChinese from "./diagnoses.zh-SG.json";
 import { generatedPortalCopy } from "./generatedCopy";
+import { translateInsuranceText } from "./insuranceCopy";
 
 export type PortalLocale = "en-SG" | "zh-SG";
 export const PORTAL_LOCALE_KEY = "inspro.portal.language";
@@ -35,7 +38,7 @@ if (typeof window !== "undefined") window.addEventListener("storage", event => {
   listeners.forEach(listener => listener());
 });
 
-const catalog: Readonly<Record<string, string>> = chinese;
+const catalog: Readonly<Record<string, string>> = { ...chinese, ...insuranceChinese, ...diagnosisChinese };
 const normalizedCatalog = new Map(Object.entries(catalog).map(([source, value]) => [source.trim().toLowerCase(), value]));
 /** Keep generated copy in source form so an existing error or note can change language. */
 export interface PortalMessage {
@@ -60,7 +63,7 @@ export function translatePortalText(source: string, locale: PortalLocale, values
     const generated = generatedPortalCopy(source);
     if (generated) return translatePortalText(generated.portalSource, locale, generated.values);
   }
-  const text = locale === "zh-SG" ? catalog[source] ?? normalizedCatalog.get(source.trim().toLowerCase()) ?? source : source;
+  const text = locale === "zh-SG" ? translateInsuranceText(source, key => catalog[key] ?? normalizedCatalog.get(key.trim().toLowerCase())) ?? source : source;
   // A single pass prevents a value containing {0} from being interpreted as copy.
   return text.replace(/\{(\d+)\}/g, (match, index: string) => {
     if (Number(index) >= values.length) return match;

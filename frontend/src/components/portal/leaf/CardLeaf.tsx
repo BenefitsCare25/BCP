@@ -161,7 +161,7 @@ function MemberCardLeaf({
         <div className="mt-3">
           <p className="leaf-label">{pt("Covered here")}</p>
           <p className="mt-1 text-row text-record">
-            {card.services.map((s) => s.label).join(" · ")}
+            {card.services.map((s) => pt(s.label)).join(" · ")}
           </p>
         </div>
       )}
@@ -172,11 +172,11 @@ function MemberCardLeaf({
           <dl>
             {remarks.map(([key, value]) => (
               <MountRow key={key} term={REMARK_GLOSS[key] ?? key}>
-                {value}
+                {pt(value)}
               </MountRow>
             ))}
             {card.special_conditions && (
-              <MountRow term="Also note">{card.special_conditions}</MountRow>
+              <MountRow term="Also note">{pt(card.special_conditions)}</MountRow>
             )}
           </dl>
         </>
@@ -199,7 +199,7 @@ function NoCards({ message, action }: { message: string; action: boolean }) {
   const company = useCompany();
   return (
     <Mount label={pt("No card issued yet")}>
-      <p className="text-row text-label">{message}</p>
+      <p className="text-row text-label">{pt(message)}</p>
       {action && (
         <Link
           to="/portal/$company/clinics"

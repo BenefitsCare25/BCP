@@ -75,7 +75,7 @@ export function BalanceCard({
 
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-            <span className="clay-tag">{name}</span>
+            <span className="clay-tag">{pt(name)}</span>
             {subLabel && <span className="min-w-0 text-row font-semibold">{subLabel}</span>}
           </div>
           <p className="mt-3 flex flex-wrap items-baseline gap-x-2.5">
@@ -151,12 +151,12 @@ export function BalanceCardShell({
   productName: string | null;
   children: ReactNode;
 }) {
-  usePortalTranslation();
+  const pt = usePortalTranslation();
   const route = productRouteKey(productCode);
   const name = productCode ? productShortLabel(productCode, productName) : productName ?? "Benefit";
   return (
     <section className={cn(`tone-${careTone(route)}`, "rounded-[28px] bg-[var(--tone-wash)] p-5 text-[var(--tone-ink)] sm:p-7")}>
-      <span className="clay-tag">{name}</span>
+      <span className="clay-tag">{pt(name)}</span>
       <div className="mt-4 space-y-2">{children}</div>
     </section>
   );

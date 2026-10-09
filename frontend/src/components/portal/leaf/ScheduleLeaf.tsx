@@ -300,7 +300,7 @@ export function ScheduleLeaf({
                 className="pt-3 text-row font-semibold text-record"
                 hidden={!allRows && !showAll && segment.rows.every(({ item }) => hiddenSet.has(item))}
               >
-                {segment.group}
+                {pt(segment.group)}
               </h4>
             )}
             <dl className="divide-y divide-hairline/75">

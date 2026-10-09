@@ -108,7 +108,7 @@ function AttachControl({
       >
         <Paperclip className="size-4 shrink-0" aria-hidden />
         {pt(label)}
-        <span className="sr-only"> {slotLabel}</span>
+        <span className="sr-only"> {pt(slotLabel)}</span>
       </button>
     );
   }
@@ -116,7 +116,7 @@ function AttachControl({
     <label className={cn(ATTACH_CLASS, "cursor-pointer")}>
       <Paperclip className="size-4 shrink-0" aria-hidden />
       {pt(label)}
-      <span className="sr-only"> {slotLabel}</span>
+      <span className="sr-only"> {pt(slotLabel)}</span>
       <input
         type="file"
         accept={CLAIM_DOC_ACCEPT}
@@ -422,7 +422,7 @@ export function ClaimDetailLeaf({
             <MountRow term="Doctor seen">{claim.doctor_name}</MountRow>
           )}
           {claim.diagnosis && (
-            <MountRow term="Diagnosis">{claim.diagnosis}</MountRow>
+            <MountRow term="Diagnosis">{pt(claim.diagnosis)}</MountRow>
           )}
           {claim.invoice_number && (
             <MountRow term="Invoice number">{claim.invoice_number}</MountRow>
@@ -501,7 +501,7 @@ export function ClaimDetailLeaf({
         {!editable && claim.member_edit_block && (
           <>
             <MountRule className="my-3" />
-            <p className="text-row text-label">{claim.member_edit_block}</p>
+            <p className="text-row text-label">{pt(claim.member_edit_block)}</p>
           </>
         )}
         </>

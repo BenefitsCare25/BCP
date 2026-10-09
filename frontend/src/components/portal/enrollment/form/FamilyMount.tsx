@@ -111,7 +111,7 @@ export function FamilyMount({
                           onChange={(e) => toggle(dep.id, ts.product_code, e.target.checked)}
                         />
                         <span className="text-row text-record">
-                          {ts.product_name ?? ts.product_code}
+                          {pt(ts.product_name ?? ts.product_code)}
                         </span>
                       </label>
                     );

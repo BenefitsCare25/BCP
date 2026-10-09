@@ -290,7 +290,7 @@ export function MessageThread({
       ) : (
         replyDisabledReason && (
           <p className="border-t border-hairline/75 pt-4 text-row text-label">
-            {replyDisabledReason}
+            {pt(replyDisabledReason)}
           </p>
         )
       )}

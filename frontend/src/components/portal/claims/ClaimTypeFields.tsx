@@ -84,7 +84,7 @@ export function ClaimTypeFields({ form }: { form: NewClaimForm }) {
                     <optgroup key={key} label={pt(groupLabels[key])}>
                       {insuredGroups[key].map((entry) => (
                         <option key={entry.value} value={entry.value}>
-                          {pt(entry.label)}
+                          {pt(entry.label)}{entry.productLabel ? ` — ${pt(entry.productLabel)}` : ""}
                         </option>
                       ))}
                     </optgroup>

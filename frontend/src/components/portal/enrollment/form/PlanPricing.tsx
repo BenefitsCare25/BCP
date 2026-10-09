@@ -98,13 +98,13 @@ export function PlanPricing({
       {hasFacts && (
         <dl>
           {fact?.insurer && <MountRow term="Insurer">{fact.insurer}</MountRow>}
-          {fact?.highlight && <MountRow term="Key benefit">{fact.highlight}</MountRow>}
+          {fact?.highlight && <MountRow term="Key benefit">{pt(fact.highlight)}</MountRow>}
           {fact?.sum_insured ? (
             <MountRow term="Sum insured">
               <Money value={fact.sum_insured} />
             </MountRow>
           ) : basis ? (
-            <MountRow term="Sum insured">{basis}</MountRow>
+            <MountRow term="Sum insured">{pt(basis)}</MountRow>
           ) : null}
         </dl>
       )}

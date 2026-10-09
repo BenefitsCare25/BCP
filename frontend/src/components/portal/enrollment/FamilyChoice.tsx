@@ -34,7 +34,7 @@ function CoveredNames({ covered }: { covered: DependantRef[] }) {
     <dl>
       {covered.map((d) => (
         <MountRow key={d.id} term={d.name ?? d.id}>
-          <span className="text-label">{d.relationship ?? pt("Covered")}</span>
+          <span className="text-label">{pt(d.relationship ?? "Covered")}</span>
         </MountRow>
       ))}
     </dl>
@@ -80,7 +80,7 @@ function DependantTicks({
               {d.name ?? d.id}
             </span>
             {d.relationship && (
-              <span className="shrink-0 text-row text-label">{d.relationship}</span>
+              <span className="shrink-0 text-row text-label">{pt(d.relationship)}</span>
             )}
           </label>
         );
@@ -105,7 +105,7 @@ function optionLabel(
     amounts_by_dependant: Record<string, number | null> },
   currency: string | null,
 ): string {
-  const parts = [choice.label];
+  const parts = [pt(choice.label)];
   if (choice.sum_insured != null) {
     parts.push(pt("covered for {0}{1}", [currencySymbol(currency), moneyText(choice.sum_insured)]));
   }

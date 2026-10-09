@@ -1,4 +1,5 @@
 import { usePortalTranslation } from "@/i18n/portal";
+import { systemClaimBody } from "@/i18n/systemMessages";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { ArrowRight, FileText, MapPin } from "lucide-react";
 import {
@@ -248,7 +249,7 @@ export function MemberHome() {
                 >
                   <span className="min-w-0">
                     <strong>{conversation.subject.kind === "enquiry" ? conversation.subject.subject || pt("Your question") : conversation.subject.reference_no || pt("Claim update")}</strong>
-                    <small>{conversation.last_message.body}</small>
+                    <small>{systemClaimBody(conversation.last_message, pt)}</small>
                   </span>
                   {conversation.unread > 0 && <span className="clay-msg-unread">{conversation.unread}  {pt("new")}</span>}
                 </button>

@@ -1023,13 +1023,14 @@ export function useSubmitClaim() {
   });
 }
 
-export function useClaimDiagnoses(productCode: string | null, q: string) {
+export function useClaimDiagnoses(productCode: string | null, q: string, limit = 50) {
   return useQuery({
-    queryKey: ["portal", "claim-diagnoses", productCode, q],
+    queryKey: ["portal", "claim-diagnoses", productCode, q, limit],
     queryFn: () => {
       const params = new URLSearchParams();
       if (productCode) params.set("product_code", productCode);
       if (q) params.set("q", q);
+      params.set("limit", String(limit));
       return portalApi.get<DiagnosisSearch>(
         `/portal/claim-diagnoses?${params.toString()}`,
       );
@@ -1037,7 +1038,7 @@ export function useClaimDiagnoses(productCode: string | null, q: string) {
     enabled: productCode !== null,
     meta: { localErrorHandling: true },
     retry: false,
-    placeholderData: (prev) => prev,
+    placeholderData: (prev, previousQuery) => previousQuery?.queryKey[2] === productCode ? prev : undefined,
   });
 }
 

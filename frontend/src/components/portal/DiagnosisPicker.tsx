@@ -33,7 +33,12 @@ export function DiagnosisPicker({
     return () => clearTimeout(t);
   }, [query]);
 
-  const results = useClaimDiagnoses(open ? productCode : null, debounced);
+  // Fetch the complete scoped catalog once, so Chinese and English searches
+  // match the displayed terms. The selected value remains the API's English label.
+  const results = useClaimDiagnoses(open ? productCode : null, "", 200);
+  const search = debounced.trim().toLocaleLowerCase();
+  const items = (results.data?.items ?? []).filter(d => !search ||
+    `${d.label} ${pt(d.label)} ${d.icd10 ?? ""}`.toLocaleLowerCase().includes(search));
 
   useEffect(() => {
     const onDown = (e: MouseEvent) => {
@@ -77,7 +82,7 @@ export function DiagnosisPicker({
     <div ref={boxRef} className="relative">
       {value ? (
         <div className="flex items-center justify-between rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground">
-          <span className="truncate">{value}</span>
+          <span className="truncate">{pt(value)}</span>
           <button
             type="button"
             aria-label={pt("Clear diagnosis")}
@@ -107,7 +112,7 @@ export function DiagnosisPicker({
 
       {open && !value && (
         <ul className="absolute z-20 mt-1 max-h-56 w-full overflow-y-auto rounded-md border border-border bg-card py-1 shadow-md">
-          {(results.data?.items ?? []).map((d) => (
+          {items.map((d) => (
             <li key={d.label}>
               <button
                 type="button"
@@ -119,7 +124,7 @@ export function DiagnosisPicker({
               </button>
             </li>
           ))}
-          {results.data && results.data.items.length === 0 && (
+          {results.data && items.length === 0 && (
             <li className="px-3 py-1.5 text-sm text-muted-foreground">
               {pt("No match — pick “Other” below.")} </li>
           )}

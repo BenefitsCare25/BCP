@@ -33,7 +33,7 @@ const isBareAmount = (value: string) => /^\d{1,3}(,\d{3})*(\.\d+)?$|^\d+(\.\d+)?
 function money(value: string | null | undefined): string | null {
   const v = clean(value);
   if (!v) return null;
-  return isBareAmount(v) ? formatValue(v, "currency", S$) : v;
+  return isBareAmount(v) ? formatValue(v, "currency", S$) : pt(v);
 }
 
 const asCharged = (value: string) => /^as charged$/i.test(value.trim());
@@ -44,7 +44,7 @@ function upTo(value: string | null | undefined, suffix = ""): string | null {
   if (!v) return null;
   if (asCharged(v)) return pt("Covered as charged");
   if (isBareAmount(v)) return pt("Up to {0}{1}", [money(v), pt(suffix)]);
-  return v;
+  return pt(v);
 }
 
 /** A limit qualifier the parser attached, e.g. "Maximum no. of days: 120 days". */
@@ -74,7 +74,7 @@ const WARD_PLACES: [RegExp, string][] = [
 /** "1 Bed Private" → "1-bed ward, private hospital". Anything else as written. */
 function wardEntitlement(value: string): string {
   const match = value.match(/^\s*(\d+)\s*[- ]?\s*beds?\b\s*(.*)$/i);
-  if (!match) return value;
+  if (!match) return pt(value);
   const place = WARD_PLACES.find(([pattern]) => pattern.test(match[2]))?.[1];
   const rest = place ? "" : match[2].trim();
   return [pt("{0}-bed ward", [match[1]]), pt(place ?? rest)].filter(Boolean).join(", ");
@@ -303,7 +303,7 @@ function dentalFacts(line: CoverageLine, items: BenefitItem[]): CareFact[] {
   }
   const nonPanel = find(items, /^non[- ]?panel dentist/i);
   if (nonPanel && clean(nonPanel.value)) {
-    facts.push({ label: "Non-panel dentist", value: pt("You pay, then claim back: {0}", [lowerFirst(clean(nonPanel.value)!)]) });
+    facts.push({ label: "Non-panel dentist", value: pt("You pay, then claim back: {0}", [lowerFirst(pt(clean(nonPanel.value)!))]) });
   }
   const priced = items.filter((item) => item !== panel && item !== nonPanel && isBareAmount(item.value ?? ""));
   if (priced.length > 0) {
