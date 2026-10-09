@@ -1,3 +1,4 @@
+import { usePortalTranslation } from "@/i18n/portal";
 /** Employee-portal sign-in: username (email / member ID / employee ID) +
  * password, with an optional two-factor step. */
 import { useRef, useState } from "react";
@@ -25,6 +26,7 @@ import { portalPath } from "@/lib/tenant";
 import { activateNotificationClaimContext, notificationClaimId, notificationClaimYear } from "@/lib/claimNotificationLink";
 
 export function PortalSignInPage() {
+  const pt = usePortalTranslation();
   const navigate = useNavigate();
   const routeCompany = useCompany();
   const login = useMemberLogin();
@@ -171,11 +173,11 @@ export function PortalSignInPage() {
     <PortalLoginScene
       role="employee"
       company={company}
-      title={step === "credentials" ? "Welcome back" : "Two-factor authentication"}
+      title={step === "credentials" ? pt("Welcome back") : pt("Two-factor authentication")}
       subtitle={
         step === "credentials"
-          ? "Sign in to your employee portal"
-          : "Enter the 6-digit code from your authenticator app, or one of your recovery codes."
+          ? pt("Sign in to your employee portal")
+          : pt("Enter the 6-digit code from your authenticator app, or one of your recovery codes.")
       }
     >
       {step === "credentials" ? (
@@ -186,8 +188,7 @@ export function PortalSignInPage() {
               htmlFor="portal-identifier"
               className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground"
             >
-              Email, member ID or employee ID
-            </Label>
+              {pt("Email, member ID or employee ID")} </Label>
             <div className="relative">
               <User className="pointer-events-none absolute left-3.5 top-1/2 size-[18px] -translate-y-1/2 text-muted-foreground" />
               <Input
@@ -200,16 +201,16 @@ export function PortalSignInPage() {
                 type="text"
                 autoComplete="username"
                 spellCheck={false}
-                placeholder="Email or ID"
+                placeholder={pt("Email or ID")}
                 value={identifier}
                 onChange={(e) => setIdentifier(e.target.value)}
                 className="h-12 pl-11"
               />
             </div>
-            {fieldErrors.identifier && <p id="portal-identifier-error" className="text-sm text-error" role="alert">{fieldErrors.identifier}</p>}
+            {fieldErrors.identifier && <p id="portal-identifier-error" className="text-sm text-error" role="alert">{pt(fieldErrors.identifier)}</p>}
           </div>
           <LoginPasswordField id="portal-password" value={password} onChange={setPassword} error={fieldErrors.password} />
-          {error && <p className="text-sm text-error" role="alert">{error}</p>}
+          {error && <p className="text-sm text-error" role="alert">{pt(error)}</p>}
           <Button
             type="submit"
             loading={login.isPending}
@@ -222,7 +223,7 @@ export function PortalSignInPage() {
             }
           >
             <ArrowRight className="portal-login__arrow size-5" aria-hidden="true" />
-            {login.isPending ? "Signing in…" : "Sign in"}
+            {login.isPending ? pt("Signing in…") : pt("Sign in")}
           </Button>
         </form>
       ) : (
@@ -232,8 +233,7 @@ export function PortalSignInPage() {
               htmlFor="portal-totp"
               className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground"
             >
-              Authentication code
-            </Label>
+              {pt("Authentication code")} </Label>
             <Input
               id="portal-totp"
               name="one-time-code"
@@ -248,14 +248,14 @@ export function PortalSignInPage() {
               className="h-12 text-center text-lg font-semibold tracking-[0.5em]"
             />
           </div>
-          {error && <p className="text-sm text-error" role="alert">{error}</p>}
+          {error && <p className="text-sm text-error" role="alert">{pt(error)}</p>}
           <Button
             type="submit"
             loading={mfa.isPending}
             className="h-12 w-full text-md transition-transform duration-150 active:scale-[0.99]"
             disabled={mfa.isPending || !canSubmitMfaCode(code)}
           >
-            {mfa.isPending ? "Verifying…" : "Verify"}
+            {mfa.isPending ? pt("Verifying…") : pt("Verify")}
           </Button>
           <button
             type="button"
@@ -269,8 +269,7 @@ export function PortalSignInPage() {
               setError(null);
             }}
           >
-            Back to sign in
-          </button>
+            {pt("Back to sign in")} </button>
         </form>
       )}
     </PortalLoginScene>

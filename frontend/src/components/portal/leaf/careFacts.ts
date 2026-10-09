@@ -17,6 +17,7 @@ import type { BenefitItem, BenefitSubItem, CoverageLine } from "@/types";
 import { coverWording } from "@/lib/basis";
 import { formatValue, subItemsOf } from "@/lib/benefitSchedule";
 import { isAbsentValue } from "@/lib/sobValues";
+import { portalText as pt } from "@/i18n/portal";
 
 export type CareFact = { label: string; value: string; note?: string };
 
@@ -41,8 +42,8 @@ const asCharged = (value: string) => /^as charged$/i.test(value.trim());
 function upTo(value: string | null | undefined, suffix = ""): string | null {
   const v = clean(value);
   if (!v) return null;
-  if (asCharged(v)) return "Covered as charged";
-  if (isBareAmount(v)) return `Up to ${money(v)}${suffix}`;
+  if (asCharged(v)) return pt("Covered as charged");
+  if (isBareAmount(v)) return pt("Up to {0}{1}", [money(v), pt(suffix)]);
   return v;
 }
 
@@ -76,7 +77,7 @@ function wardEntitlement(value: string): string {
   if (!match) return value;
   const place = WARD_PLACES.find(([pattern]) => pattern.test(match[2]))?.[1];
   const rest = place ? "" : match[2].trim();
-  return [`${match[1]}-bed ward`, place ?? rest].filter(Boolean).join(", ");
+  return [pt("{0}-bed ward", [match[1]]), pt(place ?? rest)].filter(Boolean).join(", ");
 }
 
 function hospitalFacts(items: BenefitItem[]): CareFact[] {
@@ -90,14 +91,14 @@ function hospitalFacts(items: BenefitItem[]): CareFact[] {
     const daily = isBareAmount(value);
     facts.push({
       label: daily ? "Room & board" : "Your ward",
-      value: daily ? `${money(value)} a day` : wardEntitlement(value),
-      note: days ? `Up to ${days}` : undefined,
+      value: daily ? pt("{0} a day", [money(value)]) : wardEntitlement(value),
+      note: days ? pt("Up to {0}", [pt(days)]) : undefined,
     });
   }
   const icu = find(items, /\bicu\b|intensive care/i);
   if (icu && clean(icu.value)) {
     const days = limitNote(icu, /days?/i);
-    facts.push({ label: "Intensive care", value: upTo(icu.value)!, note: days ? `Up to ${days}` : undefined });
+    facts.push({ label: "Intensive care", value: upTo(icu.value)!, note: days ? pt("Up to {0}", [pt(days)]) : undefined });
   }
   const inpatient = find(items, /in[- ]?patient (?:expenses|benefits?)|hospital (?:&|and) surgical/i);
   if (inpatient && clean(inpatient.value)) {
@@ -105,7 +106,7 @@ function hospitalFacts(items: BenefitItem[]): CareFact[] {
     facts.push({
       label: "Hospital & surgery bills",
       value: upTo(inpatient.value)!,
-      note: covers.length ? `Includes ${covers.join(", ").toLowerCase()}` : undefined,
+      note: covers.length ? pt("Includes {0}", [covers.map(cover => pt(cover.toLowerCase())).join(", ")]) : undefined,
     });
   }
   const prePost = find(items, /pre[- ]?(?:&|and)?\s*post|out[- ]?patient expenses/i);
@@ -114,7 +115,7 @@ function hospitalFacts(items: BenefitItem[]): CareFact[] {
     facts.push({
       label: "Before & after a hospital stay",
       value: upTo(prePost.value)!,
-      note: days ? `Specialist visits and tests within ${days} of your stay` : undefined,
+      note: days ? pt("Specialist visits and tests within {0} of your stay", [pt(days)]) : undefined,
     });
   }
   const emergency = find(items, /emergency|accidental outpatient/i);
@@ -138,14 +139,14 @@ function majorMedicalFacts(items: BenefitItem[]): CareFact[] {
     facts.push({
       label: "When it starts",
       value: /ghs|inpatient limits/i.test(starts.value ?? "")
-        ? "After your hospital plan's limits are used"
-        : `From the ${clean(starts.value)}`,
+        ? pt("After your hospital plan's limits are used")
+        : pt("From the {0}", [clean(starts.value)]),
     });
   }
   const max = find(items, /maximum benefit|overall (?:annual )?limit/i);
   if (max && clean(max.value)) facts.push({ label: "Maximum it pays", value: upTo(max.value)! });
   const share = items.map((item) => prop(item, "co_insurance")).find(Boolean);
-  if (share) facts.push({ label: "Your share", value: `${share} of the bill (co-insurance)` });
+  if (share) facts.push({ label: "Your share", value: pt("{0} of the bill (co-insurance)", [share]) });
   return facts;
 }
 
@@ -177,19 +178,19 @@ export function balanceLabel(bucket: { benefit_key: string | null; benefit_label
 function clinicCost(item: BenefitItem): CareFact | null {
   const parts: string[] = [];
   const perVisit = prop(item, "per_visit");
-  if (perVisit) parts.push(asCharged(perVisit) ? "Covered as charged" : `Up to ${money(perVisit)} a visit`);
+  if (perVisit) parts.push(asCharged(perVisit) ? pt("Covered as charged") : pt("Up to {0} a visit", [money(perVisit)]));
   const restructured = prop(item, "per_visit_restructured");
   const privateVisit = prop(item, "per_visit_private");
   if (restructured) {
-    parts.push(`Restructured hospital: ${asCharged(restructured) ? "covered as charged" : `up to ${money(restructured)}`}`);
+    parts.push(pt("Restructured hospital: {0}", [asCharged(restructured) ? pt("Covered as charged") : pt("Up to {0}", [money(restructured)])]));
   }
   if (privateVisit) {
-    parts.push(`Private hospital: ${asCharged(privateVisit) ? "covered as charged" : `up to ${money(privateVisit)}`}`);
+    parts.push(pt("Private hospital: {0}", [asCharged(privateVisit) ? pt("Covered as charged") : pt("Up to {0}", [money(privateVisit)])]));
   }
   const copay = prop(item, "co_payment");
   // "Co-pay", never "you pay": the member's share is a co-payment on top of
   // cover, and "you pay S$5 a visit" read as if S$5 were the benefit.
-  if (copay) parts.push(`${/%$/.test(copay) ? copay : money(copay)} co-pay per visit`);
+  if (copay) parts.push(pt("{0} co-pay per visit", [/%$/.test(copay) ? copay : money(copay)]));
   if (parts.length === 0) return null;
   const value = parts.join(" · ");
   const yearly = prop(item, "per_policy_year");
@@ -204,8 +205,8 @@ function clinicCost(item: BenefitItem): CareFact | null {
  * bare number is a count or an amount depending on the policy, so it is shown
  * as the policy states it rather than guessed into dollars. */
 function yearlyNote(yearly: string): string {
-  if (/\bvisits?\b/i.test(yearly) || /\$|\bsgd\b/i.test(yearly)) return `Up to ${yearly} a year`;
-  return `Per policy year: ${yearly}`;
+  if (/\bvisits?\b/i.test(yearly) || /\$|\bsgd\b/i.test(yearly)) return pt("Up to {0} a year", [pt(yearly)]);
+  return pt("Per policy year: {0}", [pt(yearly)]);
 }
 
 /** A schedule that states each clinic type as its own row ("Panel
@@ -218,7 +219,7 @@ function clinicRow(item: BenefitItem): CareFact | null {
   const perVisit = /per visit/i.test(item.note ?? "");
   return {
     label,
-    value: asCharged(value) ? "Covered as charged" : `Up to ${money(value)}${perVisit ? " a visit" : ""}`,
+    value: asCharged(value) ? pt("Covered as charged") : pt("Up to {0}{1}", [money(value), perVisit ? pt(" a visit") : ""]),
     note: perVisit ? undefined : clean(item.note) ?? undefined,
   };
 }
@@ -271,7 +272,7 @@ function specialistFacts(items: BenefitItem[]): CareFact[] {
     facts.push({
       label: shortName(item.name),
       value: upTo(item.value)!,
-      note: [shared?.value, count ? `${count.value} a year` : null].filter(Boolean).join(" · ") || undefined,
+      note: [pt(shared?.value), count ? pt("{0} a year", [pt(count.value)]) : null].filter(Boolean).join(" · ") || undefined,
     });
   }
   return facts;
@@ -302,13 +303,13 @@ function dentalFacts(line: CoverageLine, items: BenefitItem[]): CareFact[] {
   }
   const nonPanel = find(items, /^non[- ]?panel dentist/i);
   if (nonPanel && clean(nonPanel.value)) {
-    facts.push({ label: "Non-panel dentist", value: `You pay, then claim back: ${lowerFirst(clean(nonPanel.value)!)}` });
+    facts.push({ label: "Non-panel dentist", value: pt("You pay, then claim back: {0}", [lowerFirst(clean(nonPanel.value)!)]) });
   }
   const priced = items.filter((item) => item !== panel && item !== nonPanel && isBareAmount(item.value ?? ""));
   if (priced.length > 0) {
     facts.push({
       label: "Treatment price list",
-      value: `${priced.length} treatments with a maximum claim amount`,
+      value: pt("{0} treatments with a maximum claim amount", [priced.length]),
       note: "See the full list below",
     });
   }

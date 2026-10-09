@@ -1,3 +1,4 @@
+import { getPortalLocale, portalText, usePortalTranslation } from "@/i18n/portal";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useRouterState } from "@tanstack/react-router";
 import { AlertCircle, Bell, Info, TriangleAlert, X } from "lucide-react";
@@ -25,12 +26,12 @@ const TONE_CLASS: Record<NotificationTone, string> = {
  * timestamp for a log you glance at seconds after the event. */
 function ago(at: number): string {
   const secs = Math.max(0, Math.round((Date.now() - at) / 1000));
-  if (secs < 45) return "just now";
+  if (secs < 45) return portalText("just now");
   const mins = Math.round(secs / 60);
-  if (mins < 60) return `${mins}m ago`;
+  if (mins < 60) return portalText("{0}m ago", [mins]);
   const hours = Math.round(mins / 60);
-  if (hours < 24) return `${hours}h ago`;
-  return new Date(at).toLocaleDateString();
+  if (hours < 24) return portalText("{0}h ago", [hours]);
+  return new Date(at).toLocaleDateString(getPortalLocale() === "zh-SG" ? "zh-SG" : undefined);
 }
 
 /**
@@ -54,6 +55,7 @@ export function NotificationBell({
   /** Shown under the persistent section when there are no other notifications. */
   emptyLabel?: string;
 }) {
+  const pt = usePortalTranslation();
   // Mounted in all three shells. On the member portal it is a TOUCH target and
   // its rows must be dismissable without a pointer — see the two uses below.
   const inLeaf = useInLeaf();
@@ -120,7 +122,7 @@ export function NotificationBell({
         type="button"
         onClick={toggle}
         aria-label={
-          unread > 0 ? `Notifications (${unread} unread)` : "Notifications"
+          unread > 0 ? pt("Notifications ({0} unread)", [unread]) : pt("Notifications")
         }
         aria-expanded={open}
         aria-haspopup="dialog"
@@ -151,20 +153,19 @@ export function NotificationBell({
       {open && (
         <div
           role="dialog"
-          aria-label="Notifications"
+          aria-label={pt("Notifications")}
           className="notification-panel absolute right-0 top-10 z-50 w-[22rem] max-w-[calc(100vw-2rem)] overflow-hidden rounded-md border border-border bg-card shadow-md"
         >
           <div className="flex items-center justify-between border-b border-border px-3 py-2">
             <span className="text-sm font-medium text-foreground">
-              Notifications
-            </span>
+              {pt("Notifications")} </span>
             {items.length > 0 && (
               <button
                 type="button"
                 onClick={clear}
                 className="text-xs text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50 rounded"
               >
-                {persistent ? "Clear alerts" : "Clear all"}
+                {persistent ? pt("Clear alerts") : pt("Clear all")}
               </button>
             )}
           </div>
@@ -172,7 +173,7 @@ export function NotificationBell({
           {persistent && <div className="max-h-[22rem] overflow-y-auto">{persistent}</div>}
           {items.length === 0 ? (
             <p className="px-3 py-6 text-center text-sm text-muted-foreground">
-              {emptyLabel ?? (persistent ? "No browser alerts" : "No notifications")}
+              {pt(emptyLabel) ?? (persistent ? pt("No browser alerts") : pt("No notifications"))}
             </p>
           ) : (
             <ul className="max-h-[22rem] overflow-y-auto">
@@ -203,6 +204,7 @@ function NotificationRow({
    * no hover state, so the row would be permanently undismissable. */
   touch?: boolean;
 }) {
+  const pt = usePortalTranslation();
   const Icon = TONE_ICON[item.tone];
   return (
     <li className="group flex items-start gap-2.5 border-b border-border px-3 py-2.5 last:border-b-0">
@@ -211,16 +213,16 @@ function NotificationRow({
         strokeWidth={2}
       />
       <div className="min-w-0 flex-1">
-        <p className="break-words text-sm text-foreground">{item.message}</p>
+        <p className="break-words text-sm text-foreground">{pt(item.message)}</p>
         <p className="mt-0.5 text-xs text-muted-foreground">
           {ago(item.at)}
-          {item.count > 1 && ` · ${item.count} times`}
+          {item.count > 1 && pt(" · {0} times", [item.count])}
         </p>
       </div>
       <button
         type="button"
         onClick={() => onDismiss(item.id)}
-        aria-label="Dismiss notification"
+        aria-label={pt("Dismiss notification")}
         className={cn(
           "shrink-0 rounded text-subtle transition-opacity hover:text-foreground focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
           touch

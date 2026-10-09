@@ -1,3 +1,4 @@
+import { usePortalTranslation } from "@/i18n/portal";
 /** The strike — the leaf's memorable moment, and the answer to the question
  * members actually come back for.
  *
@@ -99,6 +100,7 @@ export function Strike({
    */
   animate?: boolean;
 }) {
+  usePortalTranslation();
   const reduced = useReducedMotion();
 
   return (
@@ -129,6 +131,7 @@ export function Strike({
  * quietest ink rather than being dropped — a member seeing an unfamiliar word
  * is recoverable; a member seeing no state at all is not. */
 export function ClaimStrike({ status }: { status: string }) {
+  const pt = usePortalTranslation();
   const cfg = CLAIM_STATE[status] ?? { label: status, tone: "review" as const };
-  return <Strike tone={cfg.tone}>{cfg.label}</Strike>;
+  return <Strike tone={cfg.tone}>{pt(cfg.label)}</Strike>;
 }

@@ -1,3 +1,4 @@
+import { portalText as pt, usePortalTranslation } from "@/i18n/portal";
 /** "Your cover has ended" — the one thing a leaver's portal has to say.
  *
  * Without it the surface just starts refusing: the card tab 403s, the enrolment
@@ -33,40 +34,37 @@ export function accessNotice(access: PortalAccess | undefined): string | null {
     case "active":
       if (!ended) return null;
       return [
-        `Your last day of cover is ${ended}.`,
+        pt("Your last day of cover is {0}.", [ended]),
         until
-          ? `You keep everything until then, and can send us claims for treatment on or before that date until ${until}.`
-          : "You keep everything until then.",
+          ? pt("You keep everything until then, and can send us claims for treatment on or before that date until {0}.", [until])
+          : pt("You keep everything until then."),
       ].join(" ");
     case "run_off":
       return [
-        ended ? `Your cover ended on ${ended}.` : "Your cover has ended.",
+        ended ? pt("Your cover ended on {0}.", [ended]) : pt("Your cover has ended."),
         // The one thing they can still act on, and the deadline for it. Said
         // in terms of the TREATMENT date, not the claim date — those are
         // different dates and only the first is bounded by their last day.
         ended
-          ? `You can still send us claims for treatment on or before that date${
-              until ? `, until ${until}` : ""
-            }.`
-          : `You can still send us claims for treatment during your cover${
-              until ? `, until ${until}` : ""
-            }.`,
+          ? pt("You can still send us claims for treatment on or before that date{0}.", [until ? pt(", until {0}", [until]) : ""])
+          : pt("You can still send us claims for treatment during your cover{0}.", [until ? pt(", until {0}", [until]) : ""]),
       ].join(" ");
     case "settling":
       return (
-        "Your cover has ended and the window for new claims has closed. " +
-        "You can still read your claims and reply to anything we've asked you about."
+        pt("Your cover has ended and the window for new claims has closed.") + " " +
+        pt("You can still read your claims and reply to anything we've asked you about.")
       );
     case "ended":
       return until
-        ? `Your access to this portal ended on ${until}.`
-        : "Your access to this portal has ended.";
+        ? pt("Your access to this portal ended on {0}.", [until])
+        : pt("Your access to this portal has ended.");
     default:
       return null;
   }
 }
 
 export function AccessNotice({ access }: { access: PortalAccess | undefined }) {
+  const pt = usePortalTranslation();
   const notice = accessNotice(access);
   if (!notice) return null;
   return (
@@ -74,7 +72,7 @@ export function AccessNotice({ access }: { access: PortalAccess | undefined }) {
       role="status"
       className="mb-4 rounded-tile border border-hairline bg-shade px-4 py-3 text-row text-record"
     >
-      {notice}
+      {pt(notice)}
     </p>
   );
 }

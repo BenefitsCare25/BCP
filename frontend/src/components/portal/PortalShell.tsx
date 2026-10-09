@@ -1,3 +1,5 @@
+import { usePortalTranslation } from "@/i18n/portal";
+import { PortalLanguageControl } from "@/i18n/PortalLanguageControl";
 /** Portal navigation and account controls. Home supplies its own greeting and
  * benefit-year context; other routes use the shell heading. The broker preview
  * keeps its own data path and layout in `components/operations/PortalFrame`. */
@@ -114,6 +116,7 @@ const ICON_BUTTON =
   "text-label transition-colors duration-200 ease-leaf hover:bg-shade hover:text-record";
 
 export function PortalShell() {
+  const pt = usePortalTranslation();
   const restricted = usePortalSession(s => s.mfaEnrollmentRequired);
   const company = useCompany();
   const navigate = useNavigate();
@@ -124,7 +127,7 @@ export function PortalShell() {
       clearLocalPortalSession();
       void navigate({ to: "/portal/$company/sign-in", params: { company } });
     } catch {
-      toast.error("Couldn't complete sign-out. Try again.");
+      toast.error(pt("Couldn't complete sign-out. Try again."));
     }
   };
   if (restricted) {
@@ -133,10 +136,10 @@ export function PortalShell() {
         <main className="leaf portal-clay portal-ui min-h-screen bg-background px-4 py-6">
           <div className="mx-auto max-w-3xl">
             <header className="mb-6 flex items-center justify-between gap-4">
-              <h1 className="text-xl font-bold">Complete two-step sign-in</h1>
+              <h1 className="text-xl font-bold">{pt("Complete two-step sign-in")}</h1>
+              <PortalLanguageControl />
               <button type="button" className="leaf-focus text-sm underline" onClick={() => void signOut()}>
-                Sign out
-              </button>
+                {pt("Sign out")} </button>
             </header>
             <Outlet />
           </div>
@@ -148,6 +151,7 @@ export function PortalShell() {
 }
 
 function PortalMainShell() {
+  const pt = usePortalTranslation();
   const { location } = useRouterState();
   const navigate = useNavigate();
   const member = usePortalSession((s) => s.member);
@@ -192,7 +196,7 @@ function PortalMainShell() {
       markSignedOut("portal");
       clearLocalPortalSession();
       void navigate({ to: "/portal/$company/sign-in", params: { company } });
-    } catch { toast.error("Couldn't complete sign-out. Check your connection and try again."); }
+    } catch { toast.error(pt("Couldn't complete sign-out. Check your connection and try again.")); }
   };
 
   /** Resolve a NAV subpath against the company actually in the URL. */
@@ -249,6 +253,7 @@ function PortalMainShell() {
 
   const accountControls = (
     <>
+      <PortalLanguageControl />
       {/* Messages is an ICON, not a seventh nav pill. The desktop bar is one
           row and is already tight at 1180px with the mark, six destinations and
           three controls — which is why Messages had no entry at all and was
@@ -261,7 +266,7 @@ function PortalMainShell() {
       <Link
         to="/portal/$company/messages"
         params={{ company }}
-        aria-label={messagesLabel(unread)}
+        aria-label={pt(messagesLabel(unread))}
         className={cn(ICON_BUTTON, isActive("/messages") && "text-action-ink")}
       >
         <MessageSquare className="size-5" aria-hidden />
@@ -271,7 +276,7 @@ function PortalMainShell() {
       <Link
         to="/portal/$company/security"
         params={{ company }}
-        aria-label="Account security"
+        aria-label={pt("Account security")}
         className={cn(
           ICON_BUTTON,
           isActive("/security") && "text-action-ink",
@@ -279,7 +284,7 @@ function PortalMainShell() {
       >
         <ShieldCheck className="size-5" aria-hidden />
       </Link>
-      <button type="button" onClick={signOut} aria-label="Sign out" className={ICON_BUTTON}>
+      <button type="button" onClick={signOut} aria-label={pt("Sign out")} className={ICON_BUTTON}>
         <LogOut className="size-5" aria-hidden />
       </button>
     </>
@@ -297,7 +302,7 @@ function PortalMainShell() {
         <header className="clay-topbar">
           <div className="clay-topbar-inner mx-auto max-w-[1440px]">
           {/* ── Phone: name, scope, account. No mark, by request. ────────── */}
-          <div className="flex items-center gap-2 py-2 pl-4 pr-1.5 lg:hidden">
+          <div className="portal-mobile-header flex items-center gap-2 py-2 pl-4 pr-1.5 lg:hidden">
             {isHome ? (
               <p className="min-w-0 flex-1 truncate text-lg font-bold tracking-title text-record">{firstName}</p>
             ) : (
@@ -310,7 +315,7 @@ function PortalMainShell() {
                 compact
               />
             )}
-            <div className="flex shrink-0 items-center">{accountControls}</div>
+            <div className="portal-nav-actions flex shrink-0 items-center">{accountControls}</div>
           </div>
 
           {/* ── Desktop: one row. ────────────────────────────────────────── */}
@@ -326,7 +331,7 @@ function PortalMainShell() {
             />
             <span aria-hidden className="portal-nav-divider mx-5 h-8 w-px shrink-0 bg-hairline" />
 
-            <nav aria-label="Portal sections" className="clay-nav relative flex items-center gap-0.5" onMouseLeave={() => setHover(null)}>
+            <nav aria-label={pt("Portal sections")} className="clay-nav relative flex items-center gap-0.5" onMouseLeave={() => setHover(null)}>
               <span aria-hidden className="clay-nav-pill" style={hover ? { opacity: 1, translate: `${hover.left}px 0`, width: hover.width } : undefined} />
               {nav.map((item) => {
                 const active = isActive(item.sub);
@@ -349,7 +354,7 @@ function PortalMainShell() {
                     )}
                   >
                     <Icon aria-hidden strokeWidth={1.75} />
-                    <span>{item.label}</span>
+                    <span>{pt(item.label)}</span>
                   </Link>
                 );
               })}
@@ -432,12 +437,9 @@ function PortalMainShell() {
                 />
                 <span>
                   <span className="block text-row font-semibold text-record">
-                    Set up two-step sign-in
-                  </span>
+                    {pt("Set up two-step sign-in")} </span>
                   <span className="block text-row text-label">
-                    Your company asks everyone to add a second step when signing
-                    in. It takes about a minute.
-                  </span>
+                    {pt("Your company asks everyone to add a second step when signing in. It takes about a minute.")} </span>
                 </span>
               </Link>
             )}
@@ -463,7 +465,7 @@ function PortalMainShell() {
             floats over SCROLLING CONTENT, and body copy travelling visibly under
             a nav is a legibility problem the thin pane used to have. */}
         <nav
-          aria-label="Portal sections"
+          aria-label={pt("Portal sections")}
           className={cn(
             glassSurface,
             "portal-nav-dock fixed inset-x-3 bottom-3 z-20 flex rounded-[22px] p-1.5 shadow-float lg:hidden",
@@ -504,10 +506,10 @@ function PortalMainShell() {
                   )}
                 </span>
                 <span className="text-2xs font-semibold leading-none">
-                  {item.short}
+                  {pt(item.short)}
                 </span>
                 {item.sub === "/enrollment" && me?.enrollment_open && (
-                  <span className="sr-only">(enrollment open)</span>
+                  <span className="sr-only">{pt("(enrollment open)")}</span>
                 )}
               </Link>
             );

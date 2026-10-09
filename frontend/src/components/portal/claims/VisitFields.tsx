@@ -1,3 +1,4 @@
+import { usePortalTranslation } from "@/i18n/portal";
 /** The visit itself: when, where, which invoice, how much.
  *
  * One column on a phone (The Whole-Frame Rule) — the old two-up grid never
@@ -13,6 +14,7 @@ import { FALLBACK_CURRENCIES, OTHER_HOSPITAL } from "./claimForm";
 import type { NewClaimForm } from "./useNewClaimForm";
 
 export function VisitFields({ form }: { form: NewClaimForm }) {
+  const pt = usePortalTranslation();
   const { hospitals, selectedProduct } = form;
   const currencies = form.currencies.length
     ? form.currencies
@@ -21,7 +23,7 @@ export function VisitFields({ form }: { form: NewClaimForm }) {
   return (
     <>
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-        <Field label="Visit date" required hint={spelledDay(form.incurredDate)} error={form.fieldErrors.incurred_date}>
+        <Field label={pt("Visit date")} required hint={spelledDay(form.incurredDate)} error={form.fieldErrors.incurred_date}>
           {(p) => (
             <input
               {...p}
@@ -38,7 +40,7 @@ export function VisitFields({ form }: { form: NewClaimForm }) {
         {form.supportsStayDates && (
           <>
             <Field
-              label="Admission date (optional)"
+              label={pt("Admission date (optional)")}
               error={form.fieldErrors.admission_date}
             >
               {(p) => (
@@ -54,7 +56,7 @@ export function VisitFields({ form }: { form: NewClaimForm }) {
               )}
             </Field>
             <Field
-              label="Discharge date (optional)"
+              label={pt("Discharge date (optional)")}
               error={form.fieldErrors.discharge_date}
             >
               {(p) => (
@@ -73,7 +75,7 @@ export function VisitFields({ form }: { form: NewClaimForm }) {
         )}
 
         <Field
-          label={form.isHospitalisation ? "Hospital" : "Provider / clinic"}
+          label={form.isHospitalisation ? pt("Hospital") : pt("Provider / clinic")}
           required
           error={form.fieldErrors.provider}
         >
@@ -86,8 +88,8 @@ export function VisitFields({ form }: { form: NewClaimForm }) {
                   value={form.hospital}
                   onChange={(e) => form.setHospital(e.target.value)}
                 >
-                  <option value="">Select the hospital</option>
-                  <optgroup label="Government / Restructured">
+                  <option value="">{pt("Select the hospital")}</option>
+                  <optgroup label={pt("Government / Restructured")}>
                     {hospitals
                       .filter((h) => h.sector === "govt")
                       .map((h) => (
@@ -96,7 +98,7 @@ export function VisitFields({ form }: { form: NewClaimForm }) {
                         </option>
                       ))}
                   </optgroup>
-                  <optgroup label="Private">
+                  <optgroup label={pt("Private")}>
                     {hospitals
                       .filter((h) => h.sector === "private")
                       .map((h) => (
@@ -106,14 +108,13 @@ export function VisitFields({ form }: { form: NewClaimForm }) {
                       ))}
                   </optgroup>
                   <option value={OTHER_HOSPITAL}>
-                    Other / overseas hospital
-                  </option>
+                    {pt("Other / overseas hospital")} </option>
                 </select>
                 {form.hospital === OTHER_HOSPITAL && (
                   <input
                     className={leafControl}
-                    aria-label="Hospital name"
-                    placeholder="Hospital name"
+                    aria-label={pt("Hospital name")}
+                    placeholder={pt("Hospital name")}
                     value={form.provider}
                     onChange={(e) => form.setProvider(e.target.value)}
                   />
@@ -130,7 +131,7 @@ export function VisitFields({ form }: { form: NewClaimForm }) {
           }
         </Field>
 
-        <Field label="Invoice number" required error={form.fieldErrors.invoice}>
+        <Field label={pt("Invoice number")} required error={form.fieldErrors.invoice}>
           {(p) => (
             <input
               {...p}
@@ -148,7 +149,7 @@ export function VisitFields({ form }: { form: NewClaimForm }) {
             episode. Whether to ask is the SERVED `requires_doctor_name`. */}
         {form.requiresDoctorName && (
           <Field
-            label="Doctor seen"
+            label={pt("Doctor seen")}
             required
             error={form.fieldErrors.doctor_name}
           >
@@ -156,7 +157,7 @@ export function VisitFields({ form }: { form: NewClaimForm }) {
               <input
                 {...p}
                 className={leafControl}
-                placeholder="e.g. Dr Tan Wei Ming"
+                placeholder={pt("e.g. Dr Tan Wei Ming")}
                 value={form.doctorName}
                 maxLength={255}
                 onChange={(e) => form.setDoctorName(e.target.value)}
@@ -165,7 +166,7 @@ export function VisitFields({ form }: { form: NewClaimForm }) {
           </Field>
         )}
 
-        <Field label="Currency" required>
+        <Field label={pt("Currency")} required>
           {(p) => (
             <select
               {...p}
@@ -190,7 +191,7 @@ export function VisitFields({ form }: { form: NewClaimForm }) {
         </Field>
 
         <Field
-          label="Incurred amount"
+          label={pt("Incurred amount")}
           required
           error={form.fieldErrors.amount}
           hint={
@@ -201,16 +202,12 @@ export function VisitFields({ form }: { form: NewClaimForm }) {
                   aria-hidden
                 />
                 <span>
-                  Your receipt is above the amount currently available after
-                  submitted claims: {" "}
+                  {pt("Your receipt is above the amount currently available after submitted claims:")} {" "}
                   <Money
                     value={form.limitRemaining}
                     currency={form.policyCurrency}
                     emphasis="strong"
-                  />.
-                  Submit the full receipt; the reimbursed amount may be lower after
-                  assessment.
-                </span>
+                  />{pt(". Submit the full receipt; the reimbursed amount may be lower after assessment.")} </span>
               </span>
             ) : undefined
           }
@@ -238,7 +235,7 @@ export function VisitFields({ form }: { form: NewClaimForm }) {
         form.effectiveCurrency !== form.policyCurrency && (
           <p className="flex items-start gap-1.5 text-row text-strike-pending">
             <AlertTriangle className="mt-0.5 size-3.5 shrink-0" aria-hidden />
-            Note that you have selected {form.effectiveCurrency}.
+            {pt("Note that you have selected")} {form.effectiveCurrency}.
           </p>
         )}
 
@@ -253,7 +250,7 @@ export function VisitFields({ form }: { form: NewClaimForm }) {
         loading={form.fxLoading}
         currency={form.effectiveCurrency}
         policyCurrency={form.policyCurrency}
-        error={form.fieldErrors.fx}
+        error={pt(form.fieldErrors.fx)}
         failed={form.fxFailed}
         onRetry={form.retryFxQuote}
       />
@@ -261,7 +258,7 @@ export function VisitFields({ form }: { form: NewClaimForm }) {
       {/* Diagnosis — searchable catalog scoped to the claim type. */}
       {form.showDiagnosisPicker && selectedProduct && (
         <FieldGroup
-          label={<>Diagnosis{selectedProduct.diagnosis_required && <RequiredMark />}</>}
+          label={<>{pt("Diagnosis")}{selectedProduct.diagnosis_required && <RequiredMark />}</>}
           error={form.fieldErrors.diagnosis}
         >
           <DiagnosisPicker

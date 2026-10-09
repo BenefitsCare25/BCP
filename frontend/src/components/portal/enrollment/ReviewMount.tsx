@@ -1,3 +1,4 @@
+import { portalText as pt, usePortalTranslation } from "@/i18n/portal";
 /** The last slide: everything the member is about to send, and the two buttons
  * that send it.
  *
@@ -51,7 +52,7 @@ export interface ChangeLine {
  *  comma-joined array. */
 function list(names: string[]): string {
   if (names.length <= 1) return names[0] ?? "";
-  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+  return pt("{0} and {1}", [names.slice(0, -1).join(", "), names[names.length - 1]]);
 }
 
 /** What moved on the family side of one product.
@@ -66,7 +67,7 @@ function familyChange(
   dependants: DependantRef[],
 ): string | null {
   const nameOf = (id: string) =>
-    dependants.find((d) => d.id === id)?.name ?? "someone in your family";
+    dependants.find((d) => d.id === id)?.name ?? pt("someone in your family");
   const added = to.dependantIds
     .filter((id) => !from.dependantIds.includes(id))
     .map(nameOf);
@@ -81,9 +82,9 @@ function familyChange(
   ].filter((role) => (from.depOptionIds[role] ?? "") !== (to.depOptionIds[role] ?? ""));
 
   const parts: string[] = [];
-  if (added.length) parts.push(`Adding ${list(added)}`);
-  if (removed.length) parts.push(`Removing ${list(removed)}`);
-  if (levels.length) parts.push(`New cover level for your ${list(levels)}`);
+  if (added.length) parts.push(pt("Adding {0}", [list(added)]));
+  if (removed.length) parts.push(pt("Removing {0}", [list(removed)]));
+  if (levels.length) parts.push(pt("New cover level for your {0}", [list(levels.map(role => pt(role)))]));
   return parts.length ? parts.join(" · ") : null;
 }
 
@@ -162,9 +163,10 @@ function Pair({
   children: React.ReactNode;
   strong?: boolean;
 }) {
+  const pt = usePortalTranslation();
   return (
     <div className={pairRow}>
-      <span className="shrink-0 text-row text-label">{term}</span>
+      <span className="shrink-0 text-row text-label">{pt(term)}</span>
       <span
         className={cn(
           "min-w-0 flex-1 text-right text-row",
@@ -238,13 +240,14 @@ export function ReviewMount({
   onSave: () => void;
   onSubmit: () => void;
 }) {
+  const pt = usePortalTranslation();
   const nothing = changes.length === 0 && !leave;
 
   return (
     <Mount
       as="article"
       rise={rise}
-      label={disabled ? "What's on record" : "Review and send"}
+      label={disabled ? pt("What's on record") : pt("Review and send")}
       gloss={
         disabled
           ? "The choices recorded against your name for this period."
@@ -275,16 +278,14 @@ export function ReviewMount({
           })}
           {leave && (
             <MountRow term="Leave">
-              {leave.action === "buy" ? "Bought" : "Sold back"} {leave.days}{" "}
-              {leave.days === 1 ? "day" : "days"}
+              {leave.action === "buy" ? pt("Bought") : pt("Sold back")} {leave.days}{" "}
+              {leave.days === 1 ? pt("day") : pt("days")}
             </MountRow>
           )}
         </dl>
       ) : nothing ? (
         <p className="text-row text-label">
-          You haven&rsquo;t changed anything. Your cover carries on exactly as it
-          is — you can still send that in to confirm it&rsquo;s what you want.
-        </p>
+          {pt("You haven’t changed anything. Your cover carries on exactly as it is — you can still send that in to confirm it’s what you want.")} </p>
       ) : (
         <dl className="divide-y divide-hairline/75 border-t border-hairline/75">
           {changes.map((c) => (
@@ -303,11 +304,11 @@ export function ReviewMount({
           ))}
           {leave && (
             <div className="py-2.5">
-              <dt className="text-row font-medium text-record">Leave</dt>
+              <dt className="text-row font-medium text-record">{pt("Leave")}</dt>
               <dd className="mt-1.5">
                 <Pair term="You've chosen" strong>
-                  {leave.action === "buy" ? "Buying" : "Selling back"}{" "}
-                  {leave.days} {leave.days === 1 ? "day" : "days"}
+                  {leave.action === "buy" ? pt("Buying") : pt("Selling back")}{" "}
+                  {leave.days} {leave.days === 1 ? pt("day") : pt("days")}
                 </Pair>
                 {/* Only when it is priced. A zero here would read as free
                     leave rather than as leave whose rate isn't set — the same
@@ -351,8 +352,8 @@ export function ReviewMount({
               save button in view at the bottom of the one column. */}
           <p className="text-row text-label">
             {dirty
-              ? "These choices aren't saved yet. Sending saves them too."
-              : "Your choices are saved. Sending them starts the check."}
+              ? pt("These choices aren't saved yet. Sending saves them too.")
+              : pt("Your choices are saved. Sending them starts the check.")}
           </p>
 
           <div className="flex flex-col gap-2 sm:flex-row">
@@ -368,8 +369,7 @@ export function ReviewMount({
                 {saving && (
                   <Loader2 className="size-4 animate-spin" aria-hidden />
                 )}
-                Save choices
-              </Action>
+                {pt("Save choices")} </Action>
             )}
             {/* The page's one brand-coloured fill. */}
             <Action
@@ -395,9 +395,7 @@ export function ReviewMount({
 
       {brokerNote && (
         <p className="text-row text-label">
-          Members save and send their choices here; a broker then confirms them
-          to apply the changes.
-        </p>
+          {pt("Members save and send their choices here; a broker then confirms them to apply the changes.")} </p>
       )}
     </Mount>
   );

@@ -1,3 +1,4 @@
+import { usePortalTranslation } from "@/i18n/portal";
 import { useMemo, useState } from "react";
 import { Link } from "@tanstack/react-router";
 import { ArrowLeft, ChevronDown, MapPin } from "lucide-react";
@@ -37,8 +38,9 @@ function PlanDetail({ line, routeKey, person, compact = false, showLabel = true 
   compact?: boolean;
   showLabel?: boolean;
 }) {
+  const pt = usePortalTranslation();
   const code = line.product_code.trim().toUpperCase();
-  const planLabel = line.plan_display_name?.trim() || (line.plan_code ? `Plan ${line.plan_code}` : undefined);
+  const planLabel = line.plan_display_name?.trim() || (line.plan_code ? pt("Plan {0}", [line.plan_code]) : undefined);
   const additionalMedical = code === "GMM" || code === "GMM2";
   const label = additionalMedical
     ? "Extra cover after your hospital plan"
@@ -49,11 +51,9 @@ function PlanDetail({ line, routeKey, person, compact = false, showLabel = true 
   // rather than shown nothing.
   if (line.published === false) {
     return (
-      <Mount as="article" label={showLabel ? label : undefined} gloss={planLabel}>
+      <Mount as="article" label={pt(showLabel ? label : undefined)} gloss={planLabel}>
         <p className="text-row text-label">
-          Your plan details are being checked and will appear here once they're confirmed.
-          Your HR team can help in the meantime.
-        </p>
+          {pt("Your plan details are being checked and will appear here once they're confirmed. Your HR team can help in the meantime.")} </p>
       </Mount>
     );
   }
@@ -62,24 +62,22 @@ function PlanDetail({ line, routeKey, person, compact = false, showLabel = true 
   // rather than presenting it as cover the member can claim against.
   if (line.enrolment === "eligible") {
     return (
-      <Mount as="article" label={showLabel ? label : undefined} gloss={planLabel}>
+      <Mount as="article" label={pt(showLabel ? label : undefined)} gloss={planLabel}>
         <p className="text-row text-label">
-          You're eligible for this voluntary cover but not enrolled, so it can't be claimed yet.
-          Your HR team can tell you how to join.
-        </p>
+          {pt("You're eligible for this voluntary cover but not enrolled, so it can't be claimed yet. Your HR team can tell you how to join.")} </p>
       </Mount>
     );
   }
 
   const facts = careFacts(line, routeKey);
   return (
-    <Mount as="article" label={showLabel ? label : undefined} gloss={planLabel}>
+    <Mount as="article" label={pt(showLabel ? label : undefined)} gloss={planLabel}>
       <p className="text-row text-label">
         {compact && !showLabel && planLabel && <span className="mr-4 font-semibold text-record">{planLabel}</span>}
-        Covered person: <span className="font-medium text-record">{person ? dependantName(person) : "You"}</span>
+        {pt("Covered person:")} <span className="font-medium text-record">{person ? dependantName(person) : pt("You")}</span>
       </p>
       {additionalMedical && (
-        <p className="text-row text-label">Pays for bigger hospital bills once your hospital plan's limits are used. It has its own conditions, listed below.</p>
+        <p className="text-row text-label">{pt("Pays for bigger hospital bills once your hospital plan's limits are used. It has its own conditions, listed below.")}</p>
       )}
       {facts.length > 0 ? (
         <>
@@ -87,10 +85,10 @@ function PlanDetail({ line, routeKey, person, compact = false, showLabel = true 
           <dl className="divide-y divide-hairline/75">
             {facts.map((fact) => (
               <div key={fact.label} className="grid gap-1 py-3 sm:grid-cols-[minmax(0,12rem)_1fr] sm:gap-4">
-                <dt className="text-row text-label">{fact.label}</dt>
+                <dt className="text-row text-label">{pt(fact.label)}</dt>
                 <dd className="text-row font-medium text-record">
                   {fact.value}
-                  {fact.note && <span className="mt-1 block font-normal text-label">{fact.note}</span>}
+                  {fact.note && <span className="mt-1 block font-normal text-label">{pt(fact.note)}</span>}
                 </dd>
               </div>
             ))}
@@ -98,13 +96,12 @@ function PlanDetail({ line, routeKey, person, compact = false, showLabel = true 
         </>
       ) : (
         <p className="text-row text-label">
-          Key amounts and conditions aren't recorded in a form we can summarise. Read the plan details below or ask your HR team before arranging care.
-        </p>
+          {pt("Key amounts and conditions aren't recorded in a form we can summarise. Read the plan details below or ask your HR team before arranging care.")} </p>
       )}
       <MountRule />
       <details className="group">
         <summary className="leaf-focus flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 text-row font-semibold text-record [&::-webkit-details-marker]:hidden">
-          {routeKey === "dental" ? "Treatment price list and full details" : "Full benefit schedule"}
+          {routeKey === "dental" ? pt("Treatment price list and full details") : pt("Full benefit schedule")}
           <ChevronDown className="size-4 shrink-0 text-label transition-transform group-open:rotate-180" aria-hidden />
         </summary>
         <div className="pt-2"><ScheduleLeaf schedule={line.benefit_schedule} allRows /></div>
@@ -122,6 +119,7 @@ export function CoverageLeaf({ data, selection, onSelectionChange, company }: {
   /** Present in the live portal; preview keeps navigation inside its frame. */
   company?: string;
 }) {
+  const pt = usePortalTranslation();
   const [local, setLocal] = useState<CoverageSelection>({ routeKey: "", personId: null });
   const current = selection ?? local;
   const people = useMemo(() => coveredPeople(data.coverage), [data.coverage]);
@@ -149,8 +147,8 @@ export function CoverageLeaf({ data, selection, onSelectionChange, company }: {
 
   if (routes.length === 0 && !data.flex && people.length === 0) {
     return (
-      <Mount label="No care benefits to show">
-        <p className="text-row text-label">We don't have any care benefits recorded against your name for this period. Your HR team can check your record.</p>
+      <Mount label={pt("No care benefits to show")}>
+        <p className="text-row text-label">{pt("We don't have any care benefits recorded against your name for this period. Your HR team can check your record.")}</p>
       </Mount>
     );
   }
@@ -158,12 +156,11 @@ export function CoverageLeaf({ data, selection, onSelectionChange, company }: {
   return (
     <div className={`${company ? "portal-coverage " : ""}space-y-4`}>
       {people.length > 0 && (
-        <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Choose covered person">
-          <span className="mr-1 text-row text-label">Cover for</span>
+        <div className="flex flex-wrap items-center gap-2" role="group" aria-label={pt("Choose covered person")}>
+          <span className="mr-1 text-row text-label">{pt("Cover for")}</span>
           <button type="button" onClick={() => choosePerson(null)} aria-pressed={!person}
             className={`${actionClass("neutral")} ${!person ? "bg-shade" : ""}`}>
-            Me
-          </button>
+            {pt("Me")} </button>
           {people.map((candidate) => (
             <button key={candidate.id} type="button" onClick={() => choosePerson(candidate.id)}
               aria-pressed={person?.id === candidate.id}
@@ -178,13 +175,12 @@ export function CoverageLeaf({ data, selection, onSelectionChange, company }: {
         <>
           <button type="button" onClick={() => select("")}
             className="leaf-focus inline-flex min-h-11 items-center gap-2 text-row font-semibold text-action-ink">
-            <ArrowLeft className="size-4" aria-hidden /> All care options
-          </button>
+            <ArrowLeft className="size-4" aria-hidden />  {pt("All care options")} </button>
           <div className={`tone-${careTone(selected.key)} relative flex min-h-36 items-end overflow-hidden rounded-[28px] bg-[var(--tone-wash)] p-6 pr-40 sm:min-h-44 sm:p-8 sm:pr-56`}>
             <div>
               {!company && <span className="clay-tag">{productShortLabel(selected.lines[0].product_code, selected.lines[0].product_name)}</span>}
-              <h2 className="mt-4 text-3xl font-bold tracking-title text-record sm:text-4xl">{selected.title}</h2>
-              {!company && <p className="mt-1 text-row text-[var(--tone-ink)]">{selected.description}</p>}
+              <h2 className="mt-4 text-3xl font-bold tracking-title text-record sm:text-4xl">{pt(selected.title)}</h2>
+              {!company && <p className="mt-1 text-row text-[var(--tone-ink)]">{pt(selected.description)}</p>}
             </div>
             {careArt(selected.key) && (
               <img src={careArt(selected.key)!} alt="" className="pointer-events-none absolute -bottom-2 right-2 size-36 object-contain sm:right-6 sm:size-48" />
@@ -197,8 +193,7 @@ export function CoverageLeaf({ data, selection, onSelectionChange, company }: {
           </div>
           {company && ["gp", "specialist", "dental"].includes(selected.key) && (
             <Link to="/portal/$company/clinics" params={{ company }} className={actionClass("quiet", { block: "phone" })}>
-              <MapPin className="size-4" aria-hidden /> Find a clinic
-            </Link>
+              <MapPin className="size-4" aria-hidden />  {pt("Find a clinic")} </Link>
           )}
         </>
       ) : (
@@ -211,8 +206,8 @@ export function CoverageLeaf({ data, selection, onSelectionChange, company }: {
             </div>
           )}
           {routes.filter((route) => route.section === "other").length > 0 && (
-            <section className="space-y-3" aria-label="Other cover">
-              <h3 className="clay-subhead !m-0">Also covered</h3>
+            <section className="space-y-3" aria-label={pt("Other cover")}>
+              <h3 className="clay-subhead !m-0">{pt("Also covered")}</h3>
               <div className="clay-sheets clay-sheets-other">
                 {routes.filter((route) => route.section === "other").map((route) => (
                   <BenefitSheetButton key={route.key} route={route} onClick={() => select(route.key)} />
@@ -221,8 +216,8 @@ export function CoverageLeaf({ data, selection, onSelectionChange, company }: {
             </section>
           )}
           {routes.length === 0 && (
-            <Mount label="No care routes for this person">
-              <p className="text-row text-label">No care benefits are recorded for this person in the current benefit year.</p>
+            <Mount label={pt("No care routes for this person")}>
+              <p className="text-row text-label">{pt("No care benefits are recorded for this person in the current benefit year.")}</p>
             </Mount>
           )}
           {data.flex && !person && <FlexMount flex={data.flex} />}

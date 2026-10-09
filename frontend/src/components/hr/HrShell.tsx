@@ -1,3 +1,5 @@
+import { usePortalTranslation } from "@/i18n/portal";
+import { PortalLanguageControl } from "@/i18n/PortalLanguageControl";
 /** Authenticated HR admin shell — top bar (company + user + sign out) over the
  * routed content. A tenant is pinned by the subdomain, so there is no client
  * switcher. */
@@ -26,6 +28,7 @@ const HR_NAV = [
 ] as const;
 
 export function HrShell() {
+  const pt = usePortalTranslation();
   const navigate = useNavigate();
   const path = useRouterState({ select: (state) => state.location.pathname });
   const me = useHrSession((s) => s.me);
@@ -42,7 +45,7 @@ export function HrShell() {
       markSignedOut("hr");
       clearLocalHrSession();
       void navigate({ to: "/hr/sign-in" });
-    } catch { toast.error("Couldn't complete sign-out. Check your connection and try again."); }
+    } catch { toast.error(pt("Couldn't complete sign-out. Check your connection and try again.")); }
   };
 
   return (
@@ -54,7 +57,7 @@ export function HrShell() {
             <Link
               to="/hr/dashboard"
               activeOptions={{ exact: true }}
-              aria-label="HR dashboard"
+              aria-label={pt("HR dashboard")}
               className="portal-nav-brand leaf-focus hidden min-h-11 shrink-0 items-center rounded-pill lg:flex"
             >
               <BrandLogo
@@ -66,26 +69,27 @@ export function HrShell() {
               />
             </Link>
             <span aria-hidden className="portal-nav-divider mx-5 hidden h-8 w-px shrink-0 bg-hairline lg:block" />
-            <nav aria-label="HR navigation" className="hr-navigation flex items-center gap-0.5">
+            <nav aria-label={pt("HR navigation")} className="hr-navigation flex items-center gap-0.5">
               {(restricted ? [] : HR_NAV).map(({ to, label, icon: Icon }) => (
                 <Link
                   key={to}
                   to={to}
-                  aria-label={label}
+                  aria-label={pt(label)}
                   activeOptions={{ exact: to === "/hr/dashboard" }}
                   aria-current={(to === "/hr/dashboard" ? path === to : path.startsWith(to)) ? "page" : undefined}
                   className="portal-nav-link leaf-focus"
                 >
                   <Icon aria-hidden strokeWidth={1.75} />
-                  <span className="hidden sm:inline">{label}</span>
+                  <span className="hidden sm:inline">{pt(label)}</span>
                 </Link>
               ))}
             </nav>
           <div className="portal-nav-actions ml-auto flex shrink-0 items-center gap-1 pl-2 lg:pl-6">
+            <PortalLanguageControl />
             {!restricted && <NotificationBell largeTarget />}
             <Link
               to="/hr/security"
-              aria-label="Security"
+              aria-label={pt("Security")}
               aria-current={path === "/hr/security" ? "page" : undefined}
               className="portal-nav-action leaf-focus inline-flex items-center justify-center transition-colors"
             >
@@ -93,7 +97,7 @@ export function HrShell() {
             </Link>
             <button
               type="button"
-              aria-label="Sign out"
+              aria-label={pt("Sign out")}
               className="portal-nav-action leaf-focus inline-flex items-center justify-center transition-colors"
               onClick={() => void signOut()}
             >
@@ -105,7 +109,7 @@ export function HrShell() {
       </header>
       <main className={cn("mx-auto w-full", !isOverview && "max-w-6xl px-4 py-4")}>
         {!isOverview && <div className="hr-context mb-4 flex flex-wrap items-baseline justify-between gap-2">
-          <p className="text-lg font-bold">{company ?? "HR Administration"}</p>
+          <p className="text-lg font-bold">{company ?? pt("HR Administration")}</p>
           <p className="text-sm text-label">{me?.display_name || me?.email}</p>
         </div>}
         <Outlet />

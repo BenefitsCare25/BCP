@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { usePortalTranslation, usePortalLocale } from "@/i18n/portal";
 
 const SUFFIX = "My Benefits";
 
@@ -29,14 +30,16 @@ export function setBaseDocumentTitle(title: string): void {
  * brand title and silently reopens the failure.
  */
 export function useDocumentTitle(title: string | null | undefined) {
+  const pt = usePortalTranslation();
+  const { locale } = usePortalLocale();
   useEffect(() => {
     if (!title) return;
     const previous = document.title;
     pageTitles += 1;
-    document.title = `${title} · ${SUFFIX}`;
+    document.title = `${pt(title)} · ${pt(SUFFIX)}`;
     return () => {
       pageTitles -= 1;
       document.title = pageTitles === 0 && baseTitle ? baseTitle : previous;
     };
-  }, [title]);
+  }, [title, locale]);
 }

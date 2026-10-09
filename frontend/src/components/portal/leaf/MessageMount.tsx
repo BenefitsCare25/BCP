@@ -1,3 +1,5 @@
+import { portalText, usePortalTranslation } from "@/i18n/portal";
+import { systemClaimBody } from "@/i18n/systemMessages";
 /** Messages, on the member's leaf.
  *
  * This file owns the THREAD — one conversation read in full, with the member's
@@ -51,6 +53,7 @@ import { clockTime, dateKey, dayHeading } from "./date";
  * exact figure stays in the label, where it can actually be read.
  */
 export function UnreadBadge({ count }: { count: number }) {
+  usePortalTranslation();
   if (count <= 0) return null;
   return (
     <span
@@ -69,17 +72,18 @@ export function UnreadBadge({ count }: { count: number }) {
  * shell and the broker's preview frame both render one, and wording that drifts
  * is wording only one surface's users ever hear. */
 export function messagesLabel(unread: number) {
-  return unread > 0 ? `Messages (${unread} unread)` : "Messages";
+  return unread > 0 ? portalText("Messages ({0} unread)", [unread]) : portalText("Messages");
 }
 
 function UnreadDot() {
+  const pt = usePortalTranslation();
   return (
     <>
       <span
         aria-hidden
         className="mt-1.5 size-1.5 shrink-0 rounded-pill bg-strike-pending"
       />
-      <span className="sr-only">(unread)</span>
+      <span className="sr-only">{pt("(unread)")}</span>
     </>
   );
 }
@@ -87,6 +91,7 @@ function UnreadDot() {
 /** Initials, so a thread reads as a conversation between two parties without
  * spending a colour or an avatar image on it. */
 function Who({ name, mine }: { name: string; mine: boolean }) {
+  usePortalTranslation();
   const initial = name.trim().charAt(0).toUpperCase() || "?";
   return (
     <span
@@ -104,10 +109,11 @@ function Who({ name, mine }: { name: string; mine: boolean }) {
 /** The day rail. A rule with the date sitting in it, so a thread that runs over
  * weeks reads as a sequence of days rather than one undifferentiated column. */
 function DayRule({ label }: { label: string }) {
+  const pt = usePortalTranslation();
   return (
     <li className="flex items-center gap-3 py-1" aria-hidden>
       <span className="h-px flex-1 bg-hairline/75" />
-      <span className="leaf-label shrink-0 text-label">{label}</span>
+      <span className="leaf-label shrink-0 text-label">{pt(label)}</span>
       <span className="h-px flex-1 bg-hairline/75" />
     </li>
   );
@@ -120,10 +126,11 @@ function ThreadMessage({
   message: ClaimMessage;
   threadSubject?: string;
 }) {
+  const pt = usePortalTranslation();
   // "You", not the member's own name. They are reading their own inbox, and
   // "You / Claims team / You" is scannable in a way that their full legal name
   // alternating with ours is not.
-  const author = message.mine ? "You" : (message.author_name ?? "Unknown");
+  const author = message.mine ? pt("You") : pt(message.author_name ?? "Unknown");
   // The subject is dropped on the member's OWN replies (they carry the
   // placeholder subject the index needs) AND when it merely repeats the title
   // of the thread it is in — a question page printed its own subject as the
@@ -146,10 +153,10 @@ function ThreadMessage({
           {message.unread && <UnreadDot />}
         </div>
         {subject && (
-          <p className="mt-0.5 text-row font-medium text-record">{subject}</p>
+          <p className="mt-0.5 text-row font-medium text-record">{message.author_type === "system" ? pt(subject) : subject}</p>
         )}
         <p className="mt-1 whitespace-pre-line text-row text-record">
-          {message.body}
+          {systemClaimBody(message, pt)}
         </p>
       </div>
     </li>
@@ -165,6 +172,7 @@ const MAX_REPLY = 2000;
  * is capped so a long message scrolls inside the box rather than pushing the
  * Send button off a phone screen. */
 function useAutoGrow(value: string) {
+  usePortalTranslation();
   const ref = useRef<HTMLTextAreaElement | null>(null);
   useEffect(() => {
     const el = ref.current;
@@ -196,6 +204,7 @@ export function MessageThread({
   placeholder?: string;
   empty?: ReactNode;
 }) {
+  const pt = usePortalTranslation();
   const [draft, setDraft] = useState("");
   const trimmed = draft.trim();
   const boxRef = useAutoGrow(draft);
@@ -229,7 +238,7 @@ export function MessageThread({
             lastDay = day;
             return (
               <Fragment key={m.id}>
-                {heading && <DayRule label={heading} />}
+                {heading && <DayRule label={pt(heading)} />}
                 <ThreadMessage message={m} threadSubject={threadSubject} />
               </Fragment>
             );
@@ -238,9 +247,7 @@ export function MessageThread({
       ) : (
         empty ?? (
           <p className="text-row text-label">
-            Nothing here yet. We&rsquo;ll write to you if anything about this
-            claim needs your attention.
-          </p>
+            {pt("Nothing here yet. We’ll write to you if anything about this claim needs your attention.")} </p>
         )
       )}
 
@@ -253,8 +260,7 @@ export function MessageThread({
           }}
         >
           <label htmlFor="claim-reply" className="sr-only">
-            Reply
-          </label>
+            {pt("Reply")} </label>
           <textarea
             ref={boxRef}
             id="claim-reply"
@@ -262,7 +268,7 @@ export function MessageThread({
             maxLength={MAX_REPLY}
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
-            placeholder={placeholder}
+            placeholder={pt(placeholder)}
             className={
               "leaf-focus w-full resize-none rounded-control border border-leaf-input " +
               "bg-bar/80 px-3 py-2.5 text-row text-record placeholder:text-label"
@@ -279,8 +285,7 @@ export function MessageThread({
             ) : (
               <Send className="size-4" aria-hidden />
             )}
-            Send
-          </Action>
+            {pt("Send")} </Action>
         </form>
       ) : (
         replyDisabledReason && (

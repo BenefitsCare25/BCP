@@ -1,3 +1,4 @@
+import { portalText as pt, usePortalTranslation } from "@/i18n/portal";
 /** The paper form's figures for the plan the member has chosen: what the plan
  * gives (room & board, sum insured), the annual premium for each family
  * composition, and the share the member pays.
@@ -22,17 +23,17 @@ function shareGloss(contribution: ProductContribution): string {
   // No share set for the member's own cover means the company pays it.
   parts.push(
     !contribution.employee_pct
-      ? "your own cover is paid by the company"
-      : `you pay ${contribution.employee_pct}% of your own cover`,
+      ? pt("your own cover is paid by the company")
+      : pt("you pay {0}% of your own cover", [contribution.employee_pct]),
   );
   if (!contribution.employee_pct && contribution.upgrade_pct) {
-    parts.push(`you pay ${contribution.upgrade_pct}% of the extra for a higher plan`);
+    parts.push(pt("you pay {0}% of the extra for a higher plan", [contribution.upgrade_pct]));
   }
   if (contribution.dependant_pct !== null) {
     parts.push(
       contribution.dependant_pct === 0
-        ? "family cover is paid by the company"
-        : `${contribution.employee_pct ? "" : "you pay "}${contribution.dependant_pct}% of family cover`,
+        ? pt("family cover is paid by the company")
+        : pt("{0}{1}% of family cover", [contribution.employee_pct ? "" : pt("you pay "), contribution.dependant_pct]),
     );
   }
   const text = parts.join(", ");
@@ -40,6 +41,7 @@ function shareGloss(contribution: ProductContribution): string {
 }
 
 function PremiumRows({ tier }: { tier: ContributionTier }) {
+  usePortalTranslation();
   if (tier.mode === "flat") {
     return (
       <>
@@ -76,6 +78,7 @@ export function PlanPricing({
   tierKey: string;
   compact?: boolean;
 }) {
+  const pt = usePortalTranslation();
   const tier = contribution?.tiers.find((t) => t.tier_key === tierKey);
   const basis = coverWording(fact?.basis, fact?.max_sum_insured);
   const hasFacts = !!(fact?.highlight || fact?.sum_insured || basis || fact?.insurer);
@@ -83,8 +86,7 @@ export function PlanPricing({
   const breakdown = tier && contribution ? (
     <div>
       <p className="text-row font-medium text-record">
-        Premium by family cover
-        {contribution.gst_included ? " (incl. GST)" : " (before GST)"}
+        {pt("Premium by family cover")} {contribution.gst_included ? pt(" (incl. GST)") : pt(" (before GST)")}
       </p>
       <dl><PremiumRows tier={tier} /></dl>
       <p className="text-row text-label">{shareGloss(contribution)}</p>
@@ -108,7 +110,7 @@ export function PlanPricing({
       )}
       {breakdown && (compact ? (
         <details className="enrolment-cost-details">
-          <summary className="leaf-focus text-row font-semibold text-record">Premium &amp; contribution details</summary>
+          <summary className="leaf-focus text-row font-semibold text-record">{pt("Premium & contribution details")}</summary>
           {breakdown}
         </details>
       ) : breakdown)}

@@ -1,3 +1,4 @@
+import { usePortalTranslation } from "@/i18n/portal";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { Tabs, TabsContent } from "@/components/ui/tabs";
 import {
@@ -26,6 +27,7 @@ type CoverageTab = (typeof TABS)[number]["key"];
  * The broker's employee-view preview (components/operations/PortalFrame)
  * mirrors this structure — keep the two in sync. */
 export function PortalCoveragePage() {
+  const pt = usePortalTranslation();
   const navigate = useNavigate();
   const company = useCompany();
   const search = useSearch({ strict: false }) as { tab?: string; p?: string; who?: string };
@@ -61,10 +63,10 @@ export function PortalCoveragePage() {
           it tightens there to sit as one control in a header rather than as a
           full-size band. */}
       <HeadRail>
-        <LeafTabsList label="Coverage" className="lg:p-1">
+        <LeafTabsList label={pt("Coverage")} className="lg:p-1">
           {TABS.map((t) => (
             <LeafTabsTrigger key={t.key} value={t.key} className="lg:px-4">
-              {t.label}
+              {pt(t.label)}
             </LeafTabsTrigger>
           ))}
         </LeafTabsList>

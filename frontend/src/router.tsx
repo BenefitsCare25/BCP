@@ -9,6 +9,7 @@ import {
 } from "@tanstack/react-router";
 import { AppShell } from "@/components/shell/AppShell";
 import { BrandProvider } from "@/components/brand/BrandProvider";
+import { PortalDocumentLanguage } from "@/i18n/PortalLanguageControl";
 import {
   GlobalErrorComponent,
   NotFoundComponent,
@@ -209,6 +210,7 @@ const PUBLIC_PATHS = new Set(["/auth/callback", SIGN_IN_PATH]);
 const rootRoute = createRootRoute({
   component: () => (
     <BrandProvider>
+      <PortalDocumentLanguage />
       <Outlet />
     </BrandProvider>
   ),

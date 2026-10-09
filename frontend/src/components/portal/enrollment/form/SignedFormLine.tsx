@@ -1,3 +1,4 @@
+import { usePortalTranslation } from "@/i18n/portal";
 /** One signed form as a line: reference, when, where it stands, and the PDF.
  * Shared by the sign step ("Last signed") and the member's forms list. */
 import { FileDown, Loader2 } from "lucide-react";
@@ -33,6 +34,7 @@ export function SignedFormLine({
   form: FormSubmissionSummary;
   lead?: string;
 }) {
+  const pt = usePortalTranslation();
   const [busy, setBusy] = useState(false);
   const state = standing(form);
 
@@ -41,7 +43,7 @@ export function SignedFormLine({
     try {
       await downloadMyEnrollmentForm(form);
     } catch (e) {
-      toast.error(formatError(e));
+      toast.error(pt(formatError(e)));
     } finally {
       setBusy(false);
     }
@@ -53,12 +55,12 @@ export function SignedFormLine({
         <p className="text-row text-record">
           {lead ? `${lead}: ` : ""}
           <span className="font-medium">{form.reference_no}</span>
-          {form.version > 1 ? ` (version ${form.version})` : ""}
+          {form.version > 1 ? pt(" (version {0})", [form.version]) : ""}
         </p>
-        <p className="text-row text-label">Signed {formatDay(form.submitted_at)}</p>
+        <p className="text-row text-label">{pt("Signed")} {formatDay(form.submitted_at)}</p>
       </div>
       <div className="flex items-center gap-3">
-        <Strike tone={state.tone}>{state.label}</Strike>
+        <Strike tone={state.tone}>{pt(state.label)}</Strike>
         {form.has_pdf && (
           <button
             type="button"
@@ -71,8 +73,7 @@ export function SignedFormLine({
             ) : (
               <FileDown className="size-4" aria-hidden />
             )}
-            PDF
-          </button>
+            {pt("PDF")} </button>
         )}
       </div>
     </div>

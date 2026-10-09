@@ -1,3 +1,4 @@
+import { usePortalTranslation } from "@/i18n/portal";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { ArrowRight, FileText, MapPin } from "lucide-react";
 import {
@@ -29,6 +30,7 @@ function greeting(): string {
 }
 
 function HeroCard({ card, companyName }: { card: MemberCard; companyName: string }) {
+  const pt = usePortalTranslation();
   const artwork = usePortalCardArtwork(card.card_id, "front", card.has_front);
   if (artwork.status === "absent") {
     return <TemporaryCard memberName={card.holder_name ?? ""} companyName={companyName} />;
@@ -42,7 +44,7 @@ function HeroCard({ card, companyName }: { card: MemberCard; companyName: string
         fields={card.placements.fields.filter((field) => field.face === "front")}
         values={card.values}
         className="portal-hero-card"
-        fallback="Your insurer hasn't uploaded a card design yet. Your card details remain available."
+        fallback={pt("Your insurer hasn't uploaded a card design yet. Your card details remain available.")}
       />
     </div>
   );
@@ -57,6 +59,7 @@ function messageDestination(conversation: Conversation, company: string) {
 /** Things only the member can move forward, in the order they would regret
  *  missing them. Empty = the strip does not render at all. */
 function NeedsYou({ company }: { company: string }) {
+  const pt = usePortalTranslation();
   const me = usePortalMe();
   const claims = usePortalClaims();
   const enrollment = usePortalEnrollment();
@@ -64,13 +67,13 @@ function NeedsYou({ company }: { company: string }) {
   const window = me.data?.enrollment_open && holds(me.data.access.capabilities, "elect") ? enrollment.data?.window : null;
   if (waiting.length === 0 && !window) return null;
   return (
-    <section className="clay-needs clay-rise clay-rise-2" aria-label="Needs your attention">
+    <section className="clay-needs clay-rise clay-rise-2" aria-label={pt("Needs your attention")}>
       {window && (
         <Link to="/portal/$company/enrollment" params={{ company }} className="clay-need tone-lime">
           <img src={sectionArt.enrol} alt="" />
           <span>
-            <strong>Choose your benefits for next year</strong>
-            <span>Your enrolment window closes {formatDay(window.closes_at)}</span>
+            <strong>{pt("Choose your benefits for next year")}</strong>
+            <span>{pt("Your enrolment window closes")} {formatDay(window.closes_at)}</span>
           </span>
           <ArrowRight className="ml-auto size-5 shrink-0" aria-hidden />
         </Link>
@@ -79,8 +82,8 @@ function NeedsYou({ company }: { company: string }) {
         <Link key={claim.id} to="/portal/$company/claims/$claimId" params={{ company, claimId: claim.id }} className="clay-need tone-peach">
           <img src={sectionArt.claim} alt="" />
           <span>
-            <strong>{claim.status === "draft" ? "Finish your claim" : "Your claim needs another document"}</strong>
-            <span>{claim.provider_name || "Claim"} · visit on {formatDay(claim.incurred_date)}</span>
+            <strong>{claim.status === "draft" ? pt("Finish your claim") : pt("Your claim needs another document")}</strong>
+            <span>{claim.provider_name || pt("Claim")}  {pt("· visit on")} {formatDay(claim.incurred_date)}</span>
           </span>
           <ArrowRight className="ml-auto size-5 shrink-0" aria-hidden />
         </Link>
@@ -90,6 +93,7 @@ function NeedsYou({ company }: { company: string }) {
 }
 
 export function MemberHome() {
+  const pt = usePortalTranslation();
   const owner = useBrandOwner();
   const company = useCompany();
   const navigate = useNavigate();
@@ -118,9 +122,9 @@ export function MemberHome() {
   const year = me.data?.policy_year;
   const memberId = firstMemberId(options.data);
   // The notes state the member's own facts; each disappears rather than guess.
-  const benefitsNote = routes.length > 0 ? `${routes.length} benefits, all yours.` : null;
+  const benefitsNote = routes.length > 0 ? pt("{0} benefits, all yours.", [routes.length]) : null;
   const familyNote = dependants.data
-    ? activeDependants.length === 0 ? "Covered, start to finish." : `You + ${activeDependants.length} covered.`
+    ? activeDependants.length === 0 ? pt("Covered, start to finish.") : pt("You + {0} covered.", [activeDependants.length])
     : null;
 
   return (
@@ -130,23 +134,23 @@ export function MemberHome() {
           <p className="sky-eyebrow">
             {companyLabel}
             {companyLabel && year && <span aria-hidden> · </span>}
-            {year && `${year.year} benefits`}
+            {year && pt("{0} benefits", [year.year])}
           </p>
         )}
         <h1>
-          {greeting()}, <span className="name">{who}</span>
+          {pt(greeting())}, <span className="name">{who}</span>
         </h1>
-        <p className="sky-sub">Your cover, claims and panel card in one place.</p>
+        <p className="sky-sub">{pt("Your cover, claims and panel card in one place.")}</p>
         <span className="sky-rule" aria-hidden />
         <div className="clay-hero-actions">
           {canClaim && (
             <Link className="clay-btn clay-btn-dark clay-btn-go" to="/portal/$company/claims/new" params={{ company }}>
-              <FileText className="size-[18px]" aria-hidden /> Make a claim <ArrowRight className="clay-go size-4" aria-hidden />
+              <FileText className="size-[18px]" aria-hidden />  {pt("Make a claim")} <ArrowRight className="clay-go size-4" aria-hidden />
             </Link>
           )}
           {canUseCard && (
             <Link className="clay-btn clay-btn-white clay-btn-go" to="/portal/$company/clinics" params={{ company }}>
-              <MapPin className="size-[18px]" aria-hidden /> Find a clinic <ArrowRight className="clay-go size-4" aria-hidden />
+              <MapPin className="size-[18px]" aria-hidden />  {pt("Find a clinic")} <ArrowRight className="clay-go size-4" aria-hidden />
             </Link>
           )}
         </div>
@@ -155,7 +159,7 @@ export function MemberHome() {
       <NeedsYou company={company} />
 
       <div className="clay-section-head clay-rise clay-rise-2">
-        <h2>Your benefits</h2>
+        <h2>{pt("Your benefits")}</h2>
         <div className="flex items-center gap-4">
           {year && (
             <span className="hidden lg:inline-flex">
@@ -163,8 +167,7 @@ export function MemberHome() {
             </span>
           )}
           <Link className="clay-section-link" to="/portal/$company/coverage" params={{ company }} search={{ tab: "usage" }}>
-            What's left
-          </Link>
+            {pt("What's left")} </Link>
         </div>
       </div>
       {statement.isError && !isNotFoundError(statement.error) ? (
@@ -175,7 +178,7 @@ export function MemberHome() {
         </div>
       ) : routes.length === 0 ? (
         <div className="clay-panel">
-          <p className="text-row text-label">Your benefits will appear here once your company's cover for the year goes live.</p>
+          <p className="text-row text-label">{pt("Your benefits will appear here once your company's cover for the year goes live.")}</p>
         </div>
       ) : (
         <>
@@ -186,7 +189,7 @@ export function MemberHome() {
           </div>
           {routes.some((route) => route.section === "other") && (
             <>
-              <p className="clay-subhead">Also covered</p>
+              <p className="clay-subhead">{pt("Also covered")}</p>
               <div className="clay-sheets clay-sheets-other clay-rise clay-rise-3">
                 {routes.filter((route) => route.section === "other").map((route) => (
                   <BenefitSheet key={route.key} route={route} utilization={utilization.data} to={{ tab: "benefits", p: route.key }} />
@@ -199,14 +202,14 @@ export function MemberHome() {
 
       <div className="clay-row clay-row-3 clay-rise clay-rise-3">
         {canUseCard && (
-          <section className="clay-panel clay-card-panel" aria-label="Your panel card">
+          <section className="clay-panel clay-card-panel" aria-label={pt("Your panel card")}>
             <div className="clay-panel-head">
-              <h2>Your card</h2>
-              <Link className="clay-section-link" to="/portal/$company/card" params={{ company }}>Show at clinic</Link>
+              <h2>{pt("Your card")}</h2>
+              <Link className="clay-section-link" to="/portal/$company/card" params={{ company }}>{pt("Show at clinic")}</Link>
             </div>
             <div className="clay-card-tilt">
               {cards.isLoading ? (
-                <div className="aspect-[1.586] w-full animate-pulse rounded-[18px] bg-shade" aria-label="Loading your panel card" />
+                <div className="aspect-[1.586] w-full animate-pulse rounded-[18px] bg-shade" aria-label={pt("Loading your panel card")} />
               ) : cards.isError && !isNotFoundError(cards.error) ? (
                 <PortalErrorState onRetry={() => { void cards.refetch(); }} />
               ) : card?.has_front ? (
@@ -217,10 +220,10 @@ export function MemberHome() {
             </div>
           </section>
         )}
-        <section className="clay-panel" aria-label="Messages">
+        <section className="clay-panel" aria-label={pt("Messages")}>
           <div className="clay-panel-head">
-            <h2>Messages</h2>
-            <Link className="clay-section-link" to="/portal/$company/messages" params={{ company }}>View all</Link>
+            <h2>{pt("Messages")}</h2>
+            <Link className="clay-section-link" to="/portal/$company/messages" params={{ company }}>{pt("View all")}</Link>
           </div>
           {messages.isLoading ? (
             <div className="h-16 animate-pulse rounded-2xl bg-shade" aria-busy="true" />
@@ -230,8 +233,8 @@ export function MemberHome() {
             <div className="clay-empty">
               <img src={sectionArt.messages} alt="" />
               <span>
-                <strong>No messages yet</strong>
-                <span>Claim updates and replies land here.</span>
+                <strong>{pt("No messages yet")}</strong>
+                <span>{pt("Claim updates and replies land here.")}</span>
               </span>
             </div>
           ) : (
@@ -244,24 +247,24 @@ export function MemberHome() {
                   onClick={() => { void navigate(messageDestination(conversation, company)); }}
                 >
                   <span className="min-w-0">
-                    <strong>{conversation.subject.kind === "enquiry" ? conversation.subject.subject || "Your question" : conversation.subject.reference_no || "Claim update"}</strong>
+                    <strong>{conversation.subject.kind === "enquiry" ? conversation.subject.subject || pt("Your question") : conversation.subject.reference_no || pt("Claim update")}</strong>
                     <small>{conversation.last_message.body}</small>
                   </span>
-                  {conversation.unread > 0 && <span className="clay-msg-unread">{conversation.unread} new</span>}
+                  {conversation.unread > 0 && <span className="clay-msg-unread">{conversation.unread}  {pt("new")}</span>}
                 </button>
               ))}
             </div>
           )}
         </section>
 
-        <nav className="clay-quick" aria-label="Your account">
+        <nav className="clay-quick" aria-label={pt("Your account")}>
           <Link to="/portal/$company/coverage" params={{ company }} search={{ tab: "dependants" }} className="tone-blue">
             <img src={sectionArt.family} alt="" />
             <span>
-              <small>Family</small>
+              <small>{pt("Family")}</small>
               <strong>
-                {dependants.isLoading ? "Loading" : dependants.isError && !isNotFoundError(dependants.error)
-                  ? "Open family" : activeDependants.length === 0 ? "Just you" : `You + ${activeDependants.length}`}
+                {dependants.isLoading ? pt("Loading") : dependants.isError && !isNotFoundError(dependants.error)
+                  ? pt("Open family") : activeDependants.length === 0 ? pt("Just you") : pt("You + {0}", [activeDependants.length])}
               </strong>
             </span>
             <ArrowRight className="size-5" aria-hidden />
@@ -269,10 +272,10 @@ export function MemberHome() {
           <Link to="/portal/$company/claims" params={{ company }} className="tone-peach">
             <img src={sectionArt.claim} alt="" />
             <span>
-              <small>Claims</small>
+              <small>{pt("Claims")}</small>
               <strong>
-                {claims.isLoading ? "Loading" : claims.isError && !isNotFoundError(claims.error)
-                  ? "Open claims" : claimCount === 0 ? "None yet" : `${claimCount} ${claimCount === 1 ? "claim" : "claims"}`}
+                {claims.isLoading ? pt("Loading") : claims.isError && !isNotFoundError(claims.error)
+                  ? pt("Open claims") : claimCount === 0 ? pt("None yet") : pt("{0} {1}", [claimCount, pt(claimCount === 1 ? "claim" : "claims")])}
               </strong>
             </span>
             <ArrowRight className="size-5" aria-hidden />
@@ -281,8 +284,8 @@ export function MemberHome() {
             <Link to="/portal/$company/clinics" params={{ company }} className="tone-mint">
               <img src={sectionArt.clinic} alt="" />
               <span>
-                <small>Clinics</small>
-                <strong>Find one near you</strong>
+                <small>{pt("Clinics")}</small>
+                <strong>{pt("Find one near you")}</strong>
               </span>
               <ArrowRight className="size-5" aria-hidden />
             </Link>

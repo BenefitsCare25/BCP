@@ -1,3 +1,4 @@
+import { usePortalTranslation } from "@/i18n/portal";
 /** "My enrollment" — the member's own election panel, rendered by the portal
  * page (interactive) and the broker's employee-view preview (`readOnly`).
  *
@@ -104,9 +105,10 @@ import { useBlocker } from "@tanstack/react-router";
 import { phaseOf, useNow } from "@/components/enrollment/period/periodMeta";
 
 function UnsavedEnrollmentGuard({ dirty }: { dirty: boolean }) {
+  const pt = usePortalTranslation();
   useBlocker({
     shouldBlockFn: ({ current, next }) => dirty && current.pathname !== next.pathname
-      && !window.confirm("Leave this enrolment? Unsaved entries will be lost. Save choices only saves benefit and leave selections; other form entries require Sign and send."),
+      && !window.confirm(pt("Leave this enrolment? Unsaved entries will be lost. Save choices only saves benefit and leave selections; other form entries require Sign and send.")),
     enableBeforeUnload: dirty,
   });
   return null;
@@ -174,6 +176,7 @@ function StatusNote({
   tone: "approved" | "review";
   children: React.ReactNode;
 }) {
+  const pt = usePortalTranslation();
   return (
     <div
       className={cn(
@@ -183,7 +186,7 @@ function StatusNote({
       )}
     >
       <Strike tone={tone} className="shrink-0">
-        {mark}
+        {pt(mark)}
       </Strike>
       <p className="text-row text-label">{children}</p>
     </div>
@@ -228,6 +231,7 @@ export function MemberEnrollmentPanel({
     signing: boolean;
   };
 }) {
+  const pt = usePortalTranslation();
   const { window: win, enrollment, options } = data;
   const now = useNow(1000);
   // Where the running balance goes. `lg` and up the shell offers the middle of
@@ -297,10 +301,8 @@ export function MemberEnrollmentPanel({
 
   if (!win) {
     return (
-      <ClayEmpty tone="lime" art={sectionArt.enrol} title="Nothing to choose right now">
-        When your company opens benefit selection, you&rsquo;ll pick your plan,
-        cover your family or trade leave here. We&rsquo;ll flag it on Home.
-      </ClayEmpty>
+      <ClayEmpty tone="lime" art={sectionArt.enrol} title={pt("Nothing to choose right now")}>
+        {pt("When your company opens benefit selection, you’ll pick your plan, cover your family or trade leave here. We’ll flag it on Home.")} </ClayEmpty>
     );
   }
 
@@ -375,7 +377,7 @@ export function MemberEnrollmentPanel({
   async function saveAll(): Promise<boolean> {
     if (disabled || phaseOf(win!, Date.now()) !== "open") return false;
     if (leaveError) {
-      toast.error("Correct your leave choice before saving. Nothing has been saved.");
+      toast.error(pt("Correct your leave choice before saving. Nothing has been saved."));
       return false;
     }
     try {
@@ -394,13 +396,13 @@ export function MemberEnrollmentPanel({
       if (leaveDirty && onSaveLeave) await onSaveLeave(chosenLeave);
       return true;
     } catch (e) {
-      toast.error(formatError(e));
+      toast.error(pt(formatError(e)));
       return false;
     }
   }
 
   async function saveOnly() {
-    if (await saveAll()) toast.success("Benefit and leave choices saved. Your form has not been submitted.");
+    if (await saveAll()) toast.success(pt("Benefit and leave choices saved. Your form has not been submitted."));
   }
 
   async function doSubmit() {
@@ -414,7 +416,7 @@ export function MemberEnrollmentPanel({
           : undefined,
         leave: win?.allow_leave ? chosenLeave : undefined,
       });
-      toast.success("Sent — you'll be told once it's confirmed.");
+      toast.success(pt("Sent — you'll be told once it's confirmed."));
     } catch (e) {
       reportSendError(e);
     }
@@ -432,7 +434,7 @@ export function MemberEnrollmentPanel({
         }),
       );
       draft.resetSignature();
-      toast.success("Signed and sent. Your copy is under Your signed forms.");
+      toast.success(pt("Signed and sent. Your copy is under Your signed forms."));
     } catch (e) {
       reportSendError(e);
     }
@@ -446,24 +448,22 @@ export function MemberEnrollmentPanel({
           : [];
         toast.error(
           products.length
-            ? `Pricing is missing for ${products.join(", ")}. Contact your HR team before sending.`
-            : "Pricing is missing for one or more choices. Contact your HR team before sending.",
+            ? pt("Pricing is missing for {0}. Contact your HR team before sending.", [products.join(", ")])
+            : pt("Pricing is missing for one or more choices. Contact your HR team before sending."),
         );
         return;
       }
       if (e.detail.code === "flex_overdrawn") {
         const balance = e.detail.balance;
         toast.error(
-          `Your choices exceed your flex dollars${
-            typeof balance === "number"
+          pt("Your choices exceed your flex dollars{0}. Reduce them before sending.", [typeof balance === "number"
               ? ` by ${money}${fmtAmount(Math.abs(balance))}`
-              : ""
-          }. Reduce them before sending.`,
+              : ""]),
         );
         return;
       }
     }
-    toast.error(formatError(e));
+    toast.error(pt(formatError(e)));
   }
 
   // ── The slides ─────────────────────────────────────────────────────────
@@ -624,7 +624,7 @@ export function MemberEnrollmentPanel({
   slides.push({
     key: REVIEW_KEY,
     label: finalized ? "What's on record" : disabled ? "Review choices" : "Review and send",
-    mark: changeCount ? `${changeCount} change${changeCount === 1 ? "" : "s"}` : undefined,
+    mark: changeCount ? pt("{0} change{1}", [changeCount, changeCount === 1 ? "" : "s"]) : undefined,
     render: () => (
       <ReviewMount
         rise={false}
@@ -655,9 +655,9 @@ export function MemberEnrollmentPanel({
     <div className="space-y-4">
       <UnsavedEnrollmentGuard dirty={!!(onSaveDraft || onSaveElections) && (dirty || !!leaveError || draft.dirty)} />
       {!finalized && (onSaveDraft || onSaveElections) && <div role="status" className="rounded-control border border-hairline bg-glass p-3 text-row text-record">
-        {periodLocked ? <p>This period is not accepting changes. You cannot save or sign. Entries still on this page have not been submitted. Contact HR if you need a correction or more time.</p>
-          : <p>No autosave. Save choices on the Review step saves benefit and leave selections only. Your details, family requests, declarations and signature are submitted only when you Sign and send.</p>}
-        <p className="mt-1 text-label">At closure, unsent choices normally follow the period's default: {win.default_behavior === "deemed_decline" ? "decline voluntary cover and retain required cover" : "keep existing cover"}. Your benefits team may explicitly submit saved choices on your behalf; this does not create your signature.</p>
+        {periodLocked ? <p>{pt("This period is not accepting changes. You cannot save or sign. Entries still on this page have not been submitted. Contact HR if you need a correction or more time.")}</p>
+          : <p>{pt("No autosave. Save choices on the Review step saves benefit and leave selections only. Your details, family requests, declarations and signature are submitted only when you Sign and send.")}</p>}
+        <p className="mt-1 text-label">{pt("At closure, unsent choices normally follow the period's default:")} {win.default_behavior === "deemed_decline" ? pt("decline voluntary cover and retain required cover") : pt("keep existing cover")}{pt(". Your benefits team may explicitly submit saved choices on your behalf; this does not create your signature.")}</p>
       </div>}
       {/* The deadline is furniture on the deck's rail, not a sentence at the
           top of the page: it governs every slide, and as a line in the flow it
@@ -672,33 +672,28 @@ export function MemberEnrollmentPanel({
 
       {submitted && (
         <StatusNote mark="Sent" tone="review">
-          Your choices were sent
-          {enrollment?.submitted_at
-            ? ` on ${formatDay(enrollment.submitted_at)}`
+          {pt("Your choices were sent")} {enrollment?.submitted_at
+            ? pt(" on {0}", [formatDay(enrollment.submitted_at)])
             : ""}{" "}
-          and are being checked. {periodLocked
-            ? "This period no longer accepts changes. Contact HR if a correction is needed."
-            : `You can still change them until ${formatDay(win.closes_at)}.`}
+          {pt("and are being checked.")} {periodLocked
+            ? pt("This period no longer accepts changes. Contact HR if a correction is needed.")
+            : pt("You can still change them until {0}.", [formatDay(win.closes_at)])}
         </StatusNote>
       )}
       {finalized && (
         <StatusNote mark="Confirmed" tone="approved">
-          These choices are confirmed and your cover is updated. Contact your HR
-          team if something needs to change.
-        </StatusNote>
+          {pt("These choices are confirmed and your cover is updated. Contact your HR team if something needs to change.")} </StatusNote>
       )}
 
       {decisions.length === 0 && standard.length === 0 && !win.allow_leave ? (
-        <Mount label="No plans to change">
+        <Mount label={pt("No plans to change")}>
           <p className="text-row text-label">
-            This period doesn&rsquo;t include any plan you can change. If you
-            were expecting a choice here, your HR team can tell you why.
-          </p>
+            {pt("This period doesn’t include any plan you can change. If you were expecting a choice here, your HR team can tell you why.")} </p>
         </Mount>
       ) : (
         <Deck
           slides={slides}
-          label="Your enrollment"
+          label={pt("Your enrollment")}
           itemNoun="step"
           railHeader={railHeader}
           activeKey={slideKey}

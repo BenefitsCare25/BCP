@@ -1,3 +1,4 @@
+import { usePortalTranslation } from "@/i18n/portal";
 /** "My family" — the people on the member's leaf, plus self-service addition.
  * Added family members are pending until HR approves them (optionally with a
  * proof document). */
@@ -19,6 +20,7 @@ import { Action } from "@/components/portal/leaf/Action";
 import { PortalErrorState } from "@/components/portal/PortalErrorState";
 
 export function PortalDependantsPage() {
+  const pt = usePortalTranslation();
   const dependants = usePortalDependants();
   // WHAT each person is covered for, from the same plans "What's covered"
   // draws. The page used to print a relationship and a date of birth — two
@@ -68,7 +70,7 @@ export function PortalDependantsPage() {
       if (proof) {
         await uploadProof.mutateAsync({ dependantId: created.id, file: proof });
       }
-      toast.success("Sent to your HR team for approval");
+      toast.success(pt("Sent to your HR team for approval"));
       setShowForm(false);
       setName("");
       setRelationship("");
@@ -85,7 +87,7 @@ export function PortalDependantsPage() {
   };
 
   if (dependants.isLoading)
-    return <LeafSkeleton label="Loading your family" mounts={2} />;
+    return <LeafSkeleton label={pt("Loading your family")} mounts={2} />;
 
   // A fetch failure must not read as "no dependants on record" — only a 404
   // falls through to the empty state.
@@ -105,14 +107,13 @@ export function PortalDependantsPage() {
         <div className="flex sm:justify-end">
           <Action block="phone" onClick={() => setShowForm(true)}>
             <UserPlus className="size-4" aria-hidden />
-            Add a family member
-          </Action>
+            {pt("Add a family member")} </Action>
         </div>
       )}
 
       {showForm && (
         <Mount
-          label="Add a family member"
+          label={pt("Add a family member")}
           gloss="HR approval is required. You can attach a birth or marriage certificate."
           aside={
             <button
@@ -128,7 +129,7 @@ export function PortalDependantsPage() {
                 setError(null);
                 setFieldErrors({});
               }}
-              aria-label="Cancel adding a family member"
+              aria-label={pt("Cancel adding a family member")}
               className="leaf-focus -mr-2 -mt-2 inline-flex size-11 items-center justify-center text-label disabled:opacity-50"
             >
               <X className="size-4" aria-hidden />
@@ -145,7 +146,7 @@ export function PortalDependantsPage() {
             {/* One column on a phone. A frame is either full width or it is not
                 on this breakpoint — never a half-width field (The Whole-Frame
                 Rule); the two-up grid used to hold a ~147px date input. */}
-            <Field label="Full name" required error={fieldErrors.name}>
+            <Field label={pt("Full name")} required error={fieldErrors.name}>
               {(p) => (
                 <input
                   {...p}
@@ -160,7 +161,7 @@ export function PortalDependantsPage() {
 
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <Field
-                label="How they're related to you"
+                label={pt("How they're related to you")}
                 required
                 error={fieldErrors.relationship}
               >
@@ -171,14 +172,14 @@ export function PortalDependantsPage() {
                     value={relationship}
                     onChange={(e) => setRelationship(e.target.value)}
                   >
-                    <option value="">Choose one…</option>
-                    <option value="spouse">Husband or wife</option>
-                    <option value="child">Child</option>
+                    <option value="">{pt("Choose one…")}</option>
+                    <option value="spouse">{pt("Husband or wife")}</option>
+                    <option value="child">{pt("Child")}</option>
                   </select>
                 )}
               </Field>
 
-              <Field label="Date of birth" hint="If you know it.">
+              <Field label={pt("Date of birth")} hint={pt("If you know it.")}>
                 {(p) => (
                   <input
                     {...p}
@@ -190,7 +191,7 @@ export function PortalDependantsPage() {
                 )}
               </Field>
 
-              <Field label="Sex">
+              <Field label={pt("Sex")}>
                 {(p) => (
                   <select
                     {...p}
@@ -198,16 +199,16 @@ export function PortalDependantsPage() {
                     value={gender}
                     onChange={(e) => setGender(e.target.value)}
                   >
-                    <option value="">Choose one…</option>
-                    <option value="Female">Female</option>
-                    <option value="Male">Male</option>
+                    <option value="">{pt("Choose one…")}</option>
+                    <option value="Female">{pt("Female")}</option>
+                    <option value="Male">{pt("Male")}</option>
                   </select>
                 )}
               </Field>
 
               <Field
-                label="NRIC, FIN or birth certificate no."
-                hint="As printed on the document."
+                label={pt("NRIC, FIN or birth certificate no.")}
+                hint={pt("As printed on the document.")}
               >
                 {(p) => (
                   <input
@@ -221,7 +222,7 @@ export function PortalDependantsPage() {
                 )}
               </Field>
 
-              <Field label="Occupation" hint="Leave blank for a child or student.">
+              <Field label={pt("Occupation")} hint={pt("Leave blank for a child or student.")}>
                 {(p) => (
                   <input
                     {...p}
@@ -250,7 +251,7 @@ export function PortalDependantsPage() {
                 >
                   <Paperclip className="size-4 shrink-0" aria-hidden />
                   <span className="truncate">
-                    {proof ? proof.name : "Attach a certificate (optional)"}
+                    {proof ? proof.name : pt("Attach a certificate (optional)")}
                   </span>
                 </Action>
                 {proof && (
@@ -259,13 +260,12 @@ export function PortalDependantsPage() {
                     onClick={() => setProof(null)}
                     className="leaf-focus min-h-11 px-2 text-row text-label underline"
                   >
-                    Remove
-                  </button>
+                    {pt("Remove")} </button>
                 )}
               </div>
             </div>
 
-            {error && <FormAlert>{error}</FormAlert>}
+            {error && <FormAlert>{pt(error)}</FormAlert>}
 
             {/* The page's one brand fill. */}
             <Action
@@ -275,8 +275,7 @@ export function PortalDependantsPage() {
               block="phone"
             >
               {busy && <Loader2 className="size-4 animate-spin" aria-hidden />}
-              Send for approval
-            </Action>
+              {pt("Send for approval")} </Action>
           </form>
         </Mount>
       )}

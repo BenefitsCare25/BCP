@@ -1,3 +1,4 @@
+import { portalText as pt, usePortalTranslation } from "@/i18n/portal";
 /** Conversations, on the member's leaf.
  *
  * A list of THREADS, replacing a stream of messages. The stream could not
@@ -34,6 +35,7 @@
  * component across the member's inbox, the home tile and the broker's preview.
  */
 import type { Conversation, ConversationSubject } from "@/api/portalMessages";
+import { systemClaimBody } from "@/i18n/systemMessages";
 import { cn } from "@/lib/cn";
 import { ClaimStrike, Strike } from "./Strike";
 import { insuredClaimTitle } from "./ClaimMount";
@@ -59,8 +61,8 @@ export function subjectKey(s: ConversationSubject): string {
  * member's own words. Takes a subject rather than a whole conversation so the
  * nested `about_claim` composes with it. */
 export function subjectTitle(s: ConversationSubject): string {
-  if (s.kind === "enquiry") return s.subject || "Your question";
-  if (s.claim_kind === "flex") return s.flex_category_name || "Flexible benefit";
+  if (s.kind === "enquiry") return s.subject || pt("Your question");
+  if (s.claim_kind === "flex") return pt(s.flex_category_name || "Flexible benefit");
   return insuredClaimTitle(s.claim_type, s.product_code);
 }
 
@@ -79,8 +81,8 @@ export function conversationTitle(c: Conversation): string {
 export function identityLine(s: ConversationSubject): string {
   if (s.kind === "enquiry") {
     return [
-      s.topic_label || s.topic || "Question",
-      s.about_claim ? `about ${subjectTitle(s.about_claim)}` : null,
+      pt(s.topic_label || s.topic || "Question"),
+      s.about_claim ? pt("about {0}", [subjectTitle(s.about_claim)]) : null,
     ]
       .filter(Boolean)
       .join(" · ");
@@ -116,6 +118,7 @@ const ENQUIRY_LABEL: Record<string, string> = {
  * private copies of the same two maps is how "Waiting" comes to read "open" on
  * one of them. */
 export function EnquiryStrike({ status }: { status: string }) {
+  usePortalTranslation();
   return (
     <Strike tone={ENQUIRY_TONE[status] ?? "review"}>
       {ENQUIRY_LABEL[status] ?? status}
@@ -124,6 +127,7 @@ export function EnquiryStrike({ status }: { status: string }) {
 }
 
 export function SubjectStrike({ subject }: { subject: ConversationSubject }) {
+  usePortalTranslation();
   if (!subject.status) return null;
   if (subject.kind === "enquiry") {
     return <EnquiryStrike status={subject.status} />;
@@ -135,6 +139,7 @@ export function SubjectStrike({ subject }: { subject: ConversationSubject }) {
  * chrome badge is one — a mark that cannot say how much is waiting makes the
  * member open the thread to find out. */
 function UnreadCount({ count }: { count: number }) {
+  const pt = usePortalTranslation();
   if (count <= 0) return null;
   return (
     <>
@@ -147,7 +152,7 @@ function UnreadCount({ count }: { count: number }) {
       >
         {count > 9 ? "9+" : count}
       </span>
-      <span className="sr-only">({count} unread)</span>
+      <span className="sr-only">({count}  {pt("unread)")}</span>
     </>
   );
 }
@@ -161,6 +166,7 @@ function ConversationRow({
   onOpen?: (conversation: Conversation) => void;
   selected?: boolean;
 }) {
+  const pt = usePortalTranslation();
   const last = conversation.last_message;
   const identity = identityLine(conversation.subject);
   const inner = (
@@ -198,10 +204,10 @@ function ConversationRow({
       <span className="mt-1.5 flex items-baseline gap-2">
         <span className="min-w-0 flex-1 truncate text-row text-label">
           <span className="font-medium text-record">
-            {last.mine ? "You" : last.author_name}
+            {last.mine ? pt("You") : pt(last.author_name)}
           </span>
           {" — "}
-          {last.body}
+          {systemClaimBody(last, pt)}
         </span>
         <UnreadCount count={conversation.unread} />
       </span>
@@ -258,6 +264,7 @@ export function ConversationRows({
   selectedKey?: string | null;
   className?: string;
 }) {
+  usePortalTranslation();
   return (
     // `-mx-3` pairs with the row's own `px-3`: the fill of a selected or unread
     // row reaches the mount's edge while its TEXT stays on the mount's margin —

@@ -1,3 +1,4 @@
+import { portalText as pt, usePortalTranslation } from "@/i18n/portal";
 /** The STAGE beside the message index: one conversation, read where it was
  * picked.
  *
@@ -85,8 +86,9 @@ function Pane({
   link?: React.ReactNode;
   children: React.ReactNode;
 }) {
+  const pt = usePortalTranslation();
   return (
-    <Mount label={title} gloss={context} aside={aside} rise={false}>
+    <Mount label={pt(title)} gloss={context} aside={aside} rise={false}>
       {link}
       {children}
     </Mount>
@@ -96,25 +98,27 @@ function Pane({
 /** Nothing picked yet — only reachable at the width where a stage exists, so it
  * names the gesture that fills it rather than apologising for being empty. */
 export function ThreadPanePlaceholder() {
+  const pt = usePortalTranslation();
   return (
-    <Mount label="Pick a conversation" rise={false}>
+    <Mount label={pt("Pick a conversation")} rise={false}>
       <p className="text-row text-label">
-        Choose one on the left to read it here and write back.
-      </p>
+        {pt("Choose one on the left to read it here and write back.")} </p>
     </Mount>
   );
 }
 
 function PaneNotice({ label, detail }: { label: string; detail: string }) {
+  const pt = usePortalTranslation();
   return (
-    <Mount label={label} rise={false}>
-      <p className="text-row text-label">{detail}</p>
+    <Mount label={pt(label)} rise={false}>
+      <p className="text-row text-label">{pt(detail)}</p>
     </Mount>
   );
 }
 
 /** One claim's conversation, with the claim's own identity above it. */
 export function ClaimThreadPane({ claimId }: { claimId: string }) {
+  const pt = usePortalTranslation();
   const company = useCompany();
   const claim = usePortalClaim(claimId);
   const messages = usePortalClaimMessages(claimId);
@@ -133,15 +137,15 @@ export function ClaimThreadPane({ claimId }: { claimId: string }) {
   }, [claimId, unreadHere, markMutate]);
 
   if (claim.isLoading) {
-    return <PaneNotice label="Loading" detail="Fetching this conversation…" />;
+    return <PaneNotice label={pt("Loading")} detail="Fetching this conversation…" />;
   }
   if (claim.isError || !claim.data) {
     return (
       <PaneNotice
         label={
           isNotFoundError(claim.error)
-            ? "We couldn't find that claim"
-            : "We couldn't load this conversation"
+            ? pt("We couldn't find that claim")
+            : pt("We couldn't load this conversation")
         }
         detail={
           isNotFoundError(claim.error)
@@ -168,7 +172,7 @@ export function ClaimThreadPane({ claimId }: { claimId: string }) {
 
   return (
     <Pane
-      title={title}
+      title={pt(title)}
       context={context}
       aside={<ClaimStrike status={data.status} />}
       link={
@@ -177,7 +181,7 @@ export function ClaimThreadPane({ claimId }: { claimId: string }) {
           params={{ company, claimId }}
           className={cn(goLinkClass(), "self-start")}
         >
-          {wants ? "Open the claim to add what's missing" : "Open the claim"}
+          {wants ? pt("Open the claim to add what's missing") : pt("Open the claim")}
           <ArrowRight className="size-4" aria-hidden />
         </Link>
       }
@@ -198,7 +202,7 @@ export function ClaimThreadPane({ claimId }: { claimId: string }) {
                 try {
                   await send.mutateAsync({ claimId, body });
                 } catch (err) {
-                  toast.error(formatError(err));
+                  toast.error(pt(formatError(err)));
                   // Re-thrown so the composer KEEPS the text — the one failure
                   // here a member cannot recover from.
                   throw err;
@@ -218,14 +222,15 @@ function enquiryContext(
   about: ConversationSubject | null,
 ): string {
   return [
-    topicLabel,
-    about ? `About ${subjectTitle(about)}` : null,
+    pt(topicLabel),
+    about ? pt("About {0}", [subjectTitle(about)]) : null,
   ]
     .filter(Boolean)
     .join(" · ");
 }
 
 export function EnquiryThreadPane({ enquiryId }: { enquiryId: string }) {
+  const pt = usePortalTranslation();
   const enquiry = usePortalEnquiry(enquiryId);
   const messages = usePortalEnquiryMessages(enquiryId);
   const send = useSendEnquiryMessage();
@@ -238,15 +243,15 @@ export function EnquiryThreadPane({ enquiryId }: { enquiryId: string }) {
   }, [enquiryId, unreadHere, markMutate]);
 
   if (enquiry.isLoading) {
-    return <PaneNotice label="Loading" detail="Fetching this conversation…" />;
+    return <PaneNotice label={pt("Loading")} detail="Fetching this conversation…" />;
   }
   if (enquiry.isError || !enquiry.data) {
     return (
       <PaneNotice
         label={
           isNotFoundError(enquiry.error)
-            ? "We couldn't find that question"
-            : "We couldn't load this conversation"
+            ? pt("We couldn't find that question")
+            : pt("We couldn't load this conversation")
         }
         detail="Your other conversations are in the list."
       />
@@ -266,7 +271,7 @@ export function EnquiryThreadPane({ enquiryId }: { enquiryId: string }) {
         messages={messages.data ?? []}
         sending={send.isPending}
         threadSubject={data.subject}
-        placeholder="Add anything else we should know."
+        placeholder={pt("Add anything else we should know.")}
         replyDisabledReason={
           closed
             ? "This question is closed. Ask a new one and we'll pick it up there."
@@ -279,7 +284,7 @@ export function EnquiryThreadPane({ enquiryId }: { enquiryId: string }) {
                 try {
                   await send.mutateAsync({ enquiryId, body });
                 } catch (err) {
-                  toast.error(formatError(err));
+                  toast.error(pt(formatError(err)));
                   throw err;
                 }
               }
@@ -292,6 +297,7 @@ export function EnquiryThreadPane({ enquiryId }: { enquiryId: string }) {
 /** Whichever kind the picked conversation is. One switch, so the page never
  * branches on `kind` itself. */
 export function ThreadPane({ subject }: { subject: ConversationSubject }) {
+  usePortalTranslation();
   return subject.kind === "enquiry" ? (
     <EnquiryThreadPane enquiryId={subject.id} />
   ) : (

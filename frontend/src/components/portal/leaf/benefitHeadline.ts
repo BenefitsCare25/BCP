@@ -15,6 +15,7 @@ import type { CoverageLine, Utilization, UtilizationBucket } from "@/types";
 import { availableAfterPending } from "@/lib/claimLimits";
 import { balanceLabel, careFacts } from "./careFacts";
 import { currencySymbol, moneyText } from "./Figure";
+import { portalText as pt } from "@/i18n/portal";
 
 export type BenefitHeadline = {
   label: string;
@@ -51,8 +52,8 @@ export function bucketHeadline(bucket: VisitBucket, currency: string): BenefitHe
     const limit = bucket.visit_limit ?? 0;
     const used = bucket.visits_used ?? 0;
     return {
-      label: isSubLimit ? `${balanceLabel(bucket)} · visits left` : "Visits left",
-      value: `${bucket.visits_remaining} of ${limit}`,
+      label: isSubLimit ? pt("{0} · visits left", [pt(balanceLabel(bucket))]) : "Visits left",
+      value: pt("{0} of {1}", [bucket.visits_remaining, limit]),
       used: limit ? used / limit : 0,
     };
   }
@@ -60,9 +61,9 @@ export function bucketHeadline(bucket: VisitBucket, currency: string): BenefitHe
   const afterPending = availableAfterPending(bucket.remaining, bucket.pending, bucket.pending_unconverted);
   const left = afterPending ?? bucket.remaining ?? 0;
   return {
-    label: isSubLimit ? `${balanceLabel(bucket)} · left` : "Left this year",
+    label: isSubLimit ? pt("{0} · left", [pt(balanceLabel(bucket))]) : "Left this year",
     value: `${symbol}${moneyText(left)}`,
-    note: bucket.pending > 0 ? `${symbol}${moneyText(bucket.pending)} in review` : `of ${symbol}${moneyText(bucket.limit ?? 0)}`,
+    note: bucket.pending > 0 ? pt("{0}{1} in review", [symbol, moneyText(bucket.pending)]) : pt("of {0}{1}", [symbol, moneyText(bucket.limit ?? 0)]),
     used: bucket.limit ? Math.min(1, bucket.approved / bucket.limit) : 0,
   };
 }
@@ -82,7 +83,7 @@ export function benefitHeadline(
   // rides beneath it under its own name.
   if (fact) {
     return sub
-      ? { label: fact.label, value: fact.value, note: `${sub.label.replace(/ · left$/, "")}: ${sub.value} left` }
+      ? { label: fact.label, value: fact.value, note: pt("{0}: {1} left", [pt(balanceLabel(tracked[0])), sub.value]) }
       : { label: fact.label, value: fact.value };
   }
   return sub;

@@ -1,3 +1,4 @@
+import { usePortalTranslation } from "@/i18n/portal";
 import { useEffect, useState } from "react";
 import { useBlocker } from "@tanstack/react-router";
 import { AlertDialog } from "@/components/ui/alert-dialog";
@@ -7,6 +8,7 @@ import type { NewClaimForm } from "./useNewClaimForm";
 type LeaveAction = "save" | "discard" | null;
 
 export function ClaimLeavePrompt({ form }: { form: NewClaimForm }) {
+  const pt = usePortalTranslation();
   const [open, setOpen] = useState(false);
   const [action, setAction] = useState<LeaveAction>(null);
   const [error, setError] = useState<string | null>(null);
@@ -50,22 +52,22 @@ export function ClaimLeavePrompt({ form }: { form: NewClaimForm }) {
         setOpen(nextOpen);
         if (!nextOpen && blocker.status === "blocked") blocker.reset();
       }}
-      title="Save this claim as a draft?"
+      title={pt("Save this claim as a draft?")}
       description={
         <div className="space-y-2">
-          <p>Save your answers now and continue this claim later.</p>
+          <p>{pt("Save your answers now and continue this claim later.")}</p>
           {form.hasLocalAttachments && (
-            <p>Selected files cannot be stored in a draft and must be reattached.</p>
+            <p>{pt("Selected files cannot be stored in a draft and must be reattached.")}</p>
           )}
           {error && (
             <p className="font-medium text-error" role="alert">
-              {error}
+              {pt(error)}
             </p>
           )}
         </div>
       }
       tone="info"
-      confirmLabel="Save draft and leave"
+      confirmLabel={pt("Save draft and leave")}
       confirmVariant="default"
       loading={action === "save"}
       onConfirm={() => finishLeave("save")}
@@ -73,7 +75,7 @@ export function ClaimLeavePrompt({ form }: { form: NewClaimForm }) {
       secondaryVariant="destructiveOutline"
       secondaryLoading={action === "discard"}
       onSecondary={() => finishLeave("discard")}
-      cancelLabel="Continue editing"
+      cancelLabel={pt("Continue editing")}
     />
   );
 }

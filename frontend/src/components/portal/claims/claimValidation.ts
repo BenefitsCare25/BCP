@@ -6,7 +6,7 @@
  * the form exists to spare the member a round trip, never to be the only gate.
  */
 import type { DocSlot, InsuredClaimOption } from "@/api/portal";
-import { formatDay } from "@/components/portal/leaf/date";
+import { portalMessage, type PortalCopy } from "@/i18n/portal";
 import { OTHER_HOSPITAL } from "./claimForm";
 
 export interface ClaimValues {
@@ -73,8 +73,8 @@ function referralError(v: ClaimValues): string | null {
   return null;
 }
 
-export function validateClaim(v: ClaimValues): Record<string, string> {
-  const errs: Record<string, string> = {};
+export function validateClaim(v: ClaimValues): Record<string, PortalCopy> {
+  const errs: Record<string, PortalCopy> = {};
 
   if (!v.effectiveKind) {
     errs.claim_type = "Select what you're claiming for.";
@@ -107,7 +107,7 @@ export function validateClaim(v: ClaimValues): Record<string, string> {
     v.claimableTo &&
     (claimDate < v.claimableFrom || claimDate > v.claimableTo)
   ) {
-    errs[claimDateField] = `Pick a date between ${formatDay(v.claimableFrom)} and ${formatDay(v.claimableTo)} — that's the period your benefits cover.`;
+    errs[claimDateField] = portalMessage("Pick a date between {0} and {1} — that's the period your benefits cover.", [new Date(`${v.claimableFrom}T00:00:00Z`), new Date(`${v.claimableTo}T00:00:00Z`)]);
   } else if (claimDate > v.today) {
     errs[claimDateField] = "The visit date can't be in the future.";
   }
@@ -163,7 +163,7 @@ export function validateClaim(v: ClaimValues): Record<string, string> {
 
   for (const slot of v.docSlots) {
     if (!v.slotFiles[slot.key]) {
-      errs[`slot_${slot.key}`] = `Attach the ${slot.label.toLowerCase()}.`;
+      errs[`slot_${slot.key}`] = portalMessage("Attach the {0}.", [portalMessage(slot.label.toLowerCase())]);
     }
   }
 

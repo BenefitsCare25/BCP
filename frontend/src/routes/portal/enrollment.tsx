@@ -1,3 +1,4 @@
+import { usePortalTranslation } from "@/i18n/portal";
 /** "My enrollment" — during an open window the member reviews their plans and
  * chooses to upgrade/downgrade, decline voluntary cover, include dependants,
  * and trade leave. Submissions await broker confirmation. */
@@ -33,6 +34,7 @@ import { EnrollmentUpdates, EnrollmentStatusNotice } from "@/components/portal/E
 import { useEnrollmentNotices, useEnrollmentState } from "@/api/enrollmentEvents";
 
 export function PortalEnrollmentPage() {
+  const pt = usePortalTranslation();
   useDocumentTitle("My enrollment");
   const navigate = useNavigate();
   const company = useCompany();
@@ -115,12 +117,9 @@ export function PortalEnrollmentPage() {
       <div className="rounded-lg border border-border bg-card p-8 text-center">
         <FileWarning className="mx-auto size-6 text-muted-foreground" />
         <p className="mt-2 text-sm font-medium text-foreground">
-          No active coverage found
-        </p>
+          {pt("No active coverage found")} </p>
         <p className="mt-1 text-xs text-muted-foreground">
-          Your company doesn't have an active policy year yet, or your record
-          isn't on the current roster. Contact your HR or broker.
-        </p>
+          {pt("Your company doesn't have an active policy year yet, or your record isn't on the current roster. Contact your HR or broker.")} </p>
       </div>
     );
   }
@@ -129,12 +128,12 @@ export function PortalEnrollmentPage() {
     <div className="space-y-4">
       <EnrollmentStatusNotice enrollmentId={enrollment.data?.enrollment?.id} />
       {live.isError && <div role="alert" className="rounded-control border border-hairline bg-glass p-4 text-row text-record">
-        <p>We couldn't check whether this period still accepts changes. Your entries remain on this page. Retry before saving or signing.</p>
-        <button className="leaf-focus min-h-11 text-action-ink" onClick={() => void live.refetch()}>Check enrolment status</button>
+        <p>{pt("We couldn't check whether this period still accepts changes. Your entries remain on this page. Retry before saving or signing.")}</p>
+        <button className="leaf-focus min-h-11 text-action-ink" onClick={() => void live.refetch()}>{pt("Check enrolment status")}</button>
       </div>}
       {changed && <div role="status" className="rounded-control border border-hairline bg-glass p-4 text-row text-record">
-        <p>Your enrolment changed while this page was open. Refresh to load the latest saved choices before continuing.</p>
-        <button className="leaf-focus min-h-11 font-semibold text-action-ink" onClick={() => void qc.invalidateQueries({ queryKey: ["portal"] })}>Refresh enrolment</button>
+        <p>{pt("Your enrolment changed while this page was open. Refresh to load the latest saved choices before continuing.")}</p>
+        <button className="leaf-focus min-h-11 font-semibold text-action-ink" onClick={() => void qc.invalidateQueries({ queryKey: ["portal"] })}>{pt("Refresh enrolment")}</button>
       </div>}
       <MemberEnrollmentPanel
         readOnly={changed || live.isError}

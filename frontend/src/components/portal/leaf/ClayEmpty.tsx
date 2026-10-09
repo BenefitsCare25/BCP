@@ -1,3 +1,4 @@
+import { usePortalTranslation } from "@/i18n/portal";
 import type { ReactNode } from "react";
 import { cn } from "@/lib/cn";
 import type { CareTone } from "./careTone";
@@ -20,6 +21,7 @@ export function ClayEmpty({
   action?: ReactNode;
   className?: string;
 }) {
+  const pt = usePortalTranslation();
   return (
     <section
       className={cn(
@@ -27,7 +29,7 @@ export function ClayEmpty({
         className,
       )}
     >
-      <h2 className="text-2xl font-bold tracking-title text-record sm:text-3xl">{title}</h2>
+      <h2 className="text-2xl font-bold tracking-title text-record sm:text-3xl">{pt(title)}</h2>
       {children && <div className="mt-2 max-w-md text-md text-[var(--tone-ink)]">{children}</div>}
       {action && <div className="mt-6">{action}</div>}
       <img

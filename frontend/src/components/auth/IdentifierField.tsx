@@ -1,3 +1,4 @@
+import { usePortalTranslation } from "@/i18n/portal";
 /** Login identifier input that detects email vs HR user id and shows an inline
  * hint. Detection is UX only — the server accepts either form regardless. */
 import { AtSign, IdCard } from "lucide-react";
@@ -31,6 +32,7 @@ export function IdentifierField({
   placeholder?: string;
   error?: string;
 }) {
+  const pt = usePortalTranslation();
   const kind = detectIdentifier(value);
   const Icon = kind === "hr-id" ? IdCard : AtSign;
   return (
@@ -39,8 +41,7 @@ export function IdentifierField({
         htmlFor={id}
         className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground"
       >
-        Email or HR ID
-      </Label>
+        {pt("Email or HR ID")} </Label>
       <div className="relative">
         <Icon className="pointer-events-none absolute left-3.5 top-1/2 size-[18px] -translate-y-1/2 text-muted-foreground" />
         <Input
@@ -60,10 +61,10 @@ export function IdentifierField({
           className="h-12 pl-11"
         />
       </div>
-      {error && <p id={`${id}-error`} className="text-sm text-error" role="alert">{error}</p>}
+      {error && <p id={`${id}-error`} className="text-sm text-error" role="alert">{pt(error)}</p>}
       {kind !== "unknown" && (
         <p className="text-xs text-muted-foreground">
-          {kind === "email" ? "Signing in with your email" : "Signing in with your HR ID"}
+          {kind === "email" ? pt("Signing in with your email") : pt("Signing in with your HR ID")}
         </p>
       )}
     </div>

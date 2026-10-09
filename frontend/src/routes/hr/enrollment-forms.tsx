@@ -1,3 +1,4 @@
+import { usePortalTranslation } from "@/i18n/portal";
 /** HR — every enrolment form filed for the company (online and scanned paper),
  * downloadable one at a time or as a (masked) Excel summary, and — for the HR
  * administrator only — all at once as a ZIP. Read-only: the broker reviews and
@@ -19,6 +20,7 @@ import { useDocumentTitle } from "@/lib/useDocumentTitle";
 import { useHrSession } from "@/stores/hrSession";
 
 export function HrEnrollmentFormsPage() {
+  const pt = usePortalTranslation();
   useDocumentTitle("Enrolment forms");
   const [filters, setFilters] = useState<RegisterFilters>({ limit: REGISTER_PAGE_SIZE });
   const query = useDebouncedValue(filters.query ?? "", 300);
@@ -32,15 +34,14 @@ export function HrEnrollmentFormsPage() {
   return (
     <div className="space-y-3">
       <div>
-        <h1 className="sr-only">Enrolment forms</h1>
+        <h1 className="sr-only">{pt("Enrolment forms")}</h1>
         <p className="text-sm text-muted-foreground">
-          Your broker reviews each form before cover changes.
-        </p>
+          {pt("Your broker reviews each form before cover changes.")} </p>
       </div>
       <FormRegisterView
         data={forms.data}
         isLoading={forms.isLoading}
-        error={forms.error}
+        error={pt(forms.error)}
         onRetry={() => void forms.refetch()}
         filters={filters}
         onFiltersChange={setFilters}

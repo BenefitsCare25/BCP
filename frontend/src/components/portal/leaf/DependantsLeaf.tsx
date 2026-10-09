@@ -1,3 +1,4 @@
+import { usePortalTranslation } from "@/i18n/portal";
 /** The people on the member's leaf.
  *
  * One mount per person rather than a four-column table. The table was the
@@ -39,22 +40,24 @@ function DependantState({
   status: string;
   covered?: boolean;
 }) {
+  const pt = usePortalTranslation();
   if (status === "pending_approval")
-    return <Strike tone="pending">Waiting for approval</Strike>;
-  if (status === "rejected") return <Strike tone="rejected">Not approved</Strike>;
-  if (covered === false) return <Strike tone="rejected">Not covered</Strike>;
-  return <Strike tone="approved">Covered</Strike>;
+    return <Strike tone="pending">{pt("Waiting for approval")}</Strike>;
+  if (status === "rejected") return <Strike tone="rejected">{pt("Not approved")}</Strike>;
+  if (covered === false) return <Strike tone="rejected">{pt("Not covered")}</Strike>;
+  return <Strike tone="approved">{pt("Covered")}</Strike>;
 }
 
 /** The benefits one person holds, as the same coloured tags Home uses. */
 function CareTags({ lines }: { lines: CoverageLine[] }) {
+  const pt = usePortalTranslation();
   const routes = buildCareRoutes(lines);
   if (routes.length === 0) return null;
   return (
     <div className="flex flex-wrap gap-x-2.5 gap-y-3 pt-1">
       {routes.map((route) => (
         <span key={route.key} className={`clay-tag !text-[10px] !normal-case !tracking-normal tone-${careTone(route.key)}`}>
-          {route.title}
+          {pt(route.title)}
         </span>
       ))}
     </div>
@@ -70,17 +73,16 @@ export function DependantsLeaf({
    *  while it is unresolvable — an absent list is not "covered for nothing". */
   statement?: BenefitStatement;
 }) {
+  const pt = usePortalTranslation();
   const linesFor = (id: string) =>
     statement ? statement.coverage.filter((line) => line.covered_dependants.some((person) => person.id === id)) : null;
 
   return (
     <ul className="portal-family-records space-y-3">
       {rows.length === 0 && (
-        <Mount as="li" label="No one added yet">
+        <Mount as="li" label={pt("No one added yet")}>
           <p className="text-row text-label">
-            Add your spouse or children to be covered under the plans that
-            include family. Your HR team approves each one first.
-          </p>
+            {pt("Add your spouse or children to be covered under the plans that include family. Your HR team approves each one first.")} </p>
         </Mount>
       )}
       {rows.map((dep) => {
@@ -92,17 +94,17 @@ export function DependantsLeaf({
           <Mount
             key={dep.id}
             as="li"
-            label={name ?? "Family member"}
+            label={name ?? pt("Family member")}
             gloss={
               <span className="capitalize">
-                {[relationship, dob ? `born ${formatDay(dob)}` : null].filter(Boolean).join(" · ")}
+                {[pt(relationship), dob ? pt("born {0}", [formatDay(dob)]) : null].filter(Boolean).join(" · ")}
               </span>
             }
             aside={<DependantState status={dep.status} covered={lines ? lines.length > 0 : undefined} />}
           >
             {lines && lines.length > 0 && <CareTags lines={lines} />}
             {lines && lines.length === 0 && dep.status === "active" && (
-              <p className="text-row text-label">No plan covers them yet — your HR team can add them.</p>
+              <p className="text-row text-label">{pt("No plan covers them yet — your HR team can add them.")}</p>
             )}
           </Mount>
         );

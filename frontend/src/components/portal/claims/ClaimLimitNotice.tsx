@@ -1,3 +1,4 @@
+import { usePortalTranslation } from "@/i18n/portal";
 /** The live balance for the claim type selected on the submission form.
  *
  * This is advisory at filing time, not a false client-side reimbursement
@@ -19,6 +20,7 @@ function LimitRow({
   row: NewClaimForm["limitRows"][number];
   currency: string;
 }) {
+  const pt = usePortalTranslation();
   const hasComputedLimit = row.limit !== null && row.remaining !== null;
   if (row.visitLimit != null && row.visitsRemaining != null) {
     return <VisitRow row={row} />;
@@ -31,7 +33,7 @@ function LimitRow({
   return (
     <div className="border-t border-hairline pt-2 first:border-t-0 first:pt-0">
       <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
-        <span className="text-row text-label">{row.label}</span>
+        <span className="text-row text-label">{pt(row.label)}</span>
         {hasComputedLimit ? (
           <span className="text-row text-record">
             <Money
@@ -44,41 +46,33 @@ function LimitRow({
               emphasis="strong"
             />{" "}
             {row.pending > 0 && available !== null
-              ? "available after pending "
-              : "left "}
-            <span className="text-label">of </span>
+              ? pt("available after pending ")
+              : pt("left ")}
+            <span className="text-label">{pt("of")} </span>
             <Money value={row.limit} currency={currency} />
           </span>
         ) : row.limitDisplay || row.limit !== null ? (
           <Limit amount={row.limit} display={row.limitDisplay} currency={currency} />
         ) : (
-          <span className="text-row text-label">No numeric yearly limit recorded</span>
+          <span className="text-row text-label">{pt("No numeric yearly limit recorded")}</span>
         )}
       </div>
       {row.pending > 0 && hasComputedLimit && (
         <p className="mt-0.5 text-2xs text-label">
-          <Money value={row.remaining} currency={currency} /> confirmed balance;{" "}
-          <Money value={row.pending} currency={currency} /> submitted and not
-          settled yet.
-        </p>
+          <Money value={row.remaining} currency={currency} />  {pt("confirmed balance;")}{" "}
+          <Money value={row.pending} currency={currency} />  {pt("submitted and not settled yet.")} </p>
       )}
       {row.pending > 0 && !hasComputedLimit && (
         <p className="mt-0.5 text-2xs text-label">
-          <Money value={row.pending} currency={currency} /> submitted and not
-          settled yet; this policy condition has no annual balance.
-        </p>
+          <Money value={row.pending} currency={currency} />  {pt("submitted and not settled yet; this policy condition has no annual balance.")} </p>
       )}
       {row.pendingUnconverted > 0 && (
         <p className="mt-0.5 text-2xs text-label">
-          {row.pendingUnconverted} pending foreign-currency claim
-          {row.pendingUnconverted === 1 ? " is" : "s are"} still awaiting conversion.
-        </p>
+          {row.pendingUnconverted}  {pt("pending foreign-currency claim")} {row.pendingUnconverted === 1 ? pt(" is") : pt("s are")}  {pt("still awaiting conversion.")} </p>
       )}
       {row.limitBasis && row.limitBasis !== "policy_year" && (
         <p className="mt-0.5 text-2xs text-label">
-          {CLAIM_LIMIT_BASIS_LABELS[row.limitBasis]} condition; this is policy wording,
-          not a yearly balance.
-        </p>
+          {CLAIM_LIMIT_BASIS_LABELS[row.limitBasis]}  {pt("condition; this is policy wording, not a yearly balance.")} </p>
       )}
     </div>
   );
@@ -86,33 +80,31 @@ function LimitRow({
 
 /** A visits-per-year cap: a count, advisory like the money balance. */
 function VisitRow({ row }: { row: NewClaimForm["limitRows"][number] }) {
+  const pt = usePortalTranslation();
   const cap = row.visitLimit ?? 0;
   const left = row.visitsRemaining ?? 0;
   const pending = row.visitsPending ?? 0;
   return (
     <div className="border-t border-hairline pt-2 first:border-t-0 first:pt-0">
       <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
-        <span className="text-row text-label">{row.label}</span>
+        <span className="text-row text-label">{pt(row.label)}</span>
         <span className="text-row font-semibold text-record">
-          {left} of {cap} visit{cap === 1 ? "" : "s"} left
-        </span>
+          {left}  {pt("of")} {cap}  {pt("visit")}{cap === 1 ? "" : pt("s")}  {pt("left")} </span>
       </div>
       {pending > 0 && (
         <p className="mt-0.5 text-2xs text-label">
-          {pending} more {pending === 1 ? "visit is" : "visits are"} submitted and not settled yet.
-        </p>
+          {pending}  {pt("more")} {pending === 1 ? pt("visit is") : pt("visits are")}  {pt("submitted and not settled yet.")} </p>
       )}
       {left - pending <= 0 && (
         <p className="mt-0.5 text-2xs text-warn">
-          You may have used every visit this benefit allows this policy year. You can still
-          submit; your claim will be assessed against the plan.
-        </p>
+          {pt("You may have used every visit this benefit allows this policy year. You can still submit; your claim will be assessed against the plan.")} </p>
       )}
     </div>
   );
 }
 
 export function ClaimLimitNotice({ form }: { form: NewClaimForm }) {
+  const pt = usePortalTranslation();
   if (!form.effectiveKind) return null;
 
   const currency = form.policyCurrency;
@@ -123,17 +115,14 @@ export function ClaimLimitNotice({ form }: { form: NewClaimForm }) {
     >
       <div>
         <h2 id="claim-limit-heading" className="leaf-label">
-          What you have left
-        </h2>
+          {pt("What you have left")} </h2>
       </div>
 
       {form.utilization.isLoading ? (
-        <p className="text-row text-label">Checking what you have left…</p>
+        <p className="text-row text-label">{pt("Checking what you have left…")}</p>
       ) : form.utilization.isError ? (
         <p className="text-row text-label">
-          We couldn&apos;t load your current balance. You can still submit the full
-          receipt; your claim will be assessed against the plan on file.
-        </p>
+          {pt("We couldn't load your current balance. You can still submit the full receipt; your claim will be assessed against the plan on file.")} </p>
       ) : form.limitRows.length > 0 ? (
         <div className="space-y-2">
           {form.limitRows.map((row) => (
@@ -142,9 +131,7 @@ export function ClaimLimitNotice({ form }: { form: NewClaimForm }) {
         </div>
       ) : (
         <p className="text-row text-label">
-          No yearly cap to count down for this type of claim. Your plan&rsquo;s
-          per-visit terms still apply — see What&rsquo;s covered.
-        </p>
+          {pt("No yearly cap to count down for this type of claim. Your plan’s per-visit terms still apply — see What’s covered.")} </p>
       )}
 
     </section>

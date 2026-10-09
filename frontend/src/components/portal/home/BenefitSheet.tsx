@@ -1,3 +1,4 @@
+import { usePortalTranslation } from "@/i18n/portal";
 import { Link } from "@tanstack/react-router";
 import { ArrowRight } from "lucide-react";
 import type { Utilization } from "@/types";
@@ -21,7 +22,7 @@ export function conciseFact(value: string): { lead: string; rest: string | null 
   // What the member PAYS is never the headline of a benefit — leading with
   // "You pay S$5 a visit" read as if S$5 were the cover. The cover leads and
   // the co-payment sits beneath it: "Covered as charged" / "S$5 co-payment a visit".
-  const payPart = parts.find((part) => /\bco-pay\b/i.test(part));
+  const payPart = parts.find((part) => /\bco-pay\b|共同支付额/i.test(part));
   if (payPart && parts.length > 1) {
     const cover = parts.filter((part) => part !== payPart).join(", ");
     return { lead: cap(cover), rest: payPart };
@@ -46,6 +47,7 @@ function conciseNote(note: string): string {
  *  its clay object. Wrapped by a link on Home and a button on Coverage, so the
  *  whole sheet is always ONE target with no nested controls. */
 function SheetContent({ route, utilization, go }: { route: CareRoute; utilization?: Utilization; go: string }) {
+  const pt = usePortalTranslation();
   const headline = benefitHeadline(route.key, route.lines, utilization);
   const art = careArt(route.key);
   const tag = productShortLabel(route.lines[0].product_code, route.lines[0].product_name);
@@ -56,21 +58,21 @@ function SheetContent({ route, utilization, go }: { route: CareRoute; utilizatio
   // empty, so label / figure / detail line up across a whole row of cards.
   return (
     <>
-      <span className="clay-tag">{tag}</span>
+      <span className="clay-tag">{pt(tag)}</span>
       {art && <img className="clay-sheet-art" src={art} alt="" loading="lazy" />}
-      <span className="clay-sheet-title">{route.title}</span>
-      <span className="clay-sheet-label">{headline?.label ?? ""}</span>
+      <span className="clay-sheet-title">{pt(route.title)}</span>
+      <span className="clay-sheet-label">{pt(headline?.label ?? "")}</span>
       <span className={cn("clay-sheet-value", !fact && "is-quiet", fact && fact.lead.length > 14 && "is-words")} title={headline?.value}>
-        {fact ? fact.lead : route.description}
+        {pt(fact ? fact.lead : route.description)}
       </span>
-      <span className="clay-sheet-detail" title={headline?.note ?? undefined}>{detail ?? ""}</span>
+      <span className="clay-sheet-detail" title={pt(headline?.note ?? undefined)}>{pt(detail ?? "")}</span>
       {headline?.used !== undefined ? (
         <span className="clay-meter" role="presentation">
           <span style={{ width: `${Math.round(headline.used * 100)}%` }} />
         </span>
       ) : <span aria-hidden />}
       <span className="clay-sheet-go">
-        {go} <ArrowRight className="size-4" aria-hidden />
+        {pt(go)} <ArrowRight className="size-4" aria-hidden />
       </span>
     </>
   );
@@ -87,6 +89,7 @@ export function BenefitSheet({
   utilization: Utilization | undefined;
   to: { tab: string; p: string };
 }) {
+  usePortalTranslation();
   const company = useCompany();
   return (
     <Link to="/portal/$company/coverage" params={{ company }} search={to} className={sheetClass(route)}>
@@ -96,6 +99,7 @@ export function BenefitSheet({
 }
 
 export function BenefitSheetButton({ route, onClick }: { route: CareRoute; onClick: () => void }) {
+  usePortalTranslation();
   return (
     <button type="button" onClick={onClick} className={sheetClass(route)}>
       <SheetContent route={route} go="View cover" />

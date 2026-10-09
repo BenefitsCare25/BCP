@@ -1,3 +1,4 @@
+import { usePortalTranslation } from "@/i18n/portal";
 /** "Two-step sign-in" — self-service TOTP enrolment and removal.
  *
  * Three things here are deliberate:
@@ -62,20 +63,19 @@ function RecoveryCodes({
   codes: string[];
   onDone: () => void;
 }) {
+  const pt = usePortalTranslation();
   const copy = async () => {
     try {
       await navigator.clipboard.writeText(codes.join("\n"));
-      toast.success("Recovery codes copied");
+      toast.success(pt("Recovery codes copied"));
     } catch {
-      toast.error("Couldn't copy — select and copy them manually.");
+      toast.error(pt("Couldn't copy — select and copy them manually."));
     }
   };
   return (
     <div className="space-y-3">
       <p className="text-row text-record">
-        Two-step sign-in is on. Save these codes somewhere safe — each one works
-        once if you lose your phone, and they won't be shown again.
-      </p>
+        {pt("Two-step sign-in is on. Save these codes somewhere safe — each one works once if you lose your phone, and they won't be shown again.")} </p>
       {/* One column on a phone. Two columns of monospace codes measured ~150px
           each at 390px, which is where they started wrapping mid-code. */}
       <div className="grid grid-cols-1 gap-x-6 gap-y-1 rounded-control border border-hairline/75 p-3 font-mono text-row text-record sm:grid-cols-2">
@@ -88,11 +88,9 @@ function RecoveryCodes({
       <div className="flex flex-col gap-2 sm:flex-row">
         <button type="button" onClick={() => void copy()} className={action}>
           <Copy className="size-4" aria-hidden />
-          Copy codes
-        </button>
+          {pt("Copy codes")} </button>
         <button type="button" onClick={onDone} className={primaryAction}>
-          I've saved them
-        </button>
+          {pt("I've saved them")} </button>
       </div>
     </div>
   );
@@ -112,6 +110,7 @@ function ReauthForm({
   onSubmit: (password: string) => void;
   onCancel: () => void;
 }) {
+  const pt = usePortalTranslation();
   const [password, setPassword] = useState("");
   return (
     <form
@@ -122,9 +121,9 @@ function ReauthForm({
       }}
     >
       <Field
-        label="Confirm your password to set up two-step sign-in"
+        label={pt("Confirm your password to set up two-step sign-in")}
         required
-        error={error}
+        error={pt(error)}
       >
         {(props) => (
           <input
@@ -142,17 +141,16 @@ function ReauthForm({
       <div className="flex flex-col gap-2 sm:flex-row">
         <button type="submit" disabled={pending || !password} className={primaryAction}>
           {pending && <Loader2 className="size-4 animate-spin" aria-hidden />}
-          Continue
-        </button>
+          {pt("Continue")} </button>
         <button type="button" onClick={onCancel} disabled={pending} className={action}>
-          Cancel
-        </button>
+          {pt("Cancel")} </button>
       </div>
     </form>
   );
 }
 
 function EnrollFlow({ onEnrolled }: { onEnrolled: (codes: string[]) => void }) {
+  const pt = usePortalTranslation();
   const start = useMemberMfaEnrollStart();
   const confirm = useMemberMfaEnrollConfirm();
   const [setup, setSetup] = useState<MemberMfaStart | null>(null);
@@ -202,7 +200,7 @@ function EnrollFlow({ onEnrolled }: { onEnrolled: (codes: string[]) => void }) {
     return (
       <ReauthForm
         pending={start.isPending}
-        error={error}
+        error={pt(error)}
         onSubmit={(password) => begin(password)}
         onCancel={() => {
           setReauth(false);
@@ -216,10 +214,8 @@ function EnrollFlow({ onEnrolled }: { onEnrolled: (codes: string[]) => void }) {
     return (
       <div className="space-y-3">
         <p className="text-row text-label">
-          You'll need an authenticator app on your phone — Google
-          Authenticator, 1Password, Authy or similar.
-        </p>
-        {error && <FormAlert>{error}</FormAlert>}
+          {pt("You'll need an authenticator app on your phone — Google Authenticator, 1Password, Authy or similar.")} </p>
+        {error && <FormAlert>{pt(error)}</FormAlert>}
         <button
           type="button"
           onClick={() => begin()}
@@ -229,8 +225,7 @@ function EnrollFlow({ onEnrolled }: { onEnrolled: (codes: string[]) => void }) {
           {start.isPending && (
             <Loader2 className="size-4 animate-spin" aria-hidden />
           )}
-          Start setup
-        </button>
+          {pt("Start setup")} </button>
       </div>
     );
   }
@@ -248,14 +243,13 @@ function EnrollFlow({ onEnrolled }: { onEnrolled: (codes: string[]) => void }) {
         </div>
         <div className="min-w-0 space-y-2">
           <p className="text-row text-label">
-            Scan this with your authenticator app, or type this key into it:
-          </p>
+            {pt("Scan this with your authenticator app, or type this key into it:")} </p>
           <code className="block select-all break-all rounded-control border border-hairline/75 px-2 py-1 font-mono text-row text-record">
             {setup.secret}
           </code>
         </div>
       </div>
-      <Field label="The 6-digit code from your app" required error={error}>
+      <Field label={pt("The 6-digit code from your app")} required error={pt(error)}>
         {(props) => (
           <input
             {...props}
@@ -281,13 +275,13 @@ function EnrollFlow({ onEnrolled }: { onEnrolled: (codes: string[]) => void }) {
         {confirm.isPending && (
           <Loader2 className="size-4 animate-spin" aria-hidden />
         )}
-        Turn on two-step sign-in
-      </button>
+        {pt("Turn on two-step sign-in")} </button>
     </div>
   );
 }
 
 function DisablePanel({ onDisabled }: { onDisabled: () => void }) {
+  const pt = usePortalTranslation();
   const disable = useMemberMfaDisable();
   const [password, setPassword] = useState("");
   const [open, setOpen] = useState(false);
@@ -297,7 +291,7 @@ function DisablePanel({ onDisabled }: { onDisabled: () => void }) {
     setError(null);
     disable.mutate(password, {
       onSuccess: () => {
-        toast.success("Two-step sign-in turned off");
+        toast.success(pt("Two-step sign-in turned off"));
         setPassword("");
         setOpen(false);
         onDisabled();
@@ -311,16 +305,13 @@ function DisablePanel({ onDisabled }: { onDisabled: () => void }) {
     return (
       <div className="space-y-3">
         <p className="text-row text-label">
-          Your account asks for a code from your authenticator app each time you
-          sign in.
-        </p>
+          {pt("Your account asks for a code from your authenticator app each time you sign in.")} </p>
         <button
           type="button"
           onClick={() => setOpen(true)}
           className={action}
         >
-          Turn it off
-        </button>
+          {pt("Turn it off")} </button>
       </div>
     );
   }
@@ -328,9 +319,9 @@ function DisablePanel({ onDisabled }: { onDisabled: () => void }) {
   return (
     <div className="space-y-3">
       <Field
-        label="Confirm your password to turn it off"
+        label={pt("Confirm your password to turn it off")}
         required
-        error={error}
+        error={pt(error)}
       >
         {(props) => (
           <input
@@ -354,8 +345,7 @@ function DisablePanel({ onDisabled }: { onDisabled: () => void }) {
           {disable.isPending && (
             <Loader2 className="size-4 animate-spin" aria-hidden />
           )}
-          Turn it off
-        </button>
+          {pt("Turn it off")} </button>
         <button
           type="button"
           onClick={() => {
@@ -364,14 +354,14 @@ function DisablePanel({ onDisabled }: { onDisabled: () => void }) {
           }}
           className={action}
         >
-          Keep it on
-        </button>
+          {pt("Keep it on")} </button>
       </div>
     </div>
   );
 }
 
 function ChangePasswordPanel() {
+  const pt = usePortalTranslation();
   const change = useMemberChangePassword();
   const company = useCompany();
   const [current, setCurrent] = useState("");
@@ -391,7 +381,7 @@ function ChangePasswordPanel() {
       { current_password: current, new_password: next },
       {
         onSuccess: () => {
-          toast.success("Password changed. Sign in with your new password.");
+          toast.success(pt("Password changed. Sign in with your new password."));
           setCurrent("");
           setNext("");
           setConfirm("");
@@ -406,22 +396,22 @@ function ChangePasswordPanel() {
   };
 
   return (
-    <Mount label="Password" gloss="At least 12 characters. Avoid one you use anywhere else.">
+    <Mount label={pt("Password")} gloss="At least 12 characters. Avoid one you use anywhere else.">
       <MountRule />
       <form onSubmit={submit} className="grid gap-4 sm:max-w-md">
-        <Field label="Current password" required>
+        <Field label={pt("Current password")} required>
           {(props) => (
             <input {...props} type="password" autoComplete="current-password" maxLength={256} value={current}
               onChange={(e) => setCurrent(e.target.value)} className={leafControl} />
           )}
         </Field>
-        <Field label="New password" required>
+        <Field label={pt("New password")} required>
           {(props) => (
             <input {...props} type="password" autoComplete="new-password" minLength={12} maxLength={256} value={next}
               onChange={(e) => setNext(e.target.value)} className={leafControl} />
           )}
         </Field>
-        <Field label="Confirm new password" required error={mismatch ? "Doesn't match the new password." : error}>
+        <Field label={pt("Confirm new password")} required error={pt(mismatch ? "Doesn't match the new password." : error)}>
           {(props) => (
             <input {...props} type="password" autoComplete="new-password" maxLength={256} value={confirm}
               onChange={(e) => setConfirm(e.target.value)} className={leafControl} />
@@ -430,8 +420,7 @@ function ChangePasswordPanel() {
         <div>
           <Action tone="primary" type="submit" disabled={change.isPending || !current || next.length < 12 || next !== confirm}>
             {change.isPending && <Loader2 className="size-4 animate-spin" aria-hidden />}
-            Change password
-          </Action>
+            {pt("Change password")} </Action>
         </div>
       </form>
     </Mount>
@@ -439,6 +428,7 @@ function ChangePasswordPanel() {
 }
 
 export function PortalSecurityPage() {
+  const pt = usePortalTranslation();
   const navigate = useNavigate();
   const company = useCompany();
   useDocumentTitle("Sign-in & security");
@@ -451,16 +441,16 @@ export function PortalSecurityPage() {
     <div className="portal-security grid items-start gap-3 md:grid-cols-2">
     {!data?.mfa_enrollment_required && <ChangePasswordPanel />}
     {isLoading && !recovery ? (
-      <LeafSkeleton label="Loading your sign-in settings" mounts={1} />
+      <LeafSkeleton label={pt("Loading your sign-in settings")} mounts={1} />
     ) : isError && !recovery ? (
       // A failed status read is NOT "your company hasn't switched this on".
       <PortalErrorState onRetry={() => void refetch()} />
     ) : (
     <Mount
-      label="Two-step sign-in"
+      label={pt("Two-step sign-in")}
       gloss="A code from your phone, asked for alongside your password."
       aside={
-        enrolled && !recovery ? <Strike tone="approved">On</Strike> : undefined
+        enrolled && !recovery ? <Strike tone="approved">{pt("On")}</Strike> : undefined
       }
     >
       <MountRule className="mb-4" />
@@ -469,7 +459,7 @@ export function PortalSecurityPage() {
           codes={recovery}
           onDone={() => {
             void refreshPortalSession().then(async restored => {
-              if (!restored) { toast.error("Sign in again to continue."); return; }
+              if (!restored) { toast.error(pt("Sign in again to continue.")); return; }
               setRecovery(null);
               await refetch();
               usePortalSession.setState({ mfaRecoveryPending: false, mfaEnrollmentRequired: false });
@@ -478,7 +468,7 @@ export function PortalSecurityPage() {
           }}
         />
       ) : enrolled ? (
-        data?.mfa_required ? <p className="text-row text-label">Two-step sign-in is required by your company.</p> : <DisablePanel onDisabled={() => void refetch()} />
+        data?.mfa_required ? <p className="text-row text-label">{pt("Two-step sign-in is required by your company.")}</p> : <DisablePanel onDisabled={() => void refetch()} />
       ) : available ? (
         <EnrollFlow onEnrolled={codes => {
           usePortalSession.setState({ mfaRecoveryPending: usePortalSession.getState().mfaEnrollmentRequired });
@@ -486,9 +476,7 @@ export function PortalSecurityPage() {
         }} />
       ) : (
         <p className="text-row text-label">
-          Your company hasn't switched this on for the employee portal. Your HR
-          team can turn it on if you'd like it.
-        </p>
+          {pt("Your company hasn't switched this on for the employee portal. Your HR team can turn it on if you'd like it.")} </p>
       )}
     </Mount>
     )}

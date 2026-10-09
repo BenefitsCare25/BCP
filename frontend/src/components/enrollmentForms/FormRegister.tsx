@@ -1,3 +1,4 @@
+import { getPortalLocale, usePortalTranslation } from "@/i18n/portal";
 /** The enrolment-form register, shared by the broker's Enrolment page and the
  * HR portal: filters, exports, and one row per signed (or scanned) form.
  *
@@ -27,25 +28,27 @@ import { fmtDateTime } from "@/lib/format";
 export const REGISTER_PAGE_SIZE = 25;
 
 export function FormStatusBadge({ item }: { item: Pick<FormRegisterItem, "status" | "enrollment_status" | "source"> }) {
-  if (item.status === "superseded") return <Badge variant="outline">Replaced</Badge>;
-  if (item.status === "cancelled") return <Badge variant="outline">Cancelled</Badge>;
-  if (item.status === "returned") return <Badge variant="outline">Needs correction</Badge>;
-  if (item.source === "portal" && ["not_started", "in_progress", "returned"].includes(item.enrollment_status ?? "")) return <Badge variant="outline">No longer current</Badge>;
+  const pt = usePortalTranslation();
+  if (item.status === "superseded") return <Badge variant="outline">{pt("Replaced")}</Badge>;
+  if (item.status === "cancelled") return <Badge variant="outline">{pt("Cancelled")}</Badge>;
+  if (item.status === "returned") return <Badge variant="outline">{pt("Needs correction")}</Badge>;
+  if (item.source === "portal" && ["not_started", "in_progress", "returned"].includes(item.enrollment_status ?? "")) return <Badge variant="outline">{pt("No longer current")}</Badge>;
   if (item.enrollment_status === "confirmed" || item.enrollment_status === "deemed") {
-    return <Badge variant="good">Confirmed</Badge>;
+    return <Badge variant="good">{pt("Confirmed")}</Badge>;
   }
-  if (item.status === "acknowledged") return <Badge variant="info">Acknowledged</Badge>;
-  return <Badge variant="warn">Awaiting review</Badge>;
+  if (item.status === "acknowledged") return <Badge variant="info">{pt("Acknowledged")}</Badge>;
+  return <Badge variant="warn">{pt("Awaiting review")}</Badge>;
 }
 
 function useBusy() {
+  const pt = usePortalTranslation();
   const [busy, setBusy] = useState<string | null>(null);
   const run = async (key: string, fn: () => Promise<unknown>) => {
     setBusy(key);
     try {
       await fn();
     } catch (e) {
-      toast.error(formatError(e));
+      toast.error(pt(formatError(e)));
     } finally {
       setBusy(null);
     }
@@ -88,6 +91,7 @@ export function FormRegisterView({
   onAcknowledge?: (item: FormRegisterItem) => Promise<unknown>;
   emptyHint: string;
 }) {
+  const pt = usePortalTranslation();
   const { busy, run } = useBusy();
   const page = Math.floor((filters.offset ?? 0) / REGISTER_PAGE_SIZE);
   const pages = Math.max(1, Math.ceil((data?.total ?? 0) / REGISTER_PAGE_SIZE));
@@ -95,15 +99,15 @@ export function FormRegisterView({
   const counts = data?.counts ?? {};
 
   return (
-    <section className="space-y-3" aria-label="Enrolment forms">
+    <section className="space-y-3" aria-label={pt("Enrolment forms")}>
       <div className="flex flex-wrap items-center gap-2">
-        <Badge variant="warn">{counts.submitted ?? 0} awaiting review</Badge>
-        <Badge variant="info">{counts.acknowledged ?? 0} acknowledged</Badge>
+        <Badge variant="warn">{counts.submitted ?? 0}  {pt("awaiting review")}</Badge>
+        <Badge variant="info">{counts.acknowledged ?? 0}  {pt("acknowledged")}</Badge>
         <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
           {/* Beside the one download it qualifies, as on the Reports Center's
               workbook rows. Masked unless deliberately switched. */}
           {idNumbers && (
-            <div role="group" aria-label="NRIC/FIN numbers in the Excel summary">
+            <div role="group" aria-label={pt("NRIC/FIN numbers in the Excel summary")}>
               <Segmented
                 value={idNumbers.full ? "full" : "masked"}
                 onChange={(v) => idNumbers.onChange(v === "full")}
@@ -123,8 +127,7 @@ export function FormRegisterView({
             onClick={() => void run("xlsx", () => onExport("xlsx"))}
           >
             {busy === "xlsx" ? <Loader2 className="size-4 animate-spin" /> : <FileSpreadsheet className="size-4" />}
-            Excel summary
-          </Button>
+            {pt("Excel summary")} </Button>
           {canExportPdfs && (
             <Button
               variant="outline"
@@ -134,31 +137,30 @@ export function FormRegisterView({
               onClick={() => void run("zip", () => onExport("zip"))}
             >
               {busy === "zip" ? <Loader2 className="size-4 animate-spin" /> : <FileArchive className="size-4" />}
-              All PDFs (.zip)
-            </Button>
+              {pt("All PDFs (.zip)")} </Button>
           )}
         </div>
       </div>
 
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
         <label className="relative block w-full sm:max-w-xs">
-          <span className="sr-only">Search forms</span>
+          <span className="sr-only">{pt("Search forms")}</span>
           <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden />
           <Input
             type="search"
             value={filters.query ?? ""}
             onChange={(e) => set({ query: e.target.value })}
-            placeholder="Name, staff ID or reference"
+            placeholder={pt("Name, staff ID or reference")}
             className="h-11 pl-9 sm:h-9"
           />
         </label>
         <NativeSelect
-          aria-label="Enrolment period"
+          aria-label={pt("Enrolment period")}
           className="h-11 sm:h-9"
           value={filters.windowId ?? ""}
           onChange={(e) => set({ windowId: e.target.value || undefined })}
         >
-          <option value="">All periods</option>
+          <option value="">{pt("All periods")}</option>
           {windows.map((w) => (
             <option key={w.id} value={w.id}>
               {w.name}
@@ -166,27 +168,27 @@ export function FormRegisterView({
           ))}
         </NativeSelect>
         <NativeSelect
-          aria-label="Status"
+          aria-label={pt("Status")}
           className="h-11 sm:h-9"
           value={filters.status ?? ""}
           onChange={(e) => set({ status: e.target.value as FormStatus | "" })}
         >
-          <option value="">Latest versions</option>
-          <option value="submitted">Awaiting review</option>
-          <option value="acknowledged">Acknowledged</option>
-          <option value="returned">Needs correction</option>
-          <option value="cancelled">Cancelled</option>
+          <option value="">{pt("Latest versions")}</option>
+          <option value="submitted">{pt("Awaiting review")}</option>
+          <option value="acknowledged">{pt("Acknowledged")}</option>
+          <option value="returned">{pt("Needs correction")}</option>
+          <option value="cancelled">{pt("Cancelled")}</option>
         </NativeSelect>
         {showSource && (
           <NativeSelect
-            aria-label="Source"
+            aria-label={pt("Source")}
             className="h-11 sm:h-9"
             value={filters.source ?? ""}
             onChange={(e) => set({ source: e.target.value as "" | "portal" | "paper" })}
           >
-            <option value="">Online and paper</option>
-            <option value="portal">Online only</option>
-            <option value="paper">Paper only</option>
+            <option value="">{pt("Online and paper")}</option>
+            <option value="portal">{pt("Online only")}</option>
+            <option value="paper">{pt("Paper only")}</option>
           </NativeSelect>
         )}
       </div>
@@ -199,14 +201,13 @@ export function FormRegisterView({
         </div>
       ) : error ? (
         <Card className="p-5" role="alert">
-          <p className="font-medium text-foreground">Forms could not be loaded</p>
-          <p className="mt-1 text-sm text-muted-foreground">{formatError(error)}</p>
+          <p className="font-medium text-foreground">{pt("Forms could not be loaded")}</p>
+          <p className="mt-1 text-sm text-muted-foreground">{pt(formatError(error))}</p>
           <Button variant="outline" className="mt-4 h-11 sm:h-9" onClick={onRetry}>
-            Try again
-          </Button>
+            {pt("Try again")} </Button>
         </Card>
       ) : !data?.items.length ? (
-        <Card className="p-6 text-sm text-muted-foreground">{emptyHint}</Card>
+        <Card className="p-6 text-sm text-muted-foreground">{pt(emptyHint)}</Card>
       ) : (
         <Card className="divide-y divide-border overflow-hidden">
           {data.items.map((item) => (
@@ -214,21 +215,22 @@ export function FormRegisterView({
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="truncate font-medium text-foreground">
-                    {item.employee_name ?? "Employee"}
+                    {item.employee_name ?? pt("Employee")}
                   </span>
                   <FormStatusBadge item={item} />
-                  {item.source === "paper" && <Badge variant="outline">Paper</Badge>}
+                  {item.source === "paper" && <Badge variant="outline">{pt("Paper")}</Badge>}
                 </div>
                 <p className="mt-1 text-sm text-muted-foreground">
                   {item.reference_no}
-                  {item.version > 1 ? ` · v${item.version}` : ""} · {item.staff_id ?? "—"} ·{" "}
+                  {item.version > 1 ? pt(" · v{0}", [item.version]) : ""} · {item.staff_id ?? "—"} ·{" "}
                   {item.id_masked || "—"}
                 </p>
                 <p className="mt-0.5 text-xs text-muted-foreground">
-                  {item.source === "paper" ? "Filed" : "Signed"} {fmtDateTime(item.submitted_at)}
+                  {item.source === "paper" ? pt("Filed") : pt("Signed")} {getPortalLocale() === "zh-SG" && item.submitted_at
+                    ? new Date(item.submitted_at).toLocaleString("zh-SG") : fmtDateTime(item.submitted_at)}
                   {item.window_name ? ` · ${item.window_name}` : ""}
                   {item.source === "portal"
-                    ? ` · ${item.changes ? `${item.changes} change${item.changes === 1 ? "" : "s"}` : "no changes"}`
+                    ? ` · ${item.changes ? pt("{0} {1}", [item.changes, pt(item.changes === 1 ? "change" : "changes")]) : pt("no changes")}`
                     : ""}
                 </p>
               </div>
@@ -242,8 +244,7 @@ export function FormRegisterView({
                     onClick={() => void run(`ack-${item.id}`, () => onAcknowledge(item))}
                   >
                     {busy === `ack-${item.id}` ? <Loader2 className="size-4 animate-spin" /> : <CheckCircle2 className="size-4" />}
-                    Acknowledge
-                  </Button>
+                    {pt("Acknowledge")} </Button>
                 )}
                 <Button
                   variant="outline"
@@ -251,11 +252,10 @@ export function FormRegisterView({
                   className="h-11 sm:h-9"
                   disabled={!item.has_pdf || busy === `pdf-${item.id}`}
                   onClick={() => void run(`pdf-${item.id}`, () => onDownload(item))}
-                  aria-label={`Download ${item.reference_no}`}
+                  aria-label={pt("Download {0}", [item.reference_no])}
                 >
                   {busy === `pdf-${item.id}` ? <Loader2 className="size-4 animate-spin" /> : <Download className="size-4" />}
-                  PDF
-                </Button>
+                  {pt("PDF")} </Button>
               </div>
             </div>
           ))}

@@ -1,3 +1,4 @@
+import { usePortalTranslation } from "@/i18n/portal";
 /** Employee-portal set / reset password: redeem a single-use token and choose
  * a password, then land in the portal. */
 import { useRef, useState } from "react";
@@ -30,6 +31,7 @@ function strength(pw: string): { label: string; ok: boolean } {
 }
 
 export function PortalSetPasswordPage() {
+  const pt = usePortalTranslation();
   const navigate = useNavigate();
   const company = useCompany();
   const setPw = useMemberSetPassword();
@@ -112,9 +114,9 @@ export function PortalSetPasswordPage() {
     return (
       <AuthScene
         portalTheme="employee"
-        eyebrow="Employee benefits portal"
-        title="Two-factor authentication"
-        subtitle="Enter the 6-digit code from your authenticator app, or one of your recovery codes."
+        eyebrow={pt("Employee benefits portal")}
+        title={pt("Two-factor authentication")}
+        subtitle={pt("Enter the 6-digit code from your authenticator app, or one of your recovery codes.")}
       >
         <form onSubmit={submitMfa} className="space-y-4">
           <div className="space-y-1.5">
@@ -122,8 +124,7 @@ export function PortalSetPasswordPage() {
               htmlFor="portal-setpw-totp"
               className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground"
             >
-              Authentication code
-            </Label>
+              {pt("Authentication code")} </Label>
             <Input
               id="portal-setpw-totp"
               inputMode="text"
@@ -136,14 +137,14 @@ export function PortalSetPasswordPage() {
               className="h-12 text-center text-lg font-semibold tracking-[0.5em]"
             />
           </div>
-          {error && <p className="text-sm text-error" role="alert">{error}</p>}
-          {expired && <a className="block text-sm underline" href={portalPath(company, "/sign-in")}>Sign in with your new password</a>}
+          {error && <p className="text-sm text-error" role="alert">{pt(error)}</p>}
+          {expired && <a className="block text-sm underline" href={portalPath(company, "/sign-in")}>{pt("Sign in with your new password")}</a>}
           <Button
             type="submit"
             className="h-12 w-full text-md transition-transform duration-150 active:scale-[0.99]"
             disabled={expired || mfa.isPending || !canSubmitMfaCode(code)}
           >
-            {mfa.isPending ? "Verifying…" : "Verify & sign in"}
+            {mfa.isPending ? pt("Verifying…") : pt("Verify & sign in")}
           </Button>
         </form>
       </AuthScene>
@@ -153,19 +154,18 @@ export function PortalSetPasswordPage() {
   return (
     <AuthScene
       portalTheme="employee"
-      eyebrow="Employee benefits portal"
-      title="Set your password"
-      subtitle="Choose a strong password to finish setting up your account."
+      eyebrow={pt("Employee benefits portal")}
+      title={pt("Set your password")}
+      subtitle={pt("Choose a strong password to finish setting up your account.")}
     >
       <form onSubmit={submit} className="space-y-4">
-        {!token && <p role="alert" className="text-sm text-error">This link is missing its token. Ask your HR team to resend it.</p>}
+        {!token && <p role="alert" className="text-sm text-error">{pt("This link is missing its token. Ask your HR team to resend it.")}</p>}
         <div className="space-y-1.5">
           <Label
             htmlFor="portal-new-password"
             className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground"
           >
-            New password
-          </Label>
+            {pt("New password")} </Label>
           <div className="relative">
             <Lock className="pointer-events-none absolute left-3.5 top-1/2 size-[18px] -translate-y-1/2 text-muted-foreground" />
             <Input
@@ -184,7 +184,7 @@ export function PortalSetPasswordPage() {
           </div>
           {password.length > 0 && (
             <p className={st.ok ? "text-xs text-good" : "text-xs text-muted-foreground"}>
-              {st.label}
+              {pt(st.label)}
             </p>
           )}
         </div>
@@ -193,8 +193,7 @@ export function PortalSetPasswordPage() {
             htmlFor="portal-confirm-password"
             className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground"
           >
-            Confirm password
-          </Label>
+            {pt("Confirm password")} </Label>
           <div className="relative">
             <Lock className="pointer-events-none absolute left-3.5 top-1/2 size-[18px] -translate-y-1/2 text-muted-foreground" />
             <Input
@@ -210,17 +209,17 @@ export function PortalSetPasswordPage() {
             />
           </div>
           {confirm.length > 0 && !match && (
-            <p className="text-xs text-error">Passwords don't match</p>
+            <p className="text-xs text-error">{pt("Passwords don't match")}</p>
           )}
         </div>
-        {error && <p className="text-sm text-error" role="alert">{error}</p>}
+        {error && <p className="text-sm text-error" role="alert">{pt(error)}</p>}
         <Button
           type="submit"
           className="h-12 w-full text-md transition-transform duration-150 active:scale-[0.99]"
           disabled={setPw.isPending || !canSubmit}
         >
           <ShieldCheck className="size-[18px]" />
-          {setPw.isPending ? "Saving…" : "Set password & sign in"}
+          {setPw.isPending ? pt("Saving…") : pt("Set password & sign in")}
         </Button>
       </form>
     </AuthScene>

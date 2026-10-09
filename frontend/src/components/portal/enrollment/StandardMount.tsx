@@ -1,3 +1,4 @@
+import { usePortalTranslation } from "@/i18n/portal";
 /** The plans this window gives the member no say over, folded into one slide.
  *
  * A product with a single tier, no decline and no dependant tick list is not a
@@ -34,17 +35,18 @@ export function StandardMount({
    *  arrival — see `Mount`'s `rise`. */
   rise?: boolean;
 }) {
+  const pt = usePortalTranslation();
   return (
     <Mount
       as="article"
       rise={rise}
-      label="Included as standard"
+      label={pt("Included as standard")}
       gloss="Cover your company sets for you — there's nothing to choose here."
     >
       <dl>
         {lines.map((l) => (
           <MountRow key={l.code} term={l.name} gloss={l.familyNote ?? undefined}>
-            {l.plan ?? "Included"}
+            {l.plan ?? pt("Included")}
           </MountRow>
         ))}
       </dl>

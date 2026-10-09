@@ -1,3 +1,4 @@
+import { usePortalTranslation } from "@/i18n/portal";
 /** Multi-invoice upload review.
  *
  * Each distinct invoice remains a separate claim because limits, duplicate
@@ -32,6 +33,7 @@ function stateLabel(state: BatchRow["state"]): string {
 }
 
 export function PendingClaimsNotice({ form }: { form: NewClaimForm }) {
+  const pt = usePortalTranslation();
   const { pendingClaims, submittedBatchClaims, multiDone, busy } = form;
   if (pendingClaims.length === 0 && multiDone === 0) return null;
 
@@ -79,17 +81,14 @@ export function PendingClaimsNotice({ form }: { form: NewClaimForm }) {
         <div className="flex items-center gap-1.5">
           <Files className="size-3.5 shrink-0 text-label" aria-hidden />
           <h2 id="claim-batch-heading" className="text-row font-semibold text-record">
-            Invoices in this submission
-          </h2>
+            {pt("Invoices in this submission")} </h2>
         </div>
         <Strike tone="pending">
-          Claim {multiDone + 1} of {totalClaims}
+          {pt("Claim")} {multiDone + 1}  {pt("of")} {totalClaims}
         </Strike>
       </div>
       <p className="text-row text-label">
-        Each invoice is submitted and AI-reviewed as its own claim. Check the
-        breakdown and totals as you work through the set.
-      </p>
+        {pt("Each invoice is submitted and AI-reviewed as its own claim. Check the breakdown and totals as you work through the set.")} </p>
 
       <ol className="divide-y divide-hairline overflow-hidden rounded-control border border-hairline">
         {rows.map((row) => (
@@ -100,7 +99,7 @@ export function PendingClaimsNotice({ form }: { form: NewClaimForm }) {
             <span className="min-w-0 flex-1">
               <span className="block truncate font-medium text-record">{row.invoice}</span>
               <span className="block text-label">
-                {row.date ? formatDay(row.date) : "Date not read"} · {stateLabel(row.state)}
+                {row.date ? formatDay(row.date) : pt("Date not read")} · {stateLabel(row.state)}
               </span>
             </span>
             <Money
@@ -111,20 +110,20 @@ export function PendingClaimsNotice({ form }: { form: NewClaimForm }) {
             {row.state === "submitted" && (
               <>
                 <Check className="size-4 shrink-0 text-strike-approved" aria-hidden />
-                <span className="sr-only">Submitted</span>
+                <span className="sr-only">{pt("Submitted")}</span>
               </>
             )}
             {row.state === "pending" && row.uploadIndex != null && (
               <button
                 type="button"
                 disabled={busy}
-                title="Don't submit a claim for this invoice"
+                title={pt("Don't submit a claim for this invoice")}
                 onClick={() =>
                   form.setPendingClaims((previous) =>
                     previous.filter((claim) => claim.uploadIndex !== row.uploadIndex),
                   )
                 }
-                aria-label={`Remove the invoice ${row.invoice}`}
+                aria-label={pt("Remove the invoice {0}", [row.invoice])}
                 className="leaf-focus -m-3 inline-flex size-11 shrink-0 items-center justify-center text-label disabled:opacity-50"
               >
                 <X className="size-4" aria-hidden />
@@ -137,13 +136,11 @@ export function PendingClaimsNotice({ form }: { form: NewClaimForm }) {
       <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-1 border-t border-hairline pt-3">
         <div>
           <p className="text-row font-semibold text-record">
-            {missingAmounts > 0 ? "Known subtotal" : "Batch total"}
+            {missingAmounts > 0 ? pt("Known subtotal") : pt("Batch total")}
           </p>
           {missingAmounts > 0 && (
             <p className="text-row text-label">
-              {missingAmounts} {missingAmounts === 1 ? "invoice needs" : "invoices need"} an
-              amount before the final total is complete.
-            </p>
+              {missingAmounts} {missingAmounts === 1 ? pt("invoice needs") : pt("invoices need")}  {pt("an amount before the final total is complete.")} </p>
           )}
         </div>
         <dl className="space-y-0.5 text-right">
@@ -161,8 +158,7 @@ export function PendingClaimsNotice({ form }: { form: NewClaimForm }) {
       </div>
       {pendingClaims.length > 0 && (
         <p className="text-row text-label">
-          Remove an invoice if you do not want to submit a claim for it.
-        </p>
+          {pt("Remove an invoice if you do not want to submit a claim for it.")} </p>
       )}
     </section>
   );

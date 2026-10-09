@@ -1,3 +1,4 @@
+import { usePortalTranslation } from "@/i18n/portal";
 /** "How much is left" — usage, as mounts.
  *
  * Fullness is utilisation. Pending is drawn and named separately and is NEVER
@@ -80,6 +81,7 @@ function PendingBreakdown({
   bucket: UtilizationBucket;
   claims: PortalClaim[];
 }) {
+  const pt = usePortalTranslation();
   const ids = new Set(bucket.pending_claim_ids);
   const mine = claims.filter((c) => ids.has(c.id));
   if (mine.length === 0) return null;
@@ -101,7 +103,7 @@ function PendingBreakdown({
   return (
     <div className="flex flex-col gap-1">
       <h3 className="leaf-label">
-        {priced.length === 1 ? "The claim in that figure" : "What's in that figure"}
+        {priced.length === 1 ? pt("The claim in that figure") : pt("What's in that figure")}
       </h3>
       <dl className="divide-y divide-hairline/75">
         {priced.map((c) => (
@@ -113,7 +115,7 @@ function PendingBreakdown({
               {c.provider_name?.trim() || insuredClaimTitle(c.claim_type, null)}
               <span className="block text-row text-label">
                 {formatDay(c.incurred_date)}
-                {c.dependant_name ? ` · for ${c.dependant_name}` : ""}
+                {c.dependant_name ? pt(" · for {0}", [c.dependant_name]) : ""}
               </span>
             </dt>
             <dd className="m-0 shrink-0 text-right">
@@ -138,8 +140,8 @@ function PendingBreakdown({
       {awaiting > 0 && (
         <p className="text-row text-strike-pending">
           {awaiting === 1
-            ? "One more claim is being converted to SGD and isn't counted above yet."
-            : `${awaiting} more claims are being converted to SGD and aren't counted above yet.`}
+            ? pt("One more claim is being converted to SGD and isn't counted above yet.")
+            : pt("{0} more claims are being converted to SGD and aren't counted above yet.", [awaiting])}
         </p>
       )}
     </div>
@@ -171,6 +173,7 @@ function drawnFromWallet(
 }
 
 function FlexBlock({ flex }: { flex: FlexUtilization }) {
+  const pt = usePortalTranslation();
   const currency = flex.currency ?? "S$";
   const base = flex.flex_balance ?? flex.wallet_amount;
   const afterPending = availableAfterPending(
@@ -204,7 +207,7 @@ function FlexBlock({ flex }: { flex: FlexUtilization }) {
 
   return (
     <Mount
-      label="Flexible benefits"
+      label={pt("Flexible benefits")}
       // No gloss. The aside states what is left and the rows beneath state the
       // allowance and what has gone — "your allowance and what you've claimed
       // against it" is a table of contents for three figures already on screen.
@@ -219,12 +222,12 @@ function FlexBlock({ flex }: { flex: FlexUtilization }) {
                 figure on the tab is aligned. */}
             <span className="leaf-label">
               {flex.available < 0
-                ? "Short by"
+                ? pt("Short by")
                 : flex.pending > 0 && afterPending !== null
-                  ? "Available after pending"
+                  ? pt("Available after pending")
                   : flex.pending_unconverted > 0
-                    ? "Confirmed balance"
-                    : "Left to claim"}
+                    ? pt("Confirmed balance")
+                    : pt("Left to claim")}
             </span>
             {/* A wallet spent past its allowance (an upgrade priced above it)
                 leaves this negative, and "S$-450 left to claim" is not a
@@ -264,7 +267,7 @@ function FlexBlock({ flex }: { flex: FlexUtilization }) {
             months of cover"); this tab is about what is left, so it carries
             the reason and not the arithmetic. An empty span holds the right
             half in place for a member who is covered the whole period. */}
-        <span>{flex.proration && prorationReason(flex.proration.note)}</span>
+        <span>{pt(flex.proration && prorationReason(flex.proration.note))}</span>
         {/* Right: "X of Y used" — the same words `FillRule` captions every
             other limit with, and the same words the category rows below use, so
             the wallet and its subdivisions read as one vocabulary. It replaced
@@ -276,16 +279,15 @@ function FlexBlock({ flex }: { flex: FlexUtilization }) {
             <Money value={used} currency={currency} />
             {hasLimit && (
               <>
-                {" of "}
+                {pt(" of ")}
                 <Money value={base} currency={currency} />
               </>
             )}
-            {" used"}
+            {pt(" used")}
             {flex.pending > 0 && (
               <>
                 {" · "}
-                <Money value={flex.pending} currency={currency} /> not settled
-              </>
+                <Money value={flex.pending} currency={currency} />  {pt("not settled")} </>
             )}
           </span>
         )}
@@ -307,11 +309,11 @@ function FlexBlock({ flex }: { flex: FlexUtilization }) {
                   />
                   {c.sub_limit !== null && (
                     <>
-                      {" of "}
+                      {pt(" of ")}
                       <Money value={c.sub_limit} currency={currency} />
                     </>
                   )}
-                  {" used"}
+                  {pt(" used")}
                   {c.remaining !== null && (
                     <>
                       {" · "}
@@ -319,7 +321,7 @@ function FlexBlock({ flex }: { flex: FlexUtilization }) {
                         value={Math.max(0, c.remaining - c.pending)}
                         currency={currency}
                       />
-                      {c.pending > 0 ? " available after pending" : " left"}
+                      {c.pending > 0 ? pt(" available after pending") : pt(" left")}
                     </>
                   )}
                 </span>
@@ -342,6 +344,7 @@ export function UsageLeaf({
    * never gates rendering. */
   claims?: PortalClaim[];
 }) {
+  const pt = usePortalTranslation();
   const products = data.insured.filter((b) => b.benefit_key === null);
   const subsFor = (product: string | null) =>
     data.insured.filter(
@@ -380,12 +383,9 @@ export function UsageLeaf({
   // an empty page must still say why.
   if (active.length === 0 && data.flex === null) {
     return (
-      <Mount label="Nothing to track yet">
+      <Mount label={pt("Nothing to track yet")}>
         <p className="text-row text-label">
-          No yearly balances or visit limits have been confirmed for this plan. Your full cover,
-          including visit, day and treatment conditions, remains under
-          What&rsquo;s covered.
-        </p>
+          {pt("No yearly balances or visit limits have been confirmed for this plan. Your full cover, including visit, day and treatment conditions, remains under What’s covered.")} </p>
       </Mount>
     );
   }
@@ -440,13 +440,10 @@ export function UsageLeaf({
 
       {anyPending && (
         <p className="px-1 text-row text-label">
-          Claims that aren&rsquo;t settled yet are shown separately and
-          reserved in the &ldquo;available after pending&rdquo; figure. Your
-          confirmed balance changes only when a claim is approved.
-          {waitingOnMember > 0 &&
+          {pt("Claims that aren’t settled yet are shown separately and reserved in the “available after pending” figure. Your confirmed balance changes only when a claim is approved.")} {waitingOnMember > 0 &&
             (waitingOnMember === 1
-              ? " One of them needs something from you — open it under Claims."
-              : ` ${waitingOnMember} of them need something from you — open them under Claims.`)}
+              ? pt(" One of them needs something from you — open it under Claims.")
+              : pt(" {0} of them need something from you — open them under Claims.", [waitingOnMember]))}
         </p>
       )}
     </div>

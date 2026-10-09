@@ -1,3 +1,4 @@
+import { portalText as pt, usePortalTranslation } from "@/i18n/portal";
 /** Fullness — the mount's state, and the rule most likely to be got wrong.
  *
  * **Fullness means UTILISATION, never entitlement.** A mount that reads empty
@@ -50,23 +51,22 @@ function sentence(
   currency: string,
 ): string {
   const parts = [
-    `${currency}${moneyText(drawnAgainst(approved, limit))} of ` +
-      `${currency}${moneyText(limit)} used`,
+    pt("{0} of {1} used", [`${currency}${moneyText(drawnAgainst(approved, limit))}`, `${currency}${moneyText(limit)}`]),
   ];
   if (pending > 0)
-    parts.push(`${currency}${moneyText(pending)} not settled yet`);
+    parts.push(pt("{0}{1} not settled yet", [currency, moneyText(pending)]));
   const available = availableAfterPending(
     remaining,
     pending,
     pendingUnconverted,
   );
   if (available !== null && pending > 0) {
-    parts.push(`${currency}${moneyText(available)} available after pending claims`);
+    parts.push(pt("{0}{1} available after pending claims", [currency, moneyText(available)]));
   } else if (remaining !== null) {
-    parts.push(`${currency}${moneyText(Math.max(0, remaining))} left`);
+    parts.push(pt("{0}{1} left", [currency, moneyText(Math.max(0, remaining))]));
   }
   if (pendingUnconverted > 0) {
-    parts.push("the after-pending balance is awaiting currency conversion");
+    parts.push(pt("the after-pending balance is awaiting currency conversion"));
   }
   return `${parts.join(", ")}.`;
 }
@@ -89,6 +89,7 @@ export function FillRule({
   /** The thinner bar used for secondary limits stacked under the headline one. */
   compact?: boolean;
 }) {
+  const pt = usePortalTranslation();
   // Symbolised once here: the accessible sentence below is plain text, so it
   // cannot lean on <Money> to do the conversion.
   const cur = currencySymbol(currency);
@@ -108,19 +109,19 @@ export function FillRule({
   // branch, so there is also no defensible "available after pending" figure.
   if (limit === null || limit <= 0) {
     if (approved <= 0 && pending <= 0) {
-      return <p className="text-row text-label">Nothing claimed yet</p>;
+      return <p className="text-row text-label">{pt("Nothing claimed yet")}</p>;
     }
     return (
       <div className="space-y-1">
         {approved > 0 && (
           <div className="flex items-baseline justify-between gap-4">
-            <span className="text-row text-label">Approved and paid</span>
+            <span className="text-row text-label">{pt("Approved and paid")}</span>
             <Money value={approved} currency={cur} emphasis="strong" />
           </div>
         )}
         {pending > 0 && (
           <div className="flex items-baseline justify-between gap-4">
-            <span className="text-row text-label">Not settled yet</span>
+            <span className="text-row text-label">{pt("Not settled yet")}</span>
             <Money value={pending} currency={cur} />
           </div>
         )}
@@ -169,9 +170,8 @@ export function FillRule({
         // falls back to.
         <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
           <span className="text-row text-label">
-            <Money value={drawn} currency={cur} className="text-record" /> of{" "}
-            <Money value={limit} currency={cur} className="text-record" /> used
-            {pending > 0 && (
+            <Money value={drawn} currency={cur} className="text-record" />  {pt("of")}{" "}
+            <Money value={limit} currency={cur} className="text-record" />  {pt("used")} {pending > 0 && (
               <>
                 {" · "}
                 <Money
@@ -179,8 +179,7 @@ export function FillRule({
                   currency={cur}
                   className="text-record"
                 />{" "}
-                not settled
-              </>
+                {pt("not settled")} </>
             )}
           </span>
           {remaining !== null && (
@@ -203,18 +202,16 @@ export function FillRule({
               />
               <span>
                 {pending > 0 && available !== null
-                  ? "available after pending"
-                  : "left"}
+                  ? pt("available after pending")
+                  : pt("left")}
               </span>
               {pending > 0 && (
                 <span className="text-2xs">
-                  <Money value={Math.max(0, remaining)} currency={cur} /> confirmed balance
-                </span>
+                  <Money value={Math.max(0, remaining)} currency={cur} />  {pt("confirmed balance")} </span>
               )}
               {pendingUnconverted > 0 && (
                 <span className="max-w-56 text-right text-2xs">
-                  After-pending balance awaits currency conversion
-                </span>
+                  {pt("After-pending balance awaits currency conversion")} </span>
               )}
             </span>
           )}

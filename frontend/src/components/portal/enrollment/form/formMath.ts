@@ -10,6 +10,7 @@
  * active family member inside that product's age window, whatever the deck's
  * state says. */
 import type { ProductTierSet } from "@/api/enrollment";
+import { portalText as pt } from "@/i18n/portal";
 import type {
   FormClause,
   FormDependant,
@@ -156,7 +157,7 @@ export function ruleProblems(
     const bName = rule.requires_product_name ?? rule.requires_product_code;
     if (!a || a.declined || !b || !aTs || !bTs) continue;
     if (b.declined) {
-      out.push(`${aName} can only be taken together with ${bName}.`);
+      out.push(pt("{0} can only be taken together with {1}.", [pt(aName), pt(bName)]));
       continue;
     }
     if (familyMode(aTs, a) === null || familyMode(bTs, b) === null) continue;
@@ -164,7 +165,7 @@ export function ruleProblems(
     const missing = coveredOn(aTs, a, dependants).filter((d) => !onB.has(d.id));
     if (missing.length) {
       out.push(
-        `${missing.map((d) => d.name ?? "A family member").join(", ")} must also be covered on ${bName} to be covered on ${aName}.`,
+        pt("{0} must also be covered on {1} to be covered on {2}.", [missing.map((d) => d.name ?? pt("A family member")).join(", "), pt(bName), pt(aName)]),
       );
     }
   }
@@ -185,9 +186,7 @@ export function eligibilityProblems(
     for (const dep of coveredOn(ts, ps, dependants)) {
       if (dep.ineligible_products.includes(ts.product_code)) {
         out.push(
-          `${dep.name ?? "A family member"} is outside the age limit for ${
-            ts.product_name ?? ts.product_code
-          } — untick them there.`,
+          pt("{0} is outside the age limit for {1} — untick them there.", [dep.name ?? pt("A family member"), pt(ts.product_name ?? ts.product_code)]),
         );
       }
     }

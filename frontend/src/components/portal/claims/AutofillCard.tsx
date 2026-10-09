@@ -1,3 +1,4 @@
+import { usePortalTranslation } from "@/i18n/portal";
 /** Autofill from documents — the AI reads the upload(s) and prefills the form;
  * everything stays editable and the files become the claim's evidence.
  *
@@ -33,6 +34,7 @@ import {
 import type { NewClaimForm } from "./useNewClaimForm";
 
 function DraftStatus({ status }: { status: NewClaimForm["draftStatus"] }) {
+  const pt = usePortalTranslation();
   if (status === "idle") return null;
   const error = status === "error";
   const Icon = error ? AlertCircle : status === "saved" ? CheckCircle2 : Cloud;
@@ -51,7 +53,7 @@ function DraftStatus({ status }: { status: NewClaimForm["draftStatus"] }) {
       aria-live="polite"
     >
       <Icon className="size-4 shrink-0" aria-hidden />
-      {label}
+      {pt(label)}
     </span>
   );
 }
@@ -64,6 +66,7 @@ export function AutofillCard({
   /** Rendered at the start of the header row, opposite the autofill control. */
   leading?: ReactNode;
 }) {
+  const pt = usePortalTranslation();
   const input = useRef<HTMLInputElement>(null);
   const camera = useRef<HTMLInputElement>(null);
   const { autofillDocs, autofillNote, lowConfidence, docSlots, slotFiles } =
@@ -105,23 +108,20 @@ export function AutofillCard({
               )}
               <span className="truncate">
                 {autofillDocs.length > 0
-                  ? `${autofillDocs.length} document${autofillDocs.length === 1 ? "" : "s"} uploaded`
-                  : "Autofill from your documents"}
+                  ? pt("{0} document{1} uploaded", [autofillDocs.length, autofillDocs.length === 1 ? "" : "s"])
+                  : pt("Autofill from your documents")}
               </span>
             </Action>
-            <Hint label="How to get the best autofill">
-              Upload the full document set for this claim together (up to{" "}
-              {MAX_AUTOFILL_FILES} files) — for example a tax invoice, itemised
-              bill and discharge summary. Keep every page of a document in one
-              file. You can edit everything before submitting.
-            </Hint>
+            <Hint label={pt("How to get the best autofill")}>
+              {pt("Upload the full document set for this claim together (up to")}{" "}
+              {MAX_AUTOFILL_FILES}  {pt("files) — for example a tax invoice, itemised bill and discharge summary. Keep every page of a document in one file. You can edit everything before submitting.")} </Hint>
             <input ref={camera} type="file" accept="image/jpeg,image/png" capture="environment" className="hidden" onChange={(event) => {
               const photo = event.target.files?.[0];
               event.target.value = "";
               if (photo) void form.runAutofill([photo]);
             }} />
-            <Action type="button" disabled={form.extractIntake.isPending} onClick={() => camera.current?.click()} aria-label="Photograph a receipt">
-              <Camera className="size-4" aria-hidden /><span>Take photo</span>
+            <Action type="button" disabled={form.extractIntake.isPending} onClick={() => camera.current?.click()} aria-label={pt("Photograph a receipt")}>
+              <Camera className="size-4" aria-hidden /><span>{pt("Take photo")}</span>
             </Action>
           </div>
         </div>
@@ -147,8 +147,8 @@ export function AutofillCard({
                 <span className="truncate">{file.name}</span>
                 {(detectedType || destination) && (
                   <span className="shrink-0">
-                    {detectedType ? ` · ${detectedType}` : ""}
-                    {destination ? ` → ${destination}` : ""}
+                    {detectedType ? ` · ${pt(detectedType)}` : ""}
+                    {destination ? ` → ${pt(destination)}` : ""}
                   </span>
                 )}
               </li>
@@ -161,11 +161,11 @@ export function AutofillCard({
         <div className="flex items-start gap-1.5 rounded-control bg-bar/70 px-3 py-2 text-row text-record">
           <Sparkles className="mt-0.5 size-3.5 shrink-0 text-label" aria-hidden />
           <div className="space-y-1">
-            <p>{autofillNote}</p>
+            <p>{autofillNote.map(note => pt(note)).join(" ")}</p>
             {lowConfidence.length > 0 && (
               <p className="text-label">
-                Double-check the{" "}
-                {lowConfidence.map((k) => LOW_CONF_LABELS[k] ?? k).join(", ")}.
+                {pt("Double-check the")}{" "}
+                {lowConfidence.map((k) => pt(LOW_CONF_LABELS[k] ?? k)).join(", ")}.
               </p>
             )}
           </div>
@@ -173,17 +173,17 @@ export function AutofillCard({
       )}
 
       {form.intakeBaseline && <details className="rounded-control bg-bar/50 p-3 text-row">
-        <summary className="cursor-pointer font-medium">Review document readings and your changes</summary>
-        <p className="mt-2 text-label">Confidence is the model's reading estimate. Check the original document; it does not confirm eligibility or accuracy.</p>
+        <summary className="cursor-pointer font-medium">{pt("Review document readings and your changes")}</summary>
+        <p className="mt-2 text-label">{pt("Confidence is the model's reading estimate. Check the original document; it does not confirm eligibility or accuracy.")}</p>
         <dl className="mt-3 space-y-3">
           {Object.entries(form.intakeBaseline).filter(([, value]) => value != null).map(([field, original]) => {
             const current = form.intakeCurrent[field];
             const changed = String(original).trim() !== String(current ?? "").trim();
             const sources = form.fieldSources[field] ?? [];
             return <div key={field}>
-              <dt className="font-medium">{LOW_CONF_LABELS[field] ?? field}{changed ? " · Changed" : ""}</dt>
-              <dd className="break-words">Read: {String(original)}{changed && <> → Now: {String(current || "Not used")}</>}</dd>
-              <dd className="text-label">{sources.length ? sources.map((source) => `${source.file_name} (upload ${source.upload_index + 1}) · ${source.source_label} · ${source.confidence == null ? "Confidence not reported" : `${Math.round(source.confidence * 100)}% model confidence`}`).join("; ") : "Derived suggestion; no direct source reading identified."}</dd>
+              <dt className="font-medium">{pt(LOW_CONF_LABELS[field] ?? field)}{changed ? pt(" · Changed") : ""}</dt>
+              <dd className="break-words">{pt("Read:")} {String(original)}{changed && <>  {pt("→ Now:")} {current ? String(current) : pt("Not used")}</>}</dd>
+              <dd className="text-label">{sources.length ? sources.map((source) => `${source.file_name} (${pt("upload {0}", [source.upload_index + 1])}) · ${pt(source.source_label)} · ${source.confidence == null ? pt("Confidence not reported") : pt("{0}% model confidence", [Math.round(source.confidence * 100)])}`).join("; ") : pt("Derived suggestion; no direct source reading identified.")}</dd>
             </div>;
           })}
         </dl>

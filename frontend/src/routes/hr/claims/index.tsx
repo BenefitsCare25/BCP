@@ -1,3 +1,4 @@
+import { usePortalTranslation } from "@/i18n/portal";
 import { Link } from "@tanstack/react-router";
 import { ArrowRight, FilePlus2, Search } from "lucide-react";
 import { useState } from "react";
@@ -19,6 +20,7 @@ import { useDocumentTitle } from "@/lib/useDocumentTitle";
 const PAGE_SIZE = 20;
 
 export function HrClaimsPage() {
+  const pt = usePortalTranslation();
   useDocumentTitle("Employee claims");
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(0);
@@ -34,34 +36,32 @@ export function HrClaimsPage() {
   return (
     <div className="space-y-3">
       <div className="flex justify-end">
-        <h1 className="sr-only">Employee claims</h1>
+        <h1 className="sr-only">{pt("Employee claims")}</h1>
         <Button asChild className="h-11 shrink-0 sm:h-9">
           <Link to="/hr/claims/new">
             <FilePlus2 className="size-4" aria-hidden />
-            New claim
-          </Link>
+            {pt("New claim")} </Link>
         </Button>
       </div>
 
       {claims.isLoading ? (
-        <div className="space-y-3" aria-label="Loading claims">
+        <div className="space-y-3" aria-label={pt("Loading claims")}>
           {[0, 1, 2].map((key) => (
             <Skeleton key={key} className="h-24 rounded-xl" />
           ))}
         </div>
       ) : claims.isError ? (
         <Card className="p-5" role="alert">
-          <p className="font-medium">Claims could not be loaded</p>
+          <p className="font-medium">{pt("Claims could not be loaded")}</p>
           <p className="mt-1 text-sm text-muted-foreground">
-            {formatError(claims.error)}
+            {pt(formatError(claims.error))}
           </p>
           <Button
             variant="outline"
             className="mt-4 h-11 sm:h-9"
             onClick={() => void claims.refetch()}
           >
-            Try again
-          </Button>
+            {pt("Try again")} </Button>
         </Card>
       ) : claims.data?.total === 0 && !debouncedSearch.trim() ? (
         <Card className="flex flex-col items-start gap-3 p-6">
@@ -69,24 +69,22 @@ export function HrClaimsPage() {
             <FilePlus2 className="size-5 text-muted-foreground" aria-hidden />
           </div>
           <div>
-            <h2 className="font-semibold">No delegated claims yet</h2>
+            <h2 className="font-semibold">{pt("No delegated claims yet")}</h2>
             <p className="mt-1 text-sm text-muted-foreground">
-              Start with the employee. Their live coverage determines the claim
-              types and evidence you can submit.
-            </p>
+              {pt("Start with the employee. Their live coverage determines the claim types and evidence you can submit.")} </p>
           </div>
           <Button asChild className="h-11 sm:h-9">
-            <Link to="/hr/claims/new">Start a claim</Link>
+            <Link to="/hr/claims/new">{pt("Start a claim")}</Link>
           </Button>
         </Card>
       ) : (
         <section aria-labelledby="claim-ledger-heading" className="space-y-3">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <h2 id="claim-ledger-heading" className="text-sm font-semibold">
-              {claims.data?.total} {claims.data?.total === 1 ? "claim" : "claims"}
+              {claims.data?.total} {claims.data?.total === 1 ? pt("claim") : pt("claims")}
             </h2>
             <label className="relative block w-full sm:max-w-xs">
-              <span className="sr-only">Search claims</span>
+              <span className="sr-only">{pt("Search claims")}</span>
               <Search
                 className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
                 aria-hidden
@@ -98,7 +96,7 @@ export function HrClaimsPage() {
                   setSearch(event.target.value);
                   setPage(0);
                 }}
-                placeholder="Employee, reference or provider"
+                placeholder={pt("Employee, reference or provider")}
                 className="h-11 pl-9 sm:h-9"
               />
             </label>
@@ -106,7 +104,7 @@ export function HrClaimsPage() {
 
           {visible.length === 0 ? (
             <Card className="p-6 text-sm text-muted-foreground">
-              No claims match “{search}”.
+              {pt("No claims match “")}{search}”.
             </Card>
           ) : (
             <Card className="divide-y divide-border overflow-hidden">
@@ -120,7 +118,7 @@ export function HrClaimsPage() {
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="truncate font-medium">
-                        {claim.employee_name ?? "Employee"}
+                        {claim.employee_name ?? pt("Employee")}
                       </span>
                       <ClaimStatus status={claim.status} />
                     </div>
@@ -129,7 +127,7 @@ export function HrClaimsPage() {
                       {claim.provider_name ? ` · ${claim.provider_name}` : ""}
                     </p>
                     <p className="mt-1 text-xs text-muted-foreground">
-                      {claim.claim_ref ?? "Draft"} · Incurred {formatClaimDate(claim.incurred_date)}
+                      {claim.claim_ref ?? pt("Draft")}  {pt("· Incurred")} {formatClaimDate(claim.incurred_date)}
                     </p>
                     <p className="mt-1 text-sm font-medium tabular-nums sm:hidden">
                       {formatClaimMoney(claim.amount_claimed, claim.currency)}

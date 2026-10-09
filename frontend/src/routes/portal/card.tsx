@@ -1,3 +1,4 @@
+import { usePortalTranslation } from "@/i18n/portal";
 /** "My card" — the digital panel cards a member shows at a clinic counter.
  *
  * No page heading and no lede: the shell carries the h1, the nav already says
@@ -20,10 +21,11 @@ import { isNotFoundError } from "@/lib/errors";
 import { useDocumentTitle } from "@/lib/useDocumentTitle";
 
 export function PortalCardPage() {
+  const pt = usePortalTranslation();
   useDocumentTitle("My card");
   const { data, isLoading, isError, error, refetch } = usePortalCards();
 
-  if (isLoading) return <LeafSkeleton label="Loading your cards" mounts={1} />;
+  if (isLoading) return <LeafSkeleton label={pt("Loading your cards")} mounts={1} />;
 
   // Anything but a 404 is a fetch that failed, and must not read as "your
   // company issued no card".
@@ -43,13 +45,9 @@ export function PortalCardPage() {
   // portal says one thing when a company's year is not current.
   if (isError || !data) {
     return (
-      <Mount label="No coverage on record">
+      <Mount label={pt("No coverage on record")}>
         <p className="text-row text-label">
-          We don&rsquo;t have any cover recorded against your name for this
-          period, so there&rsquo;s no card to show yet. This usually means your
-          company&rsquo;s cover for the year hasn&rsquo;t been finalised. Your
-          HR team can tell you where things stand.
-        </p>
+          {pt("We don’t have any cover recorded against your name for this period, so there’s no card to show yet. This usually means your company’s cover for the year hasn’t been finalised. Your HR team can tell you where things stand.")} </p>
       </Mount>
     );
   }
@@ -63,6 +61,7 @@ export function PortalCardPage() {
  *  options. So the page shows the preview card carrying it, instead of
  *  sending them to ask HR for a number the portal already knows. */
 function NoIssuedCard() {
+  const pt = usePortalTranslation();
   const company = useCompany();
   const member = usePortalSession((state) => state.member);
   const me = usePortalMe();
@@ -76,16 +75,15 @@ function NoIssuedCard() {
       </div>
       <div>
         <h2 className="text-xl font-bold tracking-title text-record">
-          {memberId ? "Show your member ID at the clinic" : "Your card is on its way"}
+          {memberId ? pt("Show your member ID at the clinic") : pt("Your card is on its way")}
         </h2>
         <p className="mt-2 text-row text-label">
           {memberId
-            ? "Your insurer hasn't supplied the card design yet. Quote the member ID shown in this preview at a panel clinic."
-            : "Your insurer hasn't issued your card yet. It will appear here as soon as it does."}
+            ? pt("Your insurer hasn't supplied the card design yet. Quote the member ID shown in this preview at a panel clinic.")
+            : pt("Your insurer hasn't issued your card yet. It will appear here as soon as it does.")}
         </p>
         <Link to="/portal/$company/clinics" params={{ company }} className={actionClass("primary", { className: "mt-4" })}>
-          <MapPin className="size-4" aria-hidden /> Find a panel clinic
-        </Link>
+          <MapPin className="size-4" aria-hidden />  {pt("Find a panel clinic")} </Link>
       </div>
     </div>
   );

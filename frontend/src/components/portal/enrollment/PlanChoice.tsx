@@ -1,3 +1,4 @@
+import { portalText as pt, usePortalTranslation } from "@/i18n/portal";
 /** The plan a member holds, in whichever of three shapes the window allows.
  *
  * **Rows, not a dropdown, and that is the substantive change.** A member comes
@@ -53,9 +54,10 @@ function ChoiceFigure({
   term: string;
   children: React.ReactNode;
 }) {
+  const pt = usePortalTranslation();
   return (
     <div className="flex items-baseline justify-between gap-3 py-0.5">
-      <dt className="min-w-0 text-row text-label">{term}</dt>
+      <dt className="min-w-0 text-row text-label">{pt(term)}</dt>
       <dd className="shrink-0 text-row text-record">{children}</dd>
     </div>
   );
@@ -80,6 +82,7 @@ function ChoiceRow({
   /** What this option costs and covers. */
   children?: React.ReactNode;
 }) {
+  const pt = usePortalTranslation();
   return (
     <label className={choiceRowClass(checked, "enrolment-plan-option")}>
       <input
@@ -98,9 +101,9 @@ function ChoiceRow({
               checked && "font-semibold",
             )}
           >
-            {title}
+            {pt(title)}
           </span>
-          {note && <span className="shrink-0 text-row text-label">{note}</span>}
+          {note && <span className="shrink-0 text-row text-label">{pt(note)}</span>}
         </div>
         {children && <div className="mt-1">{children}</div>}
       </div>
@@ -162,6 +165,7 @@ function TierFigureRows({
   row: typeof ChoiceFigure;
   siTerm: string;
 }) {
+  usePortalTranslation();
   const si = tier.financials?.sum_insured ?? null;
   const basis = coverWording(tier.financials?.basis, tier.financials?.max_sum_insured);
   const price = priceTerm(tier, flexOnChange);
@@ -196,6 +200,7 @@ function PremiumRows({
   isCurrent: boolean;
   row: typeof ChoiceFigure;
 }) {
+  usePortalTranslation();
   return (
     <>
       {price.premium !== null && (
@@ -248,6 +253,7 @@ function TierFigures({
   premium?: TierPrice | null;
   isCurrent?: boolean;
 }) {
+  const pt = usePortalTranslation();
   const price = priceTerm(tier, flexOnChange);
   if (!hasCover(tier) && !price && !hasPremiumRows(premium)) return null;
   return (
@@ -265,7 +271,7 @@ function TierFigures({
         </dl>
       )}
       {price && price.amount == null && (
-        <p className="text-row text-label">{price.term}</p>
+        <p className="text-row text-label">{pt(price.term)}</p>
       )}
     </>
   );
@@ -297,14 +303,14 @@ function tierOptionLabel(
   if (price) {
     parts.push(
       price.amount == null
-        ? price.term.replace(/\.$/, "").toLowerCase()
-        : `${price.term.toLowerCase()} ${currencySymbol(currency)}${moneyText(price.amount)}`,
+        ? pt(price.term.replace(/\.$/, "").toLowerCase())
+        : `${pt(price.term.toLowerCase())} ${currencySymbol(currency)}${moneyText(price.amount)}`,
     );
   }
   if (premium?.share != null) {
-    parts.push(`you pay S$${moneyText(premium.share)} a year`);
+    parts.push(pt("you pay S${0} a year", [moneyText(premium.share)]));
   } else if (!isCurrent && premium?.change) {
-    parts.push(`${premium.change > 0 ? "+" : "-"}S$${moneyText(Math.abs(premium.change))} premium`);
+    parts.push(pt("{0}S${1} premium", [premium.change > 0 ? "+" : "-", moneyText(Math.abs(premium.change))]));
   }
   return parts.join(" — ");
 }
@@ -329,6 +335,7 @@ export function PlanChoice({
   compact?: boolean;
   onChange: (next: ProductState) => void;
 }) {
+  const pt = usePortalTranslation();
   const groupName = useId();
 
   const selectedTier = ts.tiers.find((t) => t.key === ps.tierKey) ?? null;
@@ -367,8 +374,7 @@ export function PlanChoice({
     return (
       <div className="flex flex-col gap-1.5">
         <h3 className={compact ? "sr-only" : "leaf-label"} id={`${groupName}-label`}>
-          Your plan
-        </h3>
+          {pt("Your plan")} </h3>
         <div
           role="radiogroup"
           aria-labelledby={`${groupName}-label`}
@@ -381,7 +387,7 @@ export function PlanChoice({
               value={t.key}
               checked={!ps.declined && ps.tierKey === t.key}
               onSelect={() => selectTier(t.key)}
-              title={`${t.label}${tierIsCurrent(t) ? compact ? " · Current" : " — your current plan" : ""}`}
+              title={`${t.label}${tierIsCurrent(t) ? compact ? pt(" · Current") : pt(" — your current plan") : ""}`}
               // Neutral ink, deliberately. The strike ramp belongs to claim
               // verdicts (The Status-Is-Not-Brand Rule), and a green "upgrade"
               // beside an approved claim's green would ask the member to decide
@@ -412,11 +418,10 @@ export function PlanChoice({
               value={DECLINE}
               checked={ps.declined}
               onSelect={() => onChange({ ...ps, declined: true })}
-              title="I don't want this cover"
+              title={pt("I don't want this cover")}
             >
               <p className="text-row text-label">
-                You won&rsquo;t be covered under this plan.
-              </p>
+                {pt("You won’t be covered under this plan.")} </p>
             </ChoiceRow>
           )}
         </div>
@@ -429,7 +434,7 @@ export function PlanChoice({
     // member's own world and the phone gives them its wheel.
     return (
       <>
-        <Field label="Your plan">
+        <Field label={pt("Your plan")}>
           {(p) => (
             <select
               {...p}
@@ -449,7 +454,7 @@ export function PlanChoice({
                 </option>
               ))}
               {ts.can_decline && (
-                <option value={DECLINE}>I don't want this cover</option>
+                <option value={DECLINE}>{pt("I don't want this cover")}</option>
               )}
             </select>
           )}
@@ -486,7 +491,7 @@ export function PlanChoice({
     <>
       <dl>
         {ps.declined ? (
-          <MountRow term="Your plan">You&rsquo;ve declined this cover</MountRow>
+          <MountRow term="Your plan">{pt("You’ve declined this cover")}</MountRow>
         ) : selectedTier ? (
           <>
             <MountRow
@@ -497,7 +502,7 @@ export function PlanChoice({
                   : (directionLabel(selectedTier.direction, true) ?? undefined)
               }
             >
-              {selectedTier.label}
+              {pt(selectedTier.label)}
             </MountRow>
             <TierFigureRows
               tier={selectedTier}
@@ -515,11 +520,11 @@ export function PlanChoice({
             )}
           </>
         ) : (
-          <MountRow term="Your plan">Not set</MountRow>
+          <MountRow term="Your plan">{pt("Not set")}</MountRow>
         )}
       </dl>
       {!ps.declined && selectedPrice && selectedPrice.amount == null && (
-        <p className="text-row text-label">{selectedPrice.term}</p>
+        <p className="text-row text-label">{pt(selectedPrice.term)}</p>
       )}
       {/* A confirmed or previewed enrollment can sit on a non-baseline
           tier, and "what changed from the plan you had" is still the

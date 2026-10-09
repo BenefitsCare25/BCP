@@ -1,3 +1,4 @@
+import { usePortalTranslation } from "@/i18n/portal";
 /** Company selector for single-host deployments.
  *
  * With per-tenant subdomains the hostname already says which company a sign-in
@@ -22,6 +23,7 @@ type Props = {
 
 /** Whether the sign-in form must collect a company before it can submit. */
 export function useCompanyRequired(): boolean {
+  usePortalTranslation();
   // Read once per render — storage only changes via this field or the entry
   // link, both of which re-render the form.
   return needsTenantSelection();
@@ -34,10 +36,11 @@ export function commitCompany(value: string): boolean {
 }
 
 export function CompanyField({ id, value, onChange, error }: Props) {
+  const pt = usePortalTranslation();
   if (!isHeaderMode()) return null;
   if (!needsTenantSelection()) {
     const slug = window.location.pathname.startsWith("/hr") ? currentHrTenantSlug() : currentPortalTenantSlug();
-    return <div className="flex items-center justify-between gap-3 text-sm"><span>Company: <strong>{slug}</strong></span><button type="button" onClick={clearTenantSelection} className="underline underline-offset-4">Change company</button></div>;
+    return <div className="flex items-center justify-between gap-3 text-sm"><span>{pt("Company:")} <strong>{slug}</strong></span><button type="button" onClick={clearTenantSelection} className="underline underline-offset-4">{pt("Change company")}</button></div>;
   }
   return (
     <div className="space-y-1.5">
@@ -45,8 +48,7 @@ export function CompanyField({ id, value, onChange, error }: Props) {
         htmlFor={id}
         className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground"
       >
-        Company
-      </Label>
+        {pt("Company")} </Label>
       <div className="relative">
         <Building2 className="pointer-events-none absolute left-3.5 top-1/2 size-[18px] -translate-y-1/2 text-muted-foreground" />
         <Input
@@ -59,16 +61,15 @@ export function CompanyField({ id, value, onChange, error }: Props) {
           type="text"
           autoComplete="organization"
           spellCheck={false}
-          placeholder="your-company"
+          placeholder={pt("your-company")}
           value={value}
           onChange={(e) => onChange(e.target.value)}
           className="h-12 pl-11"
         />
       </div>
       <p id={`${id}-hint`} className="text-xs text-muted-foreground">
-        The company code from your invitation email.
-      </p>
-      {error && <p id={`${id}-error`} className="text-sm text-error" role="alert">{error}</p>}
+        {pt("The company code from your invitation email.")} </p>
+      {error && <p id={`${id}-error`} className="text-sm text-error" role="alert">{pt(error)}</p>}
     </div>
   );
 }

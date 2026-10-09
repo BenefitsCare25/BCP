@@ -1,3 +1,4 @@
+import { usePortalTranslation } from "@/i18n/portal";
 /** Find a clinic — the one portal screen a member opens while already standing
  * somewhere, deciding where to walk.
  *
@@ -121,13 +122,14 @@ function ClinicGroups({
   showHeadings: boolean;
   clock: ClinicClock;
 }) {
+  const pt = usePortalTranslation();
   return (
     <>
       {groups.map((group) => (
         // `leaf-rise` on the SECTION, not the pane: the stagger is a
         // `:nth-of-type` rule over siblings.
         <section key={group.key} className="leaf-rise space-y-1.5">
-          <h2 className={showHeadings ? "leaf-label px-1" : "sr-only"}>{group.label}</h2>
+          <h2 className={showHeadings ? "leaf-label px-1" : "sr-only"}>{pt(group.label)}</h2>
           <ul className="clinic-grid">
             {group.items.map((clinic) => (
               <ClinicRow key={clinic.id} clinic={clinic} clock={clock} />
@@ -143,6 +145,7 @@ function ClinicGroups({
  * the two ways of asking for it. `onChange` fires whenever the answer moves, so
  * the caller can restart its paging — the ranking under it is different now. */
 function useOrigin(onChange: () => void) {
+  usePortalTranslation();
   const [origin, setOrigin] = useState<Origin | null>(null);
   const [status, setStatus] = useState<OriginStatus>({ kind: "idle" });
   // Guards a stale lookup from overwriting a newer one — the origin box fires
@@ -247,6 +250,7 @@ export function ClinicLocator({
     params: ClinicSearchParams,
   ) => UseQueryResult<ClinicSearch, Error>;
 }) {
+  const pt = usePortalTranslation();
   const [typeKey, setTypeKey] = useState("all");
   const [area, setArea] = useState(ALL_AREAS);
   const [search, setSearch] = useState("");
@@ -288,7 +292,7 @@ export function ClinicLocator({
     limit: PAGE_SIZE,
   });
 
-  if (query.isLoading) return <LeafSkeleton label="Loading clinics" />;
+  if (query.isLoading) return <LeafSkeleton label={pt("Loading clinics")} />;
   if (query.isError && !isNotFoundError(query.error)) {
     return <PortalErrorState onRetry={() => void query.refetch()} />;
   }
@@ -313,11 +317,9 @@ export function ClinicLocator({
 
   if (query.isError || facets.length === 0) {
     return (
-      <Mount label="No panel clinics yet">
+      <Mount label={pt("No panel clinics yet")}>
         <p className="text-row text-label">
-          Your policy doesn't have a clinic network published yet. Your HR team
-          can tell you where you're covered in the meantime.
-        </p>
+          {pt("Your policy doesn't have a clinic network published yet. Your HR team can tell you where you're covered in the meantime.")} </p>
       </Mount>
     );
   }
@@ -362,8 +364,8 @@ export function ClinicLocator({
       />
 
       <p aria-live="polite" className="px-1 text-row text-label">
-        {total} clinic{total === 1 ? "" : "s"}
-        {located ? " · nearest first" : " · A to Z"}
+        {total}  {pt("clinic")}{total === 1 ? "" : pt("s")}
+        {located ? pt(" · nearest first") : pt(" · A to Z")}
         {query.isFetching && (
           <Loader2 className="ml-2 inline size-3 animate-spin align-middle" aria-hidden />
         )}
@@ -375,13 +377,13 @@ export function ClinicLocator({
         // as long as the request takes, and reading a verdict there would be
         // wrong about half the time it appeared.
         loading ? (
-          <LeafSkeleton label="Loading clinics" />
+          <LeafSkeleton label={pt("Loading clinics")} />
         ) : (
-          <Mount label="Nothing matches">
+          <Mount label={pt("Nothing matches")}>
             <p className="text-row text-label">
               {filtersActive
-                ? "Try another clinic type or area, or clear what you typed."
-                : "No clinics have been published for your policy yet."}
+                ? pt("Try another clinic type or area, or clear what you typed.")
+                : pt("No clinics have been published for your policy yet.")}
             </p>
           </Mount>
         )
@@ -410,16 +412,13 @@ export function ClinicLocator({
             className={actionClass("neutral", { className: "disabled:opacity-60" })}
           >
             {loading && <Loader2 className="size-4 animate-spin" aria-hidden />}
-            Show {Math.min(PAGE_SIZE, total - items.length)} more
-          </button>
+            {pt("Show")} {Math.min(PAGE_SIZE, total - items.length)}  {pt("more")} </button>
         </div>
       )}
 
       {items.length >= MAX_ROWS && total > items.length && (
         <p className="px-1 text-center text-row text-label">
-          Showing the first {items.length} of {total}. Narrow by area or name to
-          see the rest.
-        </p>
+          {pt("Showing the first")} {items.length}  {pt("of")} {total}{pt(". Narrow by area or name to see the rest.")} </p>
       )}
     </div>
   );

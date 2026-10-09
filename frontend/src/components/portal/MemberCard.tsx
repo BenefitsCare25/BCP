@@ -1,3 +1,4 @@
+import { usePortalTranslation } from "@/i18n/portal";
 /** Panel e-card CANVAS — the artwork plus its printed fields, shared by the
  * member portal (`leaf/CardLeaf.tsx`), the broker "employee view" preview and
  * the config placement editor.
@@ -80,6 +81,7 @@ export function CardCanvas({
   errorFallback?: string;
   children?: React.ReactNode;
 }) {
+  const pt = usePortalTranslation();
   return (
     <div
       className={cn(
@@ -106,7 +108,7 @@ export function CardCanvas({
         <div
           className="absolute inset-0 flex items-center justify-center text-muted-foreground"
           role="status"
-          aria-label="Loading the card design"
+          aria-label={pt("Loading the card design")}
         >
           <Loader2 className="size-6 animate-spin" aria-hidden />
         </div>
@@ -114,7 +116,7 @@ export function CardCanvas({
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 p-4 text-center text-muted-foreground">
           <ImageOff className="size-6" aria-hidden />
           <span className="text-xs leading-5">
-            {artworkStatus === "error" ? errorFallback : fallback}
+            {pt(artworkStatus === "error" ? errorFallback : fallback)}
           </span>
         </div>
       )}

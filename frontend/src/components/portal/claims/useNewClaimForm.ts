@@ -1,3 +1,4 @@
+import { portalMessage, usePortalTranslation, type PortalCopy } from "@/i18n/portal";
 /** The claim form's state machine.
  *
  * Everything the form knows lives here; the section components under
@@ -83,6 +84,7 @@ export interface ClaimLimitRow {
 }
 
 export function useNewClaimForm() {
+  const pt = usePortalTranslation();
   const navigate = useNavigate();
   const company = useCompany();
   const options = useCoverageOptions();
@@ -138,7 +140,7 @@ export function useNewClaimForm() {
   // One file per required-document slot (keyed by slot key) + optional extras.
   const [slotFiles, setSlotFiles] = useState<Record<string, File | null>>({});
   const [files, setFiles] = useState<File[]>([]);
-  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  const [fieldErrors, setFieldErrors] = useState<Record<string, PortalCopy>>({});
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const submitInFlight = useRef(false);
@@ -146,7 +148,7 @@ export function useNewClaimForm() {
   // prefill the form — each reused as the claim's evidence in the slot the AI
   // identified it as, so they don't upload twice.
   const [autofillDocs, setAutofillDocs] = useState<AutofillDoc[]>([]);
-  const [autofillNote, setAutofillNote] = useState<string | null>(null);
+  const [autofillNote, setAutofillNote] = useState<PortalCopy[] | null>(null);
   // Multi-invoice upload: the claims still to submit after this one (one per
   // distinct invoice) and how many were already submitted in this run.
   const [pendingClaims, setPendingClaims] = useState<PendingClaim[]>([]);
@@ -786,7 +788,7 @@ export function useNewClaimForm() {
     if (!s.available) {
       setLowConfidence([]);
       setAutofillNote(
-        s.reason ?? "Autofill is unavailable — please fill in the claim below.",
+        [s.reason ?? "Autofill is unavailable — please fill in the claim below."],
       );
       return;
     }
@@ -821,17 +823,17 @@ export function useNewClaimForm() {
       parts.push("Confirm the claim type below.");
     }
     if (!s.claimant) parts.push("Confirm who this claim is for.");
-    setAutofillNote(parts.join(" "));
+    setAutofillNote(parts);
   };
 
   const runAutofill = async (picked: File[]) => {
     const capped = picked.slice(0, MAX_AUTOFILL_FILES);
     if (picked.length > MAX_AUTOFILL_FILES) {
-      toast.error(`Upload at most ${MAX_AUTOFILL_FILES} documents to autofill.`);
+      toast.error(pt("Upload at most {0} documents to autofill.", [MAX_AUTOFILL_FILES]));
     }
     const withinSize = capped.filter((f) => {
       if (f.size > MAX_BYTES) {
-        toast.error(`${f.name} exceeds 15 MB`);
+        toast.error(pt("{0} exceeds 15 MB", [f.name]));
         return false;
       }
       return true;
@@ -853,9 +855,9 @@ export function useNewClaimForm() {
       setSubmittedBatchClaims([]);
       setLowConfidence([]);
       setAutofillNote(
-        "We couldn't read these files for autofill — fill in the claim and they'll still be attached.",
+        ["We couldn't read these files for autofill — fill in the claim and they'll still be attached."],
       );
-      toast.error(formatError(err));
+      toast.error(pt(formatError(err)));
     }
   };
 
@@ -888,9 +890,9 @@ export function useNewClaimForm() {
     setDoctorName(f?.doctor_name ?? "");
     setAutofillDocs(next.documents);
     setAutofillNote(
-      next.documents.length > 0
-        ? `We've filled in the next claim from ${next.fileName} — check everything before submitting.`
-        : `We've filled in the next claim from ${next.fileName}, but couldn't reuse its files — attach the documents below.`,
+      [portalMessage(next.documents.length > 0
+        ? "We've filled in the next claim from {0} — check everything before submitting."
+        : "We've filled in the next claim from {0}, but couldn't reuse its files — attach the documents below.", [next.fileName])],
     );
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
@@ -900,7 +902,7 @@ export function useNewClaimForm() {
     const next: File[] = [];
     for (const f of Array.from(picked)) {
       if (f.size > MAX_BYTES) {
-        toast.error(`${f.name} exceeds 15 MB`);
+        toast.error(pt("{0} exceeds 15 MB", [f.name]));
         continue;
       }
       next.push(f);
@@ -1080,7 +1082,7 @@ export function useNewClaimForm() {
         // waits until the last one, so the member isn't bounced out of a run.
         const done = multiDone + 1;
         toast.success(
-          `Claim ${done} of ${done + pendingClaims.length} submitted`,
+          pt("Claim {0} of {1} submitted", [done, done + pendingClaims.length]),
         );
         advanceToNextClaim();
       } else {
@@ -1093,7 +1095,7 @@ export function useNewClaimForm() {
         // THE RECEIPT: the claim's own page, which states what was sent, lists
         // every document and carries the status from here on. It replaces a
         // three-second toast that left nothing behind.
-        toast.success("Claim submitted");
+        toast.success(pt("Claim submitted"));
         try {
           await navigate({
             to: "/portal/$company/claims/$claimId",

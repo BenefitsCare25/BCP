@@ -1,3 +1,4 @@
+import { usePortalTranslation, type PortalCopy } from "@/i18n/portal";
 /** Form fields on the leaf.
  *
  * This exists to make the portal's two most common accessibility defects
@@ -37,7 +38,7 @@ export function Field({
   label: ReactNode;
   /** Plain-language help. Never behind hover — a member on a phone can't hover. */
   hint?: ReactNode;
-  error?: string | null;
+  error?: PortalCopy | null;
   required?: boolean;
   children: (props: {
     id: string;
@@ -47,6 +48,7 @@ export function Field({
   }) => ReactNode;
   className?: string;
 }) {
+  const pt = usePortalTranslation();
   const id = useId();
   const hintId = `${id}-hint`;
   const errorId = `${id}-error`;
@@ -60,12 +62,12 @@ export function Field({
       data-field-error={error ? "true" : undefined}
     >
       <label htmlFor={id} className="leaf-label block">
-        {label}
+        {pt(label)}
         {required && <RequiredMark />}
       </label>
       {hint && (
         <p id={hintId} className="text-row text-label">
-          {hint}
+          {pt(hint)}
         </p>
       )}
       {children({
@@ -82,7 +84,7 @@ export function Field({
           role="alert"
           className="text-row font-medium text-strike-rejected"
         >
-          {error}
+          {pt(error)}
         </p>
       )}
     </div>
@@ -104,10 +106,11 @@ export function FieldGroup({
 }: {
   label: ReactNode;
   hint?: ReactNode;
-  error?: string | null;
+  error?: PortalCopy | null;
   children: ReactNode;
   className?: string;
 }) {
+  const pt = usePortalTranslation();
   const id = useId();
   return (
     <div
@@ -117,13 +120,13 @@ export function FieldGroup({
       data-field-error={error ? "true" : undefined}
     >
       <span id={id} className="leaf-label block">
-        {label}
+        {pt(label)}
       </span>
-      {hint && <p className="text-row text-label">{hint}</p>}
+      {hint && <p className="text-row text-label">{pt(hint)}</p>}
       {children}
       {error && (
         <p role="alert" className="text-row font-medium text-strike-rejected">
-          {error}
+          {pt(error)}
         </p>
       )}
     </div>
@@ -134,16 +137,17 @@ export function FieldGroup({
  * surface is marked the same way — a red asterisk is a convention the portal's
  * audience does not share, and colour alone is never a marker (WCAG 1.4.1). */
 export function RequiredMark() {
+  const pt = usePortalTranslation();
   return (
     <span className="ml-1 normal-case tracking-normal text-label">
-      (required)
-    </span>
+      {pt("(required)")} </span>
   );
 }
 
 /** A form-level failure. `role="alert"` so it is announced the moment it
  * appears, wherever the member's focus happens to be. */
 export function FormAlert({ children }: { children: ReactNode }) {
+  usePortalTranslation();
   return (
     <p
       role="alert"

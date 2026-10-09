@@ -1,4 +1,5 @@
 import { Badge } from "@/components/ui/badge";
+import { getPortalLocale, portalText, usePortalTranslation } from "@/i18n/portal";
 
 const STATUS_LABELS: Record<string, string> = {
   draft: "Draft",
@@ -24,10 +25,11 @@ function statusVariant(status: string): BadgeVariant {
 }
 
 export function claimStatusLabel(status: string): string {
-  return STATUS_LABELS[status] ?? status.replaceAll("_", " ");
+  return portalText(STATUS_LABELS[status] ?? status.replaceAll("_", " "));
 }
 
 export function ClaimStatus({ status }: { status: string }) {
+  usePortalTranslation();
   return <Badge variant={statusVariant(status)}>{claimStatusLabel(status)}</Badge>;
 }
 
@@ -35,7 +37,7 @@ export function formatClaimDate(value: string | null): string {
   if (!value) return "—";
   const [year, month, day] = value.slice(0, 10).split("-").map(Number);
   if (!year || !month || !day) return value;
-  return new Intl.DateTimeFormat("en-SG", {
+  return new Intl.DateTimeFormat(getPortalLocale(), {
     day: "numeric",
     month: "short",
     year: "numeric",
@@ -44,7 +46,7 @@ export function formatClaimDate(value: string | null): string {
 
 export function formatClaimMoney(amount: number, currency: string): string {
   try {
-    return new Intl.NumberFormat("en-SG", {
+    return new Intl.NumberFormat(getPortalLocale(), {
       style: "currency",
       currency,
       minimumFractionDigits: 2,

@@ -1,3 +1,4 @@
+import { usePortalTranslation } from "@/i18n/portal";
 /** A modal on the member's leaf, built on the NATIVE `<dialog>` element.
  *
  * **This is not a stylistic preference — it is the only kind of modal this
@@ -49,6 +50,7 @@ export function LeafDialog({
   children: ReactNode;
   className?: string;
 }) {
+  const pt = usePortalTranslation();
   const ref = useRef<HTMLDialogElement | null>(null);
 
   useEffect(() => {
@@ -127,9 +129,9 @@ export function LeafDialog({
             id="leaf-dialog-title"
             className="text-md font-semibold leading-5 text-record"
           >
-            {title}
+            {pt(title)}
           </h2>
-          {gloss && <p className="mt-1 text-row text-label">{gloss}</p>}
+          {gloss && <p className="mt-1 text-row text-label">{pt(gloss)}</p>}
         </div>
         <button
           type="button"
@@ -143,7 +145,7 @@ export function LeafDialog({
           }
         >
           <X className="size-5" aria-hidden />
-          <span className="sr-only">Close</span>
+          <span className="sr-only">{pt("Close")}</span>
         </button>
       </div>
       {/* The body scrolls, the header and whatever the caller pins do not. */}

@@ -1,3 +1,4 @@
+import { usePortalTranslation } from "@/i18n/portal";
 /** The schedule of benefits, set in the leaf's language.
  *
  * Presentation only — every decision about *what* a schedule says (which rows
@@ -35,11 +36,12 @@ import { MountRule } from "./Mount";
 const MEMBER_CURRENCY = "S$";
 
 function LimitNotes({ limits }: { limits?: BenefitLimit[] }) {
+  const pt = usePortalTranslation();
   if (!limits || limits.length === 0) return null;
   return (
     <p className="mt-0.5 text-row text-label">
       {limits
-        .map((l) => (l.value ? `${l.label}: ${l.value}` : l.label))
+        .map((l) => (l.value ? `${pt(l.label)}: ${pt(l.value)}` : pt(l.label)))
         .join(" · ")}
     </p>
   );
@@ -60,6 +62,7 @@ function ScheduleRow({
   limits?: BenefitLimit[];
   indent?: boolean;
 }) {
+  const pt = usePortalTranslation();
   // The member surface writes money as S$ everywhere else, and a Yes/No row
   // reads as whether the service is included.
   const formatted =
@@ -87,7 +90,7 @@ function ScheduleRow({
             indent ? "text-label" : "text-record"
           }`}
         >
-          {label}
+          {pt(label)}
         </dt>
         {formatted && (
           <dd
@@ -95,12 +98,12 @@ function ScheduleRow({
               longForm ? "text-label" : "shrink-0 text-right font-medium text-record"
             }`}
           >
-            {formatted}
+            {pt(formatted)}
           </dd>
         )}
       </div>
       {note && (
-        <dd className="mt-0.5 text-row text-label">{note}</dd>
+        <dd className="mt-0.5 text-row text-label">{pt(note)}</dd>
       )}
       <dd>
         <LimitNotes limits={limits} />
@@ -118,6 +121,7 @@ function Enumeration({
   item: BenefitItem;
   hidden?: boolean;
 }) {
+  const pt = usePortalTranslation();
   const [open, setOpen] = useState(false);
   const subs = subItemsOf(item);
   const label = item.name ?? "";
@@ -131,28 +135,27 @@ function Enumeration({
         className="leaf-focus flex w-full min-h-11 items-center justify-between gap-3 text-left"
       >
         <span className="min-w-0 break-words text-row text-record">
-          {label}
+          {pt(label)}
         </span>
         <span className="flex shrink-0 items-center gap-1.5 text-row text-label">
-          {subs.length} listed
-          <ChevronDown
+          {subs.length}  {pt("listed")} <ChevronDown
             className={`size-4 transition-transform ${open ? "rotate-180" : ""}`}
             aria-hidden
           />
         </span>
       </button>
       {item.note && (
-        <p className="text-row text-label">{item.note}</p>
+        <p className="text-row text-label">{pt(item.note)}</p>
       )}
       {open &&
         subs.map((sub: BenefitSubItem, i) => (
           <ScheduleRow
             key={i}
             indent
-            label={`${sub.key ? `${sub.key} ` : ""}${sub.name}`}
+            label={`${sub.key ? `${sub.key} ` : ""}${pt(sub.name)}`}
             value={sub.value}
             kind={sub.kind}
-            note={sub.note}
+            note={pt(sub.note)}
             limits={sub.limits}
           />
         ))}
@@ -193,6 +196,7 @@ function Item({
    * tabbable — see the note at the call site. */
   hidden?: boolean;
 }) {
+  const pt = usePortalTranslation();
   if (isEnumeration(item)) return <Enumeration item={item} hidden={hidden} />;
 
   // The slip's row number is deliberately dropped on the member surface. It is
@@ -207,10 +211,10 @@ function Item({
   return (
     <div hidden={hidden}>
       <ScheduleRow
-        label={label}
+        label={pt(label)}
         value={item.value}
         kind={item.kind}
-        note={item.note}
+        note={pt(item.note)}
         limits={item.limits}
       />
       {displayProps(item.properties).map(([key, value]) => (
@@ -220,10 +224,10 @@ function Item({
         <ScheduleRow
           key={i}
           indent
-          label={`${sub.key ? `${sub.key} ` : ""}${sub.name}`}
+                  label={`${sub.key ? `${sub.key} ` : ""}${pt(sub.name)}`}
           value={sub.value}
           kind={sub.kind}
-          note={sub.note}
+          note={pt(sub.note)}
           limits={sub.limits}
         />
       ))}
@@ -242,6 +246,7 @@ export function ScheduleLeaf({
   /** Use inside the care detail's single full-schedule disclosure. */
   allRows?: boolean;
 }) {
+  const pt = usePortalTranslation();
   const [showAll, setShowAll] = useState(false);
   const { items, headline, collapsible, valuesMissing } = readSchedule(
     schedule?.items?.filter((item) => /\p{L}/u.test(item.name ?? "")),
@@ -250,8 +255,7 @@ export function ScheduleLeaf({
   if (items.length === 0) {
     return (
       <p className="text-row text-label">
-        The detailed benefit list for this plan isn't available yet.
-      </p>
+        {pt("The detailed benefit list for this plan isn't available yet.")} </p>
     );
   }
 
@@ -279,9 +283,7 @@ export function ScheduleLeaf({
           (`careFacts`), and the description only restated the product title. */}
       {valuesMissing && (
         <p className="mb-2 text-row text-label">
-          These are the benefits you're covered for. The amounts for this plan
-          aren't recorded yet — your HR team can confirm them.
-        </p>
+          {pt("These are the benefits you're covered for. The amounts for this plan aren't recorded yet — your HR team can confirm them.")} </p>
       )}
 
       {/* Every row is mounted, in order. A row outside the headline is `hidden`
@@ -344,7 +346,7 @@ export function ScheduleLeaf({
                 the screen nine times — the third appearance is already one too
                 many (The Twice Rule). */}
             <span className="text-row font-semibold text-record">
-              {showAll ? "Show fewer" : `Show all ${items.length} benefits`}
+              {showAll ? pt("Show fewer") : pt("Show all {0} benefits", [items.length])}
             </span>
             <ChevronDown
               className={`size-4 shrink-0 text-label transition-transform duration-200 ease-leaf ${

@@ -1,0 +1,56 @@
+.portal-language-control {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  gap: 6px;
+  min-height: 44px;
+  padding-inline: 10px 4px;
+  border-radius: 999px;
+  color: #1d3bc4;
+  background: #eef5ff;
+}
+.portal-language-control select {
+  min-height: 44px;
+  max-width: 108px;
+  padding-inline: 0 4px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+.portal-language-control:hover { background: #e1edff; }
+.portal-language-control:focus-within { outline: 2px solid #1d3bc4; outline-offset: 3px; }
+.portal-language-control select:focus { outline: none; }
+.portal-login__content { position: relative; }
+.portal-login__language { display: flex; justify-content: flex-end; position: absolute; top: 20px; right: 24px; z-index: 2; }
+.portal-login .portal-language-control { color: #c60024; background: #fff0f3; }
+.portal-login .portal-language-control:hover { background: #ffe2e8; }
+.portal-login .portal-language-control:focus-within { outline-color: #c60024; }
+html:lang(zh) :is(.portal-clay, .portal-login) {
+  font-family: "Figtree Variable", "Figtree", "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+  letter-spacing: normal;
+  line-break: strict;
+}
+html:lang(zh) :is(.portal-clay, .portal-login) :is(h1, h2, h3) { letter-spacing: normal; }
+@media (max-width: 639px) {
+  .portal-language-control { gap: 0; padding-inline: 6px 2px; }
+  .portal-language-control > svg { display: none; }
+  .portal-language-control select { max-width: 88px; }
+  .portal-mobile-header { display: grid; grid-template-columns: minmax(0, 1fr) auto; row-gap: 0; }
+  .portal-mobile-header .portal-nav-actions { grid-column: 1 / -1; justify-content: flex-end; }
+  .portal-clay.is-home .sky-content { padding-top: 124px; }
+  .hr-portal .portal-nav-row { flex-wrap: wrap; row-gap: 4px; }
+}
+@media (min-width: 1024px) and (max-width: 1199px) {
+  .portal-clay .portal-nav-link { padding-inline: 6px; gap: 4px; }
+  .portal-clay .portal-nav-link svg { width: 16px; height: 16px; }
+  .portal-clay .portal-language-control select { max-width: 96px; }
+  .portal-clay .portal-nav-divider { margin-inline: 8px; }
+  .portal-clay .portal-nav-actions { padding-left: 8px; gap: 0; }
+}
+@media (forced-colors: active) {
+  .portal-language-control { outline: 1px solid ButtonText; }
+}

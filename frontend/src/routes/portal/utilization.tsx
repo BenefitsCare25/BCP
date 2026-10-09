@@ -1,3 +1,4 @@
+import { usePortalTranslation } from "@/i18n/portal";
 /** "What's left" — how much of each benefit the member has used. */
 import { usePortalClaims, usePortalUtilization } from "@/api/portal";
 import { UsageLeaf } from "@/components/portal/leaf/UsageLeaf";
@@ -7,13 +8,14 @@ import { PortalErrorState } from "@/components/portal/PortalErrorState";
 import { isNotFoundError } from "@/lib/errors";
 
 export function PortalUtilizationPage() {
+  const pt = usePortalTranslation();
   const { data, isLoading, isError, error, refetch } = usePortalUtilization();
   // Itemises what is under review. Never gates rendering: the balances are
   // still the answer if this is slow or fails, and the breakdown simply does
   // not appear (see `PendingBreakdown`).
   const claims = usePortalClaims();
 
-  if (isLoading) return <LeafSkeleton label="Loading your balances" mounts={2} />;
+  if (isLoading) return <LeafSkeleton label={pt("Loading your balances")} mounts={2} />;
 
   if (isError && !isNotFoundError(error)) {
     return <PortalErrorState onRetry={() => void refetch()} />;
@@ -21,12 +23,9 @@ export function PortalUtilizationPage() {
 
   if (isError || !data) {
     return (
-      <Mount label="Nothing to show yet">
+      <Mount label={pt("Nothing to show yet")}>
         <p className="text-row text-label">
-          We don't have any benefits recorded against your name for this
-          period, so there's nothing to track yet. Your HR team can check your
-          record.
-        </p>
+          {pt("We don't have any benefits recorded against your name for this period, so there's nothing to track yet. Your HR team can check your record.")} </p>
       </Mount>
     );
   }

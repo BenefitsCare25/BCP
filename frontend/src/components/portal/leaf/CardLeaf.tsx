@@ -1,3 +1,4 @@
+import { usePortalTranslation } from "@/i18n/portal";
 /** The member's panel cards, as leaves.
  *
  * This is the one screen in the portal that gets used standing at a counter
@@ -63,6 +64,7 @@ function MemberCardLeaf({
   card: MemberCard;
   useArtwork: ArtworkHook;
 }) {
+  const pt = usePortalTranslation();
   const [face, setFace] = useState<CardFace>("front");
   const showingBack = face === "back" && card.has_back;
   // Both faces are fetched so flipping doesn't flash; the back only when it exists.
@@ -127,7 +129,7 @@ function MemberCardLeaf({
         // the glass as a mounted specimen rather than reading as a second tile
         // floating on the first (no nested cards).
         className="rounded-control border-hairline/75 shadow-none"
-        fallback="Your insurer hasn't supplied the card design yet — the details below are still what a clinic needs."
+        fallback={pt("Your insurer hasn't supplied the card design yet — the details below are still what a clinic needs.")}
         errorFallback="The card design couldn't be loaded just now — the details below are still what a clinic needs."
       />
 
@@ -137,7 +139,7 @@ function MemberCardLeaf({
           onClick={() => setFace(showingBack ? "front" : "back")}
           className={goLinkClass({ className: "mt-2" })}
         >
-          {showingBack ? "Show the front" : "Show the back"}
+          {showingBack ? pt("Show the front") : pt("Show the back")}
         </button>
       )}
 
@@ -157,7 +159,7 @@ function MemberCardLeaf({
 
       {card.services.length > 0 && (
         <div className="mt-3">
-          <p className="leaf-label">Covered here</p>
+          <p className="leaf-label">{pt("Covered here")}</p>
           <p className="mt-1 text-row text-record">
             {card.services.map((s) => s.label).join(" · ")}
           </p>
@@ -193,9 +195,10 @@ function MemberCardLeaf({
  * `action` is opt-out because the broker preview renders this too, where the
  * member's clinic route is not navigable. */
 function NoCards({ message, action }: { message: string; action: boolean }) {
+  const pt = usePortalTranslation();
   const company = useCompany();
   return (
-    <Mount label="No card issued yet">
+    <Mount label={pt("No card issued yet")}>
       <p className="text-row text-label">{message}</p>
       {action && (
         <Link
@@ -203,8 +206,7 @@ function NoCards({ message, action }: { message: string; action: boolean }) {
           params={{ company }}
           className={goLinkClass({ className: "mt-2" })}
         >
-          Find a panel clinic
-          <GoArrow />
+          {pt("Find a panel clinic")} <GoArrow />
         </Link>
       )}
     </Mount>
@@ -222,6 +224,7 @@ export function CardLeaf({
   emptyMessage?: string;
   emptyAction?: boolean;
 }) {
+  usePortalTranslation();
   if (cards.length === 0) {
     return <NoCards message={emptyMessage} action={emptyAction} />;
   }

@@ -1,3 +1,4 @@
+import { usePortalTranslation } from "@/i18n/portal";
 /** What a foreign bill is worth in the policy currency, and the member saying
  * they accept it.
  *
@@ -53,6 +54,7 @@ export function ConversionNotice({
   failed = false,
   onRetry,
 }: Props) {
+  const pt = usePortalTranslation();
   if (currency === policyCurrency) return null;
 
   if (failed && !loading) {
@@ -60,20 +62,16 @@ export function ConversionNotice({
       <div className="space-y-2 rounded-control bg-bar/70 px-3 py-2.5">
         <p className="flex items-start gap-2 text-row text-strike-pending">
           <AlertTriangle className="mt-0.5 size-3.5 shrink-0" aria-hidden />
-          We couldn&apos;t show the {policyCurrency} amount just now. You can still
-          submit the claim; if a rate is available when it is saved, we&apos;ll ask
-          you to confirm the converted amount.
-        </p>
+          {pt("We couldn't show the")} {policyCurrency}  {pt("amount just now. You can still submit the claim; if a rate is available when it is saved, we'll ask you to confirm the converted amount.")} </p>
         {onRetry && (
           <button
             type="button"
             onClick={onRetry}
             className="leaf-focus text-row font-medium text-action-ink underline underline-offset-2"
           >
-            Try again
-          </button>
+            {pt("Try again")} </button>
         )}
-        {error && <p className="text-2xs text-strike-pending">{error}</p>}
+        {error && <p className="text-2xs text-strike-pending">{pt(error)}</p>}
       </div>
     );
   }
@@ -82,7 +80,7 @@ export function ConversionNotice({
     return (
       <p className="flex items-center gap-2 rounded-control bg-bar/70 px-3 py-2.5 text-row text-label">
         <Loader2 className="size-3.5 shrink-0 animate-spin" aria-hidden />
-        Working out what this is in {policyCurrency}…
+        {pt("Working out what this is in")} {policyCurrency}…
       </p>
     );
   }
@@ -94,8 +92,8 @@ export function ConversionNotice({
       <p className="flex items-start gap-2 rounded-control bg-bar/70 px-3 py-2.5 text-row text-strike-pending">
         <AlertTriangle className="mt-0.5 size-3.5 shrink-0" aria-hidden />
         {quote.note ??
-          `We could not get an exchange rate for ${currency}. Your claim can ` +
-            "still be sent — it will be converted by hand when it is reviewed."}
+          pt("We could not get an exchange rate for {0}. Your claim can ", [currency]) +
+            pt("still be sent — it will be converted by hand when it is reviewed.")}
       </p>
     );
   }
@@ -114,8 +112,8 @@ export function ConversionNotice({
           receipt — no rate is published for a weekend or a holiday — and the
           server words that, so the member is not left to infer that an
           unfamiliar date is a mistake. */}
-      {quote.note && <p className="text-2xs text-label">{quote.note}</p>}
-      {error && <p className="text-2xs text-strike-pending">{error}</p>}
+      {quote.note && <p className="text-2xs text-label">{pt(quote.note)}</p>}
+      {error && <p className="text-2xs text-strike-pending">{pt(error)}</p>}
     </div>
   );
 }

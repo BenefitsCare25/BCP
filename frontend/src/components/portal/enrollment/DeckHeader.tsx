@@ -1,3 +1,4 @@
+import { getPortalLocale, usePortalTranslation } from "@/i18n/portal";
 /** The two facts that govern every slide of the enrollment deck: how long the
  * member has, and what they have left to spend.
  *
@@ -35,9 +36,10 @@ function MeterRow({
   term: string;
   children: React.ReactNode;
 }) {
+  const pt = usePortalTranslation();
   return (
     <div className="flex items-baseline justify-between gap-2">
-      <span className="leaf-label">{term}</span>
+      <span className="leaf-label">{pt(term)}</span>
       <span className="text-row font-semibold text-record">{children}</span>
     </div>
   );
@@ -48,6 +50,7 @@ function balanceTerm(flex: FlexSummary): string {
 }
 
 function BalanceFigure({ flex }: { flex: FlexSummary }) {
+  usePortalTranslation();
   const short = flexShort(flex);
   return (
     <Money
@@ -73,12 +76,13 @@ export function RailHeader({
    *  no flexible-benefits wallet at all. */
   flex: FlexSummary | null;
 }) {
+  const pt = usePortalTranslation();
   if (!closesAt && !flex) return null;
   return (
     <div className="flex flex-col gap-1">
       {closesAt && <MeterRow term={closed ? "Changes closed" : "Deadline"}>
-        <span className="flex flex-col items-end"><span>{parseServerDate(closesAt).toLocaleDateString("en-SG", { timeZone: "Asia/Singapore", day: "numeric", month: "short", year: "numeric" })}</span>
-          <span className="text-xs">{parseServerDate(closesAt).toLocaleTimeString("en-SG", { timeZone: "Asia/Singapore", hour: "numeric", minute: "2-digit" })} SGT</span>
+        <span className="flex flex-col items-end"><span>{parseServerDate(closesAt).toLocaleDateString(getPortalLocale(), { timeZone: "Asia/Singapore", day: "numeric", month: "short", year: "numeric" })}</span>
+          <span className="text-xs">{parseServerDate(closesAt).toLocaleTimeString(getPortalLocale(), { timeZone: "Asia/Singapore", hour: "numeric", minute: "2-digit" })}  {pt("SGT")}</span>
         </span>
       </MeterRow>}
       {flex && (
@@ -97,6 +101,7 @@ export function RailHeader({
  * the chip no edge, and a figure with no edge between a 2xl name and a bordered
  * year control reads as stray text that landed in the gap. */
 export function HeadBalance({ flex }: { flex: FlexSummary }) {
+  usePortalTranslation();
   return (
     <span
       className={cn(

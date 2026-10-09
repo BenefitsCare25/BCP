@@ -1,3 +1,4 @@
+import { usePortalTranslation } from "@/i18n/portal";
 /** One claim, as its own claimant reads it.
  *
  * TWO surfaces render this: the member's own claim page
@@ -95,6 +96,7 @@ function AttachControl({
   disabledTitle?: string;
   onPick?: (file: File | undefined) => void;
 }) {
+  const pt = usePortalTranslation();
   const label = done ? "Replace" : "Attach";
   if (!onPick) {
     return (
@@ -105,7 +107,7 @@ function AttachControl({
         className={cn(ATTACH_CLASS, "cursor-not-allowed opacity-60")}
       >
         <Paperclip className="size-4 shrink-0" aria-hidden />
-        {label}
+        {pt(label)}
         <span className="sr-only"> {slotLabel}</span>
       </button>
     );
@@ -113,7 +115,7 @@ function AttachControl({
   return (
     <label className={cn(ATTACH_CLASS, "cursor-pointer")}>
       <Paperclip className="size-4 shrink-0" aria-hidden />
-      {label}
+      {pt(label)}
       <span className="sr-only"> {slotLabel}</span>
       <input
         type="file"
@@ -158,7 +160,8 @@ function RemoveDocument({
   allowed?: boolean;
   reason?: string | null;
 }) {
-  if (allowed === false && reason) return <span className="ml-2 block text-2xs text-label">{reason}</span>;
+  const pt = usePortalTranslation();
+  if (allowed === false && reason) return <span className="ml-2 block text-2xs text-label">{pt(reason)}</span>;
   if (!onRemove) return null;
   return (
     <button
@@ -172,8 +175,7 @@ function RemoveDocument({
       ) : (
         <X className="size-3" aria-hidden />
       )}
-      Remove
-      <span className="sr-only"> {fileName}</span>
+      {pt("Remove")} <span className="sr-only"> {fileName}</span>
     </button>
   );
 }
@@ -187,6 +189,7 @@ function DownloadDocument({
   fileName: string;
   onDownload?: (docId: string) => void;
 }) {
+  const pt = usePortalTranslation();
   return (
     <button
       type="button"
@@ -195,8 +198,7 @@ function DownloadDocument({
       className="leaf-focus ml-2 inline-flex items-center gap-1 align-baseline text-2xs text-label underline underline-offset-2 hover:text-record disabled:opacity-50"
     >
       <Download className="size-3" aria-hidden />
-      Download
-      <span className="sr-only"> {fileName}</span>
+      {pt("Download")} <span className="sr-only"> {fileName}</span>
     </button>
   );
 }
@@ -280,6 +282,7 @@ export function ClaimDetailLeaf({
   receipt = false,
   conversion,
 }: ClaimDetailLeafProps) {
+  const pt = usePortalTranslation();
   const fileInput = useRef<HTMLInputElement>(null);
 
   // SERVED, not derived. This was `status === "draft" || status ===
@@ -359,7 +362,7 @@ export function ClaimDetailLeaf({
         gloss={gloss}
         aside={
           <Strike tone={state.tone} animate>
-            {state.label}
+            {pt(state.label)}
           </Strike>
         }
       >
@@ -373,8 +376,7 @@ export function ClaimDetailLeaf({
         {receipt && claim.submitted_at && claim.status !== "draft" && (
           <p role="status" className="flex items-center gap-2 text-row text-action-ink">
             <Check className="size-4 shrink-0" aria-hidden />
-            Claim submitted
-          </p>
+            {pt("Claim submitted")} </p>
         )}
         {/* One column on a phone. The old two-up grid never collapsed, so a
             long diagnosis and a currency figure shared ~147px each. */}
@@ -429,7 +431,7 @@ export function ClaimDetailLeaf({
             <MountRow term="Referral letter">
               {claim.referral_document
                 ? claim.referral_document.file_name
-                : "Not needed"}
+                : pt("Not needed")}
             </MountRow>
           )}
           {/* The visit this claim continues. Shown on BOTH detail surfaces —
@@ -470,7 +472,7 @@ export function ClaimDetailLeaf({
         {claim.decision_notes && !decisionInThread && (
           <>
             <MountRule className="my-3" />
-            <h3 className="leaf-label mb-1">Note from the team</h3>
+            <h3 className="leaf-label mb-1">{pt("Note from the team")}</h3>
             <p className="text-row text-record">{claim.decision_notes}</p>
           </>
         )}
@@ -490,8 +492,7 @@ export function ClaimDetailLeaf({
               onClick={onEdit}
             >
               <Pencil className="size-4" aria-hidden />
-              Correct these details
-            </Action>
+              {pt("Correct these details")} </Action>
           </>
         )}
 
@@ -520,7 +521,7 @@ export function ClaimDetailLeaf({
           Files no requirement claims are still listed, marked as additional —
           nothing a member uploaded may be invisible, and nothing extra may be
           mistaken for a requirement that has been met. */}
-      <Mount label={`Documents (${claim.documents.length})`}>
+      <Mount label={pt("Documents ({0})", [claim.documents.length])}>
         {editable && slots.length > 0 ? (
           <ul className="divide-y divide-hairline/75">
             {slots.map((slot) => {
@@ -545,7 +546,7 @@ export function ClaimDetailLeaf({
                     )}
                     <span className="min-w-0">
                       <span className="block text-row text-record">
-                        {slot.label}
+                        {pt(slot.label)}
                       </span>
                       {/* The file IS the evidence the requirement is met, so it
                           reads as the row's own second line rather than as an
@@ -556,8 +557,7 @@ export function ClaimDetailLeaf({
                             key={f.id}
                             className="block break-all text-2xs text-label"
                           >
-                            {f.file_name} · {(f.size_bytes / 1024).toFixed(0)} KB
-                            <DownloadDocument
+                            {f.file_name} · {(f.size_bytes / 1024).toFixed(0)}  {pt("KB")} <DownloadDocument
                               docId={f.id}
                               fileName={f.file_name}
                               onDownload={onDownloadDocument}
@@ -574,10 +574,9 @@ export function ClaimDetailLeaf({
                         ))
                       ) : (
                         <span className="block text-2xs text-label">
-                          Not attached yet
-                        </span>
+                          {pt("Not attached yet")} </span>
                       )}
-                      {done && <span className="sr-only">(attached)</span>}
+                      {done && <span className="sr-only">{pt("(attached)")}</span>}
                     </span>
                   </span>
                   {/* Ink, not brand: a claim needing four documents would
@@ -609,8 +608,7 @@ export function ClaimDetailLeaf({
                   {doc.file_name}
                 </span>
                 <span className="shrink-0 text-2xs tabular-nums text-label">
-                  {(doc.size_bytes / 1024).toFixed(0)} KB · additional
-                  <DownloadDocument
+                  {(doc.size_bytes / 1024).toFixed(0)}  {pt("KB · additional")} <DownloadDocument
                     docId={doc.id}
                     fileName={doc.file_name}
                     onDownload={onDownloadDocument}
@@ -643,8 +641,7 @@ export function ClaimDetailLeaf({
                   {doc.file_name}
                 </span>
                 <span className="shrink-0 text-row tabular-nums text-label">
-                  {(doc.size_bytes / 1024).toFixed(0)} KB
-                </span>
+                  {(doc.size_bytes / 1024).toFixed(0)}  {pt("KB")} </span>
                 <DownloadDocument
                   docId={doc.id}
                   fileName={doc.file_name}
@@ -654,7 +651,7 @@ export function ClaimDetailLeaf({
             ))}
           </ul>
         ) : (
-          <p className="text-row text-label">Nothing attached yet.</p>
+          <p className="text-row text-label">{pt("Nothing attached yet.")}</p>
         )}
 
         {editable && (
@@ -704,8 +701,7 @@ export function ClaimDetailLeaf({
                   ) : (
                     <Paperclip className="size-4" aria-hidden />
                   )}
-                  Add another document
-                </Action>
+                  {pt("Add another document")} </Action>
                 {/* The page's one brand fill — sending the claim is what the
                     member came here to do.
 
@@ -728,8 +724,8 @@ export function ClaimDetailLeaf({
                       <Send className="size-4" aria-hidden />
                     )}
                     {claim.status === "needs_info"
-                      ? "Send again"
-                      : "Send this claim"}
+                      ? pt("Send again")
+                      : pt("Send this claim")}
                   </Action>
                 )}
               </div>
@@ -740,8 +736,7 @@ export function ClaimDetailLeaf({
                   do, and the assessor will ask if something is missing. */}
               {claim.member_can_submit && !allSlotsSatisfied && (
                 <p className="text-row text-label">
-                  Attach {missing.map((s) => s.label).join(" and ")} first.
-                </p>
+                  {pt("Attach")} {missing.map((s) => s.label).join(" and ")}  {pt("first.")} </p>
               )}
               {/* What the claim converts to. Placed beside the Send control
                   rather than up beside the amount: pressing Send accepts this
@@ -784,13 +779,12 @@ export function ClaimDetailLeaf({
           replies. A draft has no thread — nothing has been sent, so there is
           nobody at the other end — and the mount says so rather than showing an
           empty box with a Send button that would 409. */}
-      <Mount label="Messages">
+      <Mount label={pt("Messages")}>
         {messagesLoading ? (
-          <p className="text-row text-label">Loading&hellip;</p>
+          <p className="text-row text-label">{pt("Loading…")}</p>
         ) : messagesError ? (
           <p className="text-row text-label">
-            We couldn&rsquo;t load the messages on this claim just now.
-          </p>
+            {pt("We couldn’t load the messages on this claim just now.")} </p>
         ) : (
           <MessageThread
             messages={messages ?? []}
@@ -811,6 +805,7 @@ export function ClaimDetailLeaf({
  *  paid?" without reading a status word. Each date comes from the record;
  *  a step with no date yet is drawn open, never guessed. */
 function ClaimTimeline({ claim }: { claim: PortalClaim }) {
+  const pt = usePortalTranslation();
   const refused = claim.status === "rejected";
   const asked = claim.status === "needs_info";
   const approved = ["approved", "sent_to_insurer", "paid"].includes(claim.status);
@@ -825,7 +820,7 @@ function ClaimTimeline({ claim }: { claim: PortalClaim }) {
   ];
   if (!claim.submitted_at) return null;
   return (
-    <ol className="grid gap-3 rounded-2xl bg-shade p-4 sm:grid-cols-3 sm:gap-2" aria-label="Claim progress">
+    <ol className="grid gap-3 rounded-2xl bg-shade p-4 sm:grid-cols-3 sm:gap-2" aria-label={pt("Claim progress")}>
       {steps.map((step, index) => (
         <li key={step.label} className="flex items-start gap-3 sm:flex-col sm:gap-2">
           <span className="flex items-center gap-2 sm:w-full">
@@ -843,8 +838,8 @@ function ClaimTimeline({ claim }: { claim: PortalClaim }) {
             )}
           </span>
           <span>
-            <span className={cn("block text-row font-semibold", step.done ? "text-record" : "text-label")}>{step.label}</span>
-            <span className="block text-row text-label">{step.date ? formatDay(step.date) : step.done ? "" : "Not yet"}</span>
+            <span className={cn("block text-row font-semibold", step.done ? "text-record" : "text-label")}>{pt(step.label)}</span>
+            <span className="block text-row text-label">{step.date ? formatDay(step.date) : step.done ? "" : pt("Not yet")}</span>
           </span>
         </li>
       ))}

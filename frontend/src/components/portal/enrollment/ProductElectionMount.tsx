@@ -1,3 +1,4 @@
+import { usePortalTranslation } from "@/i18n/portal";
 /** One product's choice, as a mount: the plan, then who else it covers.
  *
  * Composition only — `PlanChoice` owns the three shapes a plan picker can take
@@ -51,6 +52,7 @@ export function ProductElectionMount({
   premiumFor?: (tierKey: string) => TierPrice | null;
   onChange: (next: ProductState) => void;
 }) {
+  const pt = usePortalTranslation();
   const headingId = useId();
   const label = ts.product_name ?? ts.product_code;
   // `glossBeside`, not `productGloss`: the heading is already the product's own
@@ -66,7 +68,7 @@ export function ProductElectionMount({
     <Mount
       as="article"
       rise={rise}
-      label={compact ? undefined : label}
+      label={pt(compact ? undefined : label)}
       labelId={headingId}
       gloss={compact ? undefined : gloss}
       className={`enrolment-product tone-${careTone(productRouteKey(ts.product_code))}`}
@@ -75,7 +77,7 @@ export function ProductElectionMount({
         // plan, not a status to be badged, and this world's only pill is a
         // button.
         <span className="leaf-label">
-          {ts.can_decline ? "Your choice" : "Included for everyone"}
+          {ts.can_decline ? pt("Your choice") : pt("Included for everyone")}
         </span>
       }
     >

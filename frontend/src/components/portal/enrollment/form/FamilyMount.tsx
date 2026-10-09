@@ -1,3 +1,4 @@
+import { portalText as pt, usePortalTranslation } from "@/i18n/portal";
 /** Section C of the paper form — the member's family, with each person's
  * eligibility stated before they are put on a plan.
  *
@@ -18,9 +19,9 @@ import { choiceControl, choiceRowClass } from "../choiceRow";
 import type { PendingRequests } from "./formMath";
 
 function describe(dep: FormDependant): string {
-  const parts = [dep.relationship ?? "Family member"];
-  if (dep.age_next_birthday !== null) parts.push(`age ${dep.age_next_birthday} next birthday`);
-  if (dep.dob) parts.push(`born ${formatDay(dep.dob)}`);
+  const parts = [pt(dep.relationship ?? "Family member")];
+  if (dep.age_next_birthday !== null) parts.push(pt("age {0} next birthday", [dep.age_next_birthday]));
+  if (dep.dob) parts.push(pt("born {0}", [formatDay(dep.dob)]));
   return parts.join(" · ");
 }
 
@@ -41,6 +42,7 @@ export function FamilyMount({
   disabled: boolean;
   onPendingChange: (next: PendingRequests) => void;
 }) {
+  const pt = usePortalTranslation();
   const company = useCompany();
   // Plans this person could join: voluntary family cover the member keeps,
   // inside that plan's own age window.
@@ -58,18 +60,18 @@ export function FamilyMount({
     <Mount
       as="article"
       rise={false}
-      label="Your family"
+      label={pt("Your family")}
       gloss="Who can be covered, and anyone you've added who is still being checked."
     >
       {dependants.length === 0 ? (
-        <p className="text-row text-label">You have no family members on record.</p>
+        <p className="text-row text-label">{pt("You have no family members on record.")}</p>
       ) : (
         <ul className="divide-y divide-hairline/75">
           {dependants.map((dep) => (
             <li key={dep.id} className="flex flex-col gap-2 py-3">
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
-                  <p className="text-row font-medium text-record">{dep.name ?? "Unnamed"}</p>
+                  <p className="text-row font-medium text-record">{dep.name ?? pt("Unnamed")}</p>
                   <p className="text-row text-label">{describe(dep)}</p>
                   {dep.eligibility_note && (
                     <p
@@ -77,7 +79,7 @@ export function FamilyMount({
                         dep.eligible ? "text-row text-label" : "text-row text-strike-pending"
                       }
                     >
-                      {dep.eligibility_note}
+                      {pt(dep.eligibility_note)}
                     </p>
                   )}
                 </div>
@@ -86,18 +88,17 @@ export function FamilyMount({
                   className="shrink-0"
                 >
                   {dep.status === "pending"
-                    ? "Being checked"
+                    ? pt("Being checked")
                     : dep.eligible
-                      ? "Eligible"
-                      : "Not eligible"}
+                      ? pt("Eligible")
+                      : pt("Not eligible")}
                 </Strike>
               </div>
 
               {dep.status === "pending" && dep.eligible && requestable(dep).length > 0 && (
                 <fieldset className="flex flex-col">
                   <legend className="text-row text-label">
-                    Enrol {dep.name ?? "them"} on, once checked:
-                  </legend>
+                    {pt("Enrol")} {dep.name ?? pt("them")}  {pt("on, once checked:")} </legend>
                   {requestable(dep).map((ts) => {
                     const on = (pending[dep.id] ?? []).includes(ts.product_code);
                     return (
@@ -128,8 +129,7 @@ export function FamilyMount({
           params={{ company }}
           className={goLinkClass({ brand: true })}
         >
-          Add a family member (spouse, newborn or child)
-          <GoArrow brand />
+          {pt("Add a family member (spouse, newborn or child)")} <GoArrow brand />
         </Link>
       )}
 
@@ -137,10 +137,10 @@ export function FamilyMount({
         <>
           <MountRule />
           <div>
-            <p className="text-row font-medium text-record">Who counts as family</p>
+            <p className="text-row font-medium text-record">{pt("Who counts as family")}</p>
             <ul className="mt-1 list-disc space-y-1 pl-5 text-row text-label">
               {eligibilityNotes.map((note) => (
-                <li key={note}>{note}</li>
+                <li key={note}>{pt(note)}</li>
               ))}
             </ul>
           </div>

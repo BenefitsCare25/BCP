@@ -1,3 +1,4 @@
+import { usePortalTranslation } from "@/i18n/portal";
 /** What actually changes if a member picks this plan.
  *
  * This is the half of the decision the page used to omit. "Less cover — adds
@@ -111,21 +112,22 @@ export function TierDifferences({
   settled?: boolean;
   compact?: boolean;
 }) {
+  const pt = usePortalTranslation();
   if (!differences.length) return null;
   const hidden = Math.max(0, total - differences.length);
 
   return (
     <div className={cn("mt-2.5 border-t border-hairline/75 pt-2.5", compact && "enrolment-comparison")}>
-      <h4 className="leaf-label">What changes</h4>
+      <h4 className="leaf-label">{pt("What changes")}</h4>
       {!compact && <p className="text-row text-label">
         {currentLabel
-          ? `compared with ${currentLabel}, your current plan`
-          : "compared with your current plan"}
+          ? pt("compared with {0}, your current plan", [currentLabel])
+          : pt("compared with your current plan")}
       </p>}
       {compact && <div className="enrolment-comparison-head text-row text-label" aria-hidden="true">
-        <span>Benefit</span>
-        <span>{currentLabel ?? "Your plan"} · {settled ? "Before" : "Current"}</span>
-        <span>{electedLabel ?? "New plan"} · {settled ? "Current" : "If you switch"}</span>
+        <span>{pt("Benefit")}</span>
+        <span>{currentLabel ?? pt("Your plan")} · {settled ? pt("Before") : pt("Current")}</span>
+        <span>{electedLabel ?? pt("New plan")} · {settled ? pt("Current") : pt("If you switch")}</span>
       </div>}
 
       {/* The rule between items is the thing that makes this a list rather
@@ -169,10 +171,10 @@ export function TierDifferences({
               <div className={pairRow}>
                 <span className={pairLabel}>
                   {currentLabel
-                    ? `${currentLabel} — ${settled ? "before" : "now"}`
+                    ? `${currentLabel} — ${pt(settled ? "before" : "now")}`
                     : settled
-                      ? "Your plan before"
-                      : "Your plan now"}
+                      ? pt("Your plan before")
+                      : pt("Your plan now")}
                 </span>
                 <span className={cn(pairValue, "text-label")}>
                   {cell(d.current, d.kind)}
@@ -181,10 +183,10 @@ export function TierDifferences({
               <div className={pairRow}>
                 <span className={pairLabel}>
                   {electedLabel
-                    ? `${electedLabel} — ${settled ? "now" : "if you switch"}`
+                    ? `${electedLabel} — ${pt(settled ? "now" : "if you switch")}`
                     : settled
-                      ? "Your plan now"
-                      : "If you switch"}
+                      ? pt("Your plan now")
+                      : pt("If you switch")}
                 </span>
                 {/* Full ink and weight: this is the outcome being offered. */}
                 <span className={cn(pairValue, "font-semibold text-record")}>
@@ -198,9 +200,7 @@ export function TierDifferences({
 
       {hidden > 0 && (
         <p className="mt-2 text-row text-label">
-          and {hidden} more {hidden === 1 ? "benefit" : "benefits"} — ask your
-          HR team for the full schedule.
-        </p>
+          {pt("and")} {hidden}  {pt("more")} {hidden === 1 ? pt("benefit") : pt("benefits")}  {pt("— ask your HR team for the full schedule.")} </p>
       )}
     </div>
   );

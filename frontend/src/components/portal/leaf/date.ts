@@ -11,6 +11,7 @@
  * kind of bug nobody reports and everybody distrusts.
  */
 import { fmtDay, parseServerDate } from "@/lib/format";
+import { getPortalLocale, portalText } from "@/i18n/portal";
 
 const MONTHS = [
   "Jan", "Feb", "Mar", "Apr", "May", "Jun",
@@ -35,7 +36,13 @@ export function dateKey(iso: string | null | undefined): string {
  * defensive split, and the broker surfaces needed it too. Two copies is how a
  * date comes to read one way on a claim queue and another on the member's own
  * record of that claim. */
-export const formatDay = fmtDay;
+export function formatDay(iso: string | null | undefined): string {
+  const key = dateKey(iso);
+  if (getPortalLocale() !== "zh-SG" || !key) return fmtDay(iso);
+  const [year, month, day] = key.split("-").map(Number);
+  return new Intl.DateTimeFormat("zh-SG", { year: "numeric", month: "long", day: "numeric", timeZone: "UTC" })
+    .format(new Date(Date.UTC(year, month - 1, day)));
+}
 
 const MONTHS_FULL = [
   "January", "February", "March", "April", "May", "June",
@@ -55,6 +62,7 @@ export function monthLabel(iso: string | null | undefined): string {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(datePart);
   if (!m) return "";
   const [, year, month] = m;
+  if (getPortalLocale() === "zh-SG") return `${year}年${Number(month)}月`;
   const name = MONTHS_FULL[Number(month) - 1];
   return name ? `${name} ${year}` : "";
 }
@@ -99,10 +107,11 @@ export function shortMoment(iso: string | null | undefined): string {
     when.getDate() === now.getDate();
   if (sameDay) {
     return when
-      .toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })
+      .toLocaleTimeString(getPortalLocale(), { hour: "numeric", minute: "2-digit" })
       .toLowerCase();
   }
   const month = MONTHS[when.getMonth()] ?? "";
+  if (getPortalLocale() === "zh-SG") return when.toLocaleDateString("zh-SG", { month: "long", day: "numeric", ...(when.getFullYear() === now.getFullYear() ? {} : { year: "numeric" }) });
   return when.getFullYear() === now.getFullYear()
     ? `${when.getDate()} ${month}`
     : `${when.getDate()} ${month} ${when.getFullYear()}`;
@@ -122,9 +131,10 @@ export function dayHeading(iso: string | null | undefined): string {
   const midnight = (d: Date) =>
     new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
   const days = Math.round((midnight(now) - midnight(when)) / 86_400_000);
-  if (days === 0) return "Today";
-  if (days === 1) return "Yesterday";
+  if (days === 0) return portalText("Today");
+  if (days === 1) return portalText("Yesterday");
   const month = MONTHS[when.getMonth()] ?? "";
+  if (getPortalLocale() === "zh-SG") return when.toLocaleDateString("zh-SG", { month: "long", day: "numeric", ...(when.getFullYear() === now.getFullYear() ? {} : { year: "numeric" }) });
   return when.getFullYear() === now.getFullYear()
     ? `${when.getDate()} ${month}`
     : `${when.getDate()} ${month} ${when.getFullYear()}`;
@@ -137,7 +147,7 @@ export function clockTime(iso: string | null | undefined): string {
   const when = parseServerDate(iso);
   if (Number.isNaN(when.getTime())) return "";
   return when
-    .toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })
+    .toLocaleTimeString(getPortalLocale(), { hour: "numeric", minute: "2-digit" })
     .toLowerCase();
 }
 
@@ -153,6 +163,7 @@ export function spelledDay(iso: string | null | undefined): string | undefined {
   const key = dateKey(iso);
   if (!key) return undefined;
   const [y, m, d] = key.split("-").map(Number);
+  if (getPortalLocale() === "zh-SG") return new Intl.DateTimeFormat("zh-SG", { weekday: "short", year: "numeric", month: "long", day: "numeric", timeZone: "UTC" }).format(new Date(Date.UTC(y, m - 1, d)));
   const weekday = WEEKDAYS[new Date(Date.UTC(y, m - 1, d)).getUTCDay()];
   return `${weekday}, ${d} ${MONTHS_SHORT[m - 1]} ${y}`;
 }

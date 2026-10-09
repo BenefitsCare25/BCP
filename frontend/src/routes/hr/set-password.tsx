@@ -1,3 +1,4 @@
+import { usePortalTranslation } from "@/i18n/portal";
 /** HR set / reset password: redeem a single-use token (from the emailed link
  * or a forced-rotation redirect) and choose a password. */
 import { useRef, useState } from "react";
@@ -28,6 +29,7 @@ function strength(pw: string): { label: string; ok: boolean } {
 }
 
 export function HrSetPasswordPage() {
+  const pt = usePortalTranslation();
   const navigate = useNavigate();
   const setPw = useHrSetPassword();
   const mfa = useHrMfa();
@@ -105,9 +107,9 @@ export function HrSetPasswordPage() {
     return (
       <AuthScene
         portalTheme="hr"
-        eyebrow="HR administration"
-        title="Two-factor authentication"
-        subtitle="Enter the 6-digit code from your authenticator app, or one of your recovery codes."
+        eyebrow={pt("HR administration")}
+        title={pt("Two-factor authentication")}
+        subtitle={pt("Enter the 6-digit code from your authenticator app, or one of your recovery codes.")}
       >
         <form onSubmit={submitMfa} className="space-y-4">
           <div className="space-y-1.5">
@@ -115,8 +117,7 @@ export function HrSetPasswordPage() {
               htmlFor="hr-setpw-totp"
               className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground"
             >
-              Authentication code
-            </Label>
+              {pt("Authentication code")} </Label>
             <Input
               id="hr-setpw-totp"
               inputMode="text"
@@ -129,14 +130,14 @@ export function HrSetPasswordPage() {
               className="h-12 text-center text-lg font-semibold tracking-[0.5em]"
             />
           </div>
-          {error && <p className="text-sm text-error" role="alert">{error}</p>}
-          {expired && <a className="block text-sm underline" href={hrPath("/hr/sign-in")}>Sign in with your new password</a>}
+          {error && <p className="text-sm text-error" role="alert">{pt(error)}</p>}
+          {expired && <a className="block text-sm underline" href={hrPath("/hr/sign-in")}>{pt("Sign in with your new password")}</a>}
           <Button
             type="submit"
             className="h-12 w-full text-md transition-transform duration-150 active:scale-[0.99]"
             disabled={expired || mfa.isPending || !canSubmitMfaCode(code)}
           >
-            {mfa.isPending ? "Verifying…" : "Verify & sign in"}
+            {mfa.isPending ? pt("Verifying…") : pt("Verify & sign in")}
           </Button>
         </form>
       </AuthScene>
@@ -146,19 +147,18 @@ export function HrSetPasswordPage() {
   return (
     <AuthScene
       portalTheme="hr"
-      eyebrow="HR administration"
-      title="Set your password"
-      subtitle="Choose a strong password to finish setting up your HR account."
+      eyebrow={pt("HR administration")}
+      title={pt("Set your password")}
+      subtitle={pt("Choose a strong password to finish setting up your HR account.")}
     >
       <form onSubmit={submit} className="space-y-4">
-        {!token && <p role="alert" className="text-sm text-error">This link is missing its token. Ask your administrator to resend it.</p>}
+        {!token && <p role="alert" className="text-sm text-error">{pt("This link is missing its token. Ask your administrator to resend it.")}</p>}
         <div className="space-y-1.5">
           <Label
             htmlFor="hr-new-password"
             className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground"
           >
-            New password
-          </Label>
+            {pt("New password")} </Label>
           <div className="relative">
             <Lock className="pointer-events-none absolute left-3.5 top-1/2 size-[18px] -translate-y-1/2 text-muted-foreground" />
             <Input
@@ -177,7 +177,7 @@ export function HrSetPasswordPage() {
           </div>
           {password.length > 0 && (
             <p className={st.ok ? "text-xs text-good" : "text-xs text-muted-foreground"}>
-              {st.label}
+              {pt(st.label)}
             </p>
           )}
         </div>
@@ -186,8 +186,7 @@ export function HrSetPasswordPage() {
             htmlFor="hr-confirm-password"
             className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground"
           >
-            Confirm password
-          </Label>
+            {pt("Confirm password")} </Label>
           <div className="relative">
             <Lock className="pointer-events-none absolute left-3.5 top-1/2 size-[18px] -translate-y-1/2 text-muted-foreground" />
             <Input
@@ -203,17 +202,17 @@ export function HrSetPasswordPage() {
             />
           </div>
           {confirm.length > 0 && !match && (
-            <p className="text-xs text-error">Passwords don't match</p>
+            <p className="text-xs text-error">{pt("Passwords don't match")}</p>
           )}
         </div>
-        {error && <p className="text-sm text-error" role="alert">{error}</p>}
+        {error && <p className="text-sm text-error" role="alert">{pt(error)}</p>}
         <Button
           type="submit"
           className="h-12 w-full text-md transition-transform duration-150 active:scale-[0.99]"
           disabled={setPw.isPending || !canSubmit}
         >
           <ShieldCheck className="size-[18px]" />
-          {setPw.isPending ? "Saving…" : "Set password & sign in"}
+          {setPw.isPending ? pt("Saving…") : pt("Set password & sign in")}
         </Button>
       </form>
     </AuthScene>

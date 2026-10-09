@@ -1,3 +1,4 @@
+import { usePortalTranslation } from "@/i18n/portal";
 /** The flexible-benefits wallet, as a mount.
  *
  * Three things the broker card did are deliberately not done here:
@@ -34,6 +35,7 @@ export function FlexMount({
   /** Off inside a coverage-deck slide, whose own transition owns the arrival. */
   rise?: boolean;
 }) {
+  const pt = usePortalTranslation();
   const family = familyLabel(flex.family_status);
   const currency = flex.currency ?? "S$";
 
@@ -76,7 +78,7 @@ export function FlexMount({
     <Mount
       as="article"
       rise={rise}
-      label="Flexible benefits"
+      label={pt("Flexible benefits")}
       // No gloss. "Your allowance to spend across the benefits listed here" is
       // a table of contents for a card that is already a labelled figure over a
       // labelled list — it cost a line above the fold and named the card twice.
@@ -112,9 +114,7 @@ export function FlexMount({
         <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 text-row text-label">
           <span>{prorationReason(flex.proration.note)}</span>
           <span className="shrink-0">
-            <Money value={flex.proration.full_amount} currency={currency} /> a
-            year
-          </span>
+            <Money value={flex.proration.full_amount} currency={currency} />  {pt("a year")} </span>
         </div>
       )}
 
@@ -152,9 +152,9 @@ export function FlexMount({
                 here too, so the figure stays a plain amount. */}
             {leave !== 0 && (
               <MountRow
-                term={`Leave you ${leave < 0 ? "bought" : "sold back"}${
+                term={`${pt(leave < 0 ? "Leave you bought" : "Leave you sold back")}${
                   flex.leave_days != null
-                    ? ` (${flex.leave_days} ${flex.leave_days === 1 ? "day" : "days"})`
+                    ? ` (${pt("{0} day{1}", [flex.leave_days, flex.leave_days === 1 ? "" : "s"])})`
                     : ""
                 }`}
                 gloss={
@@ -179,9 +179,7 @@ export function FlexMount({
           </dl>
           {shortfall && (
             <p className="text-row text-label">
-              Your choices cost more than your flex dollars. Your HR team can tell
-              you how the difference is settled.
-            </p>
+              {pt("Your choices cost more than your flex dollars. Your HR team can tell you how the difference is settled.")} </p>
           )}
         </>
       )}
@@ -192,11 +190,7 @@ export function FlexMount({
           wrong, and claim against it. */}
       {!flex.price_age_known && (
         <p className="text-row text-label">
-          We don&rsquo;t have your date of birth on file, so what your plan
-          choices cost hasn&rsquo;t been taken off your flex dollars yet — the
-          figure above may be higher than what you can actually spend. Your HR
-          team can add your date of birth.
-        </p>
+          {pt("We don’t have your date of birth on file, so what your plan choices cost hasn’t been taken off your flex dollars yet — the figure above may be higher than what you can actually spend. Your HR team can add your date of birth.")} </p>
       )}
 
       {claimable.length > 0 && (
@@ -205,17 +199,17 @@ export function FlexMount({
           {/* The label belongs to the list it heads, so the two are one group
               rather than two siblings spaced identically to everything else. */}
           <div className="flex flex-col gap-1">
-            <h3 className="leaf-label">What you can claim for</h3>
+            <h3 className="leaf-label">{pt("What you can claim for")}</h3>
             <dl className="divide-y divide-hairline/75">
               {claimable.map((cat, i) => (
                 <MountRow key={i} term={cat.name} gloss={cat.note ?? undefined}>
                   {cat.sub_limit != null ? (
                     <>
                       <Money value={cat.sub_limit} currency={currency} />
-                      <span className="text-label"> cap</span>
+                      <span className="text-label">  {pt("cap")}</span>
                     </>
                   ) : (
-                    <span className="text-label">No separate cap</span>
+                    <span className="text-label">{pt("No separate cap")}</span>
                   )}
                 </MountRow>
               ))}
@@ -226,9 +220,7 @@ export function FlexMount({
 
       {flex.assignment_stale && (
         <p className="border-t border-hairline/75 pt-3 text-row text-label">
-          Your company recently changed this scheme, so the list above may not
-          be up to date yet. Your HR team can confirm what you can claim for.
-        </p>
+          {pt("Your company recently changed this scheme, so the list above may not be up to date yet. Your HR team can confirm what you can claim for.")} </p>
       )}
     </Mount>
   );

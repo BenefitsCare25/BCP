@@ -1,3 +1,4 @@
+import { usePortalTranslation } from "@/i18n/portal";
 /** HR admin home — identity and entry points to operational modules. Claims
  * and enrolment forms are live; the remaining modules stay visibly unavailable
  * until ready. */
@@ -47,6 +48,7 @@ const MODULES = [
 ] as const;
 
 export function HrDashboardPage() {
+  const pt = usePortalTranslation();
   const me = useHrSession((s) => s.me);
   const { data } = useHrMe();
   const identity = data ?? me;
@@ -60,36 +62,33 @@ export function HrDashboardPage() {
 
   return (
     <div className="hr-overview">
-      <SkyStage period={skyPeriod()} className="hr-overview-sky" label="Welcome">
+      <SkyStage period={skyPeriod()} className="hr-overview-sky" label={pt("Welcome")}>
         {identity?.company_name && <p className="sky-eyebrow">{identity.company_name}</p>}
-        <h1>Welcome, <span className="name">{name}</span></h1>
-        <p className="sky-sub">Your employee claims and enrolment forms in one place.</p>
+        <h1>{pt("Welcome,")} <span className="name">{name}</span></h1>
+        <p className="sky-sub">{pt("Your employee claims and enrolment forms in one place.")}</p>
         <span className="sky-rule" aria-hidden />
         <div className="clay-hero-actions">
           <Link to="/hr/claims/new" className="clay-btn clay-btn-dark clay-btn-go">
-            <FileText className="size-[18px]" aria-hidden /> New claim <ArrowRight className="clay-go size-4" aria-hidden />
+            <FileText className="size-[18px]" aria-hidden />  {pt("New claim")} <ArrowRight className="clay-go size-4" aria-hidden />
           </Link>
           <Link to="/hr/enrollment-forms" className="clay-btn clay-btn-white clay-btn-go">
-            <FileSignature className="size-[18px]" aria-hidden /> Enrolment forms <ArrowRight className="clay-go size-4" aria-hidden />
+            <FileSignature className="size-[18px]" aria-hidden />  {pt("Enrolment forms")} <ArrowRight className="clay-go size-4" aria-hidden />
           </Link>
         </div>
       </SkyStage>
 
-      <section className="hr-overview-modules mx-auto flex w-full max-w-6xl flex-col gap-5 px-4 pb-8 pt-5" aria-label="HR services">
+      <section className="hr-overview-modules mx-auto flex w-full max-w-6xl flex-col gap-5 px-4 pb-8 pt-5" aria-label={pt("HR services")}>
         {mfaSuggested && (
           <Card className="rounded-3xl border-warn/40 bg-[#fff8e8]">
             <CardHeader className="flex-row items-start gap-3 space-y-0">
               <ShieldAlert className="mt-0.5 size-5 shrink-0 text-warn" />
               <div>
                 <CardTitle className="text-base">
-                  Add two-factor authentication
-                </CardTitle>
+                  {pt("Add two-factor authentication")} </CardTitle>
                 <CardDescription>
-                  Your company supports two-factor authentication. It's optional,
-                  but adding it gives your account an extra layer of security.
-                </CardDescription>
+                  {pt("Your company supports two-factor authentication. It's optional, but adding it gives your account an extra layer of security.")} </CardDescription>
                 <Button asChild size="sm" className="mt-3">
-                  <Link to="/hr/security">Set up two-factor</Link>
+                  <Link to="/hr/security">{pt("Set up two-factor")}</Link>
                 </Button>
               </div>
             </CardHeader>
@@ -115,8 +114,8 @@ export function HrDashboardPage() {
                           aria-hidden
                         />
                       </div>
-                      <h2 className="mt-2 text-xl font-bold">{m.title}</h2>
-                      <CardDescription>{m.description}</CardDescription>
+                      <h2 className="mt-2 text-xl font-bold">{pt(m.title)}</h2>
+                      <CardDescription>{pt(m.description)}</CardDescription>
                     </CardHeader>
                   </Card>
                 </Link>
@@ -128,9 +127,9 @@ export function HrDashboardPage() {
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-3">
                       <Icon className="size-5 text-primary" aria-hidden />
-                      <h2 className="text-base font-semibold">{m.title}</h2>
+                      <h2 className="text-base font-semibold">{pt(m.title)}</h2>
                     </div>
-                    <Badge variant="outline">Coming soon</Badge>
+                    <Badge variant="outline">{pt("Coming soon")}</Badge>
                   </div>
                 </CardHeader>
               </Card>

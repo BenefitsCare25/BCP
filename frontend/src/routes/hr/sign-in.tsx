@@ -1,3 +1,4 @@
+import { usePortalTranslation } from "@/i18n/portal";
 /** HR credential sign-in: email OR HR ID + password, with an optional TOTP
  * step. Lives on `{slug}.hr.<base>`, where the subdomain scopes the tenant; on
  * a single-host deployment the company field does instead. */
@@ -25,6 +26,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
 export function HrSignInPage() {
+  const pt = usePortalTranslation();
   const navigate = useNavigate();
   const login = useHrLogin();
   const mfa = useHrMfa();
@@ -118,19 +120,19 @@ export function HrSignInPage() {
     <PortalLoginScene
       role="hr"
       company={company}
-      title={step === "credentials" ? "Welcome back" : "Two-factor authentication"}
+      title={step === "credentials" ? pt("Welcome back") : pt("Two-factor authentication")}
       subtitle={
         step === "credentials"
-          ? "Sign in to your HR portal"
-          : "Enter the 6-digit code from your authenticator app, or one of your recovery codes."
+          ? pt("Sign in to your HR portal")
+          : pt("Enter the 6-digit code from your authenticator app, or one of your recovery codes.")
       }
     >
       {step === "credentials" ? (
         <form noValidate onSubmit={submitCredentials} className="space-y-4">
           <CompanyField id="hr-company" value={company} onChange={setCompany} error={fieldErrors.company} />
-          <IdentifierField value={identifier} onChange={setIdentifier} placeholder="Email or HR ID" error={fieldErrors.identifier} />
+          <IdentifierField value={identifier} onChange={setIdentifier} placeholder={pt("Email or HR ID")} error={fieldErrors.identifier} />
           <LoginPasswordField id="hr-password" value={password} onChange={setPassword} error={fieldErrors.password} />
-          {error && <p className="text-sm text-error" role="alert">{error}</p>}
+          {error && <p className="text-sm text-error" role="alert">{pt(error)}</p>}
           <Button
             type="submit"
             loading={login.isPending}
@@ -143,7 +145,7 @@ export function HrSignInPage() {
             }
           >
             <ArrowRight className="portal-login__arrow size-5" aria-hidden="true" />
-            {login.isPending ? "Signing in…" : "Sign in"}
+            {login.isPending ? pt("Signing in…") : pt("Sign in")}
           </Button>
         </form>
       ) : (
@@ -153,8 +155,7 @@ export function HrSignInPage() {
               htmlFor="hr-totp"
               className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground"
             >
-              Authentication code
-            </Label>
+              {pt("Authentication code")} </Label>
             <Input
               id="hr-totp"
               required
@@ -169,14 +170,14 @@ export function HrSignInPage() {
               className="h-12 text-center text-lg font-semibold tracking-[0.5em]"
             />
           </div>
-          {error && <p className="text-sm text-error" role="alert">{error}</p>}
+          {error && <p className="text-sm text-error" role="alert">{pt(error)}</p>}
           <Button
             type="submit"
             loading={mfa.isPending}
             className="h-12 w-full text-md transition-transform duration-150 active:scale-[0.99]"
             disabled={mfa.isPending || !canSubmitMfaCode(code)}
           >
-            {mfa.isPending ? "Verifying…" : "Verify"}
+            {mfa.isPending ? pt("Verifying…") : pt("Verify")}
           </Button>
           <button
             type="button"
@@ -190,8 +191,7 @@ export function HrSignInPage() {
               setError(null);
             }}
           >
-            Back to sign in
-          </button>
+            {pt("Back to sign in")} </button>
         </form>
       )}
     </PortalLoginScene>

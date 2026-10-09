@@ -1,3 +1,4 @@
+import { usePortalTranslation } from "@/i18n/portal";
 /** The benefit-year control — a SCOPE control, not a caption.
  *
  * It changes what the whole page is showing, which is why it sits with the
@@ -19,6 +20,8 @@
  * page as well as tint this control. */
 import { ChevronDown, CalendarDays } from "lucide-react";
 import { formatPolicyRange } from "@/lib/policy-year";
+import { getPortalLocale } from "@/i18n/portal";
+import { formatDay } from "./leaf/date";
 import { cn } from "@/lib/cn";
 
 export type BenefitYearOption = {
@@ -44,10 +47,11 @@ export function BenefitYearControl({
   compact?: boolean;
   className?: string;
 }) {
+  const pt = usePortalTranslation();
   // Sliced, never `new Date(start).getFullYear()`: a bare ISO date parses as
   // midnight UTC, so every timezone west of Greenwich renders the PREVIOUS year
   // for a benefit year starting 1 January. Same trap `leaf/date.ts` documents.
-  const label = compact ? start.slice(0, 4) : formatPolicyRange(start, end);
+  const label = compact ? start.slice(0, 4) : getPortalLocale() === "zh-SG" ? `${formatDay(start)} – ${formatDay(end)}` : formatPolicyRange(start, end);
   const selectable = (years?.length ?? 0) > 1;
 
   const shell = cn(
@@ -70,7 +74,7 @@ export function BenefitYearControl({
       {!compact && (
         <CalendarDays className="size-4 shrink-0 text-label" aria-hidden />
       )}
-      {label}
+      {pt(label)}
       {selectable && (
         <ChevronDown className="size-3.5 shrink-0 text-label" aria-hidden />
       )}
@@ -82,7 +86,7 @@ export function BenefitYearControl({
     // know which year the figures on this page belong to.
     return (
       <span className={shell}>
-        <span className="sr-only">Benefit year</span>
+        <span className="sr-only">{pt("Benefit year")}</span>
         {inner}
       </span>
     );
@@ -90,7 +94,7 @@ export function BenefitYearControl({
 
   return (
     <button type="button" className={shell} aria-haspopup="listbox">
-      <span className="sr-only">Benefit year</span>
+      <span className="sr-only">{pt("Benefit year")}</span>
       {inner}
     </button>
   );

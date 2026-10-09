@@ -1,3 +1,4 @@
+import { usePortalTranslation } from "@/i18n/portal";
 /** "Messages" — every conversation the member is part of, most recently active
  * first, and the one they picked open beside it.
  *
@@ -65,6 +66,7 @@ import { useCompany } from "@/components/portal/useCompany";
 const STAGE_AT = 720;
 
 export function PortalMessagesPage() {
+  const pt = usePortalTranslation();
   const navigate = useNavigate();
   const company = useCompany();
   const conversations = usePortalConversationPages();
@@ -139,8 +141,7 @@ export function PortalMessagesPage() {
   const ask = (
     <Action tone="primary" block="phone" onClick={() => setAsking(true)}>
       <MessageSquarePlus className="size-4" aria-hidden />
-      Ask a question
-    </Action>
+      {pt("Ask a question")} </Action>
   );
   const askDialog = (
     <AskQuestionDialog
@@ -161,14 +162,13 @@ export function PortalMessagesPage() {
     <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
       <p className="text-row text-label">
         {total === 0
-          ? "No conversations yet"
-          : `${total} conversation${total === 1 ? "" : "s"}`}
+          ? pt("No conversations yet")
+          : pt("{0} conversation{1}", [total, total === 1 ? "" : "s"])}
         {unread > 0 && (
           <>
             {" · "}
             <span className="font-semibold text-strike-pending">
-              {unread} unread
-            </span>
+              {unread}  {pt("unread")} </span>
           </>
         )}
       </p>
@@ -180,7 +180,7 @@ export function PortalMessagesPage() {
   );
 
   if (conversations.isLoading) {
-    return <LeafSkeleton label="Loading your messages" />;
+    return <LeafSkeleton label={pt("Loading your messages")} />;
   }
 
   // A 404 is "no active coverage" and falls through to the empty state below;
@@ -192,9 +192,8 @@ export function PortalMessagesPage() {
   if (items.length === 0) {
     return (
       <>
-        <ClayEmpty tone="lilac" art={sectionArt.messages} title="No messages yet" action={ask}>
-          Updates on your claims land here. Got a question? Ask us anything.
-        </ClayEmpty>
+        <ClayEmpty tone="lilac" art={sectionArt.messages} title={pt("No messages yet")} action={ask}>
+          {pt("Updates on your claims land here. Got a question? Ask us anything.")} </ClayEmpty>
         {askDialog}
       </>
     );
@@ -223,8 +222,7 @@ export function PortalMessagesPage() {
             {conversations.isFetchingNextPage && (
               <Loader2 className="size-4 animate-spin" aria-hidden />
             )}
-            Show older
-          </Action>
+            {pt("Show older")} </Action>
         </>
       )}
     </Mount>

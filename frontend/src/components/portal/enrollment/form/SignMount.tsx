@@ -1,3 +1,4 @@
+import { usePortalTranslation } from "@/i18n/portal";
 /** The last step: what the member will pay, anything that stops them sending,
  * and the signature.
  *
@@ -52,6 +53,7 @@ export function SignMount({
   onConfirmedChange: (value: boolean) => void;
   onSign: () => void;
 }) {
+  const pt = usePortalTranslation();
   const problemsId = useId();
   const total = shares.reduce((sum, s) => sum + s.amount, 0);
   const ready = !disabled && problems.length === 0 && signature.trim().length >= 2 && confirmed;
@@ -60,7 +62,7 @@ export function SignMount({
     <Mount
       as="article"
       rise={false}
-      label="Sign and send"
+      label={pt("Sign and send")}
       gloss={disabled
         ? "Signing is currently unavailable. This page does not submit a form automatically."
         : "Sign below to send your form to your broker and save a copy for download."}
@@ -74,15 +76,13 @@ export function SignMount({
               </MountRow>
             ))}
             {shares.length > 1 && (
-              <MountRow term={<span className="font-semibold">Your share a year</span>}>
+              <MountRow term={<span className="font-semibold">{pt("Your share a year")}</span>}>
                 <Money value={total} emphasis="strong" />
               </MountRow>
             )}
           </dl>
           <p className="text-row text-label">
-            Your share of the annual premium{gstIncluded ? ", including GST" : ", before GST"}. It is
-            pro-rated if your cover starts part-way through the year.
-          </p>
+            {pt("Your share of the annual premium")}{gstIncluded ? pt(", including GST") : pt(", before GST")}{pt(". It is pro-rated if your cover starts part-way through the year.")} </p>
           <MountRule />
         </>
       )}
@@ -91,10 +91,10 @@ export function SignMount({
 
       {problems.length > 0 && (
         <div id={problemsId} role="alert" className="flex flex-col gap-1">
-          <p className="text-row font-medium text-strike-pending">Before you can sign:</p>
+          <p className="text-row font-medium text-strike-pending">{pt("Before you can sign:")}</p>
           <ul className="list-disc space-y-1 pl-5 text-row text-strike-pending">
             {problems.map((p) => (
-              <li key={p}>{p}</li>
+              <li key={p}>{pt(p)}</li>
             ))}
           </ul>
         </div>
@@ -103,8 +103,8 @@ export function SignMount({
       {!disabled && (
         <>
           <Field
-            label="Type your full name to sign"
-            hint={expectedName ? `As on your records: ${expectedName}` : undefined}
+            label={pt("Type your full name to sign")}
+            hint={expectedName ? pt("As on your records: {0}", [expectedName]) : undefined}
           >
             {(p) => (
               <input
@@ -125,9 +125,7 @@ export function SignMount({
               onChange={(e) => onConfirmedChange(e.target.checked)}
             />
             <span className="text-row text-record">
-              I confirm the details in this form are correct, and I agree that typing my
-              name above is my electronic signature.
-            </span>
+              {pt("I confirm the details in this form are correct, and I agree that typing my name above is my electronic signature.")} </span>
           </label>
           <Action
             tone="primary"
@@ -141,15 +139,15 @@ export function SignMount({
             ) : (
               <PenLine className="size-4" aria-hidden />
             )}
-            {latest ? "Sign and send again" : "Sign and send"}
+            {latest ? pt("Sign and send again") : pt("Sign and send")}
           </Action>
         </>
       )}
 
       {(submissionNote || helpline) && (
         <div className="flex flex-col gap-1">
-          {submissionNote && <p className="text-row text-label">{submissionNote}</p>}
-          {helpline && <p className="text-row text-label">{helpline}</p>}
+          {submissionNote && <p className="text-row text-label">{pt(submissionNote)}</p>}
+          {helpline && <p className="text-row text-label">{pt(helpline)}</p>}
         </div>
       )}
     </Mount>

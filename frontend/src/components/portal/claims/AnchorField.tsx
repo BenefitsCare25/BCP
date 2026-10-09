@@ -1,3 +1,4 @@
+import { usePortalTranslation } from "@/i18n/portal";
 /** Which earlier visit this claim continues.
  *
  * Two claim types are continuations by definition: a pre-/post-hospitalisation
@@ -37,6 +38,7 @@ function anchorLabel(a: ClaimAnchor): string {
 }
 
 export function AnchorField({ form }: { form: NewClaimForm }) {
+  const pt = usePortalTranslation();
   const { anchorMode, anchorOptions } = form;
   // Rule 2. Also covers the load: a picker that appears a beat late is better
   // than one that appears empty and then rearranges under a tapping finger.
@@ -47,19 +49,19 @@ export function AnchorField({ form }: { form: NewClaimForm }) {
     <FieldGroup
       label={
         admission
-          ? "Which hospital stay is this consultation for?"
-          : "Which visit is this a follow-up to?"
+          ? pt("Which hospital stay is this consultation for?")
+          : pt("Which visit is this a follow-up to?")
       }
       hint={
         admission
-          ? "Your insurer pays a pre- or post-hospitalisation consultation against the stay it belongs to, so telling us which one keeps them together."
-          : "We'll carry over the condition and reuse the referral letter from that visit, so you don't have to enter them again."
+          ? pt("Your insurer pays a pre- or post-hospitalisation consultation against the stay it belongs to, so telling us which one keeps them together.")
+          : pt("We'll carry over the condition and reuse the referral letter from that visit, so you don't have to enter them again.")
       }
     >
       <select
         className={leafControl}
         aria-label={
-          admission ? "Related hospital stay" : "Related specialist visit"
+          admission ? pt("Related hospital stay") : pt("Related specialist visit")
         }
         value={form.anchorId}
         onChange={(e) => form.changeAnchor(e.target.value)}
@@ -67,7 +69,7 @@ export function AnchorField({ form }: { form: NewClaimForm }) {
         {anchorOptions.map((a) => (
           <option key={a.id} value={a.id}>
             {anchorLabel(a)}
-            {a.from_records ? " (from our records)" : ""}
+            {a.from_records ? pt(" (from our records)") : ""}
           </option>
         ))}
         {/* Last, and phrased as an answer rather than an absence — "None"
@@ -75,8 +77,8 @@ export function AnchorField({ form }: { form: NewClaimForm }) {
             option is not. */}
         <option value="">
           {admission
-            ? "Not related to a hospital stay"
-            : "This is for a new condition"}
+            ? pt("Not related to a hospital stay")
+            : pt("This is for a new condition")}
         </option>
       </select>
     </FieldGroup>

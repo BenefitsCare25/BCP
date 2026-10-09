@@ -1,3 +1,4 @@
+import { usePortalTranslation } from "@/i18n/portal";
 /** HR account security — TOTP two-factor enrolment / disable. */
 import { useState } from "react";
 import { QRCodeSVG } from "qrcode.react";
@@ -28,29 +29,26 @@ import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 
 function RecoveryCodes({ codes, onDone }: { codes: string[]; onDone: () => void }) {
+  const pt = usePortalTranslation();
   const copy = async () => {
     try {
       await navigator.clipboard.writeText(codes.join("\n"));
-      toast.success("Recovery codes copied");
+      toast.success(pt("Recovery codes copied"));
     } catch {
-      toast.error("Couldn't copy — select and copy manually.");
+      toast.error(pt("Couldn't copy — select and copy manually."));
     }
   };
   return (
     <div className="space-y-3">
       <div className="rounded-md border border-good/40 bg-good/5 p-3">
         <p className="flex items-center gap-2 text-sm font-medium text-foreground">
-          <Check className="size-4 text-good" /> Two-factor authentication is on.
-        </p>
+          <Check className="size-4 text-good" />  {pt("Two-factor authentication is on.")} </p>
       </div>
       <div>
         <p className="mb-1 text-sm font-medium text-foreground">
-          Save your recovery codes
-        </p>
+          {pt("Save your recovery codes")} </p>
         <p className="mb-2 text-xs text-muted-foreground">
-          Each code works once if you lose your authenticator. Store them somewhere
-          safe — they won't be shown again.
-        </p>
+          {pt("Each code works once if you lose your authenticator. Store them somewhere safe — they won't be shown again.")} </p>
         <div className="grid grid-cols-1 gap-2 rounded-md border border-border bg-muted p-3 font-mono text-sm sm:grid-cols-2">
           {codes.map((c) => (
             <span className="break-all" key={c}>{c}</span>
@@ -58,11 +56,9 @@ function RecoveryCodes({ codes, onDone }: { codes: string[]; onDone: () => void 
         </div>
         <div className="mt-2 flex gap-2">
           <Button size="sm" variant="outline" onClick={copy}>
-            <Copy className="size-3.5" /> Copy codes
-          </Button>
+            <Copy className="size-3.5" />  {pt("Copy codes")} </Button>
           <Button size="sm" onClick={onDone}>
-            I've saved them
-          </Button>
+            {pt("I've saved them")} </Button>
         </div>
       </div>
     </div>
@@ -83,6 +79,7 @@ function ReauthForm({
   onSubmit: (password: string) => void;
   onCancel: () => void;
 }) {
+  const pt = usePortalTranslation();
   const [password, setPassword] = useState("");
   return (
     <form
@@ -93,7 +90,7 @@ function ReauthForm({
       }}
     >
       <div className="space-y-1.5">
-        <Label htmlFor="hr-reauth-pw">Confirm your password to set up two-factor</Label>
+        <Label htmlFor="hr-reauth-pw">{pt("Confirm your password to set up two-factor")}</Label>
         <Input
           id="hr-reauth-pw"
           type="password"
@@ -105,22 +102,21 @@ function ReauthForm({
           aria-describedby={error ? "hr-reauth-error" : undefined}
           autoFocus
         />
-        {error && <p id="hr-reauth-error" role="alert" className="text-sm text-error">{error}</p>}
+        {error && <p id="hr-reauth-error" role="alert" className="text-sm text-error">{pt(error)}</p>}
       </div>
       <div className="flex gap-2">
         <Button type="submit" disabled={pending || !password}>
           {pending ? <Loader2 className="size-4 animate-spin" /> : null}
-          Continue
-        </Button>
+          {pt("Continue")} </Button>
         <Button type="button" variant="ghost" onClick={onCancel} disabled={pending}>
-          Cancel
-        </Button>
+          {pt("Cancel")} </Button>
       </div>
     </form>
   );
 }
 
 function EnrollFlow({ onEnrolled }: { onEnrolled: (codes: string[]) => void }) {
+  const pt = usePortalTranslation();
   const start = useHrMfaEnrollStart();
   const confirm = useHrMfaEnrollConfirm();
   const [setup, setSetup] = useState<MfaStart | null>(null);
@@ -166,7 +162,7 @@ function EnrollFlow({ onEnrolled }: { onEnrolled: (codes: string[]) => void }) {
     return (
       <ReauthForm
         pending={start.isPending}
-        error={error}
+        error={pt(error)}
         onSubmit={(password) => begin(password)}
         onCancel={() => {
           setReauth(false);
@@ -180,14 +176,11 @@ function EnrollFlow({ onEnrolled }: { onEnrolled: (codes: string[]) => void }) {
     return (
       <div className="space-y-3">
         <p className="text-sm text-muted-foreground">
-          Protect your account with a time-based code from an authenticator app
-          (Google Authenticator, 1Password, Authy…).
-        </p>
-        {error && <p className="text-sm text-error">{error}</p>}
+          {pt("Protect your account with a time-based code from an authenticator app (Google Authenticator, 1Password, Authy…).")} </p>
+        {error && <p className="text-sm text-error">{pt(error)}</p>}
         <Button onClick={() => begin()} disabled={start.isPending}>
           {start.isPending ? <Loader2 className="size-4 animate-spin" /> : null}
-          Begin setup
-        </Button>
+          {pt("Begin setup")} </Button>
       </div>
     );
   }
@@ -200,16 +193,14 @@ function EnrollFlow({ onEnrolled }: { onEnrolled: (codes: string[]) => void }) {
         </div>
         <div className="space-y-2 text-sm">
           <p className="text-muted-foreground">
-            Scan this QR code with your authenticator app, or enter the key
-            manually:
-          </p>
+            {pt("Scan this QR code with your authenticator app, or enter the key manually:")} </p>
           <code className="block break-all rounded bg-muted px-2 py-1 text-xs">
             {setup.secret}
           </code>
         </div>
       </div>
       <div className="space-y-1.5 sm:max-w-xs">
-        <Label htmlFor="hr-enroll-code">Enter the 6-digit code</Label>
+        <Label htmlFor="hr-enroll-code">{pt("Enter the 6-digit code")}</Label>
         <Input
           id="hr-enroll-code"
           inputMode="numeric"
@@ -221,16 +212,16 @@ function EnrollFlow({ onEnrolled }: { onEnrolled: (codes: string[]) => void }) {
           className="h-11 text-center text-lg font-semibold tracking-[0.4em]"
         />
       </div>
-      {error && <p className="text-sm text-error">{error}</p>}
+      {error && <p className="text-sm text-error">{pt(error)}</p>}
       <Button onClick={doConfirm} disabled={confirm.isPending || code.length < 6}>
         {confirm.isPending ? <Loader2 className="size-4 animate-spin" /> : null}
-        Confirm & turn on
-      </Button>
+        {pt("Confirm & turn on")} </Button>
     </div>
   );
 }
 
 function DisablePanel() {
+  const pt = usePortalTranslation();
   const disable = useHrMfaDisable();
   const [password, setPassword] = useState("");
   const [open, setOpen] = useState(false);
@@ -240,7 +231,7 @@ function DisablePanel() {
     setError(null);
     disable.mutate(password, {
       onSuccess: () => {
-        toast.success("Two-factor authentication disabled");
+        toast.success(pt("Two-factor authentication disabled"));
         setPassword("");
         setOpen(false);
       },
@@ -251,18 +242,16 @@ function DisablePanel() {
   return (
     <div className="space-y-3">
       <div className="flex items-center gap-2">
-        <Badge variant="good">On</Badge>
+        <Badge variant="good">{pt("On")}</Badge>
         <span className="text-sm text-muted-foreground">
-          Your account is protected with an authenticator app.
-        </span>
+          {pt("Your account is protected with an authenticator app.")} </span>
       </div>
       {!open ? (
         <Button variant="outline" onClick={() => setOpen(true)}>
-          <ShieldOff className="size-4" /> Turn off two-factor
-        </Button>
+          <ShieldOff className="size-4" />  {pt("Turn off two-factor")} </Button>
       ) : (
         <div className="space-y-2 sm:max-w-xs">
-          <Label htmlFor="hr-disable-pw">Confirm your password to turn it off</Label>
+          <Label htmlFor="hr-disable-pw">{pt("Confirm your password to turn it off")}</Label>
           <Input
             id="hr-disable-pw"
             type="password"
@@ -270,7 +259,7 @@ function DisablePanel() {
             onChange={(e) => setPassword(e.target.value)}
             autoFocus
           />
-          {error && <p className="text-sm text-error">{error}</p>}
+          {error && <p className="text-sm text-error">{pt(error)}</p>}
           <div className="flex gap-2">
             <Button
               variant="outline"
@@ -278,11 +267,9 @@ function DisablePanel() {
               disabled={disable.isPending || !password}
             >
               {disable.isPending ? <Loader2 className="size-4 animate-spin" /> : null}
-              Turn off
-            </Button>
+              {pt("Turn off")} </Button>
             <Button variant="ghost" onClick={() => setOpen(false)}>
-              Cancel
-            </Button>
+              {pt("Cancel")} </Button>
           </div>
         </div>
       )}
@@ -291,6 +278,7 @@ function DisablePanel() {
 }
 
 export function HrSecurityPage() {
+  const pt = usePortalTranslation();
   const navigate = useNavigate();
   const { data: me, refetch, isLoading, isError, error } = useHrMe();
   const enrolled = me?.mfa_status === "confirmed";
@@ -304,7 +292,7 @@ export function HrSecurityPage() {
 
   return (
     <div className="max-w-3xl">
-      <h1 className="sr-only">Account security</h1>
+      <h1 className="sr-only">{pt("Account security")}</h1>
       <Card>
         <CardHeader className="p-5 pb-3">
           <h2 className="flex items-center gap-2 text-xl font-bold">
@@ -313,11 +301,9 @@ export function HrSecurityPage() {
             ) : (
               <ShieldCheck className="size-5 text-muted-foreground" />
             )}
-            Two-factor authentication
-          </h2>
+            {pt("Two-factor authentication")} </h2>
           <CardDescription>
-            Use an authenticator app to add a code at sign-in.
-          </CardDescription>
+            {pt("Use an authenticator app to add a code at sign-in.")} </CardDescription>
         </CardHeader>
         <CardContent className="px-5 pb-5">
           {recovery ? (
@@ -325,7 +311,7 @@ export function HrSecurityPage() {
               codes={recovery}
               onDone={() => {
                 void refreshHrSession().then(async restored => {
-                  if (!restored) { toast.error("Sign in again to continue."); return; }
+                  if (!restored) { toast.error(pt("Sign in again to continue.")); return; }
                   setRecovery(null);
                   await refetch();
                   useHrSession.setState({ mfaRecoveryPending: false, mfaEnrollmentRequired: false });
@@ -334,14 +320,14 @@ export function HrSecurityPage() {
               }}
             />
           ) : isLoading ? (
-            <div aria-label="Loading account security" role="status"><Skeleton className="h-16" /></div>
+            <div aria-label={pt("Loading account security")} role="status"><Skeleton className="h-16" /></div>
           ) : isError ? (
             <div role="alert" className="space-y-3">
-              <p className="text-sm text-error">{formatError(error)}</p>
-              <Button variant="outline" onClick={() => void refetch()}>Try again</Button>
+              <p className="text-sm text-error">{pt(formatError(error))}</p>
+              <Button variant="outline" onClick={() => void refetch()}>{pt("Try again")}</Button>
             </div>
           ) : enrolled ? (
-            me?.mfa_required ? <p className="text-sm text-muted-foreground">Two-factor authentication is required by your company.</p> : <DisablePanel />
+            me?.mfa_required ? <p className="text-sm text-muted-foreground">{pt("Two-factor authentication is required by your company.")}</p> : <DisablePanel />
           ) : available ? (
             <EnrollFlow onEnrolled={codes => {
               useHrSession.setState({ mfaRecoveryPending: useHrSession.getState().mfaEnrollmentRequired });
@@ -349,9 +335,7 @@ export function HrSecurityPage() {
             }} />
           ) : (
             <p className="text-sm text-muted-foreground">
-              Your company hasn't enabled two-factor authentication for the HR
-              platform. Contact your broker if you'd like it turned on.
-            </p>
+              {pt("Your company hasn't enabled two-factor authentication for the HR platform. Contact your broker if you'd like it turned on.")} </p>
           )}
         </CardContent>
       </Card>

@@ -1,3 +1,4 @@
+import { usePortalTranslation } from "@/i18n/portal";
 /** Section A of the paper form — the member's particulars.
  *
  * Everything the roster already knows is printed, not asked: retyping an NRIC
@@ -37,13 +38,14 @@ export function ParticularsMount({
   disabled: boolean;
   onChange: (next: ContactDraft) => void;
 }) {
+  const pt = usePortalTranslation();
   const errors = contactErrors(draft);
   return (
     <Mount
       as="article"
       rise={false}
       className="enrolment-particulars"
-      label="Your details"
+      label={pt("Your details")}
     >
       <dl className="enrolment-records">
         <MountRow term="Name">{particulars.name ?? "—"}</MountRow>
@@ -60,10 +62,10 @@ export function ParticularsMount({
           <MountRow term="Date joined">{formatDay(particulars.date_of_hire)}</MountRow>
         )}
       </dl>
-      <p className="text-row text-label">Contact HR to correct these details.</p>
+      <p className="text-row text-label">{pt("Contact HR to correct these details.")}</p>
       <MountRule />
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-        <Field label="Contact number" error={errors.contactNo}>
+        <Field label={pt("Contact number")} error={errors.contactNo}>
           {(p) => (
             <input
               {...p}
@@ -76,7 +78,7 @@ export function ParticularsMount({
             />
           )}
         </Field>
-        <Field label="Email" error={errors.email}>
+        <Field label={pt("Email")} error={errors.email}>
           {(p) => (
             <input
               {...p}

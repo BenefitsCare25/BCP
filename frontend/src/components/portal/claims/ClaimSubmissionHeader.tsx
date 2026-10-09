@@ -1,9 +1,11 @@
+import { usePortalTranslation } from "@/i18n/portal";
 import { OTHER_HOSPITAL } from "./claimForm";
 import type { NewClaimForm } from "./useNewClaimForm";
 
 const STEP_LABELS = ["Claim type", "Visit details", "Documents"] as const;
 
 export function ClaimSubmissionHeader({ form }: { form: NewClaimForm }) {
+  const pt = usePortalTranslation();
   const claimTypeComplete = Boolean(form.selection);
   const providerComplete = form.isHospitalisation
     ? Boolean(
@@ -35,18 +37,18 @@ export function ClaimSubmissionHeader({ form }: { form: NewClaimForm }) {
   return (
     <section
       className="space-y-2"
-      aria-label={`${completed} of 3 sections ready`}
+      aria-label={pt("{0} of 3 sections ready", [completed])}
     >
       <div className="flex items-center justify-between gap-3 text-row">
-        <span className="font-medium text-record">Submission readiness</span>
-        <span className="tabular-nums text-label">{completed} of 3 ready</span>
+        <span className="font-medium text-record">{pt("Submission readiness")}</span>
+        <span className="tabular-nums text-label">{completed}  {pt("of 3 ready")}</span>
       </div>
       <ol className="grid grid-cols-3 gap-2">
         {steps.map((ready, index) => (
           <li
             key={STEP_LABELS[index]}
             className="min-w-0 space-y-1.5"
-            aria-label={`${STEP_LABELS[index]}: ${ready ? "ready" : "not ready"}`}
+            aria-label={`${pt(STEP_LABELS[index])}: ${pt(ready ? "ready" : "not ready")}`}
           >
             <span
               className={`block h-2 rounded-pill ${ready ? "bg-action" : "bg-shade"}`}
@@ -58,7 +60,7 @@ export function ClaimSubmissionHeader({ form }: { form: NewClaimForm }) {
               }`}
               aria-hidden
             >
-              {STEP_LABELS[index]}
+              {pt(STEP_LABELS[index])}
             </span>
           </li>
         ))}

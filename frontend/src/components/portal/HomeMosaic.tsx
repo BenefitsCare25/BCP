@@ -1,3 +1,4 @@
+import { usePortalTranslation } from "@/i18n/portal";
 /** The home — a mosaic of tiles, each answering one question completely.
  *
  * The questions a member actually arrives with, in order of frequency: is
@@ -94,6 +95,7 @@ function Tile({
   className?: string;
   children: React.ReactNode;
 }) {
+  usePortalTranslation();
   return (
     <div
       className={cn(
@@ -109,6 +111,7 @@ function Tile({
 }
 
 function TileLabel({ children }: { children: React.ReactNode }) {
+  usePortalTranslation();
   return <p className="leaf-label">{children}</p>;
 }
 
@@ -157,6 +160,7 @@ function Go({
   stretch?: boolean;
   children: ReactNode;
 }) {
+  usePortalTranslation();
   const className = goLinkClass({
     brand,
     stretch,
@@ -283,6 +287,7 @@ export interface HomeMosaicSource {
 
 /** The member's own home: hooks in, view out. */
 export function HomeMosaic() {
+  usePortalTranslation();
   const { data: me } = usePortalMe();
   const utilization = usePortalUtilization();
   const claims = usePortalClaims();
@@ -329,6 +334,7 @@ export function HomeMosaicView({
    *  enquiry id to a claim view. */
   onOpenQuestion?: (enquiryId: string) => void;
 }) {
+  const pt = usePortalTranslation();
   const navigate = useNavigate();
   const { utilization, claims, statement, dependants, messages } = source;
   // The same rule the shell nav and the broker preview close on, from the
@@ -411,7 +417,7 @@ export function HomeMosaicView({
     dependants.isLoading ||
     messages.isLoading;
   if (loading) {
-    return <LeafSkeleton label="Loading your benefits" mounts={4} />;
+    return <LeafSkeleton label={pt("Loading your benefits")} mounts={4} />;
   }
 
   // A 404 is the honest "nothing on record" case and falls through to the tiles;
@@ -433,7 +439,7 @@ export function HomeMosaicView({
       <Tile
         className="leaf-rise col-span-2 h-full sm:col-span-1"
       >
-        <TileLabel>Your claims</TileLabel>
+        <TileLabel>{pt("Your claims")}</TileLabel>
         {latest ? (
           <>
             <ClaimStrike status={latest.status} />
@@ -475,18 +481,14 @@ export function HomeMosaicView({
               </>
             )}
             <Go dest="claims" onGo={onGo}>
-              See all claims
-            </Go>
+              {pt("See all claims")} </Go>
           </>
         ) : (
           <>
             <p className="text-md font-semibold text-record">
-              You haven&rsquo;t made a claim yet
-            </p>
+              {pt("You haven’t made a claim yet")} </p>
             <p className="text-row text-label">
-              Photograph your receipt and we&rsquo;ll read the amount, date and
-              clinic off it for you.
-            </p>
+              {pt("Photograph your receipt and we’ll read the amount, date and clinic off it for you.")} </p>
           </>
         )}
       </Tile>
@@ -507,12 +509,11 @@ export function HomeMosaicView({
           four separate destinations promises something it can't keep. */}
       <Tile className="leaf-rise col-span-2 h-full sm:col-span-2">
         <div className="flex items-baseline justify-between gap-3">
-          <TileLabel>Messages</TileLabel>
+          <TileLabel>{pt("Messages")}</TileLabel>
           {/* Struck in the pending ink, not the brand — see MessageMount. */}
           {unread > 0 && (
             <Strike tone="pending">
-              {unread} unread
-            </Strike>
+              {unread}  {pt("unread")} </Strike>
           )}
         </div>
         {messageItems.length > 0 ? (
@@ -525,19 +526,14 @@ export function HomeMosaicView({
               onOpen={openMessage}
             />
             <Go dest="messages" onGo={onGo} stretch={false}>
-              See all messages
-            </Go>
+              {pt("See all messages")} </Go>
           </>
         ) : (
           <>
             <p className="text-md font-semibold text-record">
-              Nothing to read
-            </p>
+              {pt("Nothing to read")} </p>
             <p className="text-row text-label">
-              When we have news about a claim — that we&rsquo;ve received it,
-              that it&rsquo;s settled, or that we need something else — it will
-              appear here, and you can reply to us on the claim itself.
-            </p>
+              {pt("When we have news about a claim — that we’ve received it, that it’s settled, or that we need something else — it will appear here, and you can reply to us on the claim itself.")} </p>
           </>
         )}
       </Tile>
@@ -557,7 +553,7 @@ export function HomeMosaicView({
           is the tile's absence. */}
       {headline && hero && (
         <Tile className="leaf-rise col-span-2 h-full sm:col-span-1">
-          <TileLabel>{hero.label}</TileLabel>
+          <TileLabel>{pt(hero.label)}</TileLabel>
           <Money
             value={hero.value}
             currency={cur}
@@ -587,40 +583,37 @@ export function HomeMosaicView({
             // and it must never restate it, which would read as two different
             // amounts.
             <p className="text-row text-label">
-              {hero.note ?? "No yearly cap on this benefit"}
+              {hero.note ?? pt("No yearly cap on this benefit")}
             </p>
           )}
           <Go dest="usage" onGo={onGo}>
-            {otherCount > 0 ? `See all ${otherCount + 1} limits` : "See all limits"}
+            {otherCount > 0 ? pt("See all {0} limits", [otherCount + 1]) : pt("See all limits")}
           </Go>
         </Tile>
       )}
 
       {(careRoutes.length > 0 || statement.data?.flex) && (
         <Tile className="leaf-rise h-full">
-          <TileLabel>Find your care</TileLabel>
+          <TileLabel>{pt("Find your care")}</TileLabel>
           <p className="text-2xl font-semibold tracking-title text-record">
-            {careRoutes.length > 0 ? "What do you need?" : "Flexible benefits"}
+            {careRoutes.length > 0 ? pt("What do you need?") : pt("Flexible benefits")}
           </p>
           <p className="text-row text-label">
             {careRoutes.slice(0, 4).map((route) => route.title).join(" · ")}
-            {careRoutes.length > 4 && ` · and ${careRoutes.length - 4} more`}
+            {careRoutes.length > 4 && pt(" · and {0} more", [careRoutes.length - 4])}
           </p>
           <Go dest="benefits" onGo={onGo}>
-            Explore my cover
-          </Go>
+            {pt("Explore my cover")} </Go>
         </Tile>
       )}
 
       {activeDependants.length > 0 && (
         <Tile className="leaf-rise h-full">
-          <TileLabel>My family</TileLabel>
+          <TileLabel>{pt("My family")}</TileLabel>
           <p className="text-2xl font-semibold tracking-title text-record">
-            {activeDependants.length} covered
-          </p>
+            {activeDependants.length}  {pt("covered")} </p>
           <Go dest="dependants" onGo={onGo}>
-            See my family
-          </Go>
+            {pt("See my family")} </Go>
         </Tile>
       )}
 
@@ -630,13 +623,11 @@ export function HomeMosaicView({
       >
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <TileLabel>Panel clinics</TileLabel>
+            <TileLabel>{pt("Panel clinics")}</TileLabel>
             <p className="mt-1.5 text-md font-semibold text-record">
-              Find a clinic near you
-            </p>
+              {pt("Find a clinic near you")} </p>
             <p className="mt-0.5 text-row text-label">
-              GP · Dental · TCM · Specialist
-            </p>
+              {pt("GP · Dental · TCM · Specialist")} </p>
           </div>
           <span
             aria-hidden
@@ -646,8 +637,7 @@ export function HomeMosaicView({
           </span>
         </div>
         <Go dest="clinics" onGo={onGo}>
-          Find a clinic
-        </Go>
+          {pt("Find a clinic")} </Go>
       </Tile>
       )}
 
@@ -658,17 +648,13 @@ export function HomeMosaicView({
         <Tile
           className="leaf-rise col-span-2 sm:col-span-3"
         >
-          <Strike tone="pending">Enrolment open</Strike>
+          <Strike tone="pending">{pt("Enrolment open")}</Strike>
           <p className="text-md font-semibold text-record">
-            Your benefit choices for next year
-          </p>
+            {pt("Your benefit choices for next year")} </p>
           <p className="text-row text-label">
-            If the window closes before you choose, this year&rsquo;s cover
-            carries over.
-          </p>
+            {pt("If the window closes before you choose, this year’s cover carries over.")} </p>
           <Go dest="enrollment" onGo={onGo} brand>
-            Review my choices
-          </Go>
+            {pt("Review my choices")} </Go>
         </Tile>
       )}
     </div>

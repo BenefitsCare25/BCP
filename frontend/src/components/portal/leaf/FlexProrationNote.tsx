@@ -1,3 +1,4 @@
+import { portalText as pt, usePortalTranslation } from "@/i18n/portal";
 /** Why a member's flex dollars are not the full year's.
  *
  * Three surfaces answer that question — "What's covered" (`FlexMount`),
@@ -20,7 +21,8 @@ type Proration = { full_amount: number; note: string };
 
 /** "Pro-rated to 3/6 months of cover" — the one phrasing, everywhere. */
 export function prorationReason(note: string): string {
-  return `Pro-rated to ${note} of cover`;
+  const months = /^(\d+)\/(\d+) months?$/.exec(note.trim());
+  return pt("Pro-rated to {0} of cover", [months ? pt("{0}/{1} months", [months[1], months[2]]) : pt(note)]);
 }
 
 /** The reason plus the figure it was scaled from, as one line. Used where the
@@ -34,11 +36,11 @@ export function FlexProrationNote({
   currency: string;
   className?: string;
 }) {
+  const pt = usePortalTranslation();
   return (
     <p className={`text-row text-label${className ? ` ${className}` : ""}`}>
       {prorationReason(proration.note)} ·{" "}
-      <Money value={proration.full_amount} currency={currency} /> a year
-    </p>
+      <Money value={proration.full_amount} currency={currency} />  {pt("a year")} </p>
   );
 }
 

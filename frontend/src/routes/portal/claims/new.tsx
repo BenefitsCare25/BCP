@@ -1,3 +1,4 @@
+import { usePortalTranslation } from "@/i18n/portal";
 /** Submit-a-claim form — composition only.
  *
  * The state machine is `components/portal/claims/useNewClaimForm`; each section
@@ -51,6 +52,7 @@ function focusFirstInvalidField(form: HTMLFormElement) {
 }
 
 export function PortalNewClaimPage() {
+  const pt = usePortalTranslation();
   const navigate = useNavigate();
   const company = useCompany();
   useDocumentTitle("Make a claim");
@@ -59,7 +61,7 @@ export function PortalNewClaimPage() {
 
   if (options.isLoading) return (
     <div className="portal-new-claim mx-auto w-full max-w-4xl">
-      <LeafSkeleton label="Loading the claim form" />
+      <LeafSkeleton label={pt("Loading the claim form")} />
     </div>
   );
   if (
@@ -84,12 +86,12 @@ export function PortalNewClaimPage() {
       /* The heading has to move with the sentence. "No benefits to claim
          against" is the right noun only for the generic case — a leaver HAS
          benefits, and the thing that ended is the window. */
-      <Mount className="mx-auto w-full max-w-4xl" label={blocked ? "This window has closed" : "No benefits to claim against"}>
+      <Mount className="mx-auto w-full max-w-4xl" label={blocked ? pt("This window has closed") : pt("No benefits to claim against")}>
         <p className="text-row text-label">
           {blocked ??
-            "We don't have any cover recorded against your name for this " +
-              "period, so there's nothing to claim against yet. Your HR team " +
-              "can check your record."}
+            pt("We don't have any cover recorded against your name for this ") +
+              pt("period, so there's nothing to claim against yet. Your HR team ") +
+              pt("can check your record.")}
         </p>
       </Mount>
     );
@@ -153,8 +155,7 @@ export function PortalNewClaimPage() {
                 onClick={() => void navigate({ to: "/portal/$company/claims", params: { company } })}
                 className="leaf-focus -ml-2 inline-flex min-h-11 shrink-0 items-center gap-1.5 px-2 text-row text-label"
               >
-                <ArrowLeft className="size-4" aria-hidden /> All claims
-              </button>
+                <ArrowLeft className="size-4" aria-hidden />  {pt("All claims")} </button>
             }
           />
           <PendingClaimsNotice form={form} />
@@ -171,14 +172,14 @@ export function PortalNewClaimPage() {
           <div className="space-y-4">
           <DocumentFields form={form} />
 
-          <Field label="Remarks">
+          <Field label={pt("Remarks")}>
             {(p) => (
               <>
                 <textarea
                   {...p}
                   rows={3}
                   className={`${leafControl} resize-y`}
-                  placeholder="Anything your broker should know about this claim (optional)"
+                  placeholder={pt("Anything your broker should know about this claim (optional)")}
                   value={form.remarks}
                   maxLength={MAX_REMARKS}
                   onChange={(e) => form.setRemarks(e.target.value)}
@@ -192,7 +193,7 @@ export function PortalNewClaimPage() {
           </div>
           </div>
 
-          {form.error && <FormAlert>{form.error}</FormAlert>}
+          {form.error && <FormAlert>{pt(form.error)}</FormAlert>}
 
           {/* The page's one brand fill. */}
           <Action tone="primary" type="submit" block disabled={form.busy}>
@@ -202,8 +203,8 @@ export function PortalNewClaimPage() {
               <Send className="size-4" aria-hidden />
             )}
             {queued > 0
-              ? `Submit claim ${form.multiDone + 1} of ${form.multiDone + 1 + queued}`
-              : "Submit claim"}
+              ? pt("Submit claim {0} of {1}", [form.multiDone + 1, form.multiDone + 1 + queued])
+              : pt("Submit claim")}
           </Action>
         </form>
       </Mount>

@@ -1,3 +1,4 @@
+import { usePortalTranslation } from "@/i18n/portal";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { AlertTriangle, ArrowLeft, Check, Loader2, Search, UserRound } from "lucide-react";
 import {
@@ -95,19 +96,21 @@ function Field({
   hint?: string;
   children: ReactNode;
 }) {
+  const pt = usePortalTranslation();
   return (
     <label className="block space-y-1.5 text-sm font-medium">
       <span>
-        {label}
+        {pt(label)}
         {required && <span className="text-error"> *</span>}
       </span>
       {children}
-      {hint && <span className="block text-xs font-normal text-muted-foreground">{hint}</span>}
+      {hint && <span className="block text-xs font-normal text-muted-foreground">{pt(hint)}</span>}
     </label>
   );
 }
 
 export function HrNewClaimPage() {
+  const pt = usePortalTranslation();
   useDocumentTitle("New employee claim");
   const navigate = useNavigate();
   const [employeeSearch, setEmployeeSearch] = useState("");
@@ -266,21 +269,20 @@ export function HrNewClaimPage() {
         <Button asChild variant="ghost" className="-ml-3 h-11 sm:h-9">
           <Link to="/hr/claims">
             <ArrowLeft className="size-4" aria-hidden />
-            All claims
-          </Link>
+            {pt("All claims")} </Link>
         </Button>
-        <h1 className="mt-2 text-2xl font-semibold tracking-tight">New employee claim</h1>
+        <h1 className="mt-2 text-2xl font-semibold tracking-tight">{pt("New employee claim")}</h1>
       </div>
 
       <Card className={cn("p-5", !employee && "lg:col-span-2")}>
-        <h2 className="text-xl font-bold">{employee ? "Employee" : "Choose the employee"}</h2>
+        <h2 className="text-xl font-bold">{employee ? pt("Employee") : pt("Choose the employee")}</h2>
         {employee ? (
           <div className="mt-3 grid grid-cols-[2.5rem_minmax(0,1fr)] items-start gap-3 rounded-xl bg-muted p-3">
             <div className="flex size-10 shrink-0 items-center justify-center rounded-full bg-card">
               <UserRound className="size-5 text-muted-foreground" aria-hidden />
             </div>
             <div className="min-w-0 flex-1">
-              <p className="break-words font-medium">{employee.name ?? "Employee"}</p>
+              <p className="break-words font-medium">{employee.name ?? pt("Employee")}</p>
               <p className="text-sm text-muted-foreground">
                 {employee.staff_id} · {employee.period.split(" - ").map(formatClaimDate).join(" – ")}
               </p>
@@ -291,13 +293,12 @@ export function HrNewClaimPage() {
               className="col-span-2 h-11 justify-self-end sm:h-9"
               onClick={() => setEmployee(null)}
             >
-              Change
-            </Button>
+              {pt("Change")} </Button>
           </div>
         ) : (
           <div className="mt-4 space-y-3">
             <label className="relative block">
-              <span className="sr-only">Search employees</span>
+              <span className="sr-only">{pt("Search employees")}</span>
               <Search
                 className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
                 aria-hidden
@@ -305,19 +306,19 @@ export function HrNewClaimPage() {
               <Input
                 type="search"
                 className="h-11 pl-9"
-                placeholder="Search by name or staff ID"
+                placeholder={pt("Search by name or staff ID")}
                 value={employeeSearch}
                 onChange={(event) => setEmployeeSearch(event.target.value)}
               />
             </label>
             {employees.isLoading ? (
-              <div className="space-y-2" aria-label="Loading employees">
+              <div className="space-y-2" aria-label={pt("Loading employees")}>
                 <Skeleton className="h-14" />
                 <Skeleton className="h-14" />
               </div>
             ) : employees.isError ? (
               <p className="text-sm text-error" role="alert">
-                {formatError(employees.error)}
+                {pt(formatError(employees.error))}
               </p>
             ) : (
               <div className="max-h-72 divide-y divide-border overflow-y-auto rounded-lg border border-border">
@@ -330,7 +331,7 @@ export function HrNewClaimPage() {
                   >
                     <span className="min-w-0 flex-1">
                       <span className="block truncate text-sm font-medium">
-                        {item.name ?? "Employee"}
+                        {item.name ?? pt("Employee")}
                       </span>
                       <span className="block truncate text-xs text-muted-foreground">
                         {item.staff_id} · {item.period}
@@ -340,7 +341,7 @@ export function HrNewClaimPage() {
                   </button>
                 ))}
                 {employees.data?.items.length === 0 && (
-                  <p className="p-4 text-sm text-muted-foreground">No employees found.</p>
+                  <p className="p-4 text-sm text-muted-foreground">{pt("No employees found.")}</p>
                 )}
               </div>
             )}
@@ -350,30 +351,28 @@ export function HrNewClaimPage() {
 
       {employee && (
         <Card className="p-5">
-          <h2 className="text-xl font-bold">Claim details</h2>
+          <h2 className="text-xl font-bold">{pt("Claim details")}</h2>
           {options.isLoading ? (
-            <div className="mt-4 space-y-3" aria-label="Loading claim options">
+            <div className="mt-4 space-y-3" aria-label={pt("Loading claim options")}>
               <Skeleton className="h-11" />
               <Skeleton className="h-28" />
             </div>
           ) : options.isError ? (
             <div className="mt-4" role="alert">
-              <p className="text-sm text-error">{formatError(options.error)}</p>
+              <p className="text-sm text-error">{pt(formatError(options.error))}</p>
               <Button
                 variant="outline"
                 className="mt-3 h-11 sm:h-9"
                 onClick={() => void options.refetch()}
               >
-                Try again
-              </Button>
+                {pt("Try again")} </Button>
             </div>
           ) : choices.length === 0 ? (
             <p className="mt-4 text-sm text-muted-foreground">
-              This employee has no claimable cover in the selected benefit period.
-            </p>
+              {pt("This employee has no claimable cover in the selected benefit period.")} </p>
           ) : (
             <form className="mt-3 space-y-3" onSubmit={(event) => void submit(event)}>
-              <Field label="Claim type" required>
+              <Field label={pt("Claim type")} required>
                 <NativeSelect
                   className="h-11 w-full px-3"
                   value={choiceId}
@@ -385,18 +384,18 @@ export function HrNewClaimPage() {
                     uploadedReferral.current = null;
                   }}
                 >
-                  <option value="">Select claim type</option>
+                  <option value="">{pt("Select claim type")}</option>
                   {choices.map((item) => (
-                    <option key={item.id} value={item.id}>{item.label}</option>
+                    <option key={item.id} value={item.id}>{pt(item.label)}</option>
                   ))}
                 </NativeSelect>
               </Field>
-              {planLabel && <p className="break-words text-sm text-muted-foreground">Plan: {planLabel}</p>}
+              {planLabel && <p className="break-words text-sm text-muted-foreground">{pt("Plan:")} {planLabel}</p>}
 
               {choice && (
                 <>
                   <div className="hr-claim-money grid grid-cols-2 gap-3 sm:grid-cols-3">
-                    <Field label="Date incurred" required>
+                    <Field label={pt("Date incurred")} required>
                       <Input
                         type="date"
                         className="h-11"
@@ -407,7 +406,7 @@ export function HrNewClaimPage() {
                         onChange={(event) => setIncurredDate(event.target.value)}
                       />
                     </Field>
-                    <Field label="Currency" required>
+                    <Field label={pt("Currency")} required>
                       <NativeSelect
                         className="h-11 w-full px-3"
                         value={effectiveCurrency}
@@ -422,7 +421,7 @@ export function HrNewClaimPage() {
                         ))}
                       </NativeSelect>
                     </Field>
-                    <Field label="Claim amount" required>
+                    <Field label={pt("Claim amount")} required>
                       <Input
                         type="number"
                         className="h-11 tabular-nums"
@@ -444,17 +443,14 @@ export function HrNewClaimPage() {
                     >
                       <p className="flex items-start gap-2">
                         <AlertTriangle className="mt-0.5 size-4 shrink-0 text-warn" aria-hidden />
-                        The {policyCurrency} conversion could not be loaded. Try again before
-                        saving this claim.
-                      </p>
+                        {pt("The")} {policyCurrency}  {pt("conversion could not be loaded. Try again before saving this claim.")} </p>
                       <Button
                         type="button"
                         variant="outline"
                         size="sm"
                         onClick={() => void fxQuote.refetch()}
                       >
-                        Try conversion again
-                      </Button>
+                        {pt("Try conversion again")} </Button>
                     </div>
                   ) : (
                     <ConversionNotice
@@ -466,20 +462,20 @@ export function HrNewClaimPage() {
                   )}
 
                   <div className="grid gap-4 sm:grid-cols-2">
-                    <Field label="Clinic or provider" required>
+                    <Field label={pt("Clinic or provider")} required>
                       <Input className="h-11" required minLength={2} maxLength={255} value={provider} onChange={(event) => setProvider(event.target.value)} />
                     </Field>
-                    <Field label="Invoice or receipt number" required>
+                    <Field label={pt("Invoice or receipt number")} required>
                       <Input className="h-11" required maxLength={128} value={invoice} onChange={(event) => setInvoice(event.target.value)} />
                     </Field>
                   </div>
 
                   {choice.supportsStayDates && (
                     <div className="grid gap-4 sm:grid-cols-2">
-                      <Field label="Admission date">
+                      <Field label={pt("Admission date")}>
                         <Input type="date" className="h-11" max={incurredDate || undefined} value={admissionDate} onChange={(event) => setAdmissionDate(event.target.value)} />
                       </Field>
-                      <Field label="Discharge date">
+                      <Field label={pt("Discharge date")}>
                         <Input type="date" className="h-11" min={admissionDate || undefined} value={dischargeDate} onChange={(event) => setDischargeDate(event.target.value)} />
                       </Field>
                     </div>
@@ -487,17 +483,17 @@ export function HrNewClaimPage() {
 
                   {choice.requiresReferral && (
                     <div className="grid gap-4 sm:grid-cols-2">
-                      <Field label="Visit type" required>
+                      <Field label={pt("Visit type")} required>
                         <NativeSelect className="h-11 w-full px-3" required value={visitType} onChange={(event) => setVisitType(event.target.value)}>
-                          <option value="">Select visit type</option>
-                          <option value="first">First specialist visit</option>
-                          <option value="follow_up">Follow-up specialist visit</option>
+                          <option value="">{pt("Select visit type")}</option>
+                          <option value="first">{pt("First specialist visit")}</option>
+                          <option value="follow_up">{pt("Follow-up specialist visit")}</option>
                         </NativeSelect>
                       </Field>
                       <Field
-                        label="Referral letter"
+                        label={pt("Referral letter")}
                         required={Boolean(visitType)}
-                        hint="PDF, JPG or PNG · 15 MB maximum"
+                        hint={pt("PDF, JPG or PNG · 15 MB maximum")}
                       >
                         <Input
                           type="file"
@@ -519,7 +515,7 @@ export function HrNewClaimPage() {
                         />
                       </Field>
                       {referralFile && (
-                        <Field label="Referral issued on">
+                        <Field label={pt("Referral issued on")}>
                           <Input type="date" className="h-11" max={singaporeTodayISO()} value={referralIssuedOn} onChange={(event) => setReferralIssuedOn(event.target.value)} />
                         </Field>
                       )}
@@ -527,16 +523,16 @@ export function HrNewClaimPage() {
                   )}
 
                   {choice.requiresDoctor && (
-                    <Field label="Treating doctor" required>
+                    <Field label={pt("Treating doctor")} required>
                       <Input className="h-11" required maxLength={255} value={doctor} onChange={(event) => setDoctor(event.target.value)} />
                     </Field>
                   )}
 
-                  <Field label="Diagnosis" required={choice.diagnosisRequired}>
+                  <Field label={pt("Diagnosis")} required={choice.diagnosisRequired}>
                     <Input className="h-11" required={choice.diagnosisRequired} maxLength={512} value={diagnosis} onChange={(event) => setDiagnosis(event.target.value)} />
                   </Field>
 
-                  <Field label="Remarks">
+                  <Field label={pt("Remarks")}>
                     <textarea
                       className={cn(
                         "min-h-24 w-full resize-y rounded-md border border-input bg-card px-3 py-2 text-sm text-foreground shadow-sm",
@@ -548,16 +544,15 @@ export function HrNewClaimPage() {
                     />
                   </Field>
 
-                  {error && <p className="rounded-lg bg-error-soft p-3 text-sm text-error" role="alert">{error}</p>}
+                  {error && <p className="rounded-lg bg-error-soft p-3 text-sm text-error" role="alert">{pt(error)}</p>}
 
                   <div className="flex flex-col-reverse gap-3 border-t border-border pt-5 sm:flex-row sm:justify-end">
                     <Button asChild variant="outline" className="h-11 sm:h-9">
-                      <Link to="/hr/claims">Cancel</Link>
+                      <Link to="/hr/claims">{pt("Cancel")}</Link>
                     </Button>
                     <Button type="submit" className="h-11 sm:h-9" disabled={busy}>
                       {busy && <Loader2 className="size-4 animate-spin" aria-hidden />}
-                      Save and add evidence
-                    </Button>
+                      {pt("Save and add evidence")} </Button>
                   </div>
                 </>
               )}

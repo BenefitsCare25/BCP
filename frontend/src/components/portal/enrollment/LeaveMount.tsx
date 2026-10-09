@@ -1,3 +1,4 @@
+import { portalText, usePortalTranslation } from "@/i18n/portal";
 /** Buying and selling leave, as a mount.
  *
  * Every rule the server enforces (`enrollment_validation.validate_leave`) is
@@ -23,7 +24,7 @@ import { Mount, MountRow } from "@/components/portal/leaf/Mount";
 /** "up to 5 days" / "up to 1 day" — a day count is printed as words a member
  * reads, not as a bare number with a hardcoded plural. */
 function days(n: number): string {
-  return `${n} day${n === 1 ? "" : "s"}`;
+  return portalText("{0} day{1}", [n, n === 1 ? "" : "s"]);
 }
 
 type Trade = ReturnType<typeof leaveTrade>;
@@ -39,10 +40,11 @@ function TradeImpact({
   currency: string | null;
   emphasis?: boolean;
 }) {
+  const pt = usePortalTranslation();
   return (
     <MountRow
       term={t.isBuy ? "Taken from your flex dollars" : "Added to your flex dollars"}
-      gloss={emphasis ? `${days(t.enteredDays)} at your daily rate.` : undefined}
+      gloss={emphasis ? pt("{0} at your daily rate.", [days(t.enteredDays)]) : undefined}
     >
       <Money
         value={t.impact}
@@ -68,11 +70,12 @@ function TradeControls({
   onActionChange: (action: string) => void;
   onDaysChange: (days: string) => void;
 }) {
+  const pt = usePortalTranslation();
   return (
     // One column on a phone — a frame is either full width or it is not on this
     // breakpoint (The Whole-Frame Rule).
     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-      <Field label="What would you like to do">
+      <Field label={pt("What would you like to do")}>
         {(p) => (
           <select
             {...p}
@@ -80,27 +83,27 @@ function TradeControls({
             value={action}
             onChange={(e) => onActionChange(e.target.value)}
           >
-            <option value="none">Nothing</option>
+            <option value="none">{pt("Nothing")}</option>
             <option value="buy" disabled={!!t.buyBlocked}>
-              Buy extra days
-            </option>
+              {pt("Buy extra days")} </option>
             <option value="sell" disabled={!!t.sellBlocked}>
-              Sell days back
-            </option>
+              {pt("Sell days back")} </option>
           </select>
         )}
       </Field>
 
       <Field
-        label="How many days"
-        error={t.daysError}
+        label={pt("How many days")}
+        error={t.daysError?.startsWith("More than") ? pt("More than the {0}-day limit", [t.maxDays])
+          : t.daysError?.startsWith("At least") ? pt("At least {0} day{1}", [t.minDays, t.minDays === 1 ? "" : "s"])
+          : t.daysError?.startsWith("Must be") ? pt("Must be in {0}-day steps", [t.step]) : pt(t.daysError)}
         hint={
           t.trading
             ? `${
                 t.minDays > 0
-                  ? `${t.minDays}–${t.maxDays} days`
-                  : `Up to ${days(t.maxDays)}`
-              }${t.step !== 1 ? `, in ${t.step}-day steps` : ""}.`
+                  ? pt("{0}–{1} days", [t.minDays, t.maxDays])
+                  : pt("Up to {0}", [days(t.maxDays)])
+              }${t.step !== 1 ? pt(", in {0}-day steps", [t.step]) : ""}.`
             : undefined
         }
       >
@@ -125,21 +128,19 @@ function TradeControls({
 /** Why an option is unavailable, and what a missing rate means. Both are
  *  silent server-side outcomes otherwise (a 422, or a $0 draw). */
 function TradeNotices({ t }: { t: Trade }) {
+  const pt = usePortalTranslation();
   return (
     <>
       {t.blockedReason && (
-        <p className="text-row text-strike-pending">{t.blockedReason}</p>
+        <p className="text-row text-strike-pending">{pt(t.blockedReason)}</p>
       )}
       {t.trading && !t.blockedReason && t.rate <= 0 && (
         <p className="text-row text-label">
-          There&rsquo;s no daily rate set for your role yet, so trading leave
-          won&rsquo;t change your flex dollars. Your HR team can confirm it.
-        </p>
+          {pt("There’s no daily rate set for your role yet, so trading leave won’t change your flex dollars. Your HR team can confirm it.")} </p>
       )}
       {!t.trading && t.buyBlocked && t.sellBlocked && (
         <p className="text-row text-label">
-          You can&rsquo;t buy or sell leave this year.
-        </p>
+          {pt("You can’t buy or sell leave this year.")} </p>
       )}
     </>
   );
@@ -171,34 +172,35 @@ export function LeaveMount({
   onActionChange: (action: string) => void;
   onDaysChange: (days: string) => void;
 }) {
+  const pt = usePortalTranslation();
   const t = leaveTrade(action, daysValue, leave, ratePerDay);
 
   // The allowance, stated before anything is picked — the day cap AND what it
   // is worth. Without it a member only learns their limit by exceeding it.
   const allowance = leave
     ? [
-        !t.buyBlocked && `buy up to ${days(leave.max_buy_days)}`,
-        !t.sellBlocked && `sell up to ${days(leave.max_sell_days)}`,
+        !t.buyBlocked && pt("buy up to {0}", [days(leave.max_buy_days)]),
+        !t.sellBlocked && pt("sell up to {0}", [days(leave.max_sell_days)]),
       ]
         .filter(Boolean)
-        .join(", or ")
+        .join(pt(", or "))
     : "";
 
   return (
     <Mount
       as="article"
       rise={rise}
-      label="Buy or sell leave"
+      label={pt("Buy or sell leave")}
       gloss="Spend part of your flex dollars on extra days off, or sell days back to add to them."
     >
       {allowance && (
         <p className="text-row text-label">
-          You can {allowance}
+          {pt("You can")} {allowance}
           {t.rate > 0 && (
             <>
-              {" — worth "}
+              {pt(" — worth ")}
               <Money value={t.rate} currency={currency} emphasis="strong" />
-              {" a day."}
+              {pt(" a day.")}
             </>
           )}
           {t.rate <= 0 && "."}
@@ -209,8 +211,8 @@ export function LeaveMount({
         <dl>
           <MountRow term="Leave">
             {t.trading && t.enteredDays > 0
-              ? `${t.isBuy ? "Bought" : "Sold back"} ${days(t.enteredDays)}`
-              : "You haven't traded any leave"}
+              ? pt("{0} {1}", [pt(t.isBuy ? "Bought" : "Sold back"), days(t.enteredDays)])
+              : pt("You haven't traded any leave")}
           </MountRow>
           {t.trading && t.rate > 0 && t.enteredDays > 0 && (
             <TradeImpact t={t} currency={currency} />

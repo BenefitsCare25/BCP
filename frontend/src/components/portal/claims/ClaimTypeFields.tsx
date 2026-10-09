@@ -1,3 +1,4 @@
+import { usePortalTranslation } from "@/i18n/portal";
 /** Who the claim is for, and what it is for.
  *
  * There is no separate "claim category" step — the claim-type dropdown is
@@ -14,6 +15,7 @@ import type { NewClaimForm } from "./useNewClaimForm";
 import { formatDay } from "@/components/portal/leaf/date";
 
 export function ClaimTypeFields({ form }: { form: NewClaimForm }) {
+  const pt = usePortalTranslation();
   const {
     dependants,
     flex,
@@ -26,11 +28,11 @@ export function ClaimTypeFields({ form }: { form: NewClaimForm }) {
   return (
     <>
       {selectedProduct?.claimable_from && <p className="text-sm text-label">
-        Covered {formatDay(selectedProduct.claimable_from)} – {formatDay(selectedProduct.claimable_to)}.
-        {selectedProduct.submission_deadline && ` Submit by ${formatDay(selectedProduct.submission_deadline)}.`}
+        {pt("Covered")} {formatDay(selectedProduct.claimable_from)} – {formatDay(selectedProduct.claimable_to)}.
+        {selectedProduct.submission_deadline && pt(" Submit by {0}.", [formatDay(selectedProduct.submission_deadline)])}
       </p>}
       {form.hasDependants && (
-        <Field label="Who is this claim for?">
+        <Field label={pt("Who is this claim for?")}>
           {(p) => (
             <select
               {...p}
@@ -44,8 +46,8 @@ export function ClaimTypeFields({ form }: { form: NewClaimForm }) {
               <option value="">{memberName}</option>
               {dependants.map((d) => (
                 <option key={d.id} value={d.id}>
-                  {d.name ?? "Dependant"}
-                  {d.relationship ? ` (${d.relationship})` : ""}
+                  {d.name ?? pt("Dependant")}
+                    {d.relationship ? ` (${pt(d.relationship)})` : ""}
                 </option>
               ))}
             </select>
@@ -62,14 +64,12 @@ export function ClaimTypeFields({ form }: { form: NewClaimForm }) {
         // cannot be satisfied — so leaving it off rendered "Fix the highlighted
         // fields" above a form with nothing highlighted, and the one blocker on
         // screen looking like ordinary help text.
-        <FieldGroup label="Claim type" error={form.fieldErrors.claim_type}>
+        <FieldGroup label={pt("Claim type")} error={form.fieldErrors.claim_type}>
           <p className="text-row text-label">
-            This dependant has no claimable benefits — pick a different
-            claimant.
-          </p>
+            {pt("This dependant has no claimable benefits — pick a different claimant.")} </p>
         </FieldGroup>
       ) : (
-        <Field label="Claim type" required error={form.fieldErrors.claim_type}>
+        <Field label={pt("Claim type")} required error={form.fieldErrors.claim_type}>
           {(p) => (
             <select
               {...p}
@@ -77,25 +77,25 @@ export function ClaimTypeFields({ form }: { form: NewClaimForm }) {
               value={form.selection}
               onChange={(e) => form.changeSelection(e.target.value)}
             >
-              <option value="">Select an option</option>
+              <option value="">{pt("Select an option")}</option>
               {(Object.keys(groupLabels) as InsuredGroupKey[]).map(
                 (key) =>
                   insuredGroups[key].length > 0 && (
-                    <optgroup key={key} label={groupLabels[key]}>
+                    <optgroup key={key} label={pt(groupLabels[key])}>
                       {insuredGroups[key].map((entry) => (
                         <option key={entry.value} value={entry.value}>
-                          {entry.label}
+                          {pt(entry.label)}
                         </option>
                       ))}
                     </optgroup>
                   ),
               )}
               {form.hasFlex && (
-                <optgroup label="Flexible Benefits">
+                <optgroup label={pt("Flexible Benefits")}>
                   {flex?.categories.map((c) => (
                     <option key={c.name} value={`${FLEX_PREFIX}${c.name}`}>
-                      {c.name}
-                      {c.sub_limit != null ? ` (up to ${c.sub_limit})` : ""}
+                      {pt(c.name)}
+                      {c.sub_limit != null ? pt(" (up to {0})", [c.sub_limit]) : ""}
                     </option>
                   ))}
                 </optgroup>
@@ -109,7 +109,7 @@ export function ClaimTypeFields({ form }: { form: NewClaimForm }) {
           product/insurer (from the roster). Hidden when none on file. */}
       {selectedProduct?.insurer_member_id && (
         <div className="flex flex-wrap items-baseline gap-x-2 rounded-control bg-bar/70 px-3 py-2">
-          <span className="leaf-label">Insurer member ID</span>
+          <span className="leaf-label">{pt("Insurer member ID")}</span>
           <span className="text-row font-medium text-record">
             {selectedProduct.insurer_member_id}
           </span>
@@ -126,7 +126,7 @@ export function ClaimTypeFields({ form }: { form: NewClaimForm }) {
           prompting only when none is tracked). */}
       {form.needsReferral && (
         <Field
-          label="Is this a first visit or follow-up?"
+          label={pt("Is this a first visit or follow-up?")}
           required
           error={form.fieldErrors.visit_type}
         >
@@ -137,9 +137,9 @@ export function ClaimTypeFields({ form }: { form: NewClaimForm }) {
               value={form.visitType}
               onChange={(e) => form.setVisitType(e.target.value)}
             >
-              <option value="">Select an option</option>
-              <option value="first">First visit</option>
-              <option value="follow_up">Follow-up visit</option>
+              <option value="">{pt("Select an option")}</option>
+              <option value="first">{pt("First visit")}</option>
+              <option value="follow_up">{pt("Follow-up visit")}</option>
             </select>
           )}
         </Field>

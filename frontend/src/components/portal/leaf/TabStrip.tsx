@@ -1,3 +1,4 @@
+import { usePortalTranslation } from "@/i18n/portal";
 /** The section switcher inside a page — Coverage's three readings.
  *
  * It is the same statement the chrome already makes one level up, so it is made
@@ -29,9 +30,10 @@ export function LeafTabsList({
   /** Names the group for a screen reader — "Coverage", not "Tabs". */
   label?: string;
 }) {
+  const pt = usePortalTranslation();
   return (
     <TabsList
-      aria-label={label}
+      aria-label={pt(label)}
       className={cn(
         glassSurface,
         // Full width on a phone, where the triggers share the width equally so
@@ -60,6 +62,7 @@ export function LeafTabsTrigger({
    * column — see the head rail on `routes/portal/coverage`. */
   className?: string;
 }) {
+  usePortalTranslation();
   return (
     <TabsTrigger
       value={value}

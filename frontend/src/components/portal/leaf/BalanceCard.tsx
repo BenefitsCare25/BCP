@@ -1,3 +1,4 @@
+import { usePortalTranslation } from "@/i18n/portal";
 /** One benefit's balance on "What's left", in the same world as Home's sheets:
  *  the benefit's tone and clay object, the amount LEFT set large beside a ring
  *  that fills as it is used (pending drawn lighter, on top of used), and three
@@ -14,6 +15,7 @@ import { productShortLabel } from "./glossary";
 import { balanceLabel } from "./careFacts";
 
 function Ring({ used, pending }: { used: number; pending: number }) {
+  usePortalTranslation();
   const r = 46;
   const c = 2 * Math.PI * r;
   const u = Math.min(1, Math.max(0, used));
@@ -49,6 +51,7 @@ export function BalanceCard({
   /** Further tracked rows for the same product, and the pending breakdown. */
   children?: ReactNode;
 }) {
+  const pt = usePortalTranslation();
   const route = productRouteKey(productCode);
   const art = careArt(route);
   const s = currencySymbol(null);
@@ -65,7 +68,7 @@ export function BalanceCard({
           <span className="absolute inset-0 grid place-items-center text-center leading-tight">
             <span>
               <span className="block text-lg font-bold text-record sm:text-xl">{usedPct}%</span>
-              <span className="block text-2xs font-semibold uppercase tracking-wider">used</span>
+              <span className="block text-2xs font-semibold uppercase tracking-wider">{pt("used")}</span>
             </span>
           </span>
         </div>
@@ -79,12 +82,11 @@ export function BalanceCard({
             <span className="text-[clamp(30px,4vw,44px)] font-bold leading-none tracking-[-0.04em] text-record">
               {s}{moneyText(left)}
             </span>
-            <span className="text-row font-semibold">{bucket.pending > 0 ? "left after claims in review" : "left this year"}</span>
+            <span className="text-row font-semibold">{bucket.pending > 0 ? pt("left after claims in review") : pt("left this year")}</span>
           </p>
           {bucket.pending > 0 && bucket.remaining !== null && (
             <p className="mt-1 text-row text-[var(--tone-ink)]">
-              {s}{moneyText(bucket.remaining)} confirmed balance before claims in review
-            </p>
+              {s}{moneyText(bucket.remaining)}  {pt("confirmed balance before claims in review")} </p>
           )}
           <dl className="mt-3 flex flex-wrap gap-2">
             {[
@@ -93,7 +95,7 @@ export function BalanceCard({
               ["Yearly limit", limit],
             ].map(([label, value]) => (
               <div key={label as string} className="flex items-baseline gap-1.5 rounded-full bg-white/80 px-3 py-1.5">
-                <dt className="text-2xs font-bold uppercase tracking-wider">{label}</dt>
+                <dt className="text-2xs font-bold uppercase tracking-wider">{pt(label)}</dt>
                 <dd className="text-row font-bold text-record">{s}{moneyText(value as number)}</dd>
               </div>
             ))}
@@ -109,6 +111,7 @@ export function BalanceCard({
 
 /** A further tracked sub-limit inside a balance card: name, slim meter, figure. */
 export function SubBalanceRow({ bucket }: { bucket: UtilizationBucket }) {
+  const pt = usePortalTranslation();
   const s = currencySymbol(null);
   if (bucket.visit_limit != null && bucket.visits_remaining != null) {
     const cap = bucket.visit_limit;
@@ -116,7 +119,7 @@ export function SubBalanceRow({ bucket }: { bucket: UtilizationBucket }) {
       <div className="rounded-2xl bg-white/70 px-4 py-3">
         <div className="flex items-baseline justify-between gap-3">
           <span className="min-w-0 text-row font-semibold text-record">{balanceLabel(bucket)}</span>
-          <span className="shrink-0 text-row font-bold text-record">{bucket.visits_remaining} of {cap} visits left</span>
+          <span className="shrink-0 text-row font-bold text-record">{bucket.visits_remaining}  {pt("of")} {cap}  {pt("visits left")}</span>
         </div>
         <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-white">
           <div className="h-full rounded-full bg-[var(--tone-ink)]" style={{ width: `${cap ? ((bucket.visits_used ?? 0) / cap) * 100 : 0}%` }} />
@@ -129,7 +132,7 @@ export function SubBalanceRow({ bucket }: { bucket: UtilizationBucket }) {
     <div className="rounded-2xl bg-white/70 px-4 py-3">
       <div className="flex items-baseline justify-between gap-3">
         <span className="min-w-0 text-row font-semibold text-record">{balanceLabel(bucket)}</span>
-        <span className="shrink-0 text-row font-bold text-record">{s}{moneyText(bucket.remaining ?? 0)} left</span>
+        <span className="shrink-0 text-row font-bold text-record">{s}{moneyText(bucket.remaining ?? 0)}  {pt("left")}</span>
       </div>
       <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-white">
         <div className="h-full rounded-full bg-[var(--tone-ink)]" style={{ width: `${limit ? Math.min(100, (bucket.approved / limit) * 100) : 0}%` }} />
@@ -148,6 +151,7 @@ export function BalanceCardShell({
   productName: string | null;
   children: ReactNode;
 }) {
+  usePortalTranslation();
   const route = productRouteKey(productCode);
   const name = productCode ? productShortLabel(productCode, productName) : productName ?? "Benefit";
   return (

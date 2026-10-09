@@ -1,3 +1,4 @@
+import { usePortalTranslation } from "@/i18n/portal";
 /** The deck — an index and a stage, in place of a stack.
  *
  * `/portal/coverage` used to render one mount per product down a single column;
@@ -149,6 +150,7 @@ export function Deck({
   activeKey?: string | null;
   onActiveKeyChange?: (key: string) => void;
 }) {
+  const pt = usePortalTranslation();
   // The deck's own width decides its layout — see `useContainerWide`, which
   // holds the rationale and the synchronous first measure this used to own.
   const [measureDeck, wide] = useContainerWide(WIDE_AT);
@@ -464,7 +466,7 @@ export function Deck({
           <div
             ref={trackRef}
             role="tablist"
-            aria-label={label}
+            aria-label={pt(label)}
             aria-orientation={wide ? "vertical" : "horizontal"}
             onKeyDown={onRailKeyDown}
             className={cn(
@@ -518,12 +520,12 @@ export function Deck({
                       accessibility tree, and the slide beneath prints the full
                       name with its gloss. */}
                   <span className={cn("truncate", !wide && "max-w-44")}>
-                    {slide.label}
+                    {pt(slide.label)}
                   </span>
                   {slide.mark &&
                     (wide ? (
                       <span className="leaf-label ml-auto shrink-0">
-                        {slide.mark}
+                        {pt(slide.mark)}
                       </span>
                     ) : (
                       <>
@@ -536,7 +538,7 @@ export function Deck({
                           aria-hidden
                           className="size-1.5 shrink-0 rounded-pill bg-record"
                         />
-                        <span className="sr-only">{slide.mark}</span>
+                        <span className="sr-only">{pt(slide.mark)}</span>
                       </>
                     ))}
                 </button>
@@ -630,7 +632,7 @@ export function Deck({
               screen reader already announces the position and a live region
               here would say it twice. */}
           <span aria-hidden className="shrink-0 px-1 text-2xs font-semibold text-label">
-            {index + 1} of {slides.length}
+            {index + 1}  {pt("of")} {slides.length}
           </span>
           <DeckStep
             direction="next"
@@ -655,6 +657,7 @@ function DeckStep({
   noun: string;
   onClick: () => void;
 }) {
+  const pt = usePortalTranslation();
   const isNext = direction === "next";
   const Icon = isNext ? ChevronRight : ChevronLeft;
   return (
@@ -664,8 +667,8 @@ function DeckStep({
       disabled={!slide}
       aria-label={
         slide
-          ? `${isNext ? "Next" : "Previous"} ${noun}: ${slide.label}`
-          : `${isNext ? "Next" : "Previous"} ${noun} unavailable`
+          ? `${pt(isNext ? "Next" : "Previous")} ${pt(noun)}: ${pt(slide.label)}`
+          : pt("{0} {1} unavailable", [pt(isNext ? "Next" : "Previous"), pt(noun)])
       }
       className={cn(
         glassSurface,
@@ -683,7 +686,7 @@ function DeckStep({
       )}
     >
       {!isNext && <Icon className="size-4 shrink-0 text-label" aria-hidden />}
-      <span className="truncate">{slide?.label ?? ""}</span>
+      <span className="truncate">{pt(slide?.label ?? "")}</span>
       {isNext && <Icon className="size-4 shrink-0 text-label" aria-hidden />}
     </button>
   );

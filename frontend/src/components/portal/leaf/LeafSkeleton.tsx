@@ -1,3 +1,4 @@
+import { usePortalTranslation } from "@/i18n/portal";
 /** Loading state for a leaf.
  *
  * Empty mounts, drawn in the frame ink — the page's own structure arriving
@@ -11,9 +12,10 @@ export function LeafSkeleton({
   label?: string;
   mounts?: number;
 }) {
+  const pt = usePortalTranslation();
   return (
     <div role="status" aria-live="polite" className="space-y-3">
-      <span className="sr-only">{label}</span>
+      <span className="sr-only">{pt(label)}</span>
       {Array.from({ length: mounts }, (_, i) => (
         <div
           key={i}

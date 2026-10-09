@@ -1,3 +1,4 @@
+import { portalText as pt, usePortalLocale, usePortalTranslation } from "@/i18n/portal";
 /** One clinic, as a ledger row.
  *
  * The page it sits on is opened by someone standing somewhere, so the row is
@@ -61,6 +62,7 @@ const directionsClass =
   "text-row font-semibold text-action-ink sm:min-h-8";
 
 function StateMark({ state }: { state: OpenState }) {
+  const pt = usePortalTranslation();
   return (
     <span
       className={cn(
@@ -72,7 +74,7 @@ function StateMark({ state }: { state: OpenState }) {
         state.tone === "open" ? "text-strike-approved" : "text-label",
       )}
     >
-      {state.label}
+      {pt(state.label)}
     </span>
   );
 }
@@ -95,12 +97,13 @@ function ContactCell({
   /** The raw cell, already re-cased, when there is nothing to dial. */
   contact: string;
 }) {
+  const pt = usePortalTranslation();
   if (phone.dial) {
     return (
       <a
         data-cell="call"
         href={`tel:${phone.dial}`}
-        aria-label={`Call ${name} on ${phone.display}`}
+        aria-label={pt("Call {0} on {1}", [name, phone.display])}
         className={cn(callClass, "relative z-10")}
       >
         <Phone className="size-4 shrink-0" aria-hidden />
@@ -117,6 +120,7 @@ function ContactCell({
 }
 
 function DirectionsCell({ url }: { url: string }) {
+  const pt = usePortalTranslation();
   return (
     <a
       data-cell="dirs"
@@ -126,14 +130,13 @@ function DirectionsCell({ url }: { url: string }) {
       className={cn(directionsClass, "relative z-10")}
     >
       <Map className="size-4 shrink-0" aria-hidden />
-      Directions
-      <span
+      {pt("Directions")} <span
         aria-hidden
         className="transition-transform duration-200 ease-leaf group-hover:translate-x-1"
       >
         →
       </span>
-      <span className="sr-only">(opens in a new tab)</span>
+      <span className="sr-only">{pt("(opens in a new tab)")}</span>
     </a>
   );
 }
@@ -149,6 +152,7 @@ function DisclosureCell({
   panelId: string;
   label: string;
 }) {
+  const pt = usePortalTranslation();
   return (
     <button
       data-cell="disc"
@@ -160,7 +164,7 @@ function DisclosureCell({
       // then cannot deliver it — the same rule `leaf/Deck` follows for its
       // unselected tabs.
       aria-controls={open ? panelId : undefined}
-      aria-label={label}
+      aria-label={pt(label)}
       className={cn(
         "leaf-focus grid size-7 place-items-center rounded-pill text-label",
         "after:absolute after:inset-0 after:rounded-control after:content-['']",
@@ -193,7 +197,7 @@ function statedHours(key: HoursKey, value: string | undefined): string {
   const text = readableCase(value);
   const named = daysNamedBy(value);
   const blanket = !named || CELL_DAYS[key].every((day) => named.has(day));
-  return blanket ? stripDayPrefix(text) : text;
+  return pt(blanket ? stripDayPrefix(text) : text);
 }
 
 /** Behind the disclosure: the four stated lines, and the half of the phone cell
@@ -214,6 +218,7 @@ function ClinicDetail({
   clock: ClinicClock;
   note: string | null;
 }) {
+  const pt = usePortalTranslation();
   const rows = HOURS_ROWS.filter(([key]) => hours[key]);
   return (
     <div id={id} className="px-3 pb-3 pt-0.5">
@@ -234,7 +239,7 @@ function ClinicDetail({
                     isToday ? "font-semibold text-record" : "text-label",
                   )}
                 >
-                  {label}
+                  {pt(label)}
                 </dt>
                 <dd
                   className={cn(
@@ -249,7 +254,7 @@ function ClinicDetail({
           })}
         </dl>
       )}
-      {note && <p className={cn("text-row text-label", rows.length > 0 && "mt-2")}>{note}</p>}
+      {note && <p className={cn("text-row text-label", rows.length > 0 && "mt-2")}>{pt(note)}</p>}
     </div>
   );
 }
@@ -262,6 +267,8 @@ export const ClinicRow = memo(function ClinicRow({
   /** Read once for the whole list, so every row agrees about "now". */
   clock: ClinicClock;
 }) {
+  const pt = usePortalTranslation();
+  const { locale } = usePortalLocale();
   const [open, setOpen] = useState(false);
   const panelId = useId();
 
@@ -307,7 +314,7 @@ export const ClinicRow = memo(function ClinicRow({
       >
         <div data-cell="main" className="min-w-0">
           <h3 className="text-md font-semibold leading-5 text-record">{name}</h3>
-          {read.gloss && <p className="truncate text-row leading-5 text-label">{read.gloss}</p>}
+          {read.gloss && <p className="truncate text-row leading-5 text-label">{[pt(clinic.type_label), readableCase(clinic.area), pt(readableCase(clinic.specialty)), readableCase(clinic.doctor)].filter(Boolean).join(" · ")}</p>}
           {read.address && (
             <p className="truncate text-row leading-5 text-label">{read.address}</p>
           )}
@@ -318,7 +325,7 @@ export const ClinicRow = memo(function ClinicRow({
             data-cell="dist"
             className="whitespace-nowrap text-row font-semibold text-record"
           >
-            {formatDistance(clinic.distance_km)}
+            {clinic.distance_km < 1 ? pt("{0} m", [Math.round(clinic.distance_km * 1000)]) : pt("{0} km", [clinic.distance_km.toFixed(1)])}
           </span>
         )}
 
@@ -329,7 +336,7 @@ export const ClinicRow = memo(function ClinicRow({
             </span>
             {state.detail && (
               <span data-cell="sub" className="whitespace-nowrap text-2xs text-label">
-                {state.detail}
+                {openingDetail(state.detail, locale)}
               </span>
             )}
           </>
@@ -343,18 +350,23 @@ export const ClinicRow = memo(function ClinicRow({
             open={open}
             onToggle={() => setOpen((v) => !v)}
             panelId={panelId}
-            label={read.hasHours ? `Opening hours for ${name}` : `More about ${name}`}
+            label={read.hasHours ? pt("Opening hours for {0}", [name]) : pt("More about {0}", [name])}
           />
         )}
       </div>
 
       {open && hasDetail && (
-        <ClinicDetail id={panelId} hours={read.hours} clock={clock} note={phone.note} />
+        <ClinicDetail id={panelId} hours={read.hours} clock={clock} note={pt(phone.note)} />
       )}
     </li>
   );
 });
 
-function formatDistance(km: number): string {
-  return km < 1 ? `${Math.round(km * 1000)} m` : `${km.toFixed(1)} km`;
+function openingDetail(detail: string, locale: string): string {
+  // This is the library's generated clock reading, never the clinic's original hours.
+  const match = /^(Until|Opens) (\d{1,2})(?::(\d{2}))? (am|pm)$/.exec(detail);
+  if (!match) return pt(detail);
+  const hour = Number(match[2]) % 12 + (match[4] === "pm" ? 12 : 0);
+  const time = new Intl.DateTimeFormat(locale, { hour: "numeric", minute: "2-digit", timeZone: "UTC" }).format(new Date(Date.UTC(2000, 0, 1, hour, Number(match[3] ?? 0))));
+  return pt(match[1] === "Until" ? "Until {0}" : "Opens {0}", [time]);
 }

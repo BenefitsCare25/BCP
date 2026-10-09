@@ -1,3 +1,4 @@
+import { usePortalTranslation } from "@/i18n/portal";
 /** "My claims" — the member's claims for the current benefit year. */
 import { Link } from "@tanstack/react-router";
 import { FilePlus2, Loader2 } from "lucide-react";
@@ -35,6 +36,7 @@ import { ClaimPeriodPicker } from "@/components/portal/claims/ClaimPeriodPicker"
  *    same inset — and the page grows enough bottom padding that the last row
  *    can always be scrolled clear of it. */
 function MakeClaimAction() {
+  const pt = usePortalTranslation();
   const company = useCompany();
   return (
     <div
@@ -51,8 +53,7 @@ function MakeClaimAction() {
         })}
       >
         <FilePlus2 className="size-4" aria-hidden />
-        Make a claim
-      </Link>
+        {pt("Make a claim")} </Link>
     </div>
   );
 }
@@ -62,6 +63,7 @@ function MakeClaimAction() {
 const MEASURE = "mx-auto w-full max-w-4xl";
 
 export function PortalClaimsPage() {
+  const pt = usePortalTranslation();
   const company = useCompany();
   const claims = usePortalClaimPages();
   // The FOURTH entry point that closes on the served capability list, beside
@@ -73,7 +75,7 @@ export function PortalClaimsPage() {
   const canClaim = holds(usePortalMe().data?.access.capabilities, "claim");
   useDocumentTitle("My claims");
 
-  if (claims.isLoading) return <div className={MEASURE}><LeafSkeleton label="Loading your claims" /></div>;
+  if (claims.isLoading) return <div className={MEASURE}><LeafSkeleton label={pt("Loading your claims")} /></div>;
 
   // A 404 keeps the confident empty state below; anything else is a fetch
   // failure and must not read as "no claims yet".
@@ -95,17 +97,14 @@ export function PortalClaimsPage() {
         <ClayEmpty
           tone="peach"
           art="/portal/clay/claim.webp"
-          title="No claims yet"
+          title={pt("No claims yet")}
           action={canClaim ? (
             <Link to="/portal/$company/claims/new" params={{ company }} className={actionClass("primary")}>
               <FilePlus2 className="size-4" aria-hidden />
-              Make a claim
-            </Link>
+              {pt("Make a claim")} </Link>
           ) : undefined}
         >
-          Paid for treatment your benefits cover? Send us the receipt and
-          we&rsquo;ll keep you posted here.
-        </ClayEmpty>
+          {pt("Paid for treatment your benefits cover? Send us the receipt and we’ll keep you posted here.")} </ClayEmpty>
       </div>
     );
   }
@@ -138,8 +137,7 @@ export function PortalClaimsPage() {
               {claims.isFetchingNextPage && (
                 <Loader2 className="size-4 animate-spin" aria-hidden />
               )}
-              Load older claims
-            </button>
+              {pt("Load older claims")} </button>
           </div>
         )}
       </div>

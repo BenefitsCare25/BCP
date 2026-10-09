@@ -1,3 +1,4 @@
+import { portalText } from "@/i18n/portal";
 /** The e-form's steps, wrapped around the election deck.
  *
  * `MemberEnrollmentPanel` owns the elections; this module owns everything the
@@ -149,7 +150,7 @@ export function buildFormSlides(input: FormSlideInput): FormSlides {
     ...(input.blocked ? [input.blocked] : []),
     ...ruleProblems(ctx.rules, state, tierSets, ctx.dependants),
     ...eligibilityProblems(state, tierSets, ctx.dependants),
-    ...(contactProblem ? [`Your details: ${contactProblem}`] : []),
+    ...(contactProblem ? [portalText("Your details: {0}", [portalText(contactProblem)])] : []),
     ...(clauses.some((c) => !draft.accepted.has(c.id))
       ? ["Tick every declaration on the Read and agree step."]
       : []),
@@ -176,7 +177,7 @@ export function buildFormSlides(input: FormSlideInput): FormSlides {
         ? {
             key: FAMILY_KEY,
             label: "Your family",
-            mark: pendingCount ? `${pendingCount} to add` : undefined,
+            mark: pendingCount ? portalText("{0} to add", [pendingCount]) : undefined,
             render: () => (
               <FamilyMount
                 dependants={ctx.dependants}
@@ -194,7 +195,7 @@ export function buildFormSlides(input: FormSlideInput): FormSlides {
         ? {
             key: AGREE_KEY,
             label: "Read and agree",
-            mark: !disabled && unaccepted ? `${unaccepted} to tick` : undefined,
+            mark: !disabled && unaccepted ? portalText("{0} to tick", [unaccepted]) : undefined,
             render: () => (
               <AgreeMount
                 documents={ctx.documents}

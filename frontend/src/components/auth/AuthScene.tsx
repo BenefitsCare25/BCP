@@ -1,3 +1,5 @@
+import { usePortalTranslation } from "@/i18n/portal";
+import { PortalLanguageControl } from "@/i18n/PortalLanguageControl";
 import type { ReactNode } from "react";
 import { AuthPanel } from "./AuthPanel";
 import { LeafScopeContext } from "@/lib/leaf-scope";
@@ -27,6 +29,7 @@ export function AuthScene({
   secondary?: ReactNode;
   portalTheme?: "employee" | "hr";
 }) {
+  const pt = usePortalTranslation();
   const owner = useBrandOwner();
   return (
     <LeafScopeContext.Provider value={!!portalTheme}>
@@ -34,6 +37,7 @@ export function AuthScene({
       {/* ── Form column ─────────────────────────────────────────────── */}
       <section className="relative flex flex-1 flex-col bg-background px-6 py-8 sm:px-10 lg:h-screen lg:w-[45%] lg:overflow-y-auto lg:px-12 lg:py-10">
         <div className="mx-auto flex w-full max-w-sm flex-1 flex-col">
+          {portalTheme && <div className="mb-4 flex justify-end"><PortalLanguageControl /></div>}
           <BrandLogo
             variant="lockup"
             className="signin-in h-12 w-auto self-start sm:h-14"
@@ -51,7 +55,7 @@ export function AuthScene({
               className="signin-in mt-3 text-balance text-[2rem] font-semibold leading-[1.08] tracking-[-0.02em] text-foreground sm:text-[2.375rem]"
               style={{ animationDelay: "0.08s" }}
             >
-              {title}
+              {pt(title)}
             </h1>
             <p
               className="signin-in mt-2.5 text-md leading-relaxed text-muted-foreground"
@@ -67,8 +71,7 @@ export function AuthScene({
                 <>
                   <div className="my-5 flex items-center gap-3 text-xs font-medium text-muted-foreground">
                     <span className="h-px flex-1 bg-border" />
-                    OR
-                    <span className="h-px flex-1 bg-border" />
+                    {pt("OR")} <span className="h-px flex-1 bg-border" />
                   </div>
                   {secondary}
                 </>
@@ -80,8 +83,7 @@ export function AuthScene({
             <span>© {new Date().getFullYear()} {owner}</span>
             <span className="inline-flex items-center gap-1.5">
               <span className="size-1.5 rounded-full bg-good" />
-              Secure sign-in
-            </span>
+              {pt("Secure sign-in")} </span>
           </footer>
           <PoweredBy className="mt-2 text-subtle" />
         </div>
@@ -93,11 +95,11 @@ export function AuthScene({
           <div className="portal-auth-panel flex h-full flex-col justify-center tone-mint rounded-[32px] bg-[var(--tone-wash)] p-10">
             <img src="/portal/clay/enrol.webp" alt="" className="size-44 self-start" />
             <h2 className="mt-5 max-w-sm text-3xl font-bold text-record">
-              {portalTheme === "hr" ? "Employee benefits administration" : "Your benefits, in one place"}
+              {portalTheme === "hr" ? pt("Employee benefits administration") : pt("Your benefits, in one place")}
             </h2>
             <div className="mt-6 flex flex-wrap gap-2 text-sm font-medium text-[var(--tone-ink)]">
               {(portalTheme === "hr" ? ["Claims", "Enrolment forms"] : ["Coverage", "Claims", "Clinics", "Enrolment"]).map((label) => (
-                <span key={label} className="rounded-xl bg-bar px-4 py-3">{label}</span>
+                <span key={label} className="rounded-xl bg-bar px-4 py-3">{pt(label)}</span>
               ))}
             </div>
           </div>

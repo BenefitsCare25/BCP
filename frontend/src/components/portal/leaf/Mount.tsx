@@ -1,3 +1,4 @@
+import { usePortalTranslation } from "@/i18n/portal";
 /** The mount — the portal's one structural device.
  *
  * A mount is a pane of glass laid on the ground: softly rounded, nearly solid,
@@ -171,6 +172,7 @@ export function Mount({
    * way while the coverage deck did not, which is exactly how it was found. */
   rise?: boolean;
 }) {
+  const pt = usePortalTranslation();
   return (
     <Tag
       className={cn(
@@ -191,10 +193,10 @@ export function Mount({
                 id={labelId}
                 className="text-md font-semibold leading-5 text-record"
               >
-                {label}
+                {pt(label)}
               </h2>
               {gloss && (
-                <p className="mt-1 text-row text-label">{gloss}</p>
+                <p className="mt-1 text-row text-label">{pt(gloss)}</p>
               )}
             </div>
           )}
@@ -209,6 +211,7 @@ export function Mount({
 /** A hairline that genuinely separates rows inside a mount rather than
  * decorating them. */
 export function MountRule({ className }: { className?: string }) {
+  usePortalTranslation();
   return (
     <hr className={cn("border-0 border-t border-hairline/75", className)} />
   );
@@ -226,14 +229,15 @@ export function MountRow({
   gloss?: ReactNode;
   children: ReactNode;
 }) {
+  const pt = usePortalTranslation();
   return (
     <div className="grid grid-cols-[minmax(0,1fr)_auto] items-baseline gap-x-4 py-2">
-      <dt className="min-w-0 text-row text-record">{term}</dt>
+      <dt className="min-w-0 text-row text-record">{pt(term)}</dt>
       <dd className="col-start-2 row-span-2 row-start-1 shrink-0 text-right text-row text-record">
         {children}
       </dd>
       {gloss && (
-        <dd className="col-start-1 mt-0.5 min-w-0 text-row text-label">{gloss}</dd>
+        <dd className="col-start-1 mt-0.5 min-w-0 text-row text-label">{pt(gloss)}</dd>
       )}
     </div>
   );

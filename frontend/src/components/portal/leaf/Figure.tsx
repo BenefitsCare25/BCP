@@ -1,3 +1,4 @@
+import { usePortalTranslation } from "@/i18n/portal";
 /** Figures on the leaf.
  *
  * The Tabular-Figure Rule: every figure a member could compare to another
@@ -54,6 +55,7 @@ export function Money({
    * Used once. If a screen has two, one of them is not the answer. */
   emphasis?: "normal" | "strong" | "display" | "hero";
 }) {
+  usePortalTranslation();
   if (value === null || value === undefined) {
     return <span className={cn("text-label", className)}>—</span>;
   }
@@ -101,6 +103,7 @@ export function Limit({
   currency?: string | null;
   className?: string;
 }) {
+  const pt = usePortalTranslation();
   // **`limit_display` goes through the SAME formatter the benefits tab uses.**
   // It is the SOB's raw cell, which is commonly a bare number ("20000"), and
   // printed verbatim it sat beside `FillRule`'s "S$0 of S$20,000 used" — two
@@ -116,5 +119,5 @@ export function Limit({
     );
   }
   if (amount !== null) return <Money value={amount} currency={currency} className={className} />;
-  return <span className={cn("text-label", className)}>No yearly cap</span>;
+  return <span className={cn("text-label", className)}>{pt("No yearly cap")}</span>;
 }

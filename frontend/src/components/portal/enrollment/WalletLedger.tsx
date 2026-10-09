@@ -1,3 +1,4 @@
+import { usePortalTranslation } from "@/i18n/portal";
 /** The member's flexible-benefits allowance, as a ledger — allowance in, choices
  * out, what is left.
  *
@@ -32,6 +33,7 @@ export function WalletLedger({
   flex: FlexSummary;
   allowOverdraft: boolean;
 }) {
+  const pt = usePortalTranslation();
   const currency = flex.currency ?? "S$";
   // `flexShort`, not `balance < 0`: the same predicate the heading row's figure
   // and the send gate use, so a sub-cent residue can't print "Short by S$0"
@@ -120,7 +122,7 @@ export function WalletLedger({
         )}
         {flex.leaveImpact !== 0 && (
           <MountRow
-            term={`Leave you ${flex.leaveImpact < 0 ? "bought" : "sold back"}`}
+            term={pt(flex.leaveImpact < 0 ? "Leave you bought" : "Leave you sold back")}
             gloss={
               flex.leaveImpact < 0
                 ? "Taken from your flex dollars."
@@ -146,10 +148,7 @@ export function WalletLedger({
           contradict the product slides it summarises. */}
       {flex.incomplete && (
         <p className="text-row text-label">
-          One of the people you&rsquo;ve covered doesn&rsquo;t have a price yet,
-          so this is the most we can work out so far — it will go up once that
-          choice is made.
-        </p>
+          {pt("One of the people you’ve covered doesn’t have a price yet, so this is the most we can work out so far — it will go up once that choice is made.")} </p>
       )}
 
       {shortfall && (
@@ -159,8 +158,8 @@ export function WalletLedger({
           }
         >
           {allowOverdraft
-            ? "Your choices cost more than your flex dollars. Your company allows this — your HR team can tell you how the difference is settled."
-            : "Your choices cost more than your flex dollars. Change one of them to bring it back, or ask your HR team."}
+            ? pt("Your choices cost more than your flex dollars. Your company allows this — your HR team can tell you how the difference is settled.")
+            : pt("Your choices cost more than your flex dollars. Change one of them to bring it back, or ask your HR team.")}
         </p>
       )}
     </>

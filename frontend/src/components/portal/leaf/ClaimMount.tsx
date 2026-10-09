@@ -1,3 +1,4 @@
+import { portalText as pt, usePortalTranslation } from "@/i18n/portal";
 /** The member's claims, as a LEDGER.
  *
  * "What happened to my claim?" is the question members come back for, so the
@@ -71,13 +72,13 @@ export function insuredClaimTitle(
   productCode: string | null | undefined,
 ): string {
   const named = claimType && claimType !== LOG_CLAIM_TYPE ? claimType : null;
-  return named || productCode || "Claim";
+  return pt(named || productCode || "Claim");
 }
 
 /** What the claim is FOR, in the member's words. */
 export function claimTitle(claim: PortalClaim): string {
   if (claim.claim_kind === "flex") {
-    return claim.flex_category_name || "Flexible benefit";
+    return pt(claim.flex_category_name || "Flexible benefit");
   }
   return insuredClaimTitle(claim.claim_type, claim.product_code);
 }
@@ -90,10 +91,10 @@ export function claimTitle(claim: PortalClaim): string {
 function claimContext(claim: PortalClaim): string {
   const docs = claim.documents.length;
   return [
-    claim.dependant_name ? `For ${claim.dependant_name}` : null,
+    claim.dependant_name ? pt("For {0}", [claim.dependant_name]) : null,
     claim.provider_name,
     formatDay(claim.incurred_date),
-    docs > 0 ? `${docs} document${docs === 1 ? "" : "s"}` : null,
+    docs > 0 ? pt("{0} document{1}", [docs, docs === 1 ? "" : "s"]) : null,
   ]
     .filter(Boolean)
     .join(" · ");
@@ -206,6 +207,7 @@ function ClaimRow({
   interactive?: boolean;
   onOpen?: (claim: PortalClaim) => void;
 }) {
+  const pt = usePortalTranslation();
   // An approved figure is the OUTCOME, so it takes the headline and the
   // requested one moves beneath it — a member whose claim was partly approved
   // needs both numbers to see the difference, and one of them has to be the
@@ -232,7 +234,7 @@ function ClaimRow({
           {/* The column's meaning is carried by its position, which a screen
               reader does not have. */}
           <span className="sr-only">
-            {approved ? "Approved" : "Amount claimed"}{" "}
+            {approved ? pt("Approved") : pt("Amount claimed")}{" "}
           </span>
           <Money
             value={approved ? claim.amount_approved : claim.amount_claimed}
@@ -241,9 +243,8 @@ function ClaimRow({
           />
           {partial && (
             <span className="block text-2xs text-label">
-              of {currencySymbol(claim.currency)}
-              {moneyText(claim.amount_claimed)} claimed
-            </span>
+              {pt("of")} {currencySymbol(claim.currency)}
+              {moneyText(claim.amount_claimed)}  {pt("claimed")} </span>
           )}
         </p>
         <ClaimStrike status={claim.status} />
@@ -334,6 +335,7 @@ function FilterStrip({
   active: View;
   onPick: (view: View) => void;
 }) {
+  const pt = usePortalTranslation();
   const options: { key: View; label: string }[] = [
     { key: "all", label: "All" },
     ...FIXED_TABS.map((k) => ({ key: k as View, label: BUCKET_LABEL[k] })),
@@ -342,7 +344,7 @@ function FilterStrip({
   return (
     <div
       role="group"
-      aria-label="Filter claims"
+      aria-label={pt("Filter claims")}
       className={cn(
         glassSurface,
         "flex flex-wrap gap-0.5 rounded-tile p-1 sm:inline-flex sm:gap-1 sm:rounded-pill sm:p-1.5 lg:p-1",
@@ -361,7 +363,7 @@ function FilterStrip({
               "flex-auto whitespace-nowrap px-1.5 sm:flex-none sm:px-5 lg:px-4",
             )}
           >
-            {option.label}
+            {pt(option.label)}
           </button>
         );
       })}
@@ -387,6 +389,7 @@ export function ClaimList({
    * and then the ledger is a window onto their year, which it has to say. */
   total?: number;
 }) {
+  const pt = usePortalTranslation();
   const [active, setActive] = useState<View>("all");
 
   // Below three claims the strip is four controls for a list you can already
@@ -441,7 +444,7 @@ export function ClaimList({
         // element for the second group to arrive after the first.
         <section key={group.key} className="leaf-rise space-y-1.5">
           <h2 className={showHeadings ? "leaf-label px-1" : "sr-only"}>
-            {group.label}
+            {pt(group.label)}
           </h2>
           <ul
             className={cn(
@@ -466,7 +469,7 @@ export function ClaimList({
           a list of rows it does not describe. */}
       {active === "all" && total !== undefined && total > items.length && (
         <p className="px-1 text-row text-label">
-          Showing your {items.length} most recent claims of {total}.
+          {pt("Showing your")} {items.length}  {pt("most recent claims of")} {total}.
         </p>
       )}
     </div>

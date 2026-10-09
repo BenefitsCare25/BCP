@@ -1,3 +1,4 @@
+import { usePortalTranslation } from "@/i18n/portal";
 /** Correcting a claim the broker has not yet decided.
  *
  * Deliberately NOT a reuse of the create form's field components. Those six
@@ -125,6 +126,7 @@ export function ClaimEditSheet({
   onSave: (patch: ClaimAmendInput) => void;
   onCancel: () => void;
 }) {
+  const pt = usePortalTranslation();
   // Captured ONCE, when the sheet opens: it is both the form's starting values
   // and the baseline the diff is taken against. Recomputing it from `claim` on
   // every render would make each keystroke look unchanged as soon as a refetch
@@ -153,10 +155,10 @@ export function ClaimEditSheet({
         onSave({ ...patch, expected_revision: expectedRevision });
       }}
     >
-      {error && <FormAlert>{error}</FormAlert>}
+      {error && <FormAlert>{pt(error)}</FormAlert>}
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-        <Field label="Date of treatment" required>
+        <Field label={pt("Date of treatment")} required>
           {(p) => (
             <input
               {...p}
@@ -170,7 +172,7 @@ export function ClaimEditSheet({
 
         {claim.supports_stay_dates && (
           <>
-            <Field label="Admission date (optional)">
+            <Field label={pt("Admission date (optional)")}>
               {(p) => (
                 <input
                   {...p}
@@ -182,7 +184,7 @@ export function ClaimEditSheet({
               )}
             </Field>
             <Field
-              label="Discharge date (optional)"
+              label={pt("Discharge date (optional)")}
               error={
                 draft.admission_date &&
                 draft.discharge_date &&
@@ -205,7 +207,7 @@ export function ClaimEditSheet({
           </>
         )}
 
-        <Field label="Clinic or hospital" required>
+        <Field label={pt("Clinic or hospital")} required>
           {(p) => (
             <input
               {...p}
@@ -217,7 +219,7 @@ export function ClaimEditSheet({
           )}
         </Field>
 
-        <Field label="Invoice number" required>
+        <Field label={pt("Invoice number")} required>
           {(p) => (
             <input
               {...p}
@@ -230,7 +232,7 @@ export function ClaimEditSheet({
         </Field>
 
         <Field
-          label="Amount claimed"
+          label={pt("Amount claimed")}
           required
           error={
             draft.amount_claimed !== "" && !amountValid
@@ -259,7 +261,7 @@ export function ClaimEditSheet({
             the member could use to satisfy it. `||` so a claim that carries a
             doctor can still have it corrected even if its type no longer asks. */}
         {(claim.requires_doctor_name || claim.doctor_name !== null) && (
-          <Field label="Doctor seen" required>
+          <Field label={pt("Doctor seen")} required>
             {(p) => (
               <input
                 {...p}
@@ -277,7 +279,7 @@ export function ClaimEditSheet({
           so the catalog matches the setting. Insured claims only — a flex claim
           has no diagnosis group. */}
       {claim.claim_kind === "insured" && claim.product_code && (
-        <FieldGroup label="Diagnosis">
+        <FieldGroup label={pt("Diagnosis")}>
           <DiagnosisPicker
             productCode={claim.product_code}
             value={draft.diagnosis}
@@ -286,7 +288,7 @@ export function ClaimEditSheet({
         </FieldGroup>
       )}
 
-      <Field label="Your note" hint="Anything we should know about this claim.">
+      <Field label={pt("Your note")} hint={pt("Anything we should know about this claim.")}>
         {(p) => (
           <textarea
             {...p}
@@ -309,14 +311,12 @@ export function ClaimEditSheet({
           disabled={saving || !dirty || !amountValid || !stayDatesValid}
         >
           {saving && <Loader2 className="size-4 animate-spin" aria-hidden />}
-          Save changes
-        </Action>
+          {pt("Save changes")} </Action>
         <Action type="button" block="phone" className="h-12" onClick={onCancel}>
-          Cancel
-        </Action>
+          {pt("Cancel")} </Action>
         {/* A disabled primary with nothing explaining it reads as broken. */}
         {!dirty && (
-          <p className="text-row text-label">Nothing changed yet.</p>
+          <p className="text-row text-label">{pt("Nothing changed yet.")}</p>
         )}
       </div>
     </form>

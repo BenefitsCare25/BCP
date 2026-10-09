@@ -1,3 +1,4 @@
+import { usePortalTranslation } from "@/i18n/portal";
 /** One question: what was asked, what we said back, and the box to write again.
  *
  * The whole body is `leaf/ThreadPane`'s question pane — the SAME component the
@@ -25,6 +26,7 @@ import { useCompany } from "@/components/portal/useCompany";
 import { useDocumentTitle } from "@/lib/useDocumentTitle";
 
 export function PortalQuestionDetailPage() {
+  const pt = usePortalTranslation();
   const { enquiryId } = useParams({ strict: false }) as { enquiryId: string };
   const navigate = useNavigate();
   const company = useCompany();
@@ -42,8 +44,7 @@ export function PortalQuestionDetailPage() {
         }
         className="leaf-focus -ml-2 inline-flex min-h-11 items-center gap-1.5 px-2 text-row text-label"
       >
-        <ArrowLeft className="size-4" aria-hidden /> Messages
-      </button>
+        <ArrowLeft className="size-4" aria-hidden />  {pt("Messages")} </button>
 
       <EnquiryThreadPane enquiryId={enquiryId} />
     </div>

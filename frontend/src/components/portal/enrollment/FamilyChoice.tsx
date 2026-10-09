@@ -1,3 +1,4 @@
+import { portalText as pt, usePortalTranslation } from "@/i18n/portal";
 /** Who else this plan covers, and what covering them costs.
  *
  * Three states, and they are not variations of one control:
@@ -23,16 +24,17 @@ import { cn } from "@/lib/cn";
 
 /** The names on the plan, printed — for compulsory cover and read-only views. */
 function CoveredNames({ covered }: { covered: DependantRef[] }) {
+  const pt = usePortalTranslation();
   if (!covered.length) {
     return (
-      <p className="text-row text-label">Nobody in your family is on this plan.</p>
+      <p className="text-row text-label">{pt("Nobody in your family is on this plan.")}</p>
     );
   }
   return (
     <dl>
       {covered.map((d) => (
         <MountRow key={d.id} term={d.name ?? d.id}>
-          <span className="text-label">{d.relationship ?? "Covered"}</span>
+          <span className="text-label">{d.relationship ?? pt("Covered")}</span>
         </MountRow>
       ))}
     </dl>
@@ -49,6 +51,7 @@ function DependantTicks({
   ps: ProductState;
   onChange: (next: ProductState) => void;
 }) {
+  usePortalTranslation();
   return (
     <div className="flex flex-col">
       {dependants.map((d) => {
@@ -104,16 +107,16 @@ function optionLabel(
 ): string {
   const parts = [choice.label];
   if (choice.sum_insured != null) {
-    parts.push(`covered for ${currencySymbol(currency)}${moneyText(choice.sum_insured)}`);
+    parts.push(pt("covered for {0}{1}", [currencySymbol(currency), moneyText(choice.sum_insured)]));
   }
   if (choice.amount != null) {
     parts.push(
       choice.amount > 0
-        ? `deducts ${currencySymbol(currency)}${moneyText(choice.amount)} from your flex wallet`
-        : "no flex deducted",
+        ? pt("deducts {0}{1} from your flex wallet", [currencySymbol(currency), moneyText(choice.amount)])
+        : pt("no flex deducted"),
     );
   } else if (Object.keys(choice.amounts_by_dependant).length) {
-    parts.push("price depends on their age");
+    parts.push(pt("price depends on their age"));
   }
   return parts.join(" — ");
 }
@@ -134,21 +137,22 @@ function OptionLevel({
   currency: string | null;
   onChange: (next: ProductState) => void;
 }) {
+  const pt = usePortalTranslation();
   const chosen = ps.depOptionIds[role.role] ?? "";
   const choice = role.choices.find((c) => c.category_id === chosen);
   if (disabled) {
     return (
       <dl>
-        <MountRow term={`Cover for your ${role.role}`}>
-          {choice ? choice.label : "Not chosen"}
+        <MountRow term={pt("Cover for your {0}", [pt(role.role)])}>
+          {choice ? choice.label : pt("Not chosen")}
         </MountRow>
       </dl>
     );
   }
   return (
     <Field
-      label={`How much cover for your ${role.role}`}
-      hint={chosen ? undefined : "Pick a level to see what it costs you."}
+      label={pt("How much cover for your {0}", [pt(role.role)])}
+      hint={chosen ? undefined : pt("Pick a level to see what it costs you.")}
     >
       {(p) => (
         <select
@@ -162,7 +166,7 @@ function OptionLevel({
             })
           }
         >
-          <option value="">Choose one…</option>
+          <option value="">{pt("Choose one…")}</option>
           {role.choices.map((c) => (
             <option key={c.category_id} value={c.category_id}>
               {optionLabel(c, currency)}
@@ -189,6 +193,7 @@ export function FamilyChoice({
   currency: string | null;
   onChange: (next: ProductState) => void;
 }) {
+  const pt = usePortalTranslation();
   const participation = dependantParticipationFor(ts, ps.tierKey);
   if (participation === null) return null;
   const depCompulsory = participation === "compulsory";
@@ -218,16 +223,16 @@ export function FamilyChoice({
     <>
       <div className="flex flex-col gap-1.5">
         <h3 className="leaf-label">
-          {depCompulsory ? "Your family, already covered" : "Your family"}
+          {depCompulsory ? pt("Your family, already covered") : pt("Your family")}
         </h3>
         {/* Printed, not behind a hint: a phone has no hover, and this is the
             sentence that says whether ticking is what puts them on the plan. */}
         <p className="text-row text-label">
           {depCompulsory
-            ? "Everyone here is covered automatically. Any dependant charge is deducted from your flex dollars."
+            ? pt("Everyone here is covered automatically. Any dependant charge is deducted from your flex dollars.")
             : disabled
-              ? "The people covered on this plan alongside you."
-              : "Tick anyone you'd like covered on this plan. Doing so spends part of your flex dollars."}
+              ? pt("The people covered on this plan alongside you.")
+              : pt("Tick anyone you'd like covered on this plan. Doing so spends part of your flex dollars.")}
         </p>
 
         {depCompulsory || disabled ? (
@@ -256,15 +261,14 @@ export function FamilyChoice({
       {showCost && (
         <p className="text-row text-label">
           {pricing.unresolved ? (
-            "We'll show what covering them costs once the level above is chosen."
+            pt("We'll show what covering them costs once the level above is chosen.")
           ) : pricing.total > 0 ? (
             <>
-              Covering them costs you{" "}
+              {pt("Covering them costs you")}{" "}
               <Money value={pricing.total} currency={currency} emphasis="strong" />{" "}
-              from your flex dollars.
-            </>
+              {pt("from your flex dollars.")} </>
           ) : (
-            "Covering them draws nothing from your flex dollars."
+            pt("Covering them draws nothing from your flex dollars.")
           )}
         </p>
       )}

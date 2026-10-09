@@ -2,13 +2,15 @@ import { Link } from "@tanstack/react-router";
 import { AlertTriangle, Home } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { formatError } from "@/lib/errors";
+import { usePortalTranslation } from "@/i18n/portal";
 
 function BackHome() {
+  const pt = usePortalTranslation();
   return (
     <Link to="/">
       <Button variant="default">
         <Home className="size-4" />
-        Back to home
+        {pt("Back to home")}
       </Button>
     </Link>
   );
@@ -21,18 +23,19 @@ export function GlobalErrorComponent({
   error: unknown;
   reset?: () => void;
 }) {
+  const pt = usePortalTranslation();
   return (
     <div className="flex h-screen w-screen items-center justify-center bg-background p-6">
       <div className="flex max-w-md flex-col items-start gap-4 rounded-xl border border-border bg-card p-6 shadow-sm">
         <div className="flex items-center gap-2 text-error">
           <AlertTriangle className="size-5" />
-          <span className="text-base font-semibold">Something went wrong</span>
+          <span className="text-base font-semibold">{pt("Something went wrong")}</span>
         </div>
-        <p className="text-sm text-muted-foreground">{formatError(error)}</p>
+        <p className="text-sm text-muted-foreground">{pt(formatError(error))}</p>
         <div className="flex gap-2">
           {reset && (
             <Button variant="outline" onClick={reset}>
-              Try again
+              {pt("Try again")}
             </Button>
           )}
           <BackHome />
@@ -43,12 +46,13 @@ export function GlobalErrorComponent({
 }
 
 export function NotFoundComponent() {
+  const pt = usePortalTranslation();
   return (
     <div className="flex h-full w-full items-center justify-center p-6">
       <div className="flex max-w-md flex-col items-start gap-4 rounded-xl border border-border bg-card p-6 shadow-sm">
-        <div className="text-base font-semibold text-foreground">Page not found</div>
+        <div className="text-base font-semibold text-foreground">{pt("Page not found")}</div>
         <p className="text-sm text-muted-foreground">
-          The URL you requested doesn't match any route in this workspace.
+          {pt("The URL you requested doesn't match any route in this workspace.")}
         </p>
         <BackHome />
       </div>

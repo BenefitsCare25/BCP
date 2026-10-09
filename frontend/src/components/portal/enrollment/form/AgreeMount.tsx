@@ -1,3 +1,4 @@
+import { usePortalTranslation } from "@/i18n/portal";
 /** The documents a member must read and the declarations they agree to —
  * Sections D and E of the paper form.
  *
@@ -31,6 +32,7 @@ export function AgreeMount({
   onAcceptedChange: (next: Set<string>) => void;
   onOpened: (documentKey: string) => void;
 }) {
+  const pt = usePortalTranslation();
   const toggle = (id: string, on: boolean) => {
     const next = new Set(accepted);
     if (on) next.add(id);
@@ -46,7 +48,7 @@ export function AgreeMount({
       }
       onOpened(doc.id);
     } catch (e) {
-      toast.error(formatError(e));
+      toast.error(pt(formatError(e)));
     }
   }
 
@@ -54,7 +56,7 @@ export function AgreeMount({
     <Mount
       as="article"
       rise={false}
-      label="Read and agree"
+      label={pt("Read and agree")}
       gloss="Please read these before you sign. They explain what the cover includes and excludes."
     >
       {documents.length > 0 && (
@@ -70,7 +72,7 @@ export function AgreeMount({
                   className="leaf-focus inline-flex items-center gap-2 text-row font-medium text-action-ink"
                 >
                   <ExternalLink className="size-4" aria-hidden />
-                  {doc.label}
+                  {pt(doc.label)}
                 </a>
               ) : (
                 <button
@@ -79,10 +81,10 @@ export function AgreeMount({
                   className="leaf-focus inline-flex items-center gap-2 text-row font-medium text-action-ink"
                 >
                   <FileDown className="size-4" aria-hidden />
-                  {doc.label}
+                  {pt(doc.label)}
                 </button>
               )}
-              <span className="text-row text-label">{opened.has(doc.id) ? "Opened" : ""}</span>
+              <span className="text-row text-label">{opened.has(doc.id) ? pt("Opened") : ""}</span>
             </li>
           ))}
         </ul>
@@ -92,7 +94,7 @@ export function AgreeMount({
 
       {clauses.length > 0 && (
         <fieldset className="flex flex-col">
-          <legend className="sr-only">Declarations</legend>
+          <legend className="sr-only">{pt("Declarations")}</legend>
           {clauses.map((clause) => {
             const on = accepted.has(clause.id);
             return (
@@ -104,7 +106,10 @@ export function AgreeMount({
                   disabled={disabled}
                   onChange={(e) => toggle(clause.id, e.target.checked)}
                 />
-                <span className="text-row text-record">{clause.text}</span>
+                <span className="text-row text-record">
+                  {pt(clause.text)}
+                  {pt(clause.text) !== clause.text && <span lang="en" className="mt-1 block text-row text-label">{clause.text}</span>}
+                </span>
               </label>
             );
           })}
@@ -119,7 +124,7 @@ export function AgreeMount({
             onAcceptedChange(allOn ? new Set() : new Set(clauses.map((c) => c.id)))
           }
         >
-          {allOn ? "Untick all" : "I agree to all of the above"}
+          {allOn ? pt("Untick all") : pt("I agree to all of the above")}
         </button>
       )}
     </Mount>

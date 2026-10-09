@@ -1,3 +1,5 @@
+import { usePortalTranslation } from "@/i18n/portal";
+import { PortalLanguageControl } from "@/i18n/PortalLanguageControl";
 import { useId, type ReactNode } from "react";
 import { LockKeyhole } from "lucide-react";
 import { currentHrTenantSlug, currentPortalTenantSlug, tenantSurfaceUrl } from "@/lib/tenant";
@@ -14,6 +16,7 @@ export function PortalLoginScene({
   subtitle: string;
   children: ReactNode;
 }) {
+  const pt = usePortalTranslation();
   const headingId = useId();
   const draft = company.trim().toLowerCase();
   const validDraft = draft.length <= 63 && /^(?!-)(?!.*--)[a-z0-9-]+(?<!-)$/.test(draft);
@@ -24,6 +27,7 @@ export function PortalLoginScene({
       <div className="portal-login__stage">
         <LoginScenery />
         <section className="portal-login__content">
+          <div className="portal-login__language"><PortalLanguageControl /></div>
           <div className="portal-login__form">
             <header className="portal-login__brand">
               <BrandLogo
@@ -34,17 +38,17 @@ export function PortalLoginScene({
                 wordmarkClassName="portal-login__wordmark"
               />
             </header>
-            <h1 id={headingId}>{title}</h1>
+            <h1 id={headingId}>{pt(title)}</h1>
             <p className="portal-login__subtitle">{subtitle}</p>
-            <nav className="portal-login__roles" aria-label="Sign-in role">
-              <a href={tenantSurfaceUrl("portal", slug, "/portal/sign-in")} aria-current={role === "employee" ? "page" : undefined}>Employee</a>
-              <a href={tenantSurfaceUrl("hr", slug, "/hr/sign-in")} aria-current={role === "hr" ? "page" : undefined}>HR admin</a>
+            <nav className="portal-login__roles" aria-label={pt("Sign-in role")}>
+              <a href={tenantSurfaceUrl("portal", slug, "/portal/sign-in")} aria-current={role === "employee" ? "page" : undefined}>{pt("Employee")}</a>
+              <a href={tenantSurfaceUrl("hr", slug, "/hr/sign-in")} aria-current={role === "hr" ? "page" : undefined}>{pt("HR admin")}</a>
             </nav>
             {children}
-            <p className="portal-login__support">Need access? <span>Contact your {role === "employee" ? "HR team" : "company administrator"}.</span></p>
+            <p className="portal-login__support">{pt("Need access?")} <span>{pt("Contact your")} {role === "employee" ? pt("HR team") : pt("company administrator")}.</span></p>
           </div>
           <footer className="portal-login__footer">
-            <span className="portal-login__secure"><LockKeyhole size={14} aria-hidden="true" /> Secure sign-in</span>
+            <span className="portal-login__secure"><LockKeyhole size={14} aria-hidden="true" />  {pt("Secure sign-in")}</span>
             <PoweredBy className="portal-login__attribution" />
           </footer>
         </section>

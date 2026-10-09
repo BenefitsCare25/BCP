@@ -1,3 +1,4 @@
+import { usePortalTranslation } from "@/i18n/portal";
 /** Searchable diagnosis combobox for the claim form. Options come from the
  * backend's curated ICD-10-based catalog (`/portal/claim-diagnoses`), scoped
  * to the selected product's claim setting (GP / specialist / hospital /
@@ -20,6 +21,7 @@ export function DiagnosisPicker({
   value: string;
   onChange: (next: string) => void;
 }) {
+  const pt = usePortalTranslation();
   const isOther = value.startsWith(OTHER_PREFIX);
   const [query, setQuery] = useState("");
   const [debounced, setDebounced] = useState("");
@@ -49,7 +51,7 @@ export function DiagnosisPicker({
         <Input
           value={value.slice(OTHER_PREFIX.length)}
           maxLength={200}
-          placeholder="Describe the diagnosis"
+          placeholder={pt("Describe the diagnosis")}
           onChange={(e) => onChange(OTHER_PREFIX + e.target.value)}
         />
         <button
@@ -60,8 +62,7 @@ export function DiagnosisPicker({
             setQuery("");
           }}
         >
-          Back to list
-        </button>
+          {pt("Back to list")} </button>
       </div>
     );
   }
@@ -79,7 +80,7 @@ export function DiagnosisPicker({
           <span className="truncate">{value}</span>
           <button
             type="button"
-            aria-label="Clear diagnosis"
+            aria-label={pt("Clear diagnosis")}
             className="ml-2 shrink-0 text-muted-foreground hover:text-foreground"
             onClick={() => {
               onChange("");
@@ -93,7 +94,7 @@ export function DiagnosisPicker({
         <div className="relative">
           <Input
             value={query}
-            placeholder="Start typing to search for options"
+            placeholder={pt("Start typing to search for options")}
             onFocus={() => setOpen(true)}
             onChange={(e) => {
               setQuery(e.target.value);
@@ -114,14 +115,13 @@ export function DiagnosisPicker({
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={() => pick(d.label)}
               >
-                {d.label}
+                {pt(d.label)}
               </button>
             </li>
           ))}
           {results.data && results.data.items.length === 0 && (
             <li className="px-3 py-1.5 text-sm text-muted-foreground">
-              No match — pick “Other” below.
-            </li>
+              {pt("No match — pick “Other” below.")} </li>
           )}
           <li className="border-t border-border">
             <button
@@ -133,8 +133,7 @@ export function DiagnosisPicker({
                 setOpen(false);
               }}
             >
-              Other (not listed)
-            </button>
+              {pt("Other (not listed)")} </button>
           </li>
         </ul>
       )}

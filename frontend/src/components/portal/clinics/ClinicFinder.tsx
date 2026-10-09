@@ -1,3 +1,4 @@
+import { usePortalTranslation } from "@/i18n/portal";
 /** The page's controls, as two labelled record rows rather than a toolbar.
  *
  *     WHERE YOU ARE   [◎ Use my location]  or  [Postal code or building]
@@ -74,18 +75,19 @@ function OriginChip({
   origin: OriginState;
   onClear: () => void;
 }) {
+  const pt = usePortalTranslation();
   return (
     <span className="inline-flex max-w-full items-center gap-2 self-start rounded-pill bg-shade py-1 pl-3.5 pr-1 text-row">
       <LocateFixed className="size-4 shrink-0 text-action-ink" aria-hidden />
       <span className="min-w-0 truncate">
         {origin.postal && <span className="font-semibold">{origin.postal}</span>}
         {origin.postal && origin.label && <span className="text-label"> · </span>}
-        {origin.label && <span className="text-label">{origin.label}</span>}
+        {origin.label && <span className="text-label">{pt(origin.label)}</span>}
       </span>
       <button
         type="button"
         onClick={onClear}
-        aria-label="Clear location"
+        aria-label={pt("Clear location")}
         className="leaf-focus grid size-8 shrink-0 place-items-center rounded-pill text-label hover:bg-bar/70 hover:text-record"
       >
         <X className="size-4" aria-hidden />
@@ -108,6 +110,7 @@ function OriginRow({
   onLocate: (query: string, postal: string | null) => void;
   onClear: () => void;
 }) {
+  const pt = usePortalTranslation();
   const placeId = useId();
   const [place, setPlace] = useState("");
   const typed = place.trim();
@@ -147,9 +150,8 @@ function OriginRow({
         ) : (
           <LocateFixed className="size-4" aria-hidden />
         )}
-        Use my location
-      </button>
-      <span className="hidden text-row text-label sm:inline">or</span>
+        {pt("Use my location")} </button>
+      <span className="hidden text-row text-label sm:inline">{pt("or")}</span>
       <form
         className="flex items-center gap-2"
         onSubmit={(e) => {
@@ -158,8 +160,7 @@ function OriginRow({
         }}
       >
         <label htmlFor={placeId} className="sr-only">
-          Your postal code, building or street name
-        </label>
+          {pt("Your postal code, building or street name")} </label>
         <input
           id={placeId}
           value={place}
@@ -168,14 +169,14 @@ function OriginRow({
           // still gets digits without shutting anyone else out of the field.
           inputMode={/^\d*$/.test(place) ? "numeric" : "text"}
           autoComplete="off"
-          placeholder="Postal code or building"
+          placeholder={pt("Postal code or building")}
           className={cn(leafControl, "sm:w-52")}
         />
         {typed && (
           <button
             type="submit"
             disabled={busy}
-            aria-label="Find this place"
+            aria-label={pt("Find this place")}
             className="leaf-focus grid size-11 shrink-0 place-items-center rounded-pill text-action-ink hover:bg-shade disabled:opacity-60"
           >
             {busy ? (
@@ -210,6 +211,7 @@ function FilterRow({
   search: string;
   onSearch: (value: string) => void;
 }) {
+  const pt = usePortalTranslation();
   const searchId = useId();
   const areaId = useId();
 
@@ -228,7 +230,7 @@ function FilterRow({
 
   return (
     <>
-      <div className="flex min-w-0 flex-1 flex-wrap gap-1" role="group" aria-label="Clinic type">
+      <div className="flex min-w-0 flex-1 flex-wrap gap-1" role="group" aria-label={pt("Clinic type")}>
         {chips.map((chip) => {
           const active = typeKey === chip.key;
           return (
@@ -239,7 +241,7 @@ function FilterRow({
               aria-pressed={active}
               className={pickChipClass(active, "inline-flex items-center gap-1.5 px-3.5")}
             >
-              {chip.label}
+              {pt(chip.label)}
               {chip.count !== null && <span className="font-normal text-label">{chip.count}</span>}
             </button>
           );
@@ -252,29 +254,27 @@ function FilterRow({
             aria-hidden
           />
           <label htmlFor={searchId} className="sr-only">
-            Filter by clinic name, address or postal code
-          </label>
+            {pt("Filter by clinic name, address or postal code")} </label>
           <input
             id={searchId}
             value={search}
             onChange={(e) => onSearch(e.target.value)}
             maxLength={MAX_QUERY_LENGTH}
-            placeholder="Name or address"
+            placeholder={pt("Name or address")}
             className={cn(leafControl, "pl-9 sm:w-54")}
           />
         </div>
         {areas.length > 0 && (
           <>
             <label htmlFor={areaId} className="sr-only">
-              Filter by area
-            </label>
+              {pt("Filter by area")} </label>
             <select
               id={areaId}
               value={area}
               onChange={(e) => onArea(e.target.value)}
               className={cn(leafControl, "w-32 shrink-0 sm:w-37")}
             >
-              <option value={ALL_AREAS}>All areas</option>
+              <option value={ALL_AREAS}>{pt("All areas")}</option>
               {areas.map((a) => (
                 <option key={a} value={a}>
                   {a}
@@ -321,6 +321,7 @@ export function ClinicFinder({
   onLocate: (query: string, postal: string | null) => void;
   onClearOrigin: () => void;
 }) {
+  const pt = usePortalTranslation();
   return (
     <section className="portal-clinic-finder tone-mint relative overflow-hidden rounded-[28px] bg-[var(--tone-wash)] p-5 text-[var(--tone-ink)] sm:p-7">
       <img
@@ -329,7 +330,7 @@ export function ClinicFinder({
         className="pointer-events-none absolute -right-2 -top-1 hidden size-36 object-contain sm:block lg:size-44"
       />
       <div className="sm:pr-44">
-        <h2 className={compact ? "sr-only" : "text-2xl font-bold tracking-title text-record sm:text-3xl"}>Find a panel clinic</h2>
+        <h2 className={compact ? "sr-only" : "text-2xl font-bold tracking-title text-record sm:text-3xl"}>{pt("Find a panel clinic")}</h2>
         <div className={compact ? "mt-0" : "mt-4"}>
           <OriginRow
             origin={origin}

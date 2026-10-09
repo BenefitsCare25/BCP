@@ -1,3 +1,4 @@
+import { usePortalTranslation } from "@/i18n/portal";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { cn } from "@/lib/cn";
 
@@ -31,6 +32,7 @@ export function SkyStage({
   label?: string;
   children: ReactNode;
 }) {
+  const pt = usePortalTranslation();
   const stage = useRef<HTMLElement | null>(null);
   const [still] = useState(() => window.matchMedia("(prefers-reduced-motion: reduce)").matches);
 
@@ -62,7 +64,7 @@ export function SkyStage({
   }, []);
 
   return (
-    <section ref={stage} className={cn("sky-stage", className)} data-period={period} aria-label={label}>
+    <section ref={stage} className={cn("sky-stage", className)} data-period={period} aria-label={pt(label)}>
       <div className="sky-plate" aria-hidden>
         {/* The river flows in a cinemagraph made from this same painting —
             only the water moves. Day only (the dusk plate has no loop yet);

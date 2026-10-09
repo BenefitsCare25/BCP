@@ -1,3 +1,4 @@
+import { usePortalTranslation } from "@/i18n/portal";
 /** One claim: what it was for, where it got to, and what (if anything) the
  * member has to do next.
  *
@@ -44,6 +45,7 @@ import { useDocumentTitle } from "@/lib/useDocumentTitle";
 import { useCompany } from "@/components/portal/useCompany";
 
 export function PortalClaimDetailPage() {
+  const pt = usePortalTranslation();
   const { claimId } = useParams({ strict: false }) as { claimId: string };
   // THE RECEIPT. Submitting used to end in a three-second toast: no statement
   // of what was sent, no document manifest, nothing to come back to. The claim's
@@ -105,7 +107,7 @@ export function PortalClaimDetailPage() {
     if (claimId && unreadHere) markMutate(claimId);
   }, [claimId, unreadHere, markMutate]);
 
-  if (claim.isLoading) return <LeafSkeleton label="Loading your claim" mounts={2} />;
+  if (claim.isLoading) return <LeafSkeleton label={pt("Loading your claim")} mounts={2} />;
   // Only a real 404 means the claim doesn't exist — any other failure gets a
   // retryable error state instead of a misleading "not found".
   if (claim.isError && !isNotFoundError(claim.error)) {
@@ -113,10 +115,9 @@ export function PortalClaimDetailPage() {
   }
   if (claim.isError || !claim.data) {
     return (
-      <Mount label="We couldn't find that claim">
+      <Mount label={pt("We couldn't find that claim")}>
         <p className="text-row text-label">
-          It may have been removed. Your other claims are on the claims page.
-        </p>
+          {pt("It may have been removed. Your other claims are on the claims page.")} </p>
       </Mount>
     );
   }
@@ -133,15 +134,15 @@ export function PortalClaimDetailPage() {
   const addDocument = async (file: File | undefined, docType?: string) => {
     if (!file) return;
     if (file.size > CLAIM_DOC_MAX_BYTES) {
-      toast.error(`${file.name} is larger than 15 MB. Try a smaller photo or scan.`);
+      toast.error(pt("{0} is larger than 15 MB. Try a smaller photo or scan.", [file.name]));
       return;
     }
     try {
       await uploadDoc.mutateAsync({ claimId: data.id, file, docType });
       await refetchAsSeen();
-      toast.success("Added");
+      toast.success(pt("Added"));
     } catch (err) {
-      toast.error(formatError(err));
+      toast.error(pt(formatError(err)));
     }
   };
 
@@ -171,7 +172,7 @@ export function PortalClaimDetailPage() {
         replace: true,
       });
     } catch (err) {
-      toast.error(formatError(err));
+      toast.error(pt(formatError(err)));
     }
   };
 
@@ -183,7 +184,7 @@ export function PortalClaimDetailPage() {
       await amendClaim.mutateAsync({ claimId: data.id, patch });
       await refetchAsSeen();
       setEditing(false);
-      toast.success("Updated");
+      toast.success(pt("Updated"));
     } catch (err) {
       // Stays in the sheet, holding what they typed. The server's sentence is
       // the one they need — a duplicate invoice number, a date outside the
@@ -208,9 +209,9 @@ export function PortalClaimDetailPage() {
         expectedRevision: data.revision,
       });
       await refetchAsSeen();
-      toast.success("Removed");
+      toast.success(pt("Removed"));
     } catch (err) {
-      toast.error(formatError(err));
+      toast.error(pt(formatError(err)));
     } finally {
       setRemovingDocId(null);
     }
@@ -236,8 +237,7 @@ export function PortalClaimDetailPage() {
           }
           className="leaf-focus -ml-2 inline-flex min-h-11 items-center gap-1.5 px-2 text-row text-label"
         >
-          <ArrowLeft className="size-4" aria-hidden /> All claims
-        </button>
+          <ArrowLeft className="size-4" aria-hidden />  {pt("All claims")} </button>
       }
       receipt={justSubmitted}
       onAddDocument={(file, docType) => void addDocument(file, docType)}
@@ -265,7 +265,7 @@ export function PortalClaimDetailPage() {
         const document = data.documents.find((item) => item.id === docId);
         if (!document) return;
         void downloadPortalClaimDocument(data.id, document).catch((error) => {
-          toast.error(formatError(error));
+          toast.error(pt(formatError(error)));
         });
       }}
       removingDocumentId={removingDocId}
@@ -297,7 +297,7 @@ export function PortalClaimDetailPage() {
               try {
                 await sendMessage.mutateAsync({ claimId: data.id, body });
               } catch (err) {
-                toast.error(formatError(err));
+                toast.error(pt(formatError(err)));
                 // Re-thrown so the composer KEEPS the text: clearing a message
                 // the member typed because the request failed is the one
                 // outcome they can't recover from.

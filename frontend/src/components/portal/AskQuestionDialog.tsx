@@ -1,3 +1,4 @@
+import { usePortalTranslation } from "@/i18n/portal";
 /** "Ask a question" — the only way a member starts a conversation.
  *
  * Until this existed the sole composer in the portal was the reply box on a
@@ -59,6 +60,7 @@ function PickRow({
   onPick: () => void;
   title: string;
 }) {
+  const pt = usePortalTranslation();
   return (
     <label
       className={cn(
@@ -74,7 +76,7 @@ function PickRow({
         onChange={onPick}
         className="size-4 shrink-0 accent-action-ink"
       />
-      <span className="min-w-0 text-row font-medium text-record">{title}</span>
+      <span className="min-w-0 text-row font-medium text-record">{pt(title)}</span>
     </label>
   );
 }
@@ -89,6 +91,7 @@ function ClaimPick({
   detail: string;
   onPick: () => void;
 }) {
+  const pt = usePortalTranslation();
   return (
     <li>
       <button
@@ -99,8 +102,8 @@ function ClaimPick({
           "transition-colors duration-200 ease-leaf hover:bg-shade/60",
         )}
       >
-        <span className="block text-row font-medium text-record">{title}</span>
-        <span className="mt-0.5 block text-row text-label">{detail}</span>
+        <span className="block text-row font-medium text-record">{pt(title)}</span>
+        <span className="mt-0.5 block text-row text-label">{pt(detail)}</span>
       </button>
     </li>
   );
@@ -119,6 +122,7 @@ export function AskQuestionDialog({
    *  they had just asked from, with no sign of what they had sent. */
   onCreated: (enquiryId: string) => void;
 }) {
+  const pt = usePortalTranslation();
   const navigate = useNavigate();
   const company = useCompany();
   const topics = useEnquiryTopics();
@@ -169,7 +173,7 @@ export function AskQuestionDialog({
       // stage beside the index it just joined at width. The page decides.
       onCreated(created.id);
     } catch (err) {
-      toast.error(formatError(err));
+      toast.error(pt(formatError(err)));
     }
   };
 
@@ -177,19 +181,18 @@ export function AskQuestionDialog({
     <LeafDialog
       open={open}
       onClose={onClose}
-      title="Ask a question"
+      title={pt("Ask a question")}
       gloss="We'll answer in your messages."
     >
       {topics.isLoading ? (
-        <p className="text-row text-label">Loading&hellip;</p>
+        <p className="text-row text-label">{pt("Loading…")}</p>
       ) : topics.isError ? (
         <p className="text-row text-label">
-          We couldn&rsquo;t load the options just now. Close this and try again.
-        </p>
+          {pt("We couldn’t load the options just now. Close this and try again.")} </p>
       ) : (
         <div className="space-y-4">
           <fieldset className="space-y-1">
-            <legend className="leaf-label mb-1">What&rsquo;s it about?</legend>
+            <legend className="leaf-label mb-1">{pt("What’s it about?")}</legend>
             <div className="-mx-1">
               {options.map((t) => (
                 <PickRow
@@ -199,7 +202,7 @@ export function AskQuestionDialog({
                     setTopic(t.key);
                     setAboutClaimId(null);
                   }}
-                  title={t.label}
+                  title={pt(t.label)}
                 />
               ))}
             </div>
@@ -209,16 +212,12 @@ export function AskQuestionDialog({
             <div className="space-y-2">
               <MountRule />
               <p className="text-row text-label">
-                We&rsquo;ll take you to that claim, where the whole conversation
-                about it lives.
-              </p>
+                {pt("We’ll take you to that claim, where the whole conversation about it lives.")} </p>
               {claims.isLoading ? (
-                <p className="text-row text-label">Loading&hellip;</p>
+                <p className="text-row text-label">{pt("Loading…")}</p>
               ) : claimRows.length === 0 ? (
                 <p className="text-row text-label">
-                  You haven&rsquo;t sent a claim yet. Pick another option above
-                  and we&rsquo;ll answer here.
-                </p>
+                  {pt("You haven’t sent a claim yet. Pick another option above and we’ll answer here.")} </p>
               ) : (
                 <ul className="-mx-1 divide-y divide-hairline/75">
                   {claimRows.map((c) => (
@@ -241,28 +240,26 @@ export function AskQuestionDialog({
               <MountRule />
               <div className="space-y-2">
                 <label htmlFor="q-subject" className="leaf-label">
-                  Subject
-                </label>
+                  {pt("Subject")} </label>
                 <input
                   id="q-subject"
                   value={subject}
                   maxLength={MAX_SUBJECT}
                   onChange={(e) => setSubject(e.target.value)}
-                  placeholder="In a few words"
+                  placeholder={pt("In a few words")}
                   className={fieldClass}
                 />
               </div>
               <div className="space-y-2">
                 <label htmlFor="q-body" className="leaf-label">
-                  What would you like to know?
-                </label>
+                  {pt("What would you like to know?")} </label>
                 <textarea
                   id="q-body"
                   rows={4}
                   value={body}
                   maxLength={MAX_BODY}
                   onChange={(e) => setBody(e.target.value)}
-                  placeholder="Tell us as much as you like — it all helps."
+                  placeholder={pt("Tell us as much as you like — it all helps.")}
                   className={fieldClass}
                 />
               </div>
@@ -275,15 +272,14 @@ export function AskQuestionDialog({
               {claimRows.length > 0 && (
                 <div className="space-y-2">
                   <label htmlFor="q-claim" className="leaf-label">
-                    Related claim (optional)
-                  </label>
+                    {pt("Related claim (optional)")} </label>
                   <select
                     id="q-claim"
                     value={aboutClaimId ?? ""}
                     onChange={(e) => setAboutClaimId(e.target.value || null)}
                     className={fieldClass}
                   >
-                    <option value="">Not about a particular claim</option>
+                    <option value="">{pt("Not about a particular claim")}</option>
                     {claimRows.map((c) => (
                       <option key={c.id} value={c.id}>
                         {claimTitle(c)} · {formatDay(c.incurred_date)}
@@ -304,8 +300,7 @@ export function AskQuestionDialog({
                 ) : (
                   <Send className="size-4" aria-hidden />
                 )}
-                Send
-              </Action>
+                {pt("Send")} </Action>
             </div>
           )}
         </div>

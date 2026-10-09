@@ -1,3 +1,4 @@
+import { usePortalTranslation } from "@/i18n/portal";
 /** The claim's evidence: one labelled upload per required slot, then anything
  * else the member wants the broker to see.
  *
@@ -26,11 +27,12 @@ function RemoveButton({
   label: string;
   onClick: () => void;
 }) {
+  const pt = usePortalTranslation();
   return (
     <button
       type="button"
       onClick={onClick}
-      aria-label={label}
+      aria-label={pt(label)}
       className="leaf-focus -m-3 inline-flex size-11 shrink-0 items-center justify-center text-label"
     >
       <X className="size-4" aria-hidden />
@@ -39,6 +41,7 @@ function RemoveButton({
 }
 
 export function DocumentFields({ form }: { form: NewClaimForm }) {
+  const pt = usePortalTranslation();
   const extraInput = useRef<HTMLInputElement>(null);
   const { docSlots, slotFiles, files, unplacedAutofill } = form;
   const attachedCount = docSlots.filter((slot) => slotFiles[slot.key]).length;
@@ -47,8 +50,8 @@ export function DocumentFields({ form }: { form: NewClaimForm }) {
     <>
       {docSlots.length > 0 && (
         <FieldGroup
-          label="Documents for this claim"
-          hint="Attach every document below before sending your claim."
+          label={pt("Documents for this claim")}
+          hint={pt("Attach every document below before sending your claim.")}
           className="space-y-3"
         >
           <div
@@ -56,11 +59,10 @@ export function DocumentFields({ form }: { form: NewClaimForm }) {
             aria-live="polite"
           >
             <span className="font-medium text-record">
-              {attachedCount === docSlots.length ? "All documents attached" : ""}
+              {attachedCount === docSlots.length ? pt("All documents attached") : ""}
             </span>
             <span className="tabular-nums text-label">
-              {attachedCount} of {docSlots.length} attached
-            </span>
+              {attachedCount}  {pt("of")} {docSlots.length}  {pt("attached")} </span>
           </div>
           <div className="divide-y divide-hairline overflow-hidden rounded-control border border-leaf-input bg-bar/55">
           {docSlots.map((slot) => {
@@ -79,9 +81,9 @@ export function DocumentFields({ form }: { form: NewClaimForm }) {
                     <Circle className="mt-0.5 size-4 shrink-0 text-label" aria-hidden />
                   )}
                   <div className="min-w-0 flex-1">
-                    <p className="text-row font-semibold text-record">{slot.label}</p>
+                    <p className="text-row font-semibold text-record">{pt(slot.label)}</p>
                     {slot.instructions && slot.instructions.toLowerCase().trim() !== `attach the ${slot.label.toLowerCase()}.` && (
-                      <p className="mt-0.5 text-row text-label">{slot.instructions}</p>
+                      <p className="mt-0.5 text-row text-label">{pt(slot.instructions)}</p>
                     )}
                   </div>
                 </div>
@@ -89,20 +91,20 @@ export function DocumentFields({ form }: { form: NewClaimForm }) {
                   <label className={ATTACH_CHIP}>
                     <Paperclip className="size-4 shrink-0" aria-hidden />
                     <span className="truncate">
-                      {file?.name ?? "Attach PDF or photo"}
+                      {file?.name ?? pt("Attach PDF or photo")}
                     </span>
                     <input
                       type="file"
                       accept={ACCEPT}
                       className="sr-only"
-                      aria-label={`${file ? "Replace" : "Attach"} ${slot.label}`}
+                      aria-label={pt("{0} {1}", [pt(file ? "Replace" : "Attach"), pt(slot.label)])}
                       aria-invalid={Boolean(error)}
                       onChange={(e) => {
                         const f = e.target.files?.[0] ?? null;
                         e.target.value = "";
                         if (!f) return;
                         if (f.size > MAX_BYTES) {
-                          toast.error(`${f.name} exceeds 15 MB`);
+                          toast.error(pt("{0} exceeds 15 MB", [f.name]));
                           return;
                         }
                         form.setSlotFile(slot.key, f);
@@ -111,14 +113,14 @@ export function DocumentFields({ form }: { form: NewClaimForm }) {
                   </label>
                   {file && (
                     <RemoveButton
-                      label={`Remove the ${slot.label.toLowerCase()}`}
+                      label={pt("Remove the {0}", [pt(slot.label.toLowerCase())])}
                       onClick={() => form.removeSlotFile(slot.key)}
                     />
                   )}
                 </div>
                 {error && (
                   <p role="alert" className="text-row font-medium text-strike-rejected">
-                    {error}
+                    {pt(error)}
                   </p>
                 )}
               </div>
@@ -129,7 +131,7 @@ export function DocumentFields({ form }: { form: NewClaimForm }) {
       )}
 
       {form.effectiveKind && (
-        <FieldGroup label="Additional documents (optional)">
+        <FieldGroup label={pt("Additional documents (optional)")}>
           <input
             ref={extraInput}
             type="file"
@@ -143,8 +145,7 @@ export function DocumentFields({ form }: { form: NewClaimForm }) {
           />
           <Action tone="neutral" type="button" onClick={() => extraInput.current?.click()}>
             <Paperclip className="size-4 shrink-0" aria-hidden />
-            Attach document (PDF or photo)
-          </Action>
+            {pt("Attach document (PDF or photo)")} </Action>
           {(files.length > 0 || unplacedAutofill.length > 0) && (
             <ul className="space-y-1 pt-1">
               {unplacedAutofill.map((f, i) => (
@@ -153,10 +154,10 @@ export function DocumentFields({ form }: { form: NewClaimForm }) {
                   className="flex items-center justify-between gap-2 rounded-control bg-bar/70 px-3 py-1.5 text-row"
                 >
                   <span className="min-w-0 truncate text-record">
-                    {f.name} <span className="text-label">(from autofill)</span>
+                    {f.name} <span className="text-label">{pt("(from autofill)")}</span>
                   </span>
                   <RemoveButton
-                    label={`Remove ${f.name}`}
+                    label={pt("Remove {0}", [f.name])}
                     onClick={() => form.dropAutofillFile(f)}
                   />
                 </li>
@@ -168,7 +169,7 @@ export function DocumentFields({ form }: { form: NewClaimForm }) {
                 >
                   <span className="min-w-0 truncate text-record">{f.name}</span>
                   <RemoveButton
-                    label={`Remove ${f.name}`}
+                    label={pt("Remove {0}", [f.name])}
                     onClick={() =>
                       form.setFiles((prev) => prev.filter((_, j) => j !== i))
                     }
