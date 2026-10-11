@@ -56,6 +56,7 @@ from app.services.enrollment_elections import (
     enrollment_detail,
     lock_enrollment,
     perform_submit,
+    portal_signed,
     revalidate_enrollment,
 )
 from app.services.enrollment_events import invalidate_forms, record_event
@@ -360,11 +361,7 @@ def reopen_enrollment(
     if window is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Enrolment period not found.")
     assert_window_accepts_edits(window)
-    from app.models.enrollment_form import EnrollmentFormSubmission
-    signed = db.scalar(select(EnrollmentFormSubmission.id).where(
-        EnrollmentFormSubmission.enrollment_id == enr.id,
-        EnrollmentFormSubmission.source == "portal",
-    ).limit(1))
+    signed = portal_signed(db, enr)
     if signed and not window.member_self_service:
         raise HTTPException(status.HTTP_409_CONFLICT,
                             "Enable member self-service before reopening a signed enrolment.")
@@ -461,15 +458,24 @@ def return_enrollment(
     if window is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Enrolment period not found.")
     assert_window_accepts_edits(window)
-    if not window.member_self_service:
+    # A broker-managed period has no employee to correct it: an enrolment the
+    # broker submitted comes back as their draft (as reopening does), so a
+    # submission that fails its confirm checks can be fixed instead of blocking
+    # the close. A signed one still needs the employee, so the portal.
+    to_broker = not window.member_self_service
+    if to_broker and portal_signed(db, enr):
         raise HTTPException(status.HTTP_409_CONFLICT,
             "Enable member self-service before returning an enrolment for employee correction.")
     invalidate_forms(db, enr, "returned")
-    enr.status = EnrollmentStatus.returned
+    enr.status = EnrollmentStatus.in_progress if to_broker else EnrollmentStatus.returned
     enr.submitted_at = None
     enr.submitted_by = None
-    record_event(db, enr, "returned", reason=body.reason, actor_id=user.user_id)
+    # The employee's notice must not ask for a correction and signature that
+    # only the broker can make in a broker-managed period.
+    record_event(db, enr, "returned_to_draft" if to_broker else "returned",
+                 reason=body.reason, actor_id=user.user_id)
     write_audit(db, user, "return_enrollment", "enrollment", enr.id,
-                after={"reason": body.reason}, employee_id=enr.employee_id)
+                after={"reason": body.reason, "to_broker_draft": to_broker},
+                employee_id=enr.employee_id)
     db.commit()
     return enrollment_detail(db, enr)

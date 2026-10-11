@@ -48,6 +48,23 @@ import { Switch } from "@/components/ui/switch";
 import { formatError } from "@/lib/errors";
 import { ConfigurationHistory } from "./ConfigurationHistory";
 
+// Mirrors `schemas/claims.ClaimDocumentSetupIn`, `ClaimSetupDocument` and
+// `ClaimDocKeyField`. Past these the API refuses the save with a raw 422, so
+// the editor stops at them and says why.
+const MAX_DOCUMENTS = 15;
+const MAX_ALIASES = 32;
+const MAX_KEY_FIELDS = 32;
+const MAX_KEY_FIELD_NAME = 64;
+const MAX_KEYWORDS = 16;
+const MAX_KEYWORD_LENGTH = 64;
+
+function keywordsInvalid(keywords: string[]): boolean {
+  return (
+    keywords.length > MAX_KEYWORDS ||
+    keywords.some((keyword) => keyword.length > MAX_KEYWORD_LENGTH)
+  );
+}
+
 function setupInput(
   setup: ClaimDocumentSetup,
   documents = setup.documents,
@@ -122,18 +139,21 @@ function TokenField({
   hint,
   values,
   placeholder,
+  max,
   onChange,
 }: {
   label: string;
   hint: string;
   values: string[];
   placeholder: string;
+  max: number;
   onChange: (values: string[]) => void;
 }) {
   const [value, setValue] = useState("");
+  const full = values.length >= max;
   const add = () => {
     const next = value.trim();
-    if (!next) return;
+    if (!next || full) return;
     if (!values.some((item) => item.toLowerCase() === next.toLowerCase())) {
       onChange([...values, next]);
     }
@@ -182,7 +202,7 @@ function TokenField({
             variant="ghost"
             size="sm"
             className="size-8 p-0"
-            disabled={!value.trim()}
+            disabled={!value.trim() || full}
             aria-label={`Add ${label.toLowerCase()}`}
             onClick={add}
           >
@@ -190,6 +210,11 @@ function TokenField({
           </Button>
         </div>
       </div>
+      {full && (
+        <p className="text-xs text-subtle">
+          Up to {max} {label.toLowerCase()} per document.
+        </p>
+      )}
     </div>
   );
 }
@@ -219,20 +244,30 @@ function KeywordInput({
     setValue(next.join(", "));
   };
 
+  const invalid = keywordsInvalid(values);
   return (
-    <Input
-      value={value}
-      placeholder="Matching terms, comma separated"
-      aria-label={label}
-      onChange={(event) => setValue(event.target.value)}
-      onBlur={commit}
-      onKeyDown={(event) => {
-        if (event.key === "Enter") {
-          event.preventDefault();
-          commit();
-        }
-      }}
-    />
+    <div className="space-y-1">
+      <Input
+        value={value}
+        placeholder="Matching terms, comma separated"
+        aria-label={label}
+        aria-invalid={invalid || undefined}
+        onChange={(event) => setValue(event.target.value)}
+        onBlur={commit}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            commit();
+          }
+        }}
+      />
+      {invalid && (
+        <p className="text-xs text-error">
+          Use up to {MAX_KEYWORDS} terms, each {MAX_KEYWORD_LENGTH} characters or
+          fewer.
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -333,6 +368,7 @@ function DocumentEditor({
         hint="Other titles that may be printed on this document."
         values={document.aliases}
         placeholder="Add an alias"
+        max={MAX_ALIASES}
         onChange={(aliases) => onChange({ ...document, aliases })}
       />
 
@@ -344,7 +380,18 @@ function DocumentEditor({
               Fields expected on a genuine copy of this document.
             </p>
           </div>
-          <Button type="button" variant="outline" size="sm" onClick={addKeyField}>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={document.key_fields.length >= MAX_KEY_FIELDS}
+            title={
+              document.key_fields.length >= MAX_KEY_FIELDS
+                ? `Up to ${MAX_KEY_FIELDS} key fields per document.`
+                : undefined
+            }
+            onClick={addKeyField}
+          >
             <Plus className="size-3.5" aria-hidden />
             <span className="ml-1">Add key field</span>
           </Button>
@@ -358,7 +405,7 @@ function DocumentEditor({
               >
                 <Input
                   value={field.name}
-                  maxLength={128}
+                  maxLength={MAX_KEY_FIELD_NAME}
                   placeholder="Field name"
                   aria-label={`Key field ${fieldIndex + 1} name`}
                   onChange={(event) => {
@@ -444,6 +491,14 @@ function SetupEditor({
     const invalid = documents.find((document) => !document.display.trim());
     if (invalid) {
       toast.error("Name every required document before saving.");
+      return;
+    }
+    if (
+      documents.some((document) =>
+        document.key_fields.some((field) => keywordsInvalid(field.keywords)),
+      )
+    ) {
+      toast.error("Shorten the matching terms marked on a key field before saving.");
       return;
     }
     const normalized = documents.map((document) => ({
@@ -535,10 +590,11 @@ function SetupEditor({
               </div>
             )}
 
-            <div className="px-6">
+            <div className="space-y-2 px-6">
               <Button
                 type="button"
                 variant="outline"
+                disabled={documents.length >= MAX_DOCUMENTS}
                 onClick={() =>
                   setDocuments((current) => [
                     ...current,
@@ -556,6 +612,11 @@ function SetupEditor({
                 <Plus className="size-4" aria-hidden />
                 <span className="ml-1.5">Add required document</span>
               </Button>
+              {documents.length >= MAX_DOCUMENTS && (
+                <p className="text-xs text-subtle">
+                  A claim type can require up to {MAX_DOCUMENTS} documents.
+                </p>
+              )}
             </div>
 
             <section className="mx-6 space-y-3 rounded-lg border border-border bg-muted/30 p-4">
@@ -774,10 +835,12 @@ function SetupRow({
         )}
       </div>
       <div className="flex flex-wrap gap-1 sm:justify-end">
-        <Button type="button" variant="ghost" size="sm" onClick={onDuplicate}>
+        {/* Duplicating replaces the destination's whole document list, so it
+            is a removal of saved requirements (the API refuses it too). */}
+        <FirmOwnerOnly><Button type="button" variant="ghost" size="sm" onClick={onDuplicate}>
           <Copy className="size-3.5" aria-hidden />
           <span className="ml-1">Duplicate</span>
-        </Button>
+        </Button></FirmOwnerOnly>
         <Button type="button" variant="outline" size="sm" onClick={onEdit}>
           <Pencil className="size-3.5" aria-hidden />
           <span className="ml-1">Edit</span>

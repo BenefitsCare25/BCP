@@ -27,6 +27,7 @@ from app.models import (  # noqa: E402
     Client,
     Employee,
     Enrollment,
+    EnrollmentEvent,
     EnrollmentWindow,
     LeaveElection,
     LeavePolicy,
@@ -281,12 +282,20 @@ def _reset_leave():
             el.days = 0.0
             el.flex_amount = None
             el.status = LeaveElectionStatus.draft
-        # Restore the enrollment to editable so each test can submit→confirm fresh.
+        # Restore the enrollment to a never-confirmed draft so each test can
+        # submit→confirm fresh. Its confirmation history goes too: close treats
+        # an unsent enrollment that WAS confirmed as reopened, keeping the
+        # leave trade it confirmed.
         enr = s.get(Enrollment, ENROLL_ID)
         if enr is not None:
             enr.status = EnrollmentStatus.in_progress
             enr.submitted_at = None
             enr.confirmed_at = None
+            enr.baseline_snapshot = {
+                k: v for k, v in (enr.baseline_snapshot or {}).items()
+                if k != "confirmed_leave"
+            }
+            s.query(EnrollmentEvent).filter_by(enrollment_id=ENROLL_ID).delete()
         # Restore the window (close_window tests mutate status/default_behavior).
         win = s.get(EnrollmentWindow, WINDOW_ID)
         if win is not None:

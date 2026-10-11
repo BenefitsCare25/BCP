@@ -18,7 +18,15 @@ import { errorCode } from "@/lib/errors";
 import { fmtDateTime } from "@/lib/format";
 import { BrandAssetsSection } from "./BrandAssetsSection";
 import { BrandFormFooter, BrandTextField, ColorFields, ContactFields, IdentityFields } from "./BrandFieldsets";
-import { BUILT_IN_EXTRA, type Draft, fieldRefusal, fieldsOf, useBrandDraft, validateDraft } from "./brandForm";
+import {
+  BUILT_IN_EXTRA,
+  type Draft,
+  fieldRefusal,
+  fieldsOf,
+  nameFallbacks,
+  useBrandDraft,
+  validateDraft,
+} from "./brandForm";
 
 /** The firm's white-label brand: name, colours, images, support contact,
  *  system email identity, e-card prefix and the platform attribution. A firm
@@ -97,13 +105,14 @@ function FirmBrandForm({
     );
   };
 
+  const names = nameFallbacks(draft);
   const fieldProps = {
     id,
     draft,
     errors: shownErrors,
     disabled,
-    inherited: DEFAULT_BRAND,
-    inheritedExtra: BUILT_IN_EXTRA,
+    inherited: { ...DEFAULT_BRAND, short_name: names.short_name },
+    inheritedExtra: { ...BUILT_IN_EXTRA, email_sender_name: names.email_sender_name },
     onChange: change,
   };
 

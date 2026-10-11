@@ -16,7 +16,7 @@ from app.core.auth import (
 from app.core.storage import LocalStorage
 from app.db.session import SessionLocal
 from app.main import app
-from app.models import AIPolicyVersion, AuditLog
+from app.models import AIPolicyVersion, PlatformAuditLog
 from scripts.seed_demo import seed
 
 PDF = b"%PDF-1.4\nPolicy document fixture\n%%EOF"
@@ -73,8 +73,9 @@ def test_versions_publish_and_files_survive_new_requests(ctx):
     assert download.headers["cache-control"] == "private, no-store"
     assert "attachment" in download.headers["content-disposition"]
     with SessionLocal() as db:
-        assert db.scalar(select(AuditLog.id).where(
-            AuditLog.entity_id == second["id"], AuditLog.action == "ai_policy.published",
+        assert db.scalar(select(PlatformAuditLog.id).where(
+            PlatformAuditLog.entity_id == second["id"],
+            PlatformAuditLog.action == "ai_policy.published",
         ))
 
 

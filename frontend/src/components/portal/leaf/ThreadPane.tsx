@@ -37,7 +37,7 @@ import { portalText as pt, usePortalTranslation } from "@/i18n/portal";
  */
 import { useEffect } from "react";
 import { Link } from "@tanstack/react-router";
-import { ArrowRight } from "lucide-react";
+import { ArrowRight, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import {
   useMarkEnquiryMessagesRead,
@@ -65,7 +65,7 @@ import { ClaimStrike, claimBucket } from "./Strike";
 import { claimTitle } from "./ClaimMount";
 import { currencySymbol, moneyText } from "./Figure";
 import { formatDay } from "./date";
-import { goLinkClass } from "./Action";
+import { Action, goLinkClass } from "./Action";
 import type { ConversationSubject } from "@/api/portalMessages";
 
 /** The shell every conversation is read in: who/what it is, then the thread.
@@ -105,6 +105,32 @@ export function ThreadPanePlaceholder() {
         {pt("Choose one on the left to read it here and write back.")} </p>
     </Mount>
   );
+}
+
+/** The thread, or why it is not on screen. An empty list is a real answer
+ * ("Nothing here yet"); a failed read must never render as one, or a "we need
+ * more information" notice hides behind it above a live composer. */
+function ThreadBody({
+  query,
+  children,
+}: {
+  query: { isLoading: boolean; isError: boolean; refetch: () => unknown };
+  children: React.ReactNode;
+}) {
+  const pt = usePortalTranslation();
+  if (query.isLoading) return <p className="text-row text-label">{pt("Loading…")}</p>;
+  if (query.isError) {
+    return (
+      <div className="space-y-3">
+        <p className="text-row text-label">{pt("We couldn't load this conversation")}</p>
+        <Action type="button" onClick={() => void query.refetch()}>
+          <RefreshCw className="size-4" aria-hidden />
+          {pt("Try again")}
+        </Action>
+      </div>
+    );
+  }
+  return <>{children}</>;
 }
 
 function PaneNotice({ label, detail }: { label: string; detail: string }) {
@@ -186,30 +212,32 @@ export function ClaimThreadPane({ claimId }: { claimId: string }) {
         </Link>
       }
     >
-      <MessageThread
-        messages={messages.data ?? []}
-        sending={send.isPending}
-        threadSubject={title}
-        replyDisabledReason={
-          isDraft
-            ? "Send this claim and you'll be able to write to us about it here."
-            : undefined
-        }
-        onSend={
-          isDraft
-            ? undefined
-            : async (body) => {
-                try {
-                  await send.mutateAsync({ claimId, body });
-                } catch (err) {
-                  toast.error(pt(formatError(err)));
-                  // Re-thrown so the composer KEEPS the text — the one failure
-                  // here a member cannot recover from.
-                  throw err;
+      <ThreadBody query={messages}>
+        <MessageThread
+          messages={messages.data ?? []}
+          sending={send.isPending}
+          threadSubject={title}
+          replyDisabledReason={
+            isDraft
+              ? "Send this claim and you'll be able to write to us about it here."
+              : undefined
+          }
+          onSend={
+            isDraft
+              ? undefined
+              : async (body) => {
+                  try {
+                    await send.mutateAsync({ claimId, body });
+                  } catch (err) {
+                    toast.error(pt(formatError(err)));
+                    // Re-thrown so the composer KEEPS the text — the one failure
+                    // here a member cannot recover from.
+                    throw err;
+                  }
                 }
-              }
-        }
-      />
+          }
+        />
+      </ThreadBody>
     </Pane>
   );
 }
@@ -267,29 +295,31 @@ export function EnquiryThreadPane({ enquiryId }: { enquiryId: string }) {
       context={enquiryContext(data.topic_label, data.about_claim)}
       aside={<EnquiryStrike status={data.status} />}
     >
-      <MessageThread
-        messages={messages.data ?? []}
-        sending={send.isPending}
-        threadSubject={data.subject}
-        placeholder={pt("Add anything else we should know.")}
-        replyDisabledReason={
-          closed
-            ? "This question is closed. Ask a new one and we'll pick it up there."
-            : undefined
-        }
-        onSend={
-          closed
-            ? undefined
-            : async (body) => {
-                try {
-                  await send.mutateAsync({ enquiryId, body });
-                } catch (err) {
-                  toast.error(pt(formatError(err)));
-                  throw err;
+      <ThreadBody query={messages}>
+        <MessageThread
+          messages={messages.data ?? []}
+          sending={send.isPending}
+          threadSubject={data.subject}
+          placeholder={pt("Add anything else we should know.")}
+          replyDisabledReason={
+            closed
+              ? "This question is closed. Ask a new one and we'll pick it up there."
+              : undefined
+          }
+          onSend={
+            closed
+              ? undefined
+              : async (body) => {
+                  try {
+                    await send.mutateAsync({ enquiryId, body });
+                  } catch (err) {
+                    toast.error(pt(formatError(err)));
+                    throw err;
+                  }
                 }
-              }
-        }
-      />
+          }
+        />
+      </ThreadBody>
     </Pane>
   );
 }

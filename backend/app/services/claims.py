@@ -69,7 +69,11 @@ from app.services.claim_document_setups import (
     dump_documents,
     setup_for_claim,
 )
-from app.services.claim_episodes import anchor_out, resolve_anchor
+from app.services.claim_episodes import (
+    anchor_out,
+    assert_anchor_owned,
+    resolve_anchor,
+)
 from app.services.claim_fx import (
     FX_INPUT_FIELDS,
     FX_STATE_CONVERTED,
@@ -164,7 +168,12 @@ def lock_claim_for_mutation(db: Session, claim: Claim) -> Claim:
 
 
 def lock_claim_utilization_bucket(db: Session, claim: Claim) -> None:
-    """Serialize approvals drawing on the same employee benefit bucket."""
+    """Serialize approvals drawing on the same employee benefit bucket.
+
+    Keyed on the PRODUCT, not the benefit row: the approve guard also reads the
+    product roll-up, which every row of that product draws on, so two approvals
+    on different rows must not both read the same remaining roll-up.
+    """
     if claim.claim_kind == CLAIM_KIND_FLEX:
         from app.services.flex_submission import lock_flex_wallet
 
@@ -179,7 +188,6 @@ def lock_claim_utilization_bucket(db: Session, claim: Claim) -> None:
             claim.employee_id,
             claim.claim_kind,
             claim.product_code or "",
-            claim.benefit_key or claim.flex_category_name or "",
         )
     )
     db.execute(
@@ -1419,8 +1427,16 @@ def validate_claim_facts(
         )
     else:
         # Whose referral letter a claim points at is a fact about the claim,
-        # not the form: a LOG case must not name another member's letter.
+        # not the form: a LOG case must not name another member's letter —
+        # nor another person's visit as the one it follows.
         assert_referral_owned(db, employee, claim.referral_document_id)
+        assert_anchor_owned(
+            db,
+            employee,
+            anchor_id=claim.related_claim_id,
+            dependant_id=claim.dependant_id,
+            exclude_claim_id=claim.id,
+        )
     # **Re-asking "is this member covered for this?" is ADMITTING the claim, and
     # an amendment that does not touch what the claim draws on is not
     # re-admitting it.**
@@ -1849,12 +1865,20 @@ def apply_claim_amendment(
     if claim.currency:
         claim.currency = claim.currency.upper()
     claim.doctor_name = (claim.doctor_name or "").strip() or None
-    if not supports_stay_dates(
+    touches_stay = bool(columns & {"admission_date", "discharge_date"}) or any(
+        before[name] != getattr(claim, name)
+        for name in ("claim_kind", "product_code", "sub_type")
+        if name in columns
+    )
+    if touches_stay and not supports_stay_dates(
         claim.product_code, claim.sub_type, claim_kind=claim.claim_kind
     ):
         # A broker can repoint a claim to another subtype. Stay dates belong to
         # the hospital-stay scope only and must not silently reappear if the
-        # claim is changed back later.
+        # claim is changed back later. Only when THIS amendment moved the scope
+        # (or wrote the dates): an assessor may record a stay on any inpatient
+        # claim through `/assessment`, and correcting an unrelated figure must
+        # not erase it.
         claim.admission_date = None
         claim.discharge_date = None
 

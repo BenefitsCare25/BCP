@@ -351,9 +351,12 @@ def create_app() -> FastAPI:
     # gates on the HTTP METHOD, so leaving them in the loop above 403s every
     # `broker_viewer` out of the Member Listing and Dependants tables (and out
     # of the bulk picker's headcount, which has always been POST). Registered
-    # here instead; every endpoint on both routers is read-only, and each still
-    # authenticates + tenant-checks through `load_policy_year`.
-    for read_router in (member_query.router, dependant_query.router):
+    # here instead (with the product-setup headcount preview); every endpoint on
+    # these routers is read-only, and each still authenticates + tenant-checks
+    # through `load_policy_year`.
+    for read_router in (
+        member_query.router, dependant_query.router, product_setups.read_router,
+    ):
         app.include_router(read_router, prefix=api_prefix)
 
     # Employee portal — a SEPARATE auth surface. Deliberately registered

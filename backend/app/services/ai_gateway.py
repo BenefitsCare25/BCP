@@ -15,7 +15,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from functools import lru_cache
-from typing import Any
+from typing import Any, Literal
 
 from anthropic import (
     APIConnectionError,
@@ -24,8 +24,8 @@ from anthropic import (
     PermissionDeniedError,
     RateLimitError,
 )
-from sqlalchemy import and_, func, select
-from sqlalchemy.orm import Session
+from sqlalchemy import TextClause, and_, event, func, select, text
+from sqlalchemy.orm import ORMExecuteState, Session, SessionTransaction
 
 from app.core.ai_config import AIConfig, load_ai_config
 from app.models import AISpendLog, Client, PlatformAIUsage
@@ -263,20 +263,11 @@ def _current_year_month() -> str:
     return datetime.now(tz=UTC).strftime("%Y-%m")
 
 
-def record_platform_usage(db: Session, tokens: int) -> None:
-    """Add ``tokens`` to the shared cross-firm counter for the current month.
-
-    A single dialect-aware UPSERT (atomic per statement — no flush/rollback
-    dance inside ``_record_spend``). Writes to the ``public`` control table from
-    whatever firm session made the call, so the total spans every firm. Called
-    only for non-cache spend; ``tokens <= 0`` is a no-op.
-    """
-    if tokens <= 0:
-        return
+def _platform_usage_upsert(db: Session, tokens: int) -> Any:
+    """The dialect-aware UPSERT adding ``tokens`` to this month's shared counter."""
     table = PlatformAIUsage.__table__
-    dialect = db.get_bind().dialect.name
     stmt: Any
-    if dialect == "postgresql":
+    if db.get_bind().dialect.name == "postgresql":
         from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 
         stmt = postgresql_insert(PlatformAIUsage).values(
@@ -288,11 +279,24 @@ def record_platform_usage(db: Session, tokens: int) -> None:
         stmt = sqlite_insert(PlatformAIUsage).values(
             year_month=_current_year_month(), total_tokens=tokens
         )
-    stmt = stmt.on_conflict_do_update(
+    return stmt.on_conflict_do_update(
         index_elements=["year_month"],
         set_={"total_tokens": table.c.total_tokens + tokens},
     )
-    if dialect != "postgresql":
+
+
+def record_platform_usage(db: Session, tokens: int) -> None:
+    """Add ``tokens`` to the shared cross-firm counter for the current month.
+
+    A single dialect-aware UPSERT (atomic per statement — no flush/rollback
+    dance inside ``_record_spend``). Writes to the ``public`` control table from
+    whatever firm session made the call, so the total spans every firm. Called
+    only for non-cache spend; ``tokens <= 0`` is a no-op.
+    """
+    if tokens <= 0:
+        return
+    stmt = _platform_usage_upsert(db, tokens)
+    if db.get_bind().dialect.name != "postgresql":
         # SQLite (dev/tests) has no row-level locking and one writer anyway;
         # opening a second connection here would just deadlock against the
         # caller's open write transaction.
@@ -330,18 +334,33 @@ def platform_month_to_date_tokens(db: Session) -> int:
     return int(row.total_tokens) if row else 0
 
 
-def _effective_tenant_budget(client: Client | None, default_budget: int) -> int:
-    """A tenant's cap: its explicit budget, else the fleet-wide default.
+BudgetSource = Literal["company", "platform_default", "none"]
+
+
+def tenant_budget_in_force(
+    client: Client | None, default_budget: int
+) -> tuple[int, BudgetSource]:
+    """A tenant's cap and where it comes from: its explicit budget, else the
+    fleet-wide default, else ``(0, "none")`` — no cap.
 
     ``ai_monthly_token_budget`` of 0 historically meant "unlimited". With a
     shared key that's a liability, so a fleet default (from the platform AI
     settings) applies to any tenant that hasn't set its own. An explicit
-    per-tenant budget always wins.
+    per-tenant budget always wins. The AI usage surfaces report this rather
+    than the raw column, so what they show is what ``_check_budget`` enforces.
     """
     explicit = client.ai_monthly_token_budget if client else 0
     if explicit and explicit > 0:
-        return explicit
-    return default_budget
+        return explicit, "company"
+    if default_budget > 0:
+        return default_budget, "platform_default"
+    return 0, "none"
+
+
+def client_budget_in_force(db: Session, client: Client | None) -> tuple[int, BudgetSource]:
+    """``tenant_budget_in_force`` against the platform default in force now."""
+    default_budget = resolve_platform_ai_limits(db).default_monthly_token_budget
+    return tenant_budget_in_force(client, default_budget)
 
 
 def _maybe_budget_alert(scope: str, used: int, cap: int) -> None:
@@ -380,13 +399,19 @@ def _check_budget(db: Session, client_id: str, limits: PlatformAILimits) -> None
     For a hard cap, an atomic ``UPDATE ... WHERE tokens >= N`` would be needed.
     """
     client = db.get(Client, client_id)
-    budget = _effective_tenant_budget(client, limits.default_monthly_token_budget)
+    budget, source = tenant_budget_in_force(client, limits.default_monthly_token_budget)
     if budget > 0:
         mtd = month_to_date_tokens(db, client_id)
         if mtd >= budget:
+            which = (
+                "the platform's default per-company budget"
+                if source == "platform_default"
+                else "this company's budget"
+            )
             raise AIBudgetExceededError(
-                f"Client AI budget reached ({mtd} / {budget} tokens this month). "
-                "Increase the budget in Schema settings or wait until next month."
+                f"Client AI budget reached ({mtd} / {budget} tokens this month, "
+                f"{which}). Raise the company's limit under Settings → AI Settings "
+                "→ AI usage, or wait until next month."
             )
         _maybe_budget_alert(f"client {client_id}", mtd, budget)
 
@@ -446,8 +471,9 @@ def _record_spend(
     cache_hit: bool,
 ) -> None:
     cost = _estimate_cost_usd(model, input_tokens, output_tokens) if not cache_hit else 0.0
-    db.add(
-        AISpendLog(
+
+    def make_row() -> AISpendLog:
+        return AISpendLog(
             client_id=client_id,
             policy_year_id=policy_year_id,
             operation=operation,
@@ -459,11 +485,56 @@ def _record_spend(
             cost_estimate_usd=cost,
             cache_hit=cache_hit,
         )
-    )
+
+    tokens = input_tokens + output_tokens
+    if not cache_hit and _persist_live_spend(db, client_id, make_row, tokens):
+        return
+    db.add(make_row())
     # Feed the shared cross-firm counter (public) so the platform cap sees spend
     # from every firm, not just the one whose schema this session is bound to.
     if not cache_hit:
-        record_platform_usage(db, input_tokens + output_tokens)
+        record_platform_usage(db, tokens)
+
+
+def _persist_live_spend(
+    db: Session, client_id: str, make_row: Callable[[], AISpendLog], tokens: int
+) -> bool:
+    """Commit a live call's spend row and platform tokens in their OWN transaction.
+
+    The provider is paid the moment it answers, so the record must not ride the
+    caller's transaction: the review pipeline rolls back when a checkpoint finds
+    its lease lost or its deadline passed, and a spend row pending there vanished
+    from the company's spend log, its budget and the AI-usage tile — while the
+    cached result meant a retry never recorded it again.
+
+    Postgres only. Returns False — the caller then keeps the row on its own
+    session, as before — on SQLite (a second writer would wait on the caller's
+    own open transaction) or when the separate write fails. ``lock_timeout``
+    bounds the one way it could wait on its caller: the row's foreign keys need
+    a key-share lock on the client and policy-year rows.
+    """
+    if db.get_bind().dialect.name != "postgresql":
+        return False
+    from app.core.storage import company_firm_id
+    from app.db.session import SessionLocal
+    from app.db.tenancy import set_search_path
+
+    with SessionLocal() as spend_db:
+        try:
+            set_search_path(spend_db, company_firm_id(db, client_id))
+            spend_db.execute(text("SET LOCAL lock_timeout = '2s'"))
+            spend_db.add(make_row())
+            spend_db.execute(_platform_usage_upsert(spend_db, tokens))
+            spend_db.commit()
+            return True
+        except Exception:
+            spend_db.rollback()
+            logger.exception(
+                "Could not record AI spend separately for client %s; "
+                "keeping it on the caller's transaction",
+                client_id,
+            )
+            return False
 
 
 _concurrency_state: dict[str, Any] = {"limit": None, "sem": None}
@@ -509,6 +580,67 @@ def _per_process_limit(limit: int) -> int:
     return max(1, limit // _worker_count())
 
 
+# ``Session.info`` flag: the session's current transaction has written (a flush,
+# or DML executed directly) or taken a lock (``FOR UPDATE``, an advisory lock),
+# so ending it early would lose work. ``db.new/dirty/deleted`` alone cannot tell:
+# rows already flushed have left them. Cleared when the outermost transaction ends.
+_TRANSACTION_PINNED = "inspro_ai_transaction_pinned"
+_ROUTING_STATEMENT = "SET LOCAL SEARCH_PATH"
+
+
+def _pins_transaction(state: ORMExecuteState) -> bool:
+    if state.is_insert or state.is_update or state.is_delete:
+        return True
+    statement = state.statement
+    if isinstance(statement, TextClause):
+        # Textual SQL on a session is advisory locking, or tenant routing, which
+        # `db.tenancy` re-applies at the start of every transaction anyway.
+        return not statement.text.lstrip().upper().startswith(_ROUTING_STATEMENT)
+    return getattr(statement, "_for_update_arg", None) is not None
+
+
+@event.listens_for(Session, "do_orm_execute")
+def _note_pinning_statement(state: ORMExecuteState) -> None:
+    if _pins_transaction(state):
+        state.session.info[_TRANSACTION_PINNED] = True
+
+
+@event.listens_for(Session, "after_flush")
+def _note_flush(session: Session, _flush_context: Any) -> None:
+    session.info[_TRANSACTION_PINNED] = True
+
+
+@event.listens_for(Session, "after_transaction_end")
+def _forget_pin(session: Session, transaction: SessionTransaction) -> None:
+    if transaction.parent is None:
+        session.info.pop(_TRANSACTION_PINNED, None)
+
+
+def _release_idle_connection(db: Session | None) -> None:
+    """Return the caller's pooled connection before a slow provider call.
+
+    The config, limit and budget reads just before the call leave a transaction
+    open, and an idle one held for a whole extraction (up to minutes) is what
+    exhausts a 3+2 pool. A transaction holding only reads is COMMITTED, not
+    rolled back: nothing is lost, loaded objects stay unexpired
+    (``expire_on_commit=False``) and no rollback listener fires. One holding
+    writes, flushed rows, locks or a savepoint keeps its connection — ending it
+    would discard the work (a placement slip's flushed row) or drop a lock the
+    caller still relies on.
+    """
+    if (
+        db is None
+        or not db.in_transaction()
+        or db.in_nested_transaction()
+        or db.new
+        or db.dirty
+        or db.deleted
+        or db.info.get(_TRANSACTION_PINNED)
+    ):
+        return
+    db.commit()
+
+
 @contextlib.contextmanager
 def _slot(limit: int, db: Session | None = None) -> Any:
     """Bound concurrent LIVE provider calls, in-process.
@@ -522,13 +654,12 @@ def _slot(limit: int, db: Session | None = None) -> Any:
     in-flight holders drain against the old one, which is fine for a soft
     concurrency guard.
 
-    Before blocking, release the caller's pooled DB connection when the session
-    has nothing pending — the budget check just read from it, and holding it
-    idle across the wait is what exhausts the pool. When the session IS dirty
-    (the review pipeline accumulates writes and commits once at the end) the
-    connection cannot be released without discarding that work, so the bounded
-    wait is the only protection there.
+    Before the call — limited or not — the caller's pooled DB connection is
+    released where that is lossless (`_release_idle_connection`). A session
+    holding uncommitted work keeps it, so the bounded wait is the only
+    protection there.
     """
+    _release_idle_connection(db)
     limit = _per_process_limit(limit)
     if limit <= 0:
         yield
@@ -538,10 +669,6 @@ def _slot(limit: int, db: Session | None = None) -> Any:
             _concurrency_state["limit"] = limit
             _concurrency_state["sem"] = threading.BoundedSemaphore(limit)
         sem = _concurrency_state["sem"]
-
-    if db is not None and not (db.new or db.dirty or db.deleted):
-        # Clean session: returning the connection now is lossless.
-        db.rollback()
 
     if not sem.acquire(timeout=_AI_SLOT_WAIT_SECONDS):
         raise AICapacityError(

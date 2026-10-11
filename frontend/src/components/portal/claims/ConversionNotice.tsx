@@ -1,4 +1,4 @@
-import { usePortalTranslation } from "@/i18n/portal";
+import { getPortalLocale, usePortalTranslation } from "@/i18n/portal";
 /** What a foreign bill is worth in the policy currency, and the member saying
  * they accept it.
  *
@@ -39,7 +39,7 @@ interface Props {
 }
 
 function money(code: string, value: number): string {
-  return `${code} ${value.toLocaleString(undefined, {
+  return `${code} ${value.toLocaleString(getPortalLocale(), {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   })}`;

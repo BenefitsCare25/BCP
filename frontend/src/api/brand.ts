@@ -9,6 +9,7 @@ import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tansta
 import { useSession } from "@/stores/session";
 import { ConflictDetailError, errorCode, errorStatus, formatError } from "@/lib/errors";
 import { api } from "./client";
+import { type ArtworkState, useArtworkObjectUrl } from "./panelCards";
 import { forgetPublicSites, parseBrand, type PublicBrand } from "./public";
 
 export type BrandAssetSlot = "logo" | "mark" | "favicon";
@@ -198,6 +199,21 @@ export function useDeleteCompanyBrand(clientId: string) {
     },
     meta: { localErrorHandling: true },
   });
+}
+
+const PUBLIC_IMAGE_PREFIX = "/api/v1/public/brand-assets/";
+const downloadBrandImage = (path: string) => api.download(path);
+
+/** A brand image (its public URL) for the console's previews. The public URL
+ *  answers only on the firm's own hosts and the master admin works on the
+ *  platform's, so the image is read through the firm brand API instead. */
+export function useBrandImagePreview(url: string | null): ArtworkState {
+  const id = url?.startsWith(PUBLIC_IMAGE_PREFIX) ? url.slice(PUBLIC_IMAGE_PREFIX.length) : null;
+  const stored = useArtworkObjectUrl(
+    downloadBrandImage,
+    id ? `/firm/brand/images/${encodeURIComponent(id)}` : null,
+  );
+  return id || !url ? stored : { url, status: "ready" };
 }
 
 /** `scope`: "firm", or the client id of a company override. */

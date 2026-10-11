@@ -53,6 +53,10 @@ from app.services.coverage_resolver import (
     load_overrides,
     resolve_plan,
 )
+from app.services.dependant_coverage import (
+    category_dependant_mode,
+    has_member_cover_eligibility_answer,
+)
 from app.services.matching_engine import category_insured_entities
 from app.services.plan_hydration import resolve_basis_amount
 from app.services.product_insurer import insurer_map
@@ -752,6 +756,39 @@ def _accumulate_basis(
     acc["count"] += 1
 
 
+def _covered_household(
+    data: _FormData,
+    product: Product | None,
+    category: Category | None,
+    has_dependants: bool,
+    household: list[Dependant],
+    override: EmployeePlanOverride | None,
+) -> list[Dependant]:
+    """The dependants insured on one member's cover line.
+
+    The rule ``category_member_counts`` and ``coverage_limits`` apply: an
+    override's elected subset when it names one, else the whole active
+    household only when the category's dependant cover is compulsory. Voluntary
+    dependant cover insures nobody the member has not elected.
+    """
+    if override is not None and override.covered_dependant_ids is not None:
+        chosen = set(override.covered_dependant_ids)
+        return [d for d in household if d.id in chosen]
+    code = (product.code if product else "").strip().upper()
+    mode = category_dependant_mode(
+        has_dependants,
+        category.plan_assignments if category else None,
+        _category_detail(category),
+        category.display_name if category else None,
+        category.raw_description if category else None,
+        legacy_product_default=(
+            has_dependants
+            and not has_member_cover_eligibility_answer(data.setups.get(code))
+        ),
+    )
+    return household if mode == "compulsory" else []
+
+
 def _aggregate(
     data: _FormData, ref: date
 ) -> tuple[dict[str, SectionContext], dict[tuple[str, str], dict[str, Any]], set[str]]:
@@ -907,10 +944,10 @@ def _aggregate(
                 )
                 cid = employee_category.id if employee_category else cid
 
-            covered_deps = deps if sec.has_dependants else []
-            if override and override.covered_dependant_ids is not None:
-                ids = set(override.covered_dependant_ids)
-                covered_deps = [d for d in deps if d.id in ids]
+            covered_deps = _covered_household(
+                data, employee_product, employee_category, sec.has_dependants,
+                deps, override,
+            )
 
             employee_plan = data.plans.get((product_id, resolved.plan_code or ""))
             plan_name = _plan_label(employee_plan, resolved.plan_code)
@@ -1231,6 +1268,7 @@ def build_context(db: Session, policy_year: PolicyYear) -> FactFindContext:
     if not company_name and client:
         company_name = client.name
     other_products = _other_product_contexts(data)
+    matrix_products = _matrix_product_contexts(data)
 
     completeness = _completeness(sections, data.employees)
     if other_products:
@@ -1239,6 +1277,9 @@ def build_context(db: Session, policy_year: PolicyYear) -> FactFindContext:
             f"{labels}: listed under Other products in General Information; "
             "the standard Fact-Find template has no dedicated product page(s)."
         )
+    completeness.extend(
+        _mixed_participation_notes([*matrix_products.values(), *other_products])
+    )
 
     company_address = _common_setup_value(data, "header", "address")
     return FactFindContext(
@@ -1253,8 +1294,32 @@ def build_context(db: Session, policy_year: PolicyYear) -> FactFindContext:
         sections=sections,
         other_products=other_products,
         completeness=completeness,
-        matrix_products=_matrix_product_contexts(data),
+        matrix_products=matrix_products,
     )
+
+
+def _mixed_participation_notes(products: list[OtherProductContext]) -> list[str]:
+    """Flag products whose categories disagree on participation. The matrix
+    ticks both Compulsory and Voluntary for them, so the form has to say
+    which cohort is which."""
+    notes: list[str] = []
+    for product in products:
+        lives = [
+            label
+            for label, mode in (
+                ("employees", product.employee_participation),
+                ("dependants", product.dependant_participation),
+            )
+            if mode == "mixed"
+        ]
+        if lives:
+            notes.append(
+                f"{product.code}: participation for {' and '.join(lives)} is "
+                "compulsory in some categories and voluntary in others — both "
+                "boxes are ticked in General Information; state which category "
+                "is which."
+            )
+    return notes
 
 
 # How many "Plan" rows each section's member-composition tables expose in the

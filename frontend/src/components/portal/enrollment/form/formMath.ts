@@ -116,7 +116,10 @@ export function tierPrice(
   if (!contribution) return null;
   const tier = contribution.tiers.find((t) => t.tier_key === tierKey);
   if (!tier) return null;
-  const held = ts.tiers.find((t) => t.is_current) ?? ts.tiers.find((t) => t.is_baseline);
+  // Voluntary cover the member holds nothing of has no plan to compare with.
+  const held = ts.eligible_only
+    ? undefined
+    : ts.tiers.find((t) => t.is_current) ?? ts.tiers.find((t) => t.is_baseline);
   const asIf = { ...ps, tierKey, declined: false };
   const roles = coveredOn(ts, asIf, dependants)
     .map((d) => d.role)

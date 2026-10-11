@@ -1,11 +1,28 @@
-"""Employee-scope and bulk-confirm category predicates."""
+"""Employee-scope, bulk-confirm and card-placeholder category predicates."""
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from app.models import Category
 from app.models.category import CategoryStatus
+
+# Categories added from the cards have no slip wording: their name is the cohort
+# wording that grouping, overlaps, profile reuse and AI suggest key on.
+CARD_SOURCE_REF = "category_card"
+# The cards name a new category "New employee category" (then " 2", " 3" within
+# a product) until the broker renames it. That placeholder describes no cohort.
+_PLACEHOLDER_CARD_NAME_RE = re.compile(r"new employee category(?: \d+)?", re.IGNORECASE)
+
+
+def is_placeholder_card_category(category: Category) -> bool:
+    """A card category still named by its placeholder: its wording must never
+    key a reusable mapping shared across products and policy years."""
+
+    return category.source_ref == CARD_SOURCE_REF and bool(
+        _PLACEHOLDER_CARD_NAME_RE.fullmatch((category.raw_description or "").strip())
+    )
 
 
 def is_employee_scope(plan_assignments: Any) -> bool:

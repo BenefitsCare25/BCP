@@ -356,7 +356,9 @@ def parse_employee_workbook(
             continue
         records.append(
             EmployeeRecord(
-                staff_id=str(staff_id).strip(),
+                # An identifier, like `_CODE_KEYS`: xlrd reads numeric .xls
+                # cells as floats, which would store staff id 1001 as "1001.0".
+                staff_id=_normalize_code(staff_id),
                 employee_name=_normalize_name(attrs.get("employee_name")),
                 attributes=attrs,
                 row=offset + 2,  # header is row 1
@@ -404,15 +406,16 @@ def parse_dependant_workbook(path: Path | str) -> list[DependantRecord]:
             continue
         # Persist employee-identifying info in attribute_values so the auto-match
         # endpoint can re-run linking without re-uploading the roster.
-        if staff_id:
-            attrs["employee_staff_id"] = str(staff_id).strip()
+        sponsor_staff_id = _normalize_code(staff_id) if staff_id else None
+        if sponsor_staff_id is not None:
+            attrs["employee_staff_id"] = sponsor_staff_id
         if employee_name:
             attrs["employee_name"] = employee_name
         if employee_id_no:
             attrs["employee_id_no"] = str(employee_id_no).strip()
         records.append(
             DependantRecord(
-                employee_staff_id=str(staff_id).strip() if staff_id else None,
+                employee_staff_id=sponsor_staff_id,
                 employee_name=employee_name,
                 employee_id_no=str(employee_id_no).strip() if employee_id_no else None,
                 attributes=attrs,

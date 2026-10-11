@@ -30,20 +30,29 @@ export const NOT_COVERED = "Not covered";
 const uid = () => crypto.randomUUID();
 
 // Per-plan value vector used to group plans into columns: only the genuinely
-// per-plan-varying fields (item value, sub-item values, properties).
-// Structural fields (number/name/note/limits) are shared, so they're excluded.
+// per-plan-varying fields (item value, sub-item values, properties, limits).
+// Structural fields (number/name/note) are shared, so they're excluded.
 //
 // `properties` participates for EVERY kind, not just copay: the dental axis
 // (Panel/Non-Panel) lives there too, so two plans that differ only in their
 // panel limits must stay separate columns instead of collapsing into one.
+// Limits participate because a column keeps only its representative's limits
+// (`column_limits`); a plan folded into it would inherit them.
+// Mirror of sob_columns._plan_vector.
 function planVector(items: BenefitItemAnswer[]): string {
   return JSON.stringify(
     items.map((b) => [
       b.value ?? "",
       (b.sub_items ?? []).map((s) => s.value ?? ""),
       varyingProps(b),
+      limitKey(b.limits),
     ]),
   );
+}
+
+// Comparable form of a row's limits list (mirrors sob_columns._limit_pairs).
+function limitKey(limits: BenefitLimit[] | undefined): string {
+  return JSON.stringify((limits ?? []).map((l) => [l.label.trim(), (l.value ?? "").trim()]));
 }
 
 /**
@@ -264,8 +273,6 @@ export function buildSobFromPlans(plans: PlanAnswer[]): SobSchedule | null {
 
     // A plan whose own limits differ from the base column's keeps them
     // (mirrors sob_columns.sob_from_plan_items' `column_limits`).
-    const limitKey = (limits: BenefitLimit[] | undefined) =>
-      JSON.stringify((limits ?? []).map((l) => [l.label.trim(), (l.value ?? "").trim()]));
     const baseLimits = limitKey(base.limits);
     const columnLimits: Record<string, BenefitLimit[]> = {};
     columns.forEach((col, ci) => {

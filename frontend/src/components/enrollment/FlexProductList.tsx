@@ -28,6 +28,7 @@ import { cn } from "@/lib/cn";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { PriceTagInput } from "@/components/enrollment/PriceTagInput";
 import {
   type FlexPricingEditor,
   UnifiedDependantEnrollment,
@@ -96,6 +97,13 @@ function effectiveFor(
   tier: FlexPricingTier,
 ): number | null {
   return overrideFor(pricing, product, tier) ?? tier.slip_premium;
+}
+
+/** The product's GST gross-up when one applies, else null. The price book edits
+ *  GST-exclusive amounts; every tag the product draws is charged × this. */
+function gstMultiplier(product: FlexPricingProduct): number | null {
+  const m = product.gst_multiplier ?? 1;
+  return m > 0 && m !== 1 ? m : null;
 }
 
 function statsFor(
@@ -363,18 +371,11 @@ export function CategoryPriceTable({
                       </a>
                     ) : (
                       <div className="flex items-center gap-1">
-                        <Input
-                          type="number"
-                          min="0"
-                          step="0.01"
-                          value={effective ?? ""}
+                        <PriceTagInput
+                          value={effective}
                           disabled={!editable}
-                          onChange={(event) =>
-                            editor.setPlanPrice(
-                              product.product_id,
-                              [tier.key],
-                              event.target.value,
-                            )
+                          onValueChange={(value) =>
+                            editor.setPlanPrice(product.product_id, [tier.key], value)
                           }
                           aria-label={`${product.product_code} ${cohort.label} ${tier.label} price tag`}
                           className="h-8 w-24 tabular-nums"
@@ -420,6 +421,7 @@ function UnifiedCategoryPriceTable({
   rulesEditable: boolean;
 }) {
   const cohorts = cohortsFor(product);
+  const gst = gstMultiplier(product);
   return (
     <div
       className="overflow-x-auto border-t border-border"
@@ -513,7 +515,9 @@ function UnifiedCategoryPriceTable({
                       </div>
                     ) : (
                       <div className="space-y-1">
-                        <span className="block text-2xs font-medium text-muted-foreground">Fixed</span>
+                        <span className="block text-2xs font-medium text-muted-foreground">
+                          {gst ? "Fixed · before GST" : "Fixed"}
+                        </span>
                         <div className="flex items-center gap-1">
                           <span className={cn(
                             "w-[4.75rem] text-right text-xs tabular-nums",
@@ -522,18 +526,11 @@ function UnifiedCategoryPriceTable({
                             {tier.slip_premium == null ? "Missing" : fmtMoney(tier.slip_premium)}
                           </span>
                           <span className="text-xs text-muted-foreground" aria-hidden="true">→</span>
-                          <Input
-                            type="number"
-                            min="0"
-                            step="0.01"
-                            value={effective ?? ""}
+                          <PriceTagInput
+                            value={effective}
                             disabled={!editable}
-                            onChange={(event) =>
-                              editor.setPlanPrice(
-                                product.product_id,
-                                [tier.key],
-                                event.target.value,
-                              )
+                            onValueChange={(value) =>
+                              editor.setPlanPrice(product.product_id, [tier.key], value)
                             }
                             aria-label={`${product.product_code} ${cohort.label} ${tier.label} price tag`}
                             className="h-8 w-24 tabular-nums"
@@ -553,6 +550,11 @@ function UnifiedCategoryPriceTable({
                             </Button>
                           )}
                         </div>
+                        {gst && effective != null && (
+                          <span className="block text-2xs tabular-nums text-muted-foreground">
+                            Draws {fmtMoney(Math.round(effective * gst * 100) / 100)} with GST
+                          </span>
+                        )}
                       </div>
                     )}
                   </td>
@@ -651,6 +653,7 @@ export function FlexProductList({
             const stats = statsFor(pricing, product);
             const isOpen = !!openEditor[product.product_id];
             const ageTiers = ageBandedTiersFor(product);
+            const gst = gstMultiplier(product);
             return (
               <section
                 key={product.product_id}
@@ -677,6 +680,12 @@ export function FlexProductList({
                         {product.line}
                       </Badge>
                       <ProductStatus stats={stats} />
+                      {gst && (
+                        <span className="text-xs text-muted-foreground">
+                          Amounts before GST · members are charged +
+                          {Math.round((gst - 1) * 10000) / 100}%
+                        </span>
+                      )}
                     </div>
                   </div>
                 </button>

@@ -452,6 +452,20 @@ export interface AIStatus {
   breaker_state: "closed" | "open" | "half_open";
   month_to_date_tokens?: number;
   monthly_token_budget?: number;
+  effective_monthly_token_budget?: number;
+  budget_source?: AIBudgetSource;
+}
+
+/** Where the enforced monthly token budget comes from: the company's own
+ *  limit, the platform's default per-company budget, or none (no cap). */
+export type AIBudgetSource = "company" | "platform_default" | "none";
+
+export interface AIBudgetInForce {
+  /** The company's own limit; 0 = none set (the platform default applies). */
+  monthly_token_budget: number;
+  /** What the AI gateway enforces; 0 = no cap. */
+  effective_monthly_token_budget: number;
+  budget_source: AIBudgetSource;
 }
 
 export function useAIStatus() {
@@ -463,12 +477,11 @@ export function useAIStatus() {
   });
 }
 
-export interface AISpendSummary {
+export interface AISpendSummary extends AIBudgetInForce {
   month_to_date_tokens: number;
   month_to_date_input_tokens: number;
   month_to_date_output_tokens: number;
   month_to_date_cost_usd: number;
-  monthly_token_budget: number;
   by_operation: {
     operation: string;
     calls: number;
@@ -502,7 +515,7 @@ export function useSetAIBudget() {
   const cid = useActiveClientId();
   return useMutation({
     mutationFn: (monthly_token_budget: number) =>
-      api.put<{ monthly_token_budget: number }>("/ai-spend/budget", {
+      api.put<AIBudgetInForce>("/ai-spend/budget", {
         monthly_token_budget,
       }),
     onSuccess: () => {
@@ -569,8 +582,11 @@ export function useSetPlatformAISettings() {
     mutationFn: (payload: PlatformAILimits) =>
       api.put<PlatformAISettings>("/platform-ai-settings", payload),
     onSuccess: () => {
+      // The default per-company budget is the budget in force for every
+      // company without its own, so both usage surfaces refresh.
       qc.invalidateQueries({ queryKey: ["platform-ai-settings"] });
       qc.invalidateQueries({ queryKey: ["ai-spend", "summary"] });
+      qc.invalidateQueries({ queryKey: ["system", "ai-status"] });
     },
   });
 }
@@ -610,8 +626,10 @@ export function useTestPlatformAICredentials() {
         payload ?? null,
       ),
     onSuccess: () => {
-      // Testing the stored key updates last_validated_at; refresh.
+      // Testing the stored key updates last_validated_at and, in production,
+      // is what activates it — so whether AI is configured can change too.
       qc.invalidateQueries({ queryKey: ["platform-ai-settings"] });
+      qc.invalidateQueries({ queryKey: ["system", "ai-status"] });
     },
   });
 }
@@ -655,11 +673,17 @@ export function useBulkDeleteEmployees() {
         `/employees?policy_year_id=${policyYearId}&confirm=${confirm}`,
       ),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["employees"] });
-      qc.invalidateQueries({ queryKey: ["match-results"] });
-      qc.invalidateQueries({ queryKey: ["flex-membership"] });
-      qc.invalidateQueries({ queryKey: ["flex-coverage"] });
-      qc.invalidateQueries({ queryKey: ["audit-log"] });
+      // The wipe also unlinks every dependant (sponsor FK set null) and
+      // disables portal accounts left with no employee, so their views go
+      // stale too.
+      for (const key of [
+        "employees", "employee", "match-results", "coverage-summary",
+        "benefit-statement", "dependants", "member-accounts", "portal-rollout",
+        "enrollment-readiness", "enrollment-readiness-employees",
+        "flex-membership", "flex-coverage", "audit-log",
+      ]) {
+        qc.invalidateQueries({ queryKey: [key] });
+      }
     },
     // The caller handles the enrollment_data_at_risk 409 itself (a confirm-and
     // -retry dialog), so it also owns every other error toast for this action.
@@ -732,8 +756,16 @@ export function useUploadSlip() {
       qc.invalidateQueries({ queryKey: ["setup-products"] });
       qc.invalidateQueries({ queryKey: ["plans"] });
       qc.invalidateQueries({ queryKey: ["placement-slips"] });
+      // The upload also autofills term windows / FCL-NEL and can create
+      // variant products, like a setup confirm.
+      qc.invalidateQueries({ queryKey: ["product-terms"] });
+      qc.invalidateQueries({ queryKey: ["underwriting"] });
+      qc.invalidateQueries({ queryKey: ["schemas", "products"] });
       // Re-upload can auto-rematch employees server-side (`rematched`).
       qc.invalidateQueries({ queryKey: ["match-results"] });
+      qc.invalidateQueries({ queryKey: ["employees"] });
+      qc.invalidateQueries({ queryKey: ["flex-membership"] });
+      qc.invalidateQueries({ queryKey: ["benefit-statement"] });
       qc.invalidateQueries({ queryKey: ["audit-log"] });
     },
   });
@@ -952,6 +984,33 @@ export function useRemoveProduct(policyYearId: string) {
       qc.invalidateQueries({ queryKey: ["product-setups"] });
       qc.invalidateQueries({ queryKey: ["categories"] });
       qc.invalidateQueries({ queryKey: ["product-terms"] });
+      // The removal deletes the product's plans and re-runs matching, and its
+      // coverage period no longer widens the year's envelope.
+      for (const key of [
+        "plans", "eligibility-mappings", "employees", "employee",
+        "match-results", "coverage-summary", "benefit-statement", "policy-years",
+      ]) {
+        qc.invalidateQueries({ queryKey: [key] });
+      }
+      qc.invalidateQueries({ queryKey: ["audit-log"] });
+    },
+  });
+}
+
+/** Add a client product that another benefit year already uses to this year's
+ *  tab. Its catalog row exists, so a fresh (empty) setup draft is what places
+ *  it here; the form starts from the product's template. */
+export function useAddProductToYear(policyYearId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (code: string) =>
+      api.put<ProductSetup>(
+        `/policy-years/${policyYearId}/product-setups/${encodeURIComponent(code)}`,
+        { answers: {} },
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["product-setups", policyYearId] });
+      qc.invalidateQueries({ queryKey: ["setup-products"] });
       qc.invalidateQueries({ queryKey: ["audit-log"] });
     },
   });
@@ -1139,8 +1198,8 @@ export function useCreateClient() {
   const qc = useQueryClient();
   return useMutation({
     // broker_firm_id is system_admin-only and optional: the backend falls back
-    // to the sole firm when the platform has exactly one, and rejects an
-    // unqualified create only when there are several to choose between.
+    // to the selected company's firm, then to the sole firm, as it does for
+    // the admin lists, which send none.
     mutationFn: (body: {
       name: string;
       broker_firm_id?: string;
@@ -1259,6 +1318,21 @@ export function useRevokeInvitation() {
   });
 }
 
+/** `POST /admin/users/{id}/reset-sign-in` (firm owners): removes a staff
+ *  account's password and authenticator, signs it out and returns it to
+ *  `invited` with a fresh single-use invitation link, shown once. */
+export function useResetUserSignIn() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) =>
+      api.post<CreatedInvitation>(`/admin/users/${id}/reset-sign-in`, {}),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["admin", "invitations"] });
+      qc.invalidateQueries({ queryKey: ["admin", "users"] });
+    },
+  });
+}
+
 export function useAIConfig(enabled = true) {
   // Scoped by the active client: BYOK config is per-tenant, and a user with
   // access to multiple clients switches between them via the client header.
@@ -1305,8 +1379,11 @@ export function useTestAIConfig() {
     mutationFn: (payload: AIConfigTestPayload | undefined) =>
       api.post<AIConfigTestResult>("/ai-config/test", payload ?? null),
     onSuccess: () => {
-      // Test against the stored config updates last_validated_at; refresh.
+      // Test against the stored config updates last_validated_at and, in
+      // production, activates it; every test also logs a spend row.
       qc.invalidateQueries({ queryKey: ["ai-config"] });
+      qc.invalidateQueries({ queryKey: ["system", "ai-status"] });
+      qc.invalidateQueries({ queryKey: ["ai-spend", "summary"] });
     },
   });
 }
@@ -1463,7 +1540,7 @@ export function useSetupTemplate(
     queryKey: ["setup-template", policyYearId, code, cid],
     queryFn: () =>
       api.get<ProductTemplate>(
-        `/policy-years/${policyYearId}/setup-products/${code}/template`,
+        `/policy-years/${policyYearId}/setup-products/${encodeURIComponent(code ?? "")}/template`,
       ),
     enabled: Boolean(policyYearId && code),
   });
@@ -1577,7 +1654,7 @@ export function useFieldSuggestions(
     queryKey: ["field-suggestions", policyYearId, code, cid],
     queryFn: () =>
       api.get<FieldSuggestions>(
-        `/policy-years/${policyYearId}/product-setups/${code}/field-suggestions`,
+        `/policy-years/${policyYearId}/product-setups/${encodeURIComponent(code ?? "")}/field-suggestions`,
       ),
     enabled: Boolean(policyYearId && code),
   });
@@ -1629,6 +1706,8 @@ interface SetupMutationArgs {
   answers: SetupAnswers;
   templateVersion: number;
   expectedUpdatedAt?: string | null;
+  /** Confirm past the 409 `orphaned_benefit_keys` warning. */
+  acknowledge?: boolean;
 }
 
 export interface PolicyYearDeletionImpact {
@@ -1695,7 +1774,7 @@ export function useSaveSetup(policyYearId: string) {
   return useMutation({
     mutationFn: ({ code, answers, templateVersion, expectedUpdatedAt }: SetupMutationArgs) =>
       api.put<ProductSetup>(
-        `/policy-years/${policyYearId}/product-setups/${code}`,
+        `/policy-years/${policyYearId}/product-setups/${encodeURIComponent(code)}`,
         {
           answers,
           template_version: templateVersion,
@@ -1715,7 +1794,7 @@ export function useDiscardSetup(policyYearId: string) {
   return useMutation({
     mutationFn: (code: string) =>
       api.delete<void>(
-        `/policy-years/${policyYearId}/product-setups/${code}`,
+        `/policy-years/${policyYearId}/product-setups/${encodeURIComponent(code)}`,
       ),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["product-setups", policyYearId] });
@@ -1727,13 +1806,20 @@ export function useDiscardSetup(policyYearId: string) {
 export function useConfirmSetup(policyYearId: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ code, answers, templateVersion, expectedUpdatedAt }: SetupMutationArgs) =>
+    mutationFn: ({
+      code,
+      answers,
+      templateVersion,
+      expectedUpdatedAt,
+      acknowledge = false,
+    }: SetupMutationArgs) =>
       api.post<ConfirmSetupResult>(
-        `/policy-years/${policyYearId}/product-setups/${code}/confirm`,
+        `/policy-years/${policyYearId}/product-setups/${encodeURIComponent(code)}/confirm`,
         {
           answers,
           template_version: templateVersion,
           expected_updated_at: expectedUpdatedAt,
+          acknowledge,
         },
       ),
     onSuccess: () => {
@@ -1747,6 +1833,12 @@ export function useConfirmSetup(policyYearId: string) {
       qc.invalidateQueries({ queryKey: ["categories"] });
       qc.invalidateQueries({ queryKey: ["employees"] });
       qc.invalidateQueries({ queryKey: ["match-results"] });
+      // It also proposes eligibility mappings and, on the first confirm,
+      // creates the client's catalog row (setup-products' product_id).
+      qc.invalidateQueries({ queryKey: ["eligibility-mappings"] });
+      qc.invalidateQueries({ queryKey: ["setup-products"] });
+      qc.invalidateQueries({ queryKey: ["setup-template"] });
+      qc.invalidateQueries({ queryKey: ["schemas", "products"] });
       qc.invalidateQueries({ queryKey: ["audit-log"] });
     },
     meta: { localErrorHandling: true },
@@ -1827,6 +1919,15 @@ export function useSaveFlexScheme(policyYearId: string) {
   });
 }
 
+/** Everything that renders a persisted flex wallet. The statement and the
+ *  utilization refetch together: `FlexPanel` draws one ledger from both. */
+function invalidateWallets(qc: ReturnType<typeof useQueryClient>) {
+  qc.invalidateQueries({ queryKey: ["benefit-statement"] });
+  qc.invalidateQueries({ queryKey: ["employee-utilization"] });
+  qc.invalidateQueries({ queryKey: ["enrollment-options"] });
+  qc.invalidateQueries({ queryKey: ["employees"] });
+}
+
 export function useConfirmFlexScheme(policyYearId: string) {
   const qc = useQueryClient();
   return useMutation({
@@ -1842,8 +1943,7 @@ export function useConfirmFlexScheme(policyYearId: string) {
       qc.invalidateQueries({ queryKey: ["flex-coverage", policyYearId] });
       qc.invalidateQueries({ queryKey: ["flex-roster-vocab", policyYearId] });
       // Confirm assigns wallets onto employees → benefit statements change.
-      qc.invalidateQueries({ queryKey: ["benefit-statement"] });
-      qc.invalidateQueries({ queryKey: ["employees"] });
+      invalidateWallets(qc);
       qc.invalidateQueries({ queryKey: ["audit-log"] });
     },
   });
@@ -1862,8 +1962,7 @@ export function useAssignFlex(policyYearId: string) {
       qc.invalidateQueries({ queryKey: ["flex-membership", policyYearId] });
       qc.invalidateQueries({ queryKey: ["flex-coverage", policyYearId] });
       qc.invalidateQueries({ queryKey: ["flex-roster-vocab", policyYearId] });
-      qc.invalidateQueries({ queryKey: ["benefit-statement"] });
-      qc.invalidateQueries({ queryKey: ["employees"] });
+      invalidateWallets(qc);
       qc.invalidateQueries({ queryKey: ["audit-log"] });
     },
   });
@@ -1878,6 +1977,8 @@ export function useDiscardFlexScheme(policyYearId: string) {
       qc.invalidateQueries({ queryKey: ["flex-scheme", policyYearId] });
       qc.invalidateQueries({ queryKey: ["flex-membership", policyYearId] });
       qc.invalidateQueries({ queryKey: ["flex-coverage", policyYearId] });
+      // Discarding clears every wallet the scheme sized.
+      invalidateWallets(qc);
       qc.invalidateQueries({ queryKey: ["audit-log"] });
     },
   });

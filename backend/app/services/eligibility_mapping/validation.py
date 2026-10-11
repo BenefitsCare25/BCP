@@ -334,8 +334,13 @@ def validate_ai_matching_rule(
     catalog: AttributeValueCatalog,
     *,
     location_exclusions: dict[str, list[Any]] | None = None,
+    broker_authored: bool = False,
 ) -> RuleValidation:
-    """Apply structural/company validation plus AI-specific semantic guards."""
+    """Apply structural/company validation plus AI-specific semantic guards.
+
+    ``broker_authored`` marks a rule a broker chose: covering all employees is
+    then their decision, so narrower wording only warns instead of blocking.
+    """
 
     source_values = _source_allowed_values(description, catalog)
     validation = validate_matching_rule(
@@ -350,10 +355,16 @@ def validate_ai_matching_rule(
             f"Explicit employee range exceeds {_MAX_SET_VALUES} values: {clause}"
         )
     universal = re.sub(r"\s*\(\s*(?:incl\.?|including)\s+[^)]*\)\s*$", "", text, flags=re.I)
+    warnings = list(validation.warnings)
     if rule == {"and": []} and not (
         _ALL_EMPLOYEES_RE.fullmatch(universal) or _ALL_OTHER_RE.fullmatch(universal)
     ):
-        errors.append("AI may use an all-employees rule only when the eligibility wording says so")
+        if broker_authored:
+            warnings.append("Covers all employees, although the eligibility wording is narrower")
+        else:
+            errors.append(
+                "AI may use an all-employees rule only when the eligibility wording says so"
+            )
     if has_explicit_grade_clause(text) and not source_values:
         errors.append("Could not map explicit employee codes to a company employee field")
     if source_values:
@@ -403,7 +414,7 @@ def validate_ai_matching_rule(
     return RuleValidation(
         valid=not errors,
         errors=list(dict.fromkeys(errors)),
-        warnings=validation.warnings,
+        warnings=warnings,
         referenced_attributes=validation.referenced_attributes,
     )
 

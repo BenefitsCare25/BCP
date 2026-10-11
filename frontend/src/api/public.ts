@@ -170,11 +170,16 @@ function parseSite(raw: unknown): PublicSite {
   };
 }
 
+/** Set once this page has changed a brand. The endpoint may be cached by the
+ *  browser for a minute, so later reads then go to the server instead. */
+let bypassHttpCache = false;
+
 async function fetchPublicSite(company: string): Promise<PublicSite> {
   const query = company ? `?company=${encodeURIComponent(company)}` : "";
   const response = await fetch(`${API_BASE}/public/site${query}`, {
     credentials: "same-origin",
     headers: { Accept: "application/json" },
+    cache: bypassHttpCache ? "no-cache" : "default",
   });
   if (!response.ok) {
     throw new ApiError(
@@ -229,9 +234,11 @@ export function usePublicSite(company?: string | null) {
   });
 }
 
-/** Make the next read fetch again, so it sees a saved brand change. The last
- *  successful read stays available (`loadedPublicSite`) until it is replaced:
- *  staff sign-in reads it synchronously. */
+/** Make the next read fetch again, from the server rather than the browser's
+ *  cache, so it sees a saved brand change. The last successful read stays
+ *  available (`loadedPublicSite`) until it is replaced: staff sign-in reads it
+ *  synchronously. */
 export function forgetPublicSites(): void {
+  bypassHttpCache = true;
   pending.clear();
 }

@@ -224,11 +224,15 @@ def claims_utilization(
     member: CurrentMember = Depends(get_current_member),
     db: Session = Depends(get_db),
 ) -> UtilizationOut:
-    """The selected claim period's balances; general portal benefits stay current."""
-    from app.services.utilization import build_utilization
+    """The selected claim period's balances; general portal benefits stay current.
+
+    Through the member filter like `/portal/utilization`: no GTL, and no
+    bucket for a plan still awaiting review, whose limits are unconfirmed.
+    """
+    from app.services.utilization import build_member_utilization
 
     employee = resolve_member_employee(db, member, requires=Capability.RECORD)
-    return build_utilization(db, employee)
+    return build_member_utilization(db, employee)
 
 
 @options_router.get("/claim-periods")
@@ -665,7 +669,7 @@ async def extract_claim_intake(
         coverage_opts,
         employee,
         year,
-        doc_types=configured_definitions(db, employee.client_id),
+        doc_types=configured_definitions(db, employee.client_id, coverage_opts),
     )
     from app.services.intake_feedback import remember_intake
 

@@ -22,6 +22,7 @@ import {
 import { formatError, isFirmOriginUnavailable, sendErrorMessage } from "@/lib/errors";
 import { useSession } from "@/stores/session";
 import { useMe } from "@/api/hooks";
+import { isReadOnlyAccess } from "@/lib/roles";
 import { AlertDialog } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import {
@@ -73,7 +74,7 @@ export function PortalRolloutCard({ policyYearId: suppliedYear, readOnly = false
   const selectedYear = useSession((s) => s.currentPolicyYearId);
   const policyYearId = suppliedYear ?? selectedYear;
   const { data: me } = useMe();
-  const cannotSend = readOnly || !me || me.role === "broker_viewer";
+  const cannotSend = readOnly || !me || isReadOnlyAccess(me.role, me.platform_access);
   const { data: rollout, isLoading, isError, error, refetch } = usePortalRollout(policyYearId);
   const bulkInvite = useBulkInviteMembers();
   const [confirm, setConfirm] = useState(false);

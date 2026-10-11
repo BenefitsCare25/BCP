@@ -29,11 +29,13 @@ import { History, Loader2, Play, Search, TriangleAlert } from "lucide-react";
 import { toast } from "sonner";
 import { useSession } from "@/stores/session";
 import { useMe, usePlans, useProducts } from "@/api/hooks";
+import { isFirmOwnerRole, isReadOnlyAccess } from "@/lib/roles";
 import { useMemberFacets } from "@/api/memberQuery";
 import {
   type BulkBatchDetail,
   type BulkRequest,
   type BulkResult,
+  type BulkWarningBucket,
   useApplyBulk,
   useBulkHistory,
   usePreviewBulk,
@@ -92,6 +94,50 @@ const ROWS_PER_PAGE = 100;
 export function EnrollmentBulkPage() {
   const policyYearId = useSession((s) => s.currentPolicyYearId) ?? undefined;
   const { data: me } = useMe();
+
+  if (!policyYearId) {
+    return (
+      <p className="text-sm text-muted-foreground">
+        Select a benefit year to change coverage in bulk.
+      </p>
+    );
+  }
+
+  // Everything on this page is a POST — the live headcount and the dry-run as
+  // much as the apply — and `require_write_access` 403s every POST for a
+  // `broker_viewer`. Rendering the form anyway would fire a failing request per
+  // keystroke into the notification centre and offer buttons that can only
+  // fail. Same reasoning as the claim message thread.
+  if (isReadOnlyAccess(me?.role, me?.platform_access)) {
+    return (
+      <p className="text-sm text-muted-foreground">
+        Changing coverage in bulk needs write access — your access is read-only.
+        Member Coverage shows each member&apos;s current plan.
+      </p>
+    );
+  }
+
+  // Keyed by year: the selection, preview, acknowledgements and attempt id all
+  // belong to ONE company's benefit year. Switching year — or company, which
+  // switches year — must not leave the last one's preview and an armed Apply
+  // button standing against the new one.
+  return (
+    <BulkCoverageEditor
+      key={policyYearId}
+      policyYearId={policyYearId}
+      isFirmOwner={isFirmOwnerRole(me?.role)}
+    />
+  );
+}
+
+function BulkCoverageEditor({
+  policyYearId,
+  isFirmOwner,
+}: {
+  policyYearId: string;
+  /** Revert to cohort default and Undo are firm-owner resets (AGENTS.md). */
+  isFirmOwner: boolean;
+}) {
   const { data: plans } = usePlans(policyYearId);
   const { data: products } = useProducts();
   const { data: facets, isLoading: facetsLoading } = useMemberFacets(policyYearId);
@@ -176,28 +222,6 @@ export function EnrollmentBulkPage() {
   const scopeCode = changes[0]?.productCode || undefined;
   const scopeFacet = facets?.products.find((p) => p.code === scopeCode);
 
-  if (!policyYearId) {
-    return (
-      <p className="text-sm text-muted-foreground">
-        Select a benefit year to change coverage in bulk.
-      </p>
-    );
-  }
-
-  // Everything on this page is a POST — the live headcount and the dry-run as
-  // much as the apply — and `require_write_access` 403s every POST for a
-  // `broker_viewer`. Rendering the form anyway would fire a failing request per
-  // keystroke into the notification centre and offer buttons that can only
-  // fail. Same reasoning as the claim message thread.
-  if (me?.role === "broker_viewer") {
-    return (
-      <p className="text-sm text-muted-foreground">
-        Changing coverage in bulk needs write access — your role is read-only.
-        Member Coverage shows each member&apos;s current plan.
-      </p>
-    );
-  }
-
   /** Any input change invalidates the preview it produced — and the warnings
    *  that were accepted against it, which described a different population. */
   function resetResult() {
@@ -229,19 +253,31 @@ export function EnrollmentBulkPage() {
    * the broker has already checked, and the digest is taken before exclusions
    * are subtracted, so the guard still holds. Clearing here would make removing
    * three people from a 400-member preview cost a full re-run each time.
+   *
+   * An exclusion removes the MEMBER from every product in the set, so the count
+   * moves by all of their changing rows (the server lists a member's rows
+   * together), not just the one clicked. The request body changes too, so the
+   * attempt id is re-minted: reusing it after an apply that committed would be
+   * refused as `request_id_reused` on every retry.
    */
-  function toggleExclude(employeeId: string, include: boolean, changing: boolean) {
+  function toggleExclude(employeeId: string, include: boolean) {
     setSelector((prev) => ({
       ...prev,
       excludedIds: include
         ? prev.excludedIds.filter((x) => x !== employeeId)
         : [...prev.excludedIds, employeeId],
     }));
-    if (changing) setUntickedChanging((n) => Math.max(0, n + (include ? -1 : 1)));
+    const changing = (result?.rows ?? []).filter(
+      (r) => r.employee_id === employeeId && r.outcome === "would_apply",
+    ).length;
+    if (changing) {
+      setUntickedChanging((n) => Math.max(0, n + (include ? -changing : changing)));
+    }
+    setAttemptId(crypto.randomUUID());
   }
 
   function buildRequest(extra?: Partial<BulkRequest>): BulkRequest | null {
-    const problem = changeSetError(changes);
+    const problem = changeSetError(changes, isFirmOwner);
     if (problem) {
       toast.error(problem);
       return null;
@@ -319,7 +355,34 @@ export function EnrollmentBulkPage() {
             return;
           }
           if (e.detail.code === "unacknowledged_warnings") {
+            // Some warning inputs sit outside the selection digest (a window
+            // opening, an enrolment confirming), so apply can raise a bucket
+            // the preview never showed. Merge them in so they can be ticked;
+            // otherwise Apply stays enabled and repeats this 409.
+            const raised = Array.isArray(e.detail.warnings)
+              ? (e.detail.warnings as BulkWarningBucket[])
+              : [];
+            setResult((prev) =>
+              prev
+                ? {
+                    ...prev,
+                    warnings: [
+                      ...prev.warnings.filter(
+                        (w) => !raised.some((r) => r.code === w.code),
+                      ),
+                      ...raised,
+                    ],
+                  }
+                : prev,
+            );
             toast.error("Confirm each warning below before applying.");
+            return;
+          }
+          if (e.detail.code === "request_id_reused") {
+            // The id already belongs to a different, applied change set. A new
+            // preview mints a fresh one.
+            resetResult();
+            toast.error(formatError(e));
             return;
           }
         }
@@ -405,6 +468,7 @@ export function EnrollmentBulkPage() {
             drafts={changes}
             products={productOptions}
             disabled={apply.isPending}
+            canRevert={isFirmOwner}
             onChange={updateChanges}
           />
         </div>
@@ -609,11 +673,7 @@ export function EnrollmentBulkPage() {
                                 // a shorter id list — the rule survives, and the
                                 // apply request stays the same size at 4 members
                                 // or 4,000.
-                                toggleExclude(
-                                  r.employee_id as string,
-                                  e.target.checked,
-                                  r.outcome === "would_apply",
-                                )
+                                toggleExclude(r.employee_id as string, e.target.checked)
                               }
                             />
                           )}
@@ -679,7 +739,10 @@ export function EnrollmentBulkPage() {
           (acknowledged.length
             ? ` You have accepted ${acknowledged.length} warning${acknowledged.length === 1 ? "" : "s"}, which is recorded on the change.`
             : "") +
-          " Every change in this batch can be undone from Past changes."
+          // Undo is a firm-owner reset; other roles must not be promised it.
+          (isFirmOwner
+            ? " Every change in this batch can be undone from Past changes."
+            : " Only a firm administrator can undo this batch from Past changes.")
         }
         confirmLabel="Apply"
         confirmVariant="default"

@@ -69,6 +69,22 @@ def _clear_flex(emp: Employee) -> None:
     emp.flex_assigned_at = None
 
 
+def clear_flex_assignments(db: Session, policy_year_id: str) -> None:
+    """Null every persisted wallet in the year. Caller owns the commit.
+
+    For when the scheme the wallets were sized from is discarded: with no
+    confirmed scheme assignment never runs again, so they would otherwise
+    outlive it on the wallet ledger and the utilisation reports.
+    """
+    for emp in db.execute(
+        select(Employee).where(
+            Employee.policy_year_id == policy_year_id,
+            Employee.flex_assigned_at.is_not(None),
+        )
+    ).scalars():
+        _clear_flex(emp)
+
+
 def _apply(emp: Employee, fx: EmployeeFlex, now: datetime) -> None:
     emp.flex_family_status = fx.family_status
     emp.flex_tier_name = fx.tier_name
@@ -215,5 +231,6 @@ __all__ = [
     "assign_and_audit",
     "assign_flex_membership",
     "assign_flex_safe",
+    "clear_flex_assignments",
     "confirmed_flex_scheme",
 ]

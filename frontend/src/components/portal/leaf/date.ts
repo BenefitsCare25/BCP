@@ -10,6 +10,7 @@
  * one day early. A claim's incurred date deciding it happened yesterday is the
  * kind of bug nobody reports and everybody distrusts.
  */
+import { singaporeTodayISO } from "@/lib/business-date";
 import { fmtDay, parseServerDate } from "@/lib/format";
 import { getPortalLocale, portalText } from "@/i18n/portal";
 
@@ -42,6 +43,17 @@ export function formatDay(iso: string | null | undefined): string {
   const [year, month, day] = key.split("-").map(Number);
   return new Intl.DateTimeFormat("zh-SG", { year: "numeric", month: "long", day: "numeric", timeZone: "UTC" })
     .format(new Date(Date.UTC(year, month - 1, day)));
+}
+
+/** A server TIMESTAMP (a deadline, a send or sign time) as its calendar day in
+ * Singapore, the business zone. `formatDay` reads the date part of the UTC
+ * string, which names the previous day for anything stamped 00:00–08:00 SGT;
+ * keep `formatDay` for values that are calendar dates already. */
+export function formatMomentDay(iso: string | null | undefined): string {
+  if (!iso) return formatDay(iso);
+  const when = parseServerDate(iso);
+  if (Number.isNaN(when.getTime())) return formatDay(iso);
+  return formatDay(singaporeTodayISO(when));
 }
 
 const MONTHS_FULL = [

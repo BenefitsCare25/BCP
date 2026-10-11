@@ -235,7 +235,10 @@ function DisablePanel() {
         setPassword("");
         setOpen(false);
       },
-      onError: () => setError("Password incorrect."),
+      // Only a 401 is about the password. A lockout (423) or a company that
+      // now requires 2FA (403) keeps the server's sentence, or the user keeps
+      // retrying and extends the lockout.
+      onError: (e) => setError(errorStatus(e) === 401 ? "Password incorrect." : formatError(e)),
     });
   };
 

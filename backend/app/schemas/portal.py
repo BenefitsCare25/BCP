@@ -305,3 +305,9 @@ class PortalPreviewOut(BaseModel):
     # which is what "the preview shows exactly what the member sees" means for
     # someone whose cover has ended.
     access: PortalAccessOut | None = None
+    # The company's portal slug, so the preview reads the same brand the
+    # member's portal does (`/public/site?company=`), override included.
+    company_slug: str | None = None
+    # Mirrors PortalMe.company, so the preview's Home names the employer the
+    # way the member's own Home does (registered name first).
+    company: PortalCompanyOut | None = None

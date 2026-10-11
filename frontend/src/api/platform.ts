@@ -11,6 +11,7 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
+import { ConflictDetailError } from "@/lib/errors";
 import { api } from "./client";
 
 export type FirmStatus = "active" | "suspended";
@@ -30,6 +31,10 @@ export interface PlatformFirm {
   client_count: number;
   domain_count: number;
   created_at: string;
+  /** False while the firm waits for the migration job to create its database
+   *  schema. Until then, inviting its staff, starting access and changing its
+   *  sign-in methods answer 409 `firm_not_provisioned`. */
+  provisioned: boolean;
 }
 
 /** A firm's saved email From address and when the platform verified it. */
@@ -105,10 +110,17 @@ const auditKey = ["platform", "audit"] as const;
 
 // ── Firms ────────────────────────────────────────────────────────────────────
 
+/** How often the firm list is re-read while a firm waits for its schema. */
+const PROVISIONING_POLL_MS = 15_000;
+
+/** Polled while any firm is still being provisioned, so the console's
+ *  "waiting for the migration job" state clears by itself once it has run. */
 export function usePlatformFirms(enabled = true) {
   return useQuery({
     queryKey: firmsKey,
-    queryFn: () => api.get<PlatformFirm[]>("/platform/firms"),
+    queryFn: (context) => api.poll<PlatformFirm[]>(context, "/platform/firms"),
+    refetchInterval: (query) =>
+      query.state.data?.some((firm) => !firm.provisioned) ? PROVISIONING_POLL_MS : false,
     enabled,
   });
 }
@@ -267,6 +279,12 @@ export function useVerifyFirmSender(firmId: string) {
   return useMutation({
     mutationFn: (address: string) => api.post<FirmEmailFrom>(senderPath(firmId), { address }),
     onSuccess: (saved) => senderSaved(qc, firmId, saved),
+    // The firm changed its From address since it was read: show the new one.
+    onError: (error) => {
+      if (error instanceof ConflictDetailError && error.detail.code === "sender_address_mismatch") {
+        void qc.invalidateQueries({ queryKey: senderKey(firmId) });
+      }
+    },
     meta: { localErrorHandling: true },
   });
 }
@@ -287,8 +305,8 @@ export function useClearFirmSender(firmId: string) {
 export function useAccessGrants(active: boolean, enabled = true) {
   return useQuery({
     queryKey: [...grantsKey, active ? "active" : "history"],
-    queryFn: () =>
-      api.get<AccessGrant[]>(`/platform/access-grants?active=${active ? "true" : "false"}`),
+    queryFn: (context) =>
+      api.poll<AccessGrant[]>(context, `/platform/access-grants?active=${active ? "true" : "false"}`),
     refetchInterval: active ? 60_000 : false,
     enabled,
   });

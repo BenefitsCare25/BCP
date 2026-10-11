@@ -29,6 +29,7 @@ export function ProductElectionMount({
   currency,
   rise = true,
   compact = false,
+  planChanges = true,
   pricing,
   premiumFor,
   onChange,
@@ -45,6 +46,8 @@ export function ProductElectionMount({
    *  arrival — see `Mount`'s `rise`. */
   rise?: boolean;
   compact?: boolean;
+  /** The period's plan-change switch — see `PlanChoice`. */
+  planChanges?: boolean;
   /** The e-form's figures for the chosen plan — key benefit, sum insured,
    *  premium per family tier and the member's share (`PlanPricing`). */
   pricing?: ReactNode;
@@ -58,11 +61,14 @@ export function ProductElectionMount({
   // `glossBeside`, not `productGloss`: the heading is already the product's own
   // name, and a gloss that only restates it reads as a rendering fault.
   const gloss = glossBeside(label, ts.product_code, ts.product_name);
+  const participation = dependantParticipationFor(ts, ps.tierKey);
+  // Compulsory family cover shows even when dependant changes are off: it is
+  // still covered, and charged to the wallet the balance above reports.
   const showFamily =
-    allowDeps &&
+    (allowDeps || participation === "compulsory") &&
     dependants.length > 0 &&
     !ps.declined &&
-    dependantParticipationFor(ts, ps.tierKey) !== null;
+    participation !== null;
 
   return (
     <Mount
@@ -88,6 +94,7 @@ export function ProductElectionMount({
         flexOnChange={flexOnChange}
         currency={currency}
         compact={compact}
+        planChanges={planChanges}
         premiumFor={premiumFor}
         onChange={onChange}
       />
@@ -98,7 +105,7 @@ export function ProductElectionMount({
           <FamilyChoice
             ts={ts}
             ps={ps}
-            disabled={disabled}
+            disabled={disabled || !allowDeps}
             dependants={dependants}
             currency={currency}
             onChange={onChange}

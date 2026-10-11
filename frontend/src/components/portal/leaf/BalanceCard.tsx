@@ -58,6 +58,7 @@ export function BalanceCard({
   const limit = bucket.limit ?? 0;
   const afterPending = availableAfterPending(bucket.remaining, bucket.pending, bucket.pending_unconverted);
   const left = afterPending ?? bucket.remaining ?? 0;
+  const awaitingFx = bucket.pending_unconverted > 0;
   const name = productCode ? productShortLabel(productCode, productName) : productName ?? "Benefit";
   const usedPct = limit ? Math.round((bucket.approved / limit) * 100) : 0;
   return (
@@ -82,9 +83,18 @@ export function BalanceCard({
             <span className="text-[clamp(30px,4vw,44px)] font-bold leading-none tracking-[-0.04em] text-record">
               {s}{moneyText(left)}
             </span>
-            <span className="text-row font-semibold">{bucket.pending > 0 ? pt("left after claims in review") : pt("left this year")}</span>
+            <span className="text-row font-semibold">
+              {awaitingFx
+                ? pt("confirmed balance before claims in review")
+                : bucket.pending > 0 ? pt("left after claims in review") : pt("left this year")}
+            </span>
           </p>
-          {bucket.pending > 0 && bucket.remaining !== null && (
+          {/* A foreign claim in review with no rate yet makes the after-review
+              figure unknowable: the big figure is the confirmed balance, said
+              as such, never relabelled as what's left after review. */}
+          {awaitingFx ? (
+            <p className="mt-1 text-row text-[var(--tone-ink)]">{pt("After-pending balance awaits currency conversion")}</p>
+          ) : bucket.pending > 0 && bucket.remaining !== null && (
             <p className="mt-1 text-row text-[var(--tone-ink)]">
               {s}{moneyText(bucket.remaining)}  {pt("confirmed balance before claims in review")} </p>
           )}

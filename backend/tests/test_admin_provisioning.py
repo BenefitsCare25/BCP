@@ -589,22 +589,17 @@ def test_a_users_name_can_be_set_and_cleared_after_the_fact(
 
 
 def test_invite_duplicate_email_conflicts(sysadmin: TestClient) -> None:
-    sysadmin.post(
-        "/api/v1/admin/invitations",
-        json={
-            "broker_firm_id": DEMO_BROKER_FIRM_ID,
-            "email": "dup@inspro.test",
-            "role": "broker_viewer",
-        },
-    )
-    res = sysadmin.post(
-        "/api/v1/admin/invitations",
-        json={
-            "broker_firm_id": DEMO_BROKER_FIRM_ID,
-            "email": "dup@inspro.test",
-            "role": "broker_viewer",
-        },
-    )
+    body = {"broker_firm_id": DEMO_BROKER_FIRM_ID, "email": "dup@inspro.test",
+            "role": "broker_viewer"}
+    first = sysadmin.post("/api/v1/admin/invitations", json=body)
+    # An account no one has signed in to yet is reissued a fresh link.
+    reissued = sysadmin.post("/api/v1/admin/invitations", json=body)
+    assert reissued.status_code == 201, reissued.text
+    assert reissued.json()["user_id"] == first.json()["user_id"]
+    with SessionLocal() as s:
+        s.get(User, first.json()["user_id"]).status = "active"
+        s.commit()
+    res = sysadmin.post("/api/v1/admin/invitations", json=body)
     assert res.status_code == 409
 
 
@@ -1072,6 +1067,11 @@ def test_email_is_unique_per_firm(sysadmin: TestClient) -> None:
 
     assert invite(DEMO_BROKER_FIRM_ID).status_code == 201
     assert invite(FIRM2_ID).status_code == 201
+    with SessionLocal() as s:  # signed in, so no longer reissued a link
+        s.query(User).filter(
+            User.email == "shared.person@inspro.test", User.broker_firm_id == DEMO_BROKER_FIRM_ID
+        ).update({"status": "active"})
+        s.commit()
     again = invite(DEMO_BROKER_FIRM_ID)
     assert again.status_code == 409
     assert again.json()["detail"] == "This email already has an account in this firm."
@@ -1232,7 +1232,7 @@ def test_platform_creates_lists_and_updates_firms(master: TestClient) -> None:
     assert firm | {"id": None, "created_at": None} == {
         "id": None, "name": "Harbour Brokers", "slug": "harbour-brokers", "status": "active",
         "is_platform_owner": False, "allow_hide_attribution": False, "client_count": 0,
-        "domain_count": 0, "created_at": None,
+        "domain_count": 0, "created_at": None, "provisioned": True,
     }
     twin = master.post("/api/v1/platform/firms", json={"name": "Harbour Brokers"})
     assert twin.json()["slug"] == "harbour-brokers-2"

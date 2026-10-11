@@ -9,6 +9,7 @@ import {
   useUpdateEntityAlias,
   type EntityAlias,
 } from "@/api/entityAliases";
+import { useMe } from "@/api/hooks";
 import { AlertDialog } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -34,6 +35,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { formatError } from "@/lib/errors";
+import { isReadOnlyAccess } from "@/lib/roles";
 
 interface Draft {
   alias: string;
@@ -52,6 +54,8 @@ export function SchemaEntityAliasesPage({
   onOpenChange: (open: boolean) => void;
 }) {
   const { data: aliases = [], isLoading } = useEntityAliases();
+  const { data: me } = useMe();
+  const readOnly = isReadOnlyAccess(me?.role, me?.platform_access);
   const create = useCreateEntityAlias();
   const update = useUpdateEntityAlias();
   const remove = useDeleteEntityAlias();
@@ -244,25 +248,27 @@ export function SchemaEntityAliasesPage({
                     </TableCell>
                     <TableCell>
                       <div className="flex gap-1 justify-end">
-                        <Button
-                          variant="ghost"
-                          size="icon-sm"
-                          onClick={() => {
-                            setEditing(a);
-                            setDraft({
-                              alias: a.alias,
-                              canonicals:
-                                a.canonicals.length > 0
-                                  ? a.canonicals
-                                  : [a.canonical],
-                            });
-                            setEntityInput("");
-                            onOpenChange(true);
-                          }}
-                          aria-label="Edit alias"
-                        >
-                          <Pencil className="size-3.5" />
-                        </Button>
+                        {!readOnly && (
+                          <Button
+                            variant="ghost"
+                            size="icon-sm"
+                            onClick={() => {
+                              setEditing(a);
+                              setDraft({
+                                alias: a.alias,
+                                canonicals:
+                                  a.canonicals.length > 0
+                                    ? a.canonicals
+                                    : [a.canonical],
+                              });
+                              setEntityInput("");
+                              onOpenChange(true);
+                            }}
+                            aria-label="Edit alias"
+                          >
+                            <Pencil className="size-3.5" />
+                          </Button>
+                        )}
                         <FirmOwnerOnly><Button
                           variant="ghost"
                           size="icon-sm"

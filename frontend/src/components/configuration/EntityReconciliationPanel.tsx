@@ -16,7 +16,7 @@
 import { useState } from "react";
 import { AlertTriangle, Link2, Plus } from "lucide-react";
 import { toast } from "sonner";
-import { useEntityVocab } from "@/api/hooks";
+import { useEntityVocab, useMe } from "@/api/hooks";
 import { useCreateEntityAlias } from "@/api/entityAliases";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -28,6 +28,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { formatError } from "@/lib/errors";
+import { isReadOnlyAccess } from "@/lib/roles";
 
 export function EntityReconciliationPanel({
   policyYearId,
@@ -35,6 +36,8 @@ export function EntityReconciliationPanel({
   policyYearId: string;
 }) {
   const { data } = useEntityVocab(policyYearId);
+  const { data: me } = useMe();
+  const readOnly = isReadOnlyAccess(me?.role, me?.platform_access);
   const createAlias = useCreateEntityAlias();
   const [linking, setLinking] = useState<string | null>(null);
 
@@ -100,15 +103,17 @@ export function EntityReconciliationPanel({
                   )}
                 </div>
                 {e.suggestion ? (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    disabled={linking === e.value}
-                    onClick={() => void link(e.value, e.suggestion!)}
-                  >
-                    <Link2 className="size-3.5" />
-                    {linking === e.value ? "Linking…" : "Same entity"}
-                  </Button>
+                  !readOnly && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={linking === e.value}
+                      onClick={() => void link(e.value, e.suggestion!)}
+                    >
+                      <Link2 className="size-3.5" />
+                      {linking === e.value ? "Linking…" : "Same entity"}
+                    </Button>
+                  )
                 ) : (
                   <span className="text-xs text-muted-foreground">
                     No close roster match — fix the spelling or add an alias

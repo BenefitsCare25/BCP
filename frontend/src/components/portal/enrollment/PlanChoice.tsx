@@ -326,6 +326,7 @@ export function PlanChoice({
   currency,
   premiumFor,
   compact = false,
+  planChanges = true,
   onChange,
 }: {
   ts: ProductTierSet;
@@ -336,21 +337,34 @@ export function PlanChoice({
   /** E-form only: each option's premium, change and member share. */
   premiumFor?: (tierKey: string) => TierPrice | null;
   compact?: boolean;
+  /** The period's own plan-change switch. Taking up voluntary cover the
+   *  member holds nothing of is a plan change, so with it off that cover
+   *  stays not enrolled. */
+  planChanges?: boolean;
   onChange: (next: ProductState) => void;
 }) {
   const pt = usePortalTranslation();
   const groupName = useId();
 
+  // Voluntary cover the member holds nothing of: no tier is theirs today, the
+  // "decline" row is staying not enrolled, and any tier picked enrols them.
+  const notHeld = !!ts.eligible_only;
   const selectedTier = ts.tiers.find((t) => t.key === ps.tierKey) ?? null;
-  // A window that forbids plan changes still allows a decline, so the member's
-  // own tier stays on offer as the alternative to declining — it is just not
-  // swappable for a sibling.
-  const offered = ts.allow_plan_change
-    ? ts.tiers
-    : selectedTier
-      ? [selectedTier]
-      : [];
-  const optionCount = offered.length + (ts.can_decline ? 1 : 0);
+  // A window that forbids plan changes lets the member keep only what they
+  // hold: their own tier (not swappable for a sibling), or the decline they
+  // already have. Declining held cover is a plan change the server refuses, so
+  // the decline row stays only for a member already declined. Cover they hold
+  // nothing of has no own tier to keep, so such a window offers none.
+  const offered =
+    notHeld && !planChanges && ps.declined
+      ? []
+      : ts.allow_plan_change
+        ? ts.tiers
+        : selectedTier
+          ? [selectedTier]
+          : [];
+  const canDecline = ts.can_decline && (planChanges || ps.declined);
+  const optionCount = offered.length + (canDecline ? 1 : 0);
   const editable = !disabled && optionCount > 1;
   const asRows = editable && optionCount <= MAX_CHOICE_ROWS;
 
@@ -369,9 +383,16 @@ export function PlanChoice({
   // payload (or a declined member, where nothing is current) still reads
   // sensibly.
   const heldTier = ts.tiers.find((t) => t.is_current) ?? null;
-  const currentLabel = (heldTier ?? ts.tiers.find((t) => t.is_baseline))?.label ?? null;
+  const currentLabel = notHeld
+    ? null
+    : (heldTier ?? ts.tiers.find((t) => t.is_baseline))?.label ?? null;
   const tierIsCurrent = (t: CohortTier) =>
-    heldTier ? t.key === heldTier.key : t.is_baseline;
+    !notHeld && (heldTier ? t.key === heldTier.key : t.is_baseline);
+  // "What changes" compares a tier with the plan the member holds. With
+  // nothing held there is no such plan, and the server's comparison against
+  // the default tier would be labelled as theirs.
+  const differencesOf = (t: CohortTier) => (notHeld ? [] : (t.differences ?? []));
+  const declineTitle = notHeld ? "Not enrolled" : "I don't want this cover";
 
   if (asRows) {
     return (
@@ -408,23 +429,26 @@ export function PlanChoice({
                   "what changes" block under it would compare it to itself. */}
               <TierDifferences
                 compact={compact}
-                differences={t.differences ?? []}
+                differences={differencesOf(t)}
                 total={t.differences_total ?? 0}
                 currentLabel={currentLabel}
                 electedLabel={t.label}
               />
             </ChoiceRow>
           ))}
-          {ts.can_decline && (
+          {canDecline && (
             <ChoiceRow
               name={groupName}
               value={DECLINE}
               checked={ps.declined}
               onSelect={() => onChange({ ...ps, declined: true })}
-              title={pt("I don't want this cover")}
+              title={pt(declineTitle)}
             >
               <p className="text-row text-label">
-                {pt("You won’t be covered under this plan.")} </p>
+                {notHeld
+                  ? pt("Choose a plan to enrol. You aren’t covered under this plan until you do.")
+                  : pt("You won’t be covered under this plan.")}
+              </p>
             </ChoiceRow>
           )}
         </div>
@@ -456,8 +480,12 @@ export function PlanChoice({
                   )}
                 </option>
               ))}
-              {ts.can_decline && (
-                <option value={DECLINE}>{pt("I don't want this cover")}</option>
+              {canDecline && (
+                <option value={DECLINE}>
+                  {notHeld
+                    ? pt("Not enrolled — choose a plan to enrol")
+                    : pt("I don't want this cover")}
+                </option>
               )}
             </select>
           )}
@@ -473,7 +501,7 @@ export function PlanChoice({
             />
             <TierDifferences
               compact={compact}
-              differences={selectedTier.differences ?? []}
+              differences={differencesOf(selectedTier)}
               total={selectedTier.differences_total ?? 0}
               currentLabel={currentLabel}
               electedLabel={selectedTier.label}
@@ -494,7 +522,9 @@ export function PlanChoice({
     <>
       <dl>
         {ps.declined ? (
-          <MountRow term="Your plan">{pt("You’ve declined this cover")}</MountRow>
+          <MountRow term="Your plan">
+            {notHeld ? pt("Not enrolled") : pt("You’ve declined this cover")}
+          </MountRow>
         ) : selectedTier ? (
           <>
             <MountRow
@@ -535,7 +565,7 @@ export function PlanChoice({
       {!ps.declined && selectedTier && (
         <TierDifferences
           compact={compact}
-          differences={selectedTier.differences ?? []}
+          differences={differencesOf(selectedTier)}
           total={selectedTier.differences_total ?? 0}
           currentLabel={currentLabel}
           electedLabel={selectedTier.label}

@@ -17,13 +17,14 @@ import pytest
 TEST_DB = Path(__file__).parent / "_test_activity_reports.db"
 os.environ["INSPRO_DATABASE_URL"] = f"sqlite:///{TEST_DB}"
 
-from datetime import UTC, date, datetime, timedelta  # noqa: E402
+from datetime import UTC, date, datetime, time, timedelta  # noqa: E402
 from io import BytesIO  # noqa: E402
 
 from fastapi.testclient import TestClient  # noqa: E402
 from openpyxl import load_workbook  # noqa: E402
 
 from app.core.auth import DEMO_BROKER_FIRM_ID, CurrentUser, get_current_user  # noqa: E402
+from app.core.clock import BUSINESS_TZ  # noqa: E402
 from app.db.base import Base  # noqa: E402
 from app.db.session import SessionLocal, engine  # noqa: E402
 from app.main import app  # noqa: E402
@@ -169,9 +170,10 @@ def _setup_db():
                       totp_secret_enc="x", confirmed_at=NOW))
         s.add_all([
             _event(ACC_ACTIVE, NOW - timedelta(days=2)),
-            # Last instant of the range's final day — a `<= end` comparison
-            # against a timestamp column drops this one.
-            _event(ACC_ACTIVE, NOW.replace(hour=23, minute=59)),
+            # Last instant of the range's final (Singapore) day — a `<= end`
+            # comparison against a timestamp column drops this one.
+            _event(ACC_ACTIVE,
+                   datetime.combine(TODAY, time(23, 59), BUSINESS_TZ).astimezone(UTC)),
             # Name lives only on the roster for this one.
             _event(ACC_LEAVER, NOW - timedelta(days=3)),
             # Failed login with no resolved subject: we store only a hash of

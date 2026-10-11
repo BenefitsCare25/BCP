@@ -74,6 +74,15 @@ export function inviteError(error: unknown): { message: string; invalid: boolean
   if (errorCode(error) === "invitation_invalid") {
     return { message: serverSentence(apiError, INVITATION_INVALID), invalid: true, field: false };
   }
+  // Still a live invitation, for an account that signs in with Microsoft:
+  // keep the link so the invitee can choose that option instead.
+  if (errorCode(error) === "invitation_requires_microsoft") {
+    return {
+      message: serverSentence(apiError, "This invitation is accepted by signing in with Microsoft, not with a password."),
+      invalid: false,
+      field: false,
+    };
+  }
   if (apiError.status === 422) {
     return {
       message: serverSentence(apiError, "Choose a stronger password and try again."),

@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { QRCodeSVG } from "qrcode.react";
 import { brokerAccessToken, brokerAuthRequest, refreshBrokerSession } from "@/auth/brokerSession";
+import { takeReturnPath } from "@/auth/returnPath";
 import { clearLocalSession, signOut } from "@/auth/msal";
 import { useBrokerSession, type BrokerSession } from "@/stores/brokerSession";
 import { Button } from "@/components/ui/button";
@@ -59,7 +60,7 @@ export function BrokerSecurityPage() {
         useBrokerSession.getState().set(authenticated);
         if (recovery_codes) setCodes(recovery_codes);
         setSetup(null); setCode("");
-        if (!recovery_codes) await navigate({ to: "/", replace: true });
+        if (!recovery_codes) await navigate({ href: takeReturnPath(), replace: true });
       }
     } catch (error) {
       setError(error instanceof Error ? error.message : "Verification failed. Try again.");
@@ -81,12 +82,12 @@ export function BrokerSecurityPage() {
           <h2 className="font-semibold">Save your recovery codes</h2>
           <p className="text-sm">Each code works once if you lose your authenticator. Store them safely; they won't be shown again.</p>
           <div className="grid grid-cols-1 gap-2 rounded-md bg-muted p-3 font-mono sm:grid-cols-2">{codes.map(value => <span key={value}>{value}</span>)}</div>
-          <Button onClick={() => void navigate({ to: "/", replace: true })}>I've saved them — continue</Button>
+          <Button onClick={() => void navigate({ href: takeReturnPath(), replace: true })}>I've saved them — continue</Button>
         </> : session?.mfa_required === false ? <>
-          <Button onClick={() => void navigate({ to: "/", replace: true })}>Continue to broker platform</Button>
+          <Button onClick={() => void navigate({ href: takeReturnPath(), replace: true })}>Continue to broker platform</Button>
         </> : session?.mfa_verified ? <>
           <p role="status">Two-factor verification is complete.</p>
-          <Button onClick={() => void navigate({ to: "/", replace: true })}>Continue to broker platform</Button>
+          <Button onClick={() => void navigate({ href: takeReturnPath(), replace: true })}>Continue to broker platform</Button>
         </> : status.data && <>
           {status.data.status !== "confirmed" && !setup && <Button disabled={pending} onClick={() => void run("start")}>Set up authenticator</Button>}
           {setup && <div className="space-y-3">

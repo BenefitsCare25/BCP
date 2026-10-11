@@ -69,6 +69,7 @@ export function PortalEnrollmentPage() {
           id: d.id,
           name: dependantName(d),
           relationship: dependantRelationship(d),
+          role: d.role ?? null,
         })),
     [dependants.data],
   );

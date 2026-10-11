@@ -15,7 +15,10 @@ interface Props {
 }
 
 const ALLOWED_EXT = [".pdf", ".png", ".jpg", ".jpeg", ".msg"];
-const MAX_BYTES = 50 * 1024 * 1024; // mirrors backend DEFAULT_MAX_BYTES
+// Mirrors backend DEFAULT_MAX_BYTES, which caps the whole REQUEST — every file
+// selected together travels in one upload.
+const MAX_BYTES = 50 * 1024 * 1024;
+const toMb = (bytes: number) => (bytes / 1024 / 1024).toFixed(1);
 
 function validateFile(file: File): string | null {
   const lower = file.name.toLowerCase();
@@ -24,7 +27,17 @@ function validateFile(file: File): string | null {
   }
   if (file.size === 0) return "File is empty.";
   if (file.size > MAX_BYTES) {
-    return `File is too large (${(file.size / 1024 / 1024).toFixed(1)} MB) — max 50 MB.`;
+    return `File is too large (${toMb(file.size)} MB) — max 50 MB.`;
+  }
+  return null;
+}
+
+function validateFiles(files: File[]): string | null {
+  const fileError = files.map(validateFile).find(Boolean);
+  if (fileError) return fileError;
+  const total = files.reduce((sum, file) => sum + file.size, 0);
+  if (total > MAX_BYTES) {
+    return `These files total ${toMb(total)} MB — max 50 MB per upload. Upload them in smaller batches; each batch merges into the same scheme.`;
   }
   return null;
 }
@@ -38,7 +51,7 @@ export function FlexUploadCard({ policyYearId, compact = false }: Props) {
   const onPick = (picked: FileList | null) => {
     const files = picked ? Array.from(picked) : [];
     if (files.length === 0) return;
-    const err = files.map(validateFile).find(Boolean) ?? null;
+    const err = validateFiles(files);
     setFilename(
       files.length === 1 ? files[0].name : `${files.length} files`,
     );
@@ -88,7 +101,7 @@ export function FlexUploadCard({ policyYearId, compact = false }: Props) {
           size="sm"
           onClick={() => fileInput.current?.click()}
           disabled={upload.isPending}
-          title="Upload Flexible Benefits documents (PDF, image or .msg — max 50 MB each). AI extracts the scheme; select multiple files to merge."
+          title="Upload Flexible Benefits documents (PDF, image or .msg — max 50 MB per upload). AI extracts the scheme; select multiple files to merge."
         >
           <Upload className="size-3.5" />
           {upload.isPending ? "Extracting…" : "Upload documents"}
@@ -112,7 +125,7 @@ export function FlexUploadCard({ policyYearId, compact = false }: Props) {
                   <Sparkles className="size-3" /> AI extraction
                 </Badge>
                 <InfoHint>
-                  PDF, image (PNG/JPG) or Outlook .msg — max 50 MB each. Select
+                  PDF, image (PNG/JPG) or Outlook .msg — max 50 MB per upload. Select
                   multiple files at once (e.g. each grade band + the country
                   tables); AI reads the four parameters from each and merges them
                   into one scheme, then you review before confirming.

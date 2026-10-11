@@ -28,7 +28,7 @@ import type {
   SobSchedule,
   TemplateField,
 } from "@/types";
-import { formatError, isStaleConfigurationError } from "@/lib/errors";
+import { ConflictDetailError, formatError, isStaleConfigurationError } from "@/lib/errors";
 import { insuredNames } from "@/lib/insured";
 import { InsuredPicker } from "./InsuredPicker";
 import { PolicyNumberMappingsEditor } from "./PolicyNumberMappingsEditor";
@@ -42,6 +42,7 @@ import { ScheduleOfBenefitsSection } from "./setup/ScheduleOfBenefitsSection";
 import { ClaimLimitsPanel } from "./setup/limits/ClaimLimitsPanel";
 import { EndorsementsSection } from "./setup/EndorsementsSection";
 import { SetupGapsPanel } from "./setup/SetupGapsPanel";
+import { SavedEntriesProvider, savedSetupEntries } from "./setup/savedEntries";
 import { ProductLimitCheck } from "./setup/ProductLimitCheck";
 import {
   gapCountsBySection,
@@ -337,6 +338,8 @@ export const ProductSetupForm = forwardRef<ProductSetupFormHandle, Props>(functi
     buildAnswers(template, draft),
   );
   const [confirmOpen, setConfirmOpen] = useState(false);
+  // Benefit names existing claims count against that the confirm would drop.
+  const [orphanedKeys, setOrphanedKeys] = useState<string[] | null>(null);
   // Which section tab is open. Local: the form no longer remounts on the first
   // save (parent keys on `code`), so this survives naturally.
   const [activeSection, setActiveSection] = useState<string | null>(
@@ -394,7 +397,13 @@ export const ProductSetupForm = forwardRef<ProductSetupFormHandle, Props>(functi
   // label (the category cards rename it); the draft's `answers.plans[].label` is
   // only a cached copy. Sync it below so Rate / Schedule of Benefits show the
   // current name and a later confirm doesn't write the stale label back.
-  const { data: livePlans } = usePlans(policyYearId, group?.product_id ?? undefined);
+  // Only this product's plans: unscoped, the list holds every product's plans
+  // for the year, whose codes ("1", "2") collide with this product's.
+  const planProductId = group?.product_id ?? draft?.materialized_product_id ?? undefined;
+  const { data: livePlans } = usePlans(
+    planProductId ? policyYearId : undefined,
+    planProductId,
+  );
 
   const selectedPlans = useMemo(
     () => answers.plans.filter((p) => p.selected),
@@ -405,10 +414,12 @@ export const ProductSetupForm = forwardRef<ProductSetupFormHandle, Props>(functi
   // rename propagates everywhere (Rate, SOB) and survives the next confirm.
   useEffect(() => {
     const live = livePlans?.items;
-    if (!live?.length) return;
+    if (!planProductId || !live?.length) return;
     const nameByCode: Record<string, string> = {};
     for (const p of live) {
-      if (p.display_name) nameByCode[String(p.code)] = p.display_name;
+      if (p.display_name && p.product_id === planProductId) {
+        nameByCode[String(p.code)] = p.display_name;
+      }
     }
     const syncNames = (value: SetupAnswers) => {
       let changed = false;
@@ -428,7 +439,7 @@ export const ProductSetupForm = forwardRef<ProductSetupFormHandle, Props>(functi
       );
       return next;
     });
-  }, [livePlans]);
+  }, [livePlans, planProductId]);
 
   // Live "members matched" preview. Debounce the category descriptions so we
   // don't fire a request per keystroke; the result auto-prefills headcounts.
@@ -516,6 +527,9 @@ export const ProductSetupForm = forwardRef<ProductSetupFormHandle, Props>(functi
     setAnswers((a) => ({ ...a, endorsements }));
 
   const isDirty = JSON.stringify(answers) !== savedSnapshot.current;
+  // The stored draft is what the API diffs a save against; only removing one
+  // of its entries is a firm-owner action.
+  const savedEntries = useMemo(() => savedSetupEntries(draft?.answers), [draft?.answers]);
   const dirtySections = useMemo(
     () => setupDirtySections(answers, savedSnapshot.current),
     [answers],
@@ -559,7 +573,7 @@ export const ProductSetupForm = forwardRef<ProductSetupFormHandle, Props>(functi
   const isConfirmed =
     draft?.status === "confirmed" || Boolean(draft?.materialized_product_id);
   const confirmLabel = isConfirmed ? "Update setup" : "Confirm setup";
-  const onConfirm = async () => {
+  const onConfirm = async (acknowledge: boolean) => {
     if (confirmInFlight.current || saveInFlight.current) return;
     confirmInFlight.current = true;
     try {
@@ -568,8 +582,10 @@ export const ProductSetupForm = forwardRef<ProductSetupFormHandle, Props>(functi
         answers: { ...answers, policy_number_mappings: policyMappings },
         templateVersion: template.version,
         expectedUpdatedAt: expectedUpdatedAt.current,
+        acknowledge,
       });
       setConfirmOpen(false);
+      setOrphanedKeys(null);
       savedSnapshot.current = JSON.stringify(answers);
       onDirtyChange?.(false, []);
       const planMsg = `${r.plans_created + r.plans_updated} plan(s)`;
@@ -585,9 +601,17 @@ export const ProductSetupForm = forwardRef<ProductSetupFormHandle, Props>(functi
       );
       onConfirmed?.();
     } catch (error) {
+      const orphaned = orphanedBenefitKeys(error);
+      if (orphaned) {
+        // A confirmable warning, not a failure: ask before stranding claims.
+        setConfirmOpen(false);
+        setOrphanedKeys(orphaned);
+        return;
+      }
       const message = formatError(error);
       if (isStaleConfigurationError(error)) {
         setConfirmOpen(false);
+        setOrphanedKeys(null);
         setConflictMessage(message);
       }
       toast.error(message);
@@ -755,6 +779,7 @@ export const ProductSetupForm = forwardRef<ProductSetupFormHandle, Props>(functi
         onFocusHandled={clearFocusTarget}
         maxSumInsured={String(answers.header.el_max_sum_insured ?? "")}
         onMaxSumInsuredChange={(value) => setHeader("el_max_sum_insured", value)}
+        setupDirty={isDirty}
       />
     ),
     // Schedule of Benefits = what's covered: cover description + cover-term
@@ -877,6 +902,7 @@ export const ProductSetupForm = forwardRef<ProductSetupFormHandle, Props>(functi
   };
 
   return (
+    <SavedEntriesProvider value={savedEntries}>
     <div className="flex flex-col gap-4">
       <fieldset disabled={busy} className="min-w-0 space-y-4">
       <SourceMappingNotes answers={answers} onReview={source_reviewed => setAnswers(a => ({ ...a, source_reviewed }))} />
@@ -1006,7 +1032,7 @@ export const ProductSetupForm = forwardRef<ProductSetupFormHandle, Props>(functi
         confirmVariant="default"
         tone="info"
         loading={busy}
-        onConfirm={onConfirm}
+        onConfirm={() => onConfirm(false)}
         description={
           <span className="flex flex-col gap-3">
           <span>
@@ -1023,9 +1049,42 @@ export const ProductSetupForm = forwardRef<ProductSetupFormHandle, Props>(functi
           </span>
         }
       />
+      <AlertDialog
+        open={orphanedKeys !== null}
+        onOpenChange={(open) => !open && setOrphanedKeys(null)}
+        title="Existing claims use these benefits"
+        confirmLabel={`${confirmLabel} anyway`}
+        confirmVariant="default"
+        loading={busy}
+        onConfirm={() => onConfirm(true)}
+        description={
+          <span className="flex flex-col gap-2">
+            <span>
+              Claims already filed under {template.code} count against benefits
+              this setup no longer lists. Those claims lose their claim limit.
+              Rename the benefits back to keep it, or {confirmLabel.toLowerCase()} anyway.
+            </span>
+            <span className="text-muted-foreground">
+              {orphanedKeys?.slice(0, 8).join(", ")}
+              {(orphanedKeys?.length ?? 0) > 8 ? ` and ${(orphanedKeys?.length ?? 0) - 8} more` : ""}
+            </span>
+          </span>
+        }
+      />
     </div>
+    </SavedEntriesProvider>
   );
 });
+
+/** The benefit names a confirm would strand (409 `orphaned_benefit_keys`),
+ *  or null for any other error. */
+function orphanedBenefitKeys(error: unknown): string[] | null {
+  if (!(error instanceof ConflictDetailError) || error.detail.code !== "orphaned_benefit_keys") {
+    return null;
+  }
+  const keys = error.detail.orphaned_benefit_keys;
+  return Array.isArray(keys) ? keys.map(String) : [];
+}
 
 /** Confirm keeps blank values blank; say which, so it is a decision. */
 function ConfirmGapNote({ gaps }: { gaps: SetupGap[] }) {

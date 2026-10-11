@@ -131,7 +131,7 @@ def _write_product_sheet(
         # the slip's own captured wording stands in.
         default_insured = insured or captured_answers(answers).get("insured", "")
         write_basis_of_cover(ws, categories, ctx, default_insured)
-        write_sections(ws, answers, "basis")
+        write_sections(ws, answers, "basis", quotation=ctx.blank_rates)
         write_rate_section(
             ws, categories, term, ctx, default_insured,
             premium_wording=premium_qualifier(answers),
@@ -143,7 +143,9 @@ def _write_product_sheet(
     # awaiting its schedule has a non-evidence limit and needs the remaining
     # rows as labelled blanks, so it is never gated on plans existing.
     spacer_row(ws)
-    for label, value in merge_terms(term_rows(term, plans), answers):
+    for label, value in merge_terms(
+        term_rows(term, plans), answers, quotation=ctx.blank_rates
+    ):
         ws.append([label, "", value])
         row = style_row(ws)
         ws.cell(row=row, column=1).font = HEADER
@@ -159,7 +161,7 @@ def _write_product_sheet(
             answers=answers,
             quotation=ctx.blank_rates,
         )
-    write_sections(ws, answers, "after_sob")
+    write_sections(ws, answers, "after_sob", quotation=ctx.blank_rates)
     set_compact_product_widths(ws)
 
 

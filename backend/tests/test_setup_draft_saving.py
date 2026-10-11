@@ -161,9 +161,14 @@ def test_only_system_admin_can_remove_saved_policy_assignments(context):
     body = payload(policy_number_mappings=[{"entity": "A", "policy_number": "ONE"}])
     assert client.post(f"{PATH}/confirm", json=body).status_code == 200
     cleared = payload(policy_number_mappings=[])
+    # A stale form is told to reload before it is told what it may not remove.
+    assert client.put(PATH, json=cleared).json()["detail"]["code"] == "stale_configuration"
+    current = client.get(PATH).json()["updated_at"]
+    cleared["expected_updated_at"] = current
     assert client.put(PATH, json=cleared).status_code == 403
     assert client.post(f"{PATH}/confirm", json=cleared).status_code == 403
-    assert client.put(PATH, json=payload(policy_number_mappings=None)).status_code == 403
+    omitted = {**payload(policy_number_mappings=None), "expected_updated_at": current}
+    assert client.put(PATH, json=omitted).status_code == 403
     endpoint = "/api/v1/policy-years/year/product-terms/product"
     assert client.put(endpoint, json={"policy_number_mappings": []}).status_code == 403
     assert term(db).policy_number_mappings == body["answers"]["policy_number_mappings"]

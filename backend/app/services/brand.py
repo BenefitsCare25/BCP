@@ -29,6 +29,8 @@ DEFAULT_ACCENT_COLOR = "#c11a2b"
 DEFAULT_SUPPORT_EMAIL = "helpdesk@inspro.com.sg"
 DEFAULT_EMAIL_SENDER_NAME = "Inspro Benefits Portal"
 DEFAULT_CARD_PREFIX = "INS"
+# Longest short name (the column's width): a product name stands in cut to it.
+SHORT_NAME_MAX = 30
 
 # Plain-value fields a company row may override, in model attribute names.
 _LAYERED = (
@@ -119,10 +121,12 @@ def resolve_brand(db: Session, firm_id: str | None, client_id: str | None = None
             sender = firm_row.email_from_address
     if firm_row is None and company_row is None:
         return DEFAULT_BRAND
-    # A rebranded firm never mails as "Inspro Benefits Portal". (Its support
-    # email is required by the settings API once it sets a product name.)
-    if "email_sender_name" not in values and "product_name" in values:
-        values["email_sender_name"] = values["product_name"]
+    # A rebranded firm never mails as "Inspro Benefits Portal", nor is it
+    # installed as "Inspro". (Its support email is required by the settings API
+    # once it sets a product name.)
+    if "product_name" in values:
+        values.setdefault("email_sender_name", values["product_name"])
+        values.setdefault("short_name", values["product_name"][:SHORT_NAME_MAX].rstrip())
     return Brand(
         **values,
         email_from_address=sender,

@@ -5,6 +5,7 @@ import itertools
 import logging
 import os
 import random
+import secrets
 import signal
 import socket
 import sys
@@ -55,6 +56,7 @@ from app.services.claims import retry_pending_document_deletes
 from app.services.claims_review import metrics as review_metrics
 from app.services.claims_review.pipeline import (
     ReviewDeadlineExceeded,
+    ReviewLeaseExpired,
     ReviewOwnershipLost,
     execute_leased_review,
     review_age_exceeded,
@@ -77,6 +79,7 @@ LOOP_STALE_SECONDS = max(
     HEARTBEAT_SECONDS * 2.5,
 )
 QUEUE_ALERT_SECONDS = int(os.environ.get("INSPRO_REVIEW_QUEUE_ALERT_SECONDS", "120"))
+_LEASE_EXPIRED_DETAIL = "Worker lease expired before the review completed."
 _loop_heartbeat = time.monotonic()
 _notification_heartbeat = time.monotonic()
 _worker_stopping = False
@@ -100,8 +103,13 @@ class JobLease:
     client_id: str
     attempt: int
     stage: str
+    # This lease's own identity: the worker plus a per-lease token. The worker
+    # name alone (`host:pid`) is shared by every thread of the process, so a job
+    # reaped and re-leased by a sibling thread still passed the old thread's
+    # ownership checks and two threads reviewed it at once.
+    lease_owner: str
 
-    def log_context(self, owner: str) -> dict[str, str | int]:
+    def log_context(self) -> dict[str, str | int]:
         return {
             "job_id": self.job_id,
             "review_id": self.review_id,
@@ -110,7 +118,7 @@ class JobLease:
             "client_id": self.client_id,
             "attempt": self.attempt,
             "stage": self.stage,
-            "lease_owner": owner,
+            "lease_owner": self.lease_owner,
         }
 
 
@@ -141,6 +149,8 @@ def _safe_error(exc: BaseException) -> str:
         return "AI provider circuit is open; the review will retry."
     if isinstance(exc, ReviewDeadlineExceeded):
         return "Claim review exceeded its processing deadline."
+    if isinstance(exc, ReviewLeaseExpired):
+        return _LEASE_EXPIRED_DETAIL
     if isinstance(exc, ReviewOwnershipLost):
         return "Claim review no longer owns the current claim revision."
     if isinstance(exc, OperationalError):
@@ -244,7 +254,8 @@ def _claim_next(
             return None
         job.state = JOB_STATE_RUNNING
         job.attempt += 1
-        job.lease_owner = owner
+        # `lease_owner` is String(128): room for the worker name and the token.
+        job.lease_owner = f"{owner[:110]}/{secrets.token_hex(6)}"
         job.heartbeat_at = now
         job.lease_expires_at = now + timedelta(seconds=LEASE_SECONDS)
         # Every lease starts a fresh processing deadline: time spent queued or
@@ -260,6 +271,7 @@ def _claim_next(
             client_id=job.client_id,
             attempt=job.attempt,
             stage=job.stage,
+            lease_owner=job.lease_owner,
         )
 
 
@@ -327,6 +339,8 @@ def _retryable(exc: BaseException) -> bool:
             OperationalError,
             TimeoutError,
             ConnectionError,
+            # Same treatment the reaper gives an expired lease.
+            ReviewLeaseExpired,
         ),
     )
 
@@ -362,12 +376,21 @@ def _terminal_failure(job: ClaimReviewJob, code: str, detail: str) -> None:
         db.commit()
 
 
+def _failure_code(exc: BaseException) -> str:
+    if isinstance(exc, ReviewOwnershipLost):
+        return "review_ownership_lost"
+    if isinstance(exc, ReviewLeaseExpired):
+        return "lease_expired"  # the code the reaper records for the same event
+    return type(exc).__name__
+
+
 def _handle_failure(job_id: str, owner: str, exc: BaseException) -> None:
     now = _now()
-    code = "review_ownership_lost" if isinstance(exc, ReviewOwnershipLost) else type(exc).__name__
+    code = _failure_code(exc)
     detail = _safe_error(exc)
     with SessionLocal() as db:
-        job = db.get(ClaimReviewJob, job_id)
+        # Locked: the reaper may be retiring this same expired lease right now.
+        job = db.get(ClaimReviewJob, job_id, with_for_update=True)
         if job is None or job.lease_owner != owner:
             return
         # Each retry gets its own processing deadline; only the age ceiling
@@ -437,7 +460,7 @@ def reap_expired_jobs() -> int:
                 job.state = JOB_STATE_FAILED
                 job.finished_at = now
             job.last_error_code = "lease_expired"
-            job.last_error_detail = "Worker lease expired before the review completed."
+            job.last_error_detail = _LEASE_EXPIRED_DETAIL
             job.lease_owner = None
             job.lease_expires_at = None
         db.commit()
@@ -630,8 +653,10 @@ def _start_health_server() -> ThreadingHTTPServer:
     return server
 
 
-def _process_lease(lease: JobLease, owner: str) -> None:
-    job_id = lease.job_id
+def _process_lease(lease: JobLease, _worker: str) -> None:
+    """Run one leased job. Every ownership check uses the LEASE's identity, not
+    the worker name the scheduler passes (see `JobLease.lease_owner`)."""
+    job_id, owner = lease.job_id, lease.lease_owner
     heartbeat_stop = threading.Event()
     heartbeat = threading.Thread(
         target=_heartbeat,
@@ -642,13 +667,13 @@ def _process_lease(lease: JobLease, owner: str) -> None:
     heartbeat.start()
     started = time.monotonic()
     try:
-        logger.info("Claim-review job started", extra=lease.log_context(owner))
+        logger.info("Claim-review job started", extra=lease.log_context())
         execute_leased_review(job_id, owner)
         _finish_success(job_id, owner)
         logger.info(
             "Claim-review job succeeded",
             extra={
-                **lease.log_context(owner),
+                **lease.log_context(),
                 "duration_ms": round((time.monotonic() - started) * 1000),
             },
         )
@@ -656,7 +681,7 @@ def _process_lease(lease: JobLease, owner: str) -> None:
     except Exception as exc:
         logger.error(
             "Claim-review job failed",
-            extra={**lease.log_context(owner), "error_code": type(exc).__name__},
+            extra={**lease.log_context(), "error_code": type(exc).__name__},
         )
         _handle_failure(job_id, owner, exc)
         review_metrics.duration(time.monotonic() - started, outcome="failed")

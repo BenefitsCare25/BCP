@@ -237,10 +237,20 @@ export function parseHoursLine(
       break;
     }
     if (!m[3]) {
-      // No meridiem on the start ("9 - 1PM"): take the reading that puts the
-      // start before the end, preferring am.
+      // No meridiem on the start: keep it only when exactly one reading fits
+      // between the previous session and the end. "9 - 1PM" can only be am and
+      // "8AM - 1PM, 2 - 5PM" can only be pm, but "6 - 9PM" fits both, so stop
+      // rather than guess a morning opening for an evening session.
+      const after = ranges.length > 0 ? ranges[ranges.length - 1][1] : 0;
       const asPm = clockToMinutes(m[1], m[2], "pm");
-      if (start >= end && asPm !== null && asPm < end) start = asPm;
+      const fits = [...new Set([start, asPm])].filter(
+        (t): t is number => t !== null && t >= after && t < end,
+      );
+      if (fits.length !== 1) {
+        complete = false;
+        break;
+      }
+      start = fits[0];
     }
     if (start >= end) {
       complete = false;

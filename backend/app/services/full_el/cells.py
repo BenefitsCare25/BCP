@@ -19,7 +19,14 @@ from app.models.employee_listing import ListingAssignment
 from app.services.el_workbook import ElBlock
 from app.services.full_el.context import CategoryInfo, ElContext, ProductInfo
 from app.services.insurer_reports import safe_cell
-from app.services.roster_attributes import mask_nric, roster_date
+from app.services.roster_attributes import (
+    DEPENDANT_ID_KEYS,
+    DOB_KEYS,
+    first_value,
+    mask_nric,
+    roster_date,
+)
+from app.services.roster_dedup import DEP_NAME_KEYS
 from app.services.underwriting import report_uw_amounts
 
 DATE_ROLES = {"date_of_birth", "date_of_hire", "last_day_of_service", "mu_letter_member",
@@ -38,12 +45,12 @@ _EMPLOYEE_ATTRS = {
     "reemployment_start": "reemployment_start", "reemployment_end": "reemployment_end",
 }
 _DEPENDANT_ATTRS = {
-    "name": "dependant_name", "relationship": "relationship", "gender": "gender",
-    "national_id": "dependant_id_no", "nationality": "nationality",
-    "residence": "country_of_residence", "date_of_birth": "date_of_birth",
+    "relationship": "relationship", "gender": "gender", "nationality": "nationality",
+    "residence": "country_of_residence",
 }
 _RECORDED = ("present_si", "mu_status", "mu_decision", "mu_letter_member",
              "mu_letter_insurer", "last_accepted_si", "loading_rate", "acceptance_date")
+FLAT_RATE_BASES = frozenset({"flat", "per_member"})
 
 
 @dataclass(frozen=True)
@@ -173,10 +180,14 @@ def dependant_value(
     attrs = dep.attribute_values or {}
     if role == "age":
         return age_formula(refs.dep_dob, row, refs.reference, ctx.age_basis)
+    # Portal-added dependants store name / dob / id_no; roster imports the
+    # dependant_* spellings.
+    if role == "name":
+        return _plain(first_value(attrs, DEP_NAME_KEYS))
     if role == "date_of_birth":
-        return _date(attrs.get("date_of_birth"))
+        return _date(first_value(attrs, DOB_KEYS))
     if role == "national_id":
-        value = attrs.get("dependant_id_no")
+        value = first_value(attrs, DEPENDANT_ID_KEYS)
         return _plain(mask_nric(value) if masked and value else value)
     attr = _DEPENDANT_ATTRS.get(role)
     return _plain(attrs.get(attr)) if attr else None
@@ -314,8 +325,8 @@ def _premium(
         if dependant is not None:
             return None
         return info.tiers.get(cover.family_group or "EO")
-    if info.rate_basis in {"flat", "per_member"}:
-        if dependant is not None and not info.covers_dependants:
-            return None
-        return info.rate
+    if info.rate_basis in FLAT_RATE_BASES:
+        # A covered dependant is billed at the dependant rate; with none set
+        # the cell stays blank (a setup gap) rather than repeat the employee's.
+        return info.dependant_rate if dependant is not None else info.rate
     return None

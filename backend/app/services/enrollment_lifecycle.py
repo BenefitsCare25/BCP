@@ -28,12 +28,13 @@ from app.models import (
     EmployeePlanOverride,
     Enrollment,
     EnrollmentElection,
+    EnrollmentEvent,
     EnrollmentWindow,
     LeaveElection,
     Plan,
 )
 from app.models.employee_plan_override import OverrideSource
-from app.models.enrollment import EnrollmentStatus
+from app.models.enrollment import ElectionAction, EnrollmentStatus
 from app.models.enrollment_window import DefaultBehavior, WindowStatus
 from app.models.leave_election import LeaveAction, LeaveElectionStatus
 from app.services.coverage_resolver import (
@@ -44,6 +45,10 @@ from app.services.coverage_resolver import (
 )
 from app.services.enrollment_events import record_event
 from app.services.override_writer import upsert_override
+from app.services.voluntary_enrolment import (
+    eligible_only_product_ids,
+    voluntary_product_ids,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -156,23 +161,42 @@ def _defaults_and_baseline(
     return defaults, baseline_cat
 
 
+# The baseline entry of a voluntary product the member is only eligible for:
+# nothing held, so an election of any tier is an ``enroll``.
+NOT_HELD_ENTRY: dict[str, Any] = {
+    "plan_code": None,
+    "tier_category_id": None,
+    "declined": True,
+    "covered_dependant_ids": None,
+    "dependant_option_ids": None,
+    "compulsory": False,
+    "eligible_only": True,
+}
+
+
 def baseline_for(
     db: Session, employee: Employee
 ) -> dict[str, Any]:
     """Snapshot the employee's current effective coverage as the baseline bag.
 
-    Each product entry now includes a ``compulsory`` flag so the enrollment UI
-    can prevent members from declining required coverage.
+    Each product entry includes a ``compulsory`` flag so the enrollment UI can
+    prevent members from declining required coverage, and an ``eligible_only``
+    flag: a voluntary product the member has not taken up is snapshotted as NOT
+    held (declined, no plan), so both enrolment surfaces start it as "not
+    enrolled" and electing any of its tiers records ``enroll``.
     """
     defaults, baseline_cat = _defaults_and_baseline(db, employee)
     overrides = load_overrides(db, employee.policy_year_id, [employee.id])
     compulsory_ids = employee_compulsory_product_ids(db, employee)
+    eligible_only = eligible_only_product_ids(db, employee, overrides=overrides)
     products: dict[str, dict[str, Any]] = {}
     for product_id, (code, default_plan) in defaults.items():
         ov = overrides.get((employee.id, product_id))
         compulsory = product_id in compulsory_ids
         base_tier = baseline_cat.get(product_id)
-        if ov is not None:
+        if product_id in eligible_only:
+            products[code] = dict(NOT_HELD_ENTRY)
+        elif ov is not None:
             products[code] = {
                 "plan_code": None if ov.declined else (ov.plan_code or default_plan),
                 "tier_category_id": None if ov.declined else (ov.tier_category_id or base_tier),
@@ -180,6 +204,7 @@ def baseline_for(
                 "covered_dependant_ids": ov.covered_dependant_ids,
                 "dependant_option_ids": ov.dependant_option_ids,
                 "compulsory": compulsory,
+                "eligible_only": False,
             }
         else:
             products[code] = {
@@ -189,6 +214,7 @@ def baseline_for(
                 "covered_dependant_ids": None,
                 "dependant_option_ids": None,
                 "compulsory": compulsory,
+                "eligible_only": False,
             }
     return {"products": products, "leave": {"action": "none", "days": 0}}
 
@@ -319,10 +345,31 @@ def open_window(
 def project_enrollment(
     db: Session, enrollment: Enrollment, user: CurrentUser
 ) -> None:
-    """Materialize one enrollment's elections into EmployeePlanOverride rows."""
+    """Materialize one enrollment's elections into EmployeePlanOverride rows.
+
+    Voluntary cover is eligibility until taken up (``voluntary_enrolment``), so
+    two elections on it are not plain plan changes:
+
+    - Electing the cohort default tier of voluntary cover the member enrols in
+      (``enroll``) or already holds leaves a non-declined override with no plan
+      pinned, instead of staying sparse. The take-up then lives in the
+      effective coverage, so a later reopen — or a reopened enrolment left
+      unsent at close — cannot lose it. A keep of a product the member is only
+      eligible for (older enrolments recorded one per untouched product) stays
+      sparse, so it still enrols nobody.
+    - ``decline`` of a product the member holds nothing of writes nothing: the
+      benefit statement keeps it as 'eligible' rather than 'declined'.
+
+    The confirmed leave trade is copied into the enrolment's snapshot, so a
+    reopened enrolment left unsent at close gets it back (``_apply_default``).
+    """
     emp = db.get(Employee, enrollment.employee_id)
     # Keyed by product_id (not code) so two products sharing a code can't collide.
     defaults, baseline_cat = _defaults_and_baseline(db, emp) if emp else ({}, {})
+    voluntary = voluntary_product_ids(db, emp) if emp else set()
+    eligible_only = (
+        eligible_only_product_ids(db, emp, voluntary=voluntary) if emp else set()
+    )
 
     elections = db.execute(
         select(EnrollmentElection).where(
@@ -331,12 +378,14 @@ def project_enrollment(
     ).scalars().all()
     for el in elections:
         _code, default_plan = defaults.get(el.product_id, (el.product_code, None))
-        declined = el.action == "decline"
+        declined = el.action == ElectionAction.decline
+        if declined and el.product_id in eligible_only:
+            continue
         base_tier = baseline_cat.get(el.product_id)
         # A "keep at default" election needs no override — stay sparse. A tier
         # change that keeps the same plan_code (e.g. GPA "Option N") is NOT a
         # default: the elected tier differs from the matched cohort tier.
-        if is_sparse_default(
+        sparse = is_sparse_default(
             declined=declined,
             plan_code=el.elected_plan_code,
             tier_category_id=el.tier_category_id,
@@ -344,7 +393,30 @@ def project_enrollment(
             default_plan=default_plan,
             base_tier=base_tier,
             dependant_option_ids=el.dependant_option_ids,
-        ):
+        )
+        takes_up = el.product_id in voluntary and (
+            el.action == ElectionAction.enroll or el.product_id not in eligible_only
+        )
+        if sparse and not declined and takes_up:
+            upsert_override(
+                db,
+                employee_id=enrollment.employee_id,
+                policy_year_id=enrollment.policy_year_id,
+                client_id=enrollment.client_id,
+                product_id=el.product_id,
+                product_code=el.product_code,
+                declined=False,
+                plan_code=None,
+                tier_category_id=None,
+                flex_price_tag=el.flex_price_tag,
+                covered_dependant_ids=None,
+                dependant_option_ids=None,
+                source=OverrideSource.enrollment,
+                source_ref=enrollment.id,
+                modified_by=user.user_id,
+            )
+            continue
+        if sparse:
             existing = db.execute(
                 select(EmployeePlanOverride).where(
                     EmployeePlanOverride.employee_id == enrollment.employee_id,
@@ -377,6 +449,7 @@ def project_enrollment(
     ).scalar_one_or_none()
     if leave is not None:
         leave.status = LeaveElectionStatus.confirmed
+    _remember_confirmed_leave(enrollment, leave)
 
     enrollment.status = EnrollmentStatus.confirmed
     enrollment.confirmed_at = datetime.now(UTC)
@@ -395,20 +468,23 @@ def _decline_in_scope(
 ) -> None:
     """Write declined overrides for every in-scope voluntary product the employee has.
 
-    Compulsory products are skipped — a deemed-decline cannot remove required coverage.
+    Compulsory products are skipped — a deemed-decline cannot remove required
+    coverage — and so are voluntary products the member was only eligible for:
+    there is nothing to decline, and they stay 'eligible' on the statement.
     """
     emp = db.get(Employee, enrollment.employee_id)
     if emp is None:
         return
     defaults = employee_category_defaults(db, emp)
     compulsory_ids = employee_compulsory_product_ids(db, emp)
+    eligible_only = eligible_only_product_ids(db, emp)
     window = db.get(EnrollmentWindow, enrollment.window_id)
     scope = window.product_scope if window else None
     for product_id, (code, _plan) in defaults.items():
         if scope and code not in scope:
             continue
-        if product_id in compulsory_ids:
-            continue  # never decline a compulsory product
+        if product_id in compulsory_ids or product_id in eligible_only:
+            continue  # never decline required cover, nor cover never taken up
         upsert_override(
             db,
             employee_id=enrollment.employee_id,
@@ -424,7 +500,82 @@ def _decline_in_scope(
         )
 
 
-def _discard_unsent_leave(db: Session, enrollment: Enrollment) -> None:
+def _was_confirmed(db: Session, enrollment: Enrollment) -> bool:
+    """Was this enrollment confirmed before being reopened for changes? Its
+    projected overrides (and a still-confirmed leave trade) are then the
+    member's current choices — what reopening promised to keep until a
+    re-confirmation replaces them."""
+    return db.scalar(
+        select(EnrollmentEvent.id).where(
+            EnrollmentEvent.enrollment_id == enrollment.id,
+            EnrollmentEvent.kind == "confirmed",
+        ).limit(1)
+    ) is not None
+
+
+def _reopened_unsent(db: Session, enrollment: Enrollment) -> bool:
+    """A confirmed enrollment reopened for changes that was never sent again:
+    saved choices (``in_progress``), or none after they were cancelled
+    (``not_started``). Close keeps what it confirmed and drops only the edits."""
+    return enrollment.status in (
+        EnrollmentStatus.in_progress,
+        EnrollmentStatus.not_started,
+    ) and _was_confirmed(db, enrollment)
+
+
+# Snapshot key holding a copy of the leave trade as last confirmed. A reopened
+# enrollment edits its one ``LeaveElection`` row in place, so without the copy
+# a trade re-saved after reopening (or cleared by a cancel) could not be put
+# back when the enrollment is left unsent at close.
+_CONFIRMED_LEAVE = "confirmed_leave"
+
+
+def _remember_confirmed_leave(enrollment: Enrollment, leave: LeaveElection | None) -> None:
+    """Copy the trade being confirmed into the enrollment's snapshot (None:
+    nothing was traded). Reassigned, not mutated, so the JSON column saves."""
+    enrollment.baseline_snapshot = {
+        **(enrollment.baseline_snapshot or {}),
+        _CONFIRMED_LEAVE: (
+            {"action": leave.action, "days": leave.days, "flex_amount": leave.flex_amount}
+            if leave is not None
+            else None
+        ),
+    }
+
+
+def _restore_confirmed_leave(db: Session, enrollment: Enrollment) -> None:
+    """Put a reopened enrollment's leave back to the trade it last confirmed,
+    discarding any trade saved since. One confirmed before the copy was kept
+    falls back to keeping a row still in its confirmed state."""
+    snapshot = enrollment.baseline_snapshot or {}
+    if _CONFIRMED_LEAVE not in snapshot:
+        _discard_unsent_leave(db, enrollment, keep_confirmed=True)
+        return
+    kept = snapshot[_CONFIRMED_LEAVE]
+    if not isinstance(kept, dict):
+        _discard_unsent_leave(db, enrollment)
+        return
+    leave = db.execute(
+        select(LeaveElection).where(LeaveElection.enrollment_id == enrollment.id)
+    ).scalar_one_or_none()
+    if leave is None:
+        leave = LeaveElection(
+            enrollment_id=enrollment.id,
+            policy_year_id=enrollment.policy_year_id,
+            client_id=enrollment.client_id,
+            employee_id=enrollment.employee_id,
+        )
+        db.add(leave)
+    leave.action = str(kept.get("action") or LeaveAction.none)
+    leave.days = float(kept.get("days") or 0.0)
+    flex_amount = kept.get("flex_amount")
+    leave.flex_amount = float(flex_amount) if isinstance(flex_amount, (int, float)) else None
+    leave.status = LeaveElectionStatus.confirmed
+
+
+def _discard_unsent_leave(
+    db: Session, enrollment: Enrollment, *, keep_confirmed: bool = False
+) -> None:
     """Zero and finalize the leave trade of an enrollment that was never sent.
 
     Unsent choices are discarded at close — coverage AND leave alike. This used
@@ -435,11 +586,14 @@ def _discard_unsent_leave(db: Session, enrollment: Enrollment) -> None:
     member's saved choices by submitting them — the close dialog offers that
     for everyone in one tick. A member with no saved trade has no row; only
     saving moves an enrollment off ``not_started``.
+
+    ``keep_confirmed`` (a reopened enrollment) leaves a trade still in its
+    confirmed state alone: that is the live trade, not an unsent one.
     """
     leave = db.execute(
         select(LeaveElection).where(LeaveElection.enrollment_id == enrollment.id)
     ).scalar_one_or_none()
-    if leave is None:
+    if leave is None or (keep_confirmed and leave.status == LeaveElectionStatus.confirmed):
         return
     leave.action = LeaveAction.none
     leave.days = 0.0
@@ -458,11 +612,18 @@ def _apply_default(
 
     A member who chose "decline all" (status ``declined``) is declined whatever
     the default — ``close_preview`` reports them as their own group for that
-    reason."""
-    declines = enr.status == EnrollmentStatus.declined or (
-        window.default_behavior == DefaultBehavior.decline
+    reason. A reopened enrollment left unsent loses only its unsent edits: what
+    it already confirmed stays — its overrides are never deemed declined over,
+    and its leave goes back to the trade it confirmed."""
+    reopened = _reopened_unsent(db, enr)
+    declines = not reopened and (
+        enr.status == EnrollmentStatus.declined
+        or window.default_behavior == DefaultBehavior.decline
     )
-    _discard_unsent_leave(db, enr)
+    if reopened:
+        _restore_confirmed_leave(db, enr)
+    else:
+        _discard_unsent_leave(db, enr)
     if declines:
         _decline_in_scope(db, enr, user)
     enr.status = EnrollmentStatus.deemed
@@ -555,8 +716,11 @@ def close_preview(db: Session, window: EnrollmentWindow) -> dict[str, Any]:
 
     Runs the same checks close runs, so its lists are the truth: submissions
     that would block the close, and saved-but-unsent choices that could (or
-    could not) be submitted on the member's behalf. Every check runs in a
-    savepoint; the caller must still roll back (the GET handler does)."""
+    could not) be submitted on the member's behalf. Reopened enrollments left
+    unsent are their own group, because close keeps what they confirmed rather
+    than applying the default; with saved choices they can still be submitted
+    on the member's behalf like any other. Every check runs in a savepoint; the
+    caller must still roll back (the GET handler does)."""
     rows = db.execute(
         select(Enrollment, Employee.staff_id, Employee.employee_name)
         .join(Employee, Enrollment.employee_id == Employee.id)
@@ -569,6 +733,7 @@ def close_preview(db: Session, window: EnrollmentWindow) -> dict[str, Any]:
     }
     invalid: list[dict[str, Any]] = []
     saved_blocked: list[dict[str, Any]] = []
+    reopened: list[dict[str, Any]] = []
     saved_submittable = 0
     for enr, staff_id, name in rows:
         who = {"enrollment_id": enr.id, "staff_id": staff_id, "employee_name": name}
@@ -582,6 +747,16 @@ def close_preview(db: Session, window: EnrollmentWindow) -> dict[str, Any]:
         elif enr.status == EnrollmentStatus.returned:
             counts["returned"] += 1
             invalid.append({**who, "reason": "Awaiting correction and a new signed submission."})
+        elif _reopened_unsent(db, enr):
+            reason = "Reopened after confirmation; saved changes were cancelled."
+            if enr.status == EnrollmentStatus.in_progress:
+                problem = _submission_problem(db, window, enr, require_priced=True)
+                if problem is None:
+                    saved_submittable += 1
+                    reason = "Reopened after confirmation; changes not sent."
+                else:
+                    reason = f"Reopened; changes can't be submitted: {problem}"
+            reopened.append({**who, "reason": reason})
         elif enr.status == EnrollmentStatus.in_progress:
             counts["saved_not_sent"] += 1
             problem = _submission_problem(db, window, enr, require_priced=True)
@@ -601,6 +776,8 @@ def close_preview(db: Session, window: EnrollmentWindow) -> dict[str, Any]:
         "saved_submittable": saved_submittable,
         "saved_blocked": saved_blocked[:_PREVIEW_LIST_LIMIT],
         "saved_blocked_count": len(saved_blocked),
+        "reopened_unsent": reopened[:_PREVIEW_LIST_LIMIT],
+        "reopened_unsent_count": len(reopened),
     }
 
 

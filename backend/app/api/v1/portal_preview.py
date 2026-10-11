@@ -17,7 +17,7 @@ from app.core.deps import load_employee
 from app.core.pagination import MAX_LIMIT
 from app.core.portal_auth import active_policy_year
 from app.db.session import get_db
-from app.models import Claim, Dependant, Employee, MemberAccount, PolicyYear
+from app.models import Claim, Client, Employee, MemberAccount, PolicyYear
 from app.models.claim import member_visible_claims
 from app.schemas.api import BenefitStatementOut, DependantOut
 from app.schemas.claims import (
@@ -36,11 +36,13 @@ from app.schemas.panel_card import MemberCardsOut
 from app.schemas.portal import (
     MemberAccountOut,
     PortalAccessOut,
+    PortalCompanyOut,
     PortalEmployeeOut,
     PortalPolicyYearOut,
     PortalPreviewOut,
 )
 from app.services.claim_episodes import anchor_out, eligible_anchors
+from app.services.claim_intake import person_employee_ids
 from app.services.claim_messages import (
     member_conversation_out,
     member_conversations,
@@ -58,6 +60,7 @@ from app.services.member_access import access_of, access_payload
 from app.services.member_enquiries import enquiry_out, load_member_enquiry
 from app.services.member_statement import (
     build_member_statement,
+    member_dependants,
     member_visible_statement,
 )
 from app.services.panel_cards import build_member_cards
@@ -95,6 +98,7 @@ def portal_preview_context(
     year = db.get(PolicyYear, employee.policy_year_id)
     active = active_policy_year(db, employee.client_id)
     account = _member_account_for(db, employee)
+    client = db.get(Client, employee.client_id)
     return PortalPreviewOut(
         employee=PortalEmployeeOut(
             id=employee.id,
@@ -122,6 +126,14 @@ def portal_preview_context(
             MemberAccountOut.model_validate(account) if account is not None else None
         ),
         enrollment_open=member_window_for(db, employee) is not None,
+        company_slug=client.slug if client is not None else None,
+        company=PortalCompanyOut(
+            slug=client.slug,
+            name=client.name,
+            legal_name=client.legal_name,
+        )
+        if client is not None
+        else None,
     )
 
 
@@ -191,15 +203,7 @@ def portal_preview_dependants(
     employee: Employee = Depends(load_employee),
     db: Session = Depends(get_db),
 ) -> list[DependantOut]:
-    rows = db.execute(
-        select(Dependant)
-        .where(
-            Dependant.employee_id == employee.id,
-            Dependant.policy_year_id == employee.policy_year_id,
-        )
-        .order_by(Dependant.id)
-    ).scalars().all()
-    return [DependantOut.model_validate(r) for r in rows]
+    return member_dependants(db, employee)
 
 
 @router.get("/cards", response_model=MemberCardsOut)
@@ -316,14 +320,18 @@ def portal_preview_conversations(
     """Mirror of `GET /portal/conversations`. Built through the SAME projection
     and the member serializer, so the preview can't show a broker's name where
     the member reads "Claims team", or a thread the member cannot see."""
+    questions = person_employee_ids(db, employee)
     total, rows = member_conversations(
-        db, employee.id, employee.policy_year_id, offset=offset, limit=limit
+        db, employee.id, employee.policy_year_id, offset=offset, limit=limit,
+        question_owner_ids=questions,
     )
     return ConversationList(
         total=total,
         offset=offset,
         limit=limit,
-        unread_total=member_unread_count(db, employee.id, employee.policy_year_id),
+        unread_total=member_unread_count(
+            db, employee.id, employee.policy_year_id, question_owner_ids=questions
+        ),
         items=[member_conversation_out(r) for r in rows],
     )
 
@@ -337,7 +345,7 @@ def portal_preview_enquiry(
     """Mirror of `GET /portal/enquiries/{id}` — the question header as its own
     author reads it. TWO checks: `load_employee` proves the broker may read this
     EMPLOYEE, `load_member_enquiry` proves the question is theirs."""
-    return enquiry_out(db, load_member_enquiry(db, enquiry_id, employee.id))
+    return enquiry_out(db, load_member_enquiry(db, enquiry_id, employee))
 
 
 @router.get(
@@ -350,7 +358,7 @@ def portal_preview_enquiry_messages(
 ) -> list[ClaimMessageOut]:
     """Mirror of `GET /portal/enquiries/{id}/messages`, through the MEMBER
     serializer — so the preview reads "Claims team" where the member does."""
-    enquiry = load_member_enquiry(db, enquiry_id, employee.id)
+    enquiry = load_member_enquiry(db, enquiry_id, employee)
     return [member_message_out(m) for m in thread_for_enquiry(db, enquiry.id)]
 
 

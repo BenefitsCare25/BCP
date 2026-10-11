@@ -19,6 +19,10 @@ export function prepareReviewConfigDraft(
     portal_field: mapping.portal_field.trim(),
     document_field: mapping.document_field.trim(),
   }));
+  // `ClaimReviewConfigIn.field_maps` has `min_length=1`.
+  if (fieldMaps.length === 0) {
+    return { ok: false, error: "Add at least one field mapping." };
+  }
   if (fieldMaps.some((mapping) => !mapping.portal_field || !mapping.document_field)) {
     return { ok: false, error: "Complete or remove every field mapping." };
   }

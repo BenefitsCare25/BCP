@@ -71,7 +71,7 @@ export function ClaimLeavePrompt({ form }: { form: NewClaimForm }) {
       confirmVariant="default"
       loading={action === "save"}
       onConfirm={() => finishLeave("save")}
-      secondaryLabel="Leave without saving"
+      secondaryLabel={pt("Leave without saving")}
       secondaryVariant="destructiveOutline"
       secondaryLoading={action === "discard"}
       onSecondary={() => finishLeave("discard")}

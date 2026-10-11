@@ -14,6 +14,7 @@ import {
 import { FirmConsole } from "@/components/admin/FirmConsole";
 import { FirmPicker } from "@/components/admin/FirmPicker";
 import { UsersCard } from "@/components/admin/UsersCard";
+import { ListError } from "@/components/platform/QueryStates";
 import { AlertDialog } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import {
@@ -28,7 +29,12 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { InfoHint } from "@/components/ui/tooltip";
 import { formatError } from "@/lib/errors";
-import { isBrokerAdminRole, isFirmOwnerRole, isSystemAdminRole } from "@/lib/roles";
+import {
+  isBrokerAdminRole,
+  isFirmOwnerRole,
+  isSystemAdminRole,
+  useWriteAccess,
+} from "@/lib/roles";
 import { toast } from "sonner";
 import { portalPath } from "@/lib/tenant";
 
@@ -101,7 +107,7 @@ type AccessSurface = (typeof ACCESS_SURFACES)[number];
 /** The company's employee- and HR-portal kill switches, under the same
  *  permission as editing the company. Turning one off signs everyone out of
  *  that portal for the company, so only that direction is confirmed. */
-function ClientAccessSwitches({ client }: { client: AdminClient }) {
+function ClientAccessSwitches({ client, readOnly }: { client: AdminClient; readOnly: boolean }) {
   const patch = usePatchClient();
   const [turningOff, setTurningOff] = useState<AccessSurface | null>(null);
 
@@ -129,7 +135,7 @@ function ClientAccessSwitches({ client }: { client: AdminClient }) {
             <Switch
               id={id}
               checked={client[surface.key]}
-              disabled={patch.isPending}
+              disabled={readOnly || patch.isPending}
               aria-label={`${surface.label} for ${client.name}`}
               onCheckedChange={(on) => {
                 if (on) void apply(surface, true);
@@ -160,7 +166,8 @@ function ClientAccessSwitches({ client }: { client: AdminClient }) {
 }
 
 function ClientsCard({ isSystemAdmin }: { isSystemAdmin: boolean }) {
-  const { data: clients = [] } = useAdminClients();
+  const clientsQuery = useAdminClients();
+  const clients = clientsQuery.data ?? [];
   const { data: firms = [] } = useBrokerFirms(isSystemAdmin);
   const [firmId, setFirmId] = useState("");
   const { data: summary } = useDashboardSummary();
@@ -172,6 +179,9 @@ function ClientsCard({ isSystemAdmin }: { isSystemAdmin: boolean }) {
   );
   const patch = usePatchClient();
   const del = useDeleteClient();
+  // A read-only access grant lists the firm's companies but cannot create,
+  // edit or switch them (the API refuses those changes).
+  const { canAdmin: canEdit } = useWriteAccess();
   const [name, setName] = useState("");
   const [legalName, setLegalName] = useState("");
   const [editing, setEditing] = useState<string | null>(null);
@@ -273,6 +283,7 @@ function ClientsCard({ isSystemAdmin }: { isSystemAdmin: boolean }) {
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-3">
+        {canEdit && <>
         <div className="flex flex-wrap items-end gap-2">
           <div className="flex min-w-40 flex-1 flex-col gap-1.5">
             <Label>Short name</Label>
@@ -304,6 +315,7 @@ function ClientsCard({ isSystemAdmin }: { isSystemAdmin: boolean }) {
           is what employees see in their portal, and the portal address is
           derived from the short name — you can change it below.
         </p>
+        </>}
         <ul className="divide-y divide-border rounded-md border border-border">
           {clients.map((c) => (
             <li key={c.id} className="flex items-center justify-between gap-2 px-3 py-2 text-sm">
@@ -387,16 +399,16 @@ function ClientsCard({ isSystemAdmin }: { isSystemAdmin: boolean }) {
                         {portalPath(c.slug)}
                       </div>
                     )}
-                    <ClientAccessSwitches client={c} />
+                    <ClientAccessSwitches client={c} readOnly={!canEdit} />
                   </div>
                   <div className="flex gap-1 shrink-0">
-                    <Button
+                    {canEdit && <Button
                       size="sm"
                       variant="outline"
                       onClick={() => beginEdit(c)}
                     >
                       Edit
-                    </Button>
+                    </Button>}
                     <FirmOwnerOnly><Button
                       size="sm"
                       variant="ghost"
@@ -411,7 +423,15 @@ function ClientsCard({ isSystemAdmin }: { isSystemAdmin: boolean }) {
               )}
             </li>
           ))}
-          {clients.length === 0 && (
+          {clientsQuery.isError ? (
+            <li className="px-3">
+              <ListError
+                what="companies"
+                error={clientsQuery.error}
+                onRetry={() => void clientsQuery.refetch()}
+              />
+            </li>
+          ) : clients.length === 0 && (
             <li className="px-3 py-3 text-sm text-muted-foreground">No clients yet.</li>
           )}
         </ul>

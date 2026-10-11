@@ -59,6 +59,7 @@ import {
   memberFiltersAreEmpty,
   toMemberQuery,
 } from "@/lib/memberFilters";
+import { useWriteAccess } from "@/lib/roles";
 import { useDebouncedValue } from "@/lib/use-debounced-value";
 import { useSession } from "@/stores/session";
 import { AlertDialog } from "@/components/ui/alert-dialog";
@@ -120,6 +121,17 @@ const METHOD_LABEL: Record<MatchMethod, string> = {
 
 const PAGE_SIZE = 50;
 
+/** What a roster wipe also destroys, keyed as the `enrollment_data_at_risk`
+ *  409 reports it (`_RISK_LABELS` in `api/v1/employees.py`). A count the
+ *  server refuses on but this list omits leaves the dialog explaining nothing. */
+const DELETE_RISKS: [key: string, label: string][] = [
+  ["enrollments_at_risk", "in-progress or confirmed enrollment(s)"],
+  ["open_period_members_at_risk", "member(s) enrolled in an open enrolment period"],
+  ["leave_elections_at_risk", "leave selection(s)"],
+  ["claims_at_risk", "member claim(s), including retained receipts"],
+  ["overrides_at_risk", "active coverage override(s)"],
+];
+
 /** Separator between facts in the identity strip's meta run. Decorative, so it
  *  is hidden from assistive tech — a screen reader announcing "middle dot"
  *  between every value is noise, and the values read fine as a list without it. */
@@ -133,6 +145,9 @@ function MetaDot() {
 
 export function EmployeesPage() {
   const policyYearId = useSession((s) => s.currentPolicyYearId);
+  // The API refuses every write from a viewer and under a read-only access
+  // grant; don't offer one.
+  const { canEdit } = useWriteAccess();
   const bulkDelete = useBulkDeleteEmployees();
   const runMatching = useRunMatching();
   const navigate = useNavigate();
@@ -170,10 +185,8 @@ export function EmployeesPage() {
   const [actionContainer, setActionContainer] = useState<HTMLDivElement | null>(null);
   const [showDeleteAll, setShowDeleteAll] = useState(false);
   const [deleteRisk, setDeleteRisk] = useState<{
-    enrollments_at_risk: number;
-    leave_elections_at_risk: number;
-    claims_at_risk: number;
-    overrides_at_risk: number;
+    items: { label: string; count: number }[];
+    message: string;
   } | null>(null);
   const [showRunConfirm, setShowRunConfirm] = useState(false);
   // Only the SEARCH text is debounced; a picker change is a deliberate click
@@ -220,6 +233,11 @@ export function EmployeesPage() {
   const pages = Math.ceil(total / PAGE_SIZE);
   const pending = matchData?.pending ?? true;
   const employeesTotal = matchData?.employees_total ?? 0;
+  // Clear all deletes every row, leavers included; the active counts above
+  // would understate it.
+  const clearTotal = facets
+    ? facets.employees_total + facets.terminated_total
+    : employeesTotal;
 
   return (
     <div className="space-y-5">
@@ -233,14 +251,14 @@ export function EmployeesPage() {
         {/* "Invite all to portal" moved to Company settings → Authentication,
          * beside the sign-in policy that governs it (and where the rollout
          * counts + the "needs an email address" follow-up list now live). */}
-        <Button
+        {canEdit && <Button
           variant={pending ? "default" : "outline"}
           onClick={() => setShowRunConfirm(true)}
           disabled={!employeesTotal || runMatching.isPending}
         >
           {pending ? <Play className="size-4" /> : <RefreshCw className="size-4" />}
           {pending ? "Run matching" : "Re-run matching"}
-        </Button>
+        </Button>}
       </RosterTabActions>
 
       <ListingImportBar
@@ -282,7 +300,7 @@ export function EmployeesPage() {
           <FirmOwnerOnly><Button
             variant="outline"
             size="sm"
-            disabled={!total}
+            disabled={!clearTotal}
             onClick={() => setShowDeleteAll(true)}
             className="shrink-0 text-error hover:text-error"
           >
@@ -405,13 +423,13 @@ export function EmployeesPage() {
         description={
           <>
             This will permanently delete{" "}
-            <strong>{employeesTotal.toLocaleString()} employee records</strong>{" "}
-            for the current policy year (every employee, regardless of any active
-            search or filter). Linked dependants will be unlinked. This cannot be
-            undone.
+            <strong>{clearTotal.toLocaleString()} employee records</strong>{" "}
+            for the current policy year (every employee, including leavers,
+            regardless of any active search or filter). Linked dependants will
+            be unlinked. This cannot be undone.
           </>
         }
-        confirmLabel={`Delete ${employeesTotal.toLocaleString()} employees`}
+        confirmLabel={`Delete ${clearTotal.toLocaleString()} employees`}
         loading={bulkDelete.isPending}
         onConfirm={async () => {
           try {
@@ -428,13 +446,13 @@ export function EmployeesPage() {
               e.detail.code === "enrollment_data_at_risk"
             ) {
               setShowDeleteAll(false);
+              const { detail } = e;
               setDeleteRisk({
-                enrollments_at_risk: Number(e.detail.enrollments_at_risk ?? 0),
-                leave_elections_at_risk: Number(
-                  e.detail.leave_elections_at_risk ?? 0,
-                ),
-                claims_at_risk: Number(e.detail.claims_at_risk ?? 0),
-                overrides_at_risk: Number(e.detail.overrides_at_risk ?? 0),
+                items: DELETE_RISKS.map(([key, label]) => ({
+                  label,
+                  count: Number(detail[key] ?? 0),
+                })).filter((risk) => risk.count > 0),
+                message: e.message,
               });
               return;
             }
@@ -448,36 +466,25 @@ export function EmployeesPage() {
         onOpenChange={(o) => !o && setDeleteRisk(null)}
         title="Enrollment & claims data will be lost"
         description={
-          deleteRisk && (
+          deleteRisk &&
+          (deleteRisk.items.length > 0 ? (
             <>
               Deleting these employees will also permanently destroy the
               following data tied to them, which cannot be recovered by
               re-uploading the roster:
               <ul className="mt-2 list-disc pl-5">
-                {[
-                  [
-                    deleteRisk.enrollments_at_risk,
-                    "in-progress or confirmed enrollment(s)",
-                  ],
-                  [deleteRisk.leave_elections_at_risk, "leave selection(s)"],
-                  [
-                    deleteRisk.claims_at_risk,
-                    "member claim(s), including retained receipts",
-                  ],
-                  [deleteRisk.overrides_at_risk, "active coverage override(s)"],
-                ]
-                  .filter(([n]) => (n as number) > 0)
-                  .map(([n, label]) => (
-                    <li key={label as string}>
-                      <strong>{(n as number).toLocaleString()}</strong>{" "}
-                      {label as string}
-                    </li>
-                  ))}
+                {deleteRisk.items.map(({ label, count }) => (
+                  <li key={label}>
+                    <strong>{count.toLocaleString()}</strong> {label}
+                  </li>
+                ))}
               </ul>
             </>
-          )
+          ) : (
+            deleteRisk.message
+          ))
         }
-        confirmLabel={`Delete anyway (${employeesTotal.toLocaleString()} employees)`}
+        confirmLabel={`Delete anyway (${clearTotal.toLocaleString()} employees)`}
         loading={bulkDelete.isPending}
         onConfirm={async () => {
           try {

@@ -45,7 +45,11 @@ from app.schemas.claims import LogCaseCreateIn
 from app.services.claim_fx import apply_conversion
 from app.services.claim_intake import ALLOWED_CURRENCIES, normalize_sub_type
 from app.services.claim_settlement import mint_reference_no
-from app.services.claims import assert_coverage_claimable, assert_incurred_in_period
+from app.services.claims import (
+    _apply_gp_rider_benefit_key,
+    assert_coverage_claimable,
+    assert_incurred_in_period,
+)
 from app.services.member_statement import build_member_statement
 
 # How a request reached the assessor. Display/reporting only — nothing branches
@@ -128,7 +132,12 @@ def assert_log_valid(
     # dependant must be covered under it. The `member_claimable` gate inside
     # this helper is exempted for LOG cases (see its comment) — recording a case
     # for an insurer-settled product is exactly what an assessor is for.
-    assert_coverage_claimable(build_member_statement(db, employee), claim)
+    statement = build_member_statement(db, employee)
+    # Bound to its schedule row exactly as a member submit is, so the case
+    # counts against that row's limit and visit cap and the approve guard
+    # reads them — not only the product roll-up.
+    _apply_gp_rider_benefit_key(statement, claim)
+    assert_coverage_claimable(statement, claim)
 
 
 def create_log_case(

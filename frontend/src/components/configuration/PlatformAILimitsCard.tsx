@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Loader2, ShieldAlert } from "lucide-react";
+import { Loader2, RefreshCw, ShieldAlert } from "lucide-react";
 import { toast } from "sonner";
 import {
   usePlatformAISettings,
@@ -60,7 +60,7 @@ const EMPTY: Record<FieldKey, string> = {
 
 /** System-admin-only controls for the shared AI key. Render behind a role gate. */
 export function PlatformAILimitsCard() {
-  const { data, isLoading } = usePlatformAISettings();
+  const { data, isLoading, isError, error, refetch } = usePlatformAISettings();
   const save = useSetPlatformAISettings();
   const [draft, setDraft] = useState<Record<FieldKey, string>>(EMPTY);
   const seeded = useRef(false);
@@ -120,6 +120,23 @@ export function PlatformAILimitsCard() {
         {isLoading ? (
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
             <Loader2 className="size-4 animate-spin" /> Loading…
+          </div>
+        ) : !data ? (
+          // Never show blank inputs over limits that failed to load: Save
+          // would write them as 0 and switch every limit off.
+          <div className="flex flex-col items-start gap-3 text-sm text-error">
+            <span>
+              Couldn&apos;t load the platform AI limits.{" "}
+              {isError ? formatError(error) : null}
+            </span>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => void refetch()}
+            >
+              <RefreshCw className="size-4" /> Retry
+            </Button>
           </div>
         ) : (
           <>

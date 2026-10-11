@@ -35,6 +35,7 @@ import {
 import {
   CURRENCY_OPTIONS,
   DEFAULT_CURRENCY,
+  duplicateTierNames,
   flexTierReview,
   normalizeFlexBody,
   numOrNull,
@@ -151,6 +152,11 @@ export function FlexSchemeForm({ policyYearId, scheme }: Props) {
     for (const t of membership?.tiers ?? []) m.set(tierKey(t.name), t);
     return m;
   }, [membership]);
+  // A shared name can't say whose headcount it is — and leaving such a tier
+  // without one keeps its name editable, so the clash can be fixed.
+  const dupeNames = useMemo(() => duplicateTierNames(body.tiers), [body.tiers]);
+  const headcountFor = (tier: FlexTier) =>
+    dupeNames.has(tierKey(tier.name)) ? undefined : headcountByName.get(tierKey(tier.name));
 
   const addTier = () => {
     const newIndex = body.tiers.length;
@@ -222,6 +228,12 @@ export function FlexSchemeForm({ policyYearId, scheme }: Props) {
   const onConfirm = () => {
     if (errors.length > 0) {
       toast.error("Resolve the validation issues before confirming.");
+      return;
+    }
+    // An unchanged form has nothing to persist — and re-saving it would reopen a
+    // confirmed scheme as a draft, stranding it there if the confirm is cancelled.
+    if (!dirty) {
+      runConfirm(false);
       return;
     }
     // Persist any pending edits first, then confirm. Keep `pending` on "confirm"
@@ -338,6 +350,18 @@ export function FlexSchemeForm({ policyYearId, scheme }: Props) {
                 onChange={(e) =>
                   setMeta({ effective_end: e.target.value || null })
                 }
+              />
+            </div>
+            <div className="w-40 space-y-1">
+              <Label htmlFor="flex-scheme-cap">Scheme-wide flat cap</Label>
+              <Input
+                id="flex-scheme-cap"
+                type="number"
+                min={0}
+                value={meta.system_cap ?? ""}
+                onChange={(e) => setMeta({ system_cap: numOrNull(e.target.value) })}
+                placeholder="None"
+                title="Sizes every tier that sets neither its own flat cap nor family-status rows."
               />
             </div>
             <div className="space-y-1">
@@ -542,8 +566,8 @@ export function FlexSchemeForm({ policyYearId, scheme }: Props) {
           <Tabs value={activeValue} onValueChange={setActiveTier}>
             <TabsList className="flex-wrap h-auto gap-x-4 gap-y-1">
               {body.tiers.map((tier, i) => {
-                const hc = headcountByName.get(tierKey(tier.name));
-                const needsReview = flexTierReview(tier, hc).needsReview;
+                const hc = headcountFor(tier);
+                const needsReview = flexTierReview(tier, hc, meta.system_cap).needsReview;
                 return (
                   <TabsTrigger key={i} value={String(i)}>
                     <span className="max-w-[13rem] truncate">
@@ -566,7 +590,7 @@ export function FlexSchemeForm({ policyYearId, scheme }: Props) {
               })}
             </TabsList>
             {body.tiers.map((tier, i) => {
-              const hc = headcountByName.get(tierKey(tier.name));
+              const hc = headcountFor(tier);
               return (
                 <TabsContent key={i} value={String(i)}>
                   <FlexTierEditor
@@ -574,6 +598,7 @@ export function FlexSchemeForm({ policyYearId, scheme }: Props) {
                     index={i}
                     headcount={hc}
                     currency={meta.currency ?? ""}
+                    schemeCap={meta.system_cap}
                     designations={vocab?.designations ?? []}
                     grades={vocab?.grades ?? []}
                     onChange={(t) => setTier(i, t)}

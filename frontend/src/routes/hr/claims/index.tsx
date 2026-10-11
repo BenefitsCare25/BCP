@@ -6,6 +6,7 @@ import { useHrClaims } from "@/api/hrClaims";
 import {
   ClaimStatus,
   formatClaimDate,
+  formatClaimTimestamp,
   formatClaimMoney,
 } from "@/components/hr/claimPresentation";
 import { Button } from "@/components/ui/button";
@@ -138,7 +139,7 @@ export function HrClaimsPage() {
                       {formatClaimMoney(claim.amount_claimed, claim.currency)}
                     </p>
                     <p className="mt-1 text-xs text-muted-foreground">
-                      {formatClaimDate(claim.submitted_at ?? claim.created_at)}
+                      {formatClaimTimestamp(claim.submitted_at ?? claim.created_at)}
                     </p>
                   </div>
                   <ArrowRight

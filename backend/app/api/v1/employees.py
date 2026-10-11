@@ -18,7 +18,7 @@ from fastapi import (
     UploadFile,
     status,
 )
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.orm import Session
 
 from app.core.audit import write_audit
@@ -36,6 +36,7 @@ from app.core.uploads import WORKBOOK_SUFFIXES, saved_upload
 from app.db.session import get_db
 from app.models import (
     Claim,
+    Dependant,
     Employee,
     EmployeeAttributeSchema,
     Enrollment,
@@ -77,7 +78,11 @@ from app.services.roster_attributes import (
     normalize_nric,
     suspect_nric_warning,
 )
-from app.services.roster_dedup import employee_candidate_keys, employee_nric
+from app.services.roster_dedup import (
+    employee_candidate_keys,
+    employee_nric,
+    staff_key,
+)
 from app.services.roster_mapping import employee_roster_fields
 from app.services.roster_parser import parse_employee_workbook
 from app.services.roster_reports import build_employee_report_workbook
@@ -320,11 +325,21 @@ def update_employee(
         after={"employee_name": e.employee_name, "attribute_values": e.attribute_values},
     )
     db.commit()
+    # Family status falls back to the roster's marital status and flex tiers
+    # key on roster attributes, so an edit can move the stored wallet. Refresh
+    # it like the dependant edit and every roster upload do; best-effort.
+    flex_errors: list[str] = []
+    if payload.attribute_values is not None:
+        assign_flex_safe(
+            db, user, e.policy_year_id, e.client_id,
+            trigger="auto_on_employee_edit", errors=flex_errors,
+        )
     db.refresh(e)
     out = EmployeeOut.model_validate(e)
     out.matched_plans = _hydrate_plans([e], db, e.policy_year_id).get(e.id, [])
     out.roster_fields = employee_roster_fields(db, e)
     out.unmatched_product_codes = sorted(build_coverage_gaps(db, py).missing(e))
+    out.flex_errors = flex_errors
     return out
 
 
@@ -445,6 +460,22 @@ def bulk_delete_employees(
             )
     deleted = len(rows)
     linked_account_ids = {r.member_account_id for r in rows if r.member_account_id}
+    # The FK nulls each dependant's sponsor; the row must say so too, or it
+    # reads as linked "by staff id" to nobody. A member's own self-add keeps
+    # its provenance, which the dependants wipe guards on.
+    db.execute(
+        update(Dependant)
+        .where(
+            Dependant.client_id == client_id,
+            Dependant.policy_year_id == policy_year_id,
+            Dependant.employee_id.is_not(None),
+            or_(
+                Dependant.link_method.is_(None),
+                Dependant.link_method != "member_portal",
+            ),
+        )
+        .values(link_method="unlinked")
+    )
     for r in rows:
         db.delete(r)
     db.flush()
@@ -533,7 +564,7 @@ async def upload_employees(
         if nid:
             existing_keys.setdefault(f"nric:{nid}", eid)
         if sid:
-            existing_keys.setdefault(f"staff:{str(sid).strip().lower()}", eid)
+            existing_keys.setdefault(f"staff:{staff_key(sid)}", eid)
 
     seen: set[str] = set()
     for rec in records:

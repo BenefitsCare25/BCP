@@ -8,12 +8,14 @@
  * drift class as mirroring the pending-claim status set into TypeScript.
  *
  * Typed rather than bare strings because three surfaces close on this list —
- * the shell nav, the broker's preview frame and the home mosaic — and they are
+ * the shell nav, the broker's preview frame and Home — and they are
  * entry points to the SAME destinations. A leaver whose Clinics tab is gone but
  * whose "Find a clinic" tile is still there just reaches the 403 by a different
  * route, which is exactly the "this app is broken" outcome the access notice
  * exists to prevent. A typo in any one of the three used to be invisible.
  */
+import { errorCode, formatError } from "@/lib/errors";
+
 export type Capability =
   | "record"
   | "respond"
@@ -36,4 +38,11 @@ export function holds(
   if (!needs) return true;
   if (!capabilities) return true;
   return capabilities.includes(needs);
+}
+
+/** The server's own sentence when an endpoint refused a capability the member
+ *  no longer holds (403 `coverage_ended`), else null. A refusal is an answer,
+ *  not an outage: "try again" can never succeed against it. */
+export function capabilityRefusal(error: unknown): string | null {
+  return errorCode(error) === "coverage_ended" ? formatError(error) : null;
 }

@@ -452,6 +452,43 @@ def _require_schema(session: Session, schema: str) -> None:
     _KNOWN_SCHEMAS.add(schema)
 
 
+def firm_provisioned(session: Session, firm_id: str) -> bool:
+    """Whether a firm's schema exists yet. Always True on SQLite.
+
+    False only for a firm created with runtime provisioning off, until the
+    migration job (`scripts.provision_tenants`) has created its schema.
+    """
+    if not is_postgres(session):
+        return True
+    schema = schema_for_firm(firm_id)
+    if schema in _KNOWN_SCHEMAS:
+        return True
+    if not schema_exists(session.connection(), schema):
+        return False
+    _KNOWN_SCHEMAS.add(schema)
+    return True
+
+
+def require_firm_provisioned(session: Session, firm_id: str) -> None:
+    """409 `firm_not_provisioned` while a firm created with runtime
+    provisioning off still waits for the migration job to create its schema.
+
+    Checked before a console action that files into the firm's own trail, so
+    the platform admin learns why instead of getting `tenant_unavailable`.
+    No-op on SQLite.
+    """
+    if firm_provisioned(session, firm_id):
+        return
+    raise HTTPException(
+        status.HTTP_409_CONFLICT,
+        {
+            "code": "firm_not_provisioned",
+            "message": "This firm is still being set up: the next migration job "
+            "creates its workspace. Try again once it has run.",
+        },
+    )
+
+
 def set_search_path(session: Session, firm_id: str | None) -> None:
     """Route a session's tenant-table reads/writes to the firm's schema.
 

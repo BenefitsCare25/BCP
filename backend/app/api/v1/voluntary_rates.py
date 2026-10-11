@@ -16,13 +16,15 @@ tenant simply has no matching voluntary categories → 404.
 """
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.audit import write_audit
 from app.core.auth import CurrentUser, get_current_user
-from app.core.deps import assert_policy_year_editable, load_policy_year
+from app.core.deps import assert_policy_year_editable, is_firm_owner, load_policy_year
 from app.db.session import get_db
 from app.models import PolicyYear
 from app.models.category import Category
@@ -57,6 +59,18 @@ def _age_banded_voluntary_categories(
     ]
 
 
+def _saved_bands(cats: list[Category]) -> list[Any]:
+    """The stored table. All copies are identical — read off the first category
+    that actually carries it (the filter also admits rate_basis==age_banded rows
+    that might lack it, and the query has no stable order, so not cats[0])."""
+    src = next(
+        (c for c in cats if (c.plan_assignments or {}).get("voluntary_rates")),
+        cats[0],
+    )
+    raw = (src.plan_assignments or {}).get("voluntary_rates")
+    return raw if isinstance(raw, list) else []
+
+
 def _validate_bands(bands: list[VoluntaryRateBand]) -> list[str]:
     errors: list[str] = []
     if not bands:
@@ -64,8 +78,9 @@ def _validate_bands(bands: list[VoluntaryRateBand]) -> list[str]:
     for i, b in enumerate(bands):
         if b.min is not None and b.max is not None and b.min > b.max:
             errors.append(f"Band {i + 1} ({b.label}): min {b.min} > max {b.max}.")
-        if b.rate < 0:
-            errors.append(f"Band {i + 1} ({b.label}): rate must be >= 0.")
+        # A blank rate arrives as 0 and would price the whole band at S$0.
+        if not b.rate > 0:
+            errors.append(f"Band {i + 1} ({b.label}): rate must be greater than 0.")
     return errors
 
 
@@ -85,15 +100,7 @@ def get_voluntary_rates(
             status.HTTP_404_NOT_FOUND,
             detail="No age-banded voluntary plans for this product.",
         )
-    # All copies are identical — read off the first category that actually carries
-    # the table (the filter also admits rate_basis==age_banded rows that might lack
-    # it, and the query has no stable order, so don't blindly take cats[0]).
-    src = next(
-        (c for c in cats if (c.plan_assignments or {}).get("voluntary_rates")),
-        cats[0],
-    )
-    raw = (src.plan_assignments or {}).get("voluntary_rates") or []
-    bands = [VoluntaryRateBand.model_validate(b) for b in raw]
+    bands = [VoluntaryRateBand.model_validate(b) for b in _saved_bands(cats)]
     return ProductVoluntaryRatesOut(
         product_id=product_id, bands=bands, voluntary_plan_count=len(cats)
     )
@@ -123,6 +130,11 @@ def set_voluntary_rates(
         raise HTTPException(
             status.HTTP_404_NOT_FOUND,
             detail="No age-banded voluntary plans for this product.",
+        )
+    if len(body.bands) < len(_saved_bands(cats)) and not is_firm_owner(user):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Only firm administrators may remove a saved age band.",
         )
     bands_json = [b.model_dump() for b in body.bands]
     for c in cats:

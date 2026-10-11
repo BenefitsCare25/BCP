@@ -2136,6 +2136,10 @@ def test_review_config_crud_over_http(broker: TestClient, system_admin_request):
             f"/api/v1/claim-review-configs/{config_id}",
             json={
                 **body,
+                # The saved rules go back with their ids, as the editor sends
+                # them: an id-less rule is a NEW rule, and dropping a saved one
+                # is a firm-owner action.
+                "ai_rules": created_row["ai_rules"],
                 "display_label": "GHS review rules",
                 "enabled": False,
                 "expected_updated_at": created_row["updated_at"],

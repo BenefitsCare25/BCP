@@ -27,7 +27,7 @@ from app.core.storage import (
     get_storage,
 )
 from app.db.session import get_db
-from app.models import Client, Dependant, PanelCard, PolicyYearCard
+from app.models import Client, PanelCard, PolicyYearCard
 from app.models.panel_card import CARD_FACES
 from app.schemas.api import BenefitStatementOut, DependantOut
 from app.schemas.claims import UtilizationOut
@@ -50,6 +50,7 @@ from app.services.member_access import (
 )
 from app.services.member_statement import (
     build_member_statement,
+    member_dependants,
     member_visible_statement,
 )
 from app.services.panel_cards import build_member_cards
@@ -252,12 +253,4 @@ def portal_dependants(
     db: Session = Depends(get_db),
 ) -> list[DependantOut]:
     employee = resolve_member_employee(db, member, requires=Capability.RECORD)
-    rows = db.execute(
-        select(Dependant)
-        .where(
-            Dependant.employee_id == employee.id,
-            Dependant.policy_year_id == employee.policy_year_id,
-        )
-        .order_by(Dependant.id)
-    ).scalars().all()
-    return [DependantOut.model_validate(r) for r in rows]
+    return member_dependants(db, employee)

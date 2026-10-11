@@ -1,3 +1,4 @@
+import { useId } from "react";
 import { Link, useParams } from "@tanstack/react-router";
 import { ChevronLeft } from "lucide-react";
 import {
@@ -18,6 +19,10 @@ import {
 } from "@/components/ui/card";
 import { FirmActivityCard } from "@/components/platform/FirmActivityCard";
 import { FirmDomainsCard } from "@/components/platform/FirmDomainsCard";
+import {
+  FirmProvisioningNotice,
+  UntilProvisioned,
+} from "@/components/platform/FirmProvisioning";
 import { FirmSenderCard } from "@/components/platform/FirmSenderCard";
 import { FirmStatusCard } from "@/components/platform/FirmStatusCard";
 import { PlatformPageHeader } from "@/components/platform/PlatformPageHeader";
@@ -43,7 +48,9 @@ function FirmSignInMethods({ firm }: { firm: PlatformFirm }) {
 
 export function PlatformFirmDetailPage() {
   const { firmId } = useParams({ strict: false }) as { firmId: string };
+  // Polled while the firm waits for its schema, so this page updates itself.
   const firms = usePlatformFirms();
+  const pendingNoticeId = useId();
 
   if (firms.isPending) return <ListLoading label="Loading broker firm…" />;
   if (firms.isError) {
@@ -69,6 +76,7 @@ export function PlatformFirmDetailPage() {
             {firm.name}
             {firm.is_platform_owner && <Badge variant="info">Platform owner</Badge>}
             {firm.status === "suspended" && <Badge variant="error">Suspended</Badge>}
+            {!firm.provisioned && <Badge variant="warn">Setting up</Badge>}
           </span>
         }
         description={
@@ -80,10 +88,15 @@ export function PlatformFirmDetailPage() {
           </>
         }
       />
+      <FirmProvisioningNotice firm={firm} id={pendingNoticeId} />
       <FirmStatusCard firm={firm} />
       <FirmActivityCard firmId={firm.id} firmName={firm.name} />
-      <FirmSignInMethods firm={firm} />
-      <FirmSenderCard firm={firm} />
+      <UntilProvisioned firm={firm} describedBy={pendingNoticeId}>
+        <FirmSignInMethods firm={firm} />
+      </UntilProvisioned>
+      <UntilProvisioned firm={firm} describedBy={pendingNoticeId}>
+        <FirmSenderCard firm={firm} />
+      </UntilProvisioned>
       <FirmDomainsCard firm={firm} />
       <Card>
         <CardHeader>
@@ -95,12 +108,14 @@ export function PlatformFirmDetailPage() {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <InviteUserForm
-            idPrefix={`firm-admin-${firm.id}`}
-            roleOptions={["firm_admin"]}
-            defaultRole="firm_admin"
-            firmId={firm.id}
-          />
+          <UntilProvisioned firm={firm} describedBy={pendingNoticeId}>
+            <InviteUserForm
+              idPrefix={`firm-admin-${firm.id}`}
+              roleOptions={["firm_admin"]}
+              defaultRole="firm_admin"
+              firmId={firm.id}
+            />
+          </UntilProvisioned>
         </CardContent>
       </Card>
     </>

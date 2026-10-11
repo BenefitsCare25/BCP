@@ -10,6 +10,7 @@ import {
   useProductSetups,
   useSetupProducts,
 } from "@/api/hooks";
+import { isReadOnlyAccess } from "@/lib/roles";
 import { useRegistry } from "@/api/registry";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -78,7 +79,7 @@ export function ConfigurationPage() {
       ? selectedYearId
       : defaultPolicyYear(policyYears)?.id ?? null;
   const viewedYear = policyYears.find((y) => y.id === policyYearId) ?? null;
-  const readOnly = me?.role === "broker_viewer";
+  const readOnly = isReadOnlyAccess(me?.role, me?.platform_access);
 
   const { data: groups = [], isLoading } = useCategoriesGrouped(
     policyYearId ?? undefined,

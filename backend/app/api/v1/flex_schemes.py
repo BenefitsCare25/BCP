@@ -48,6 +48,7 @@ from app.core.audit import write_audit
 from app.core.auth import CurrentUser, get_current_user
 from app.core.deps import (
     assert_policy_year_editable,
+    is_firm_owner,
     load_policy_year,
     policy_year_company,
 )
@@ -63,7 +64,11 @@ from app.services.ai_extractor import (
     AIParseError,
 )
 from app.services.ai_gateway import AIBudgetExceededError, extract_flex_scheme
-from app.services.flex_assignment import FlexAssignmentSummary, assign_and_audit
+from app.services.flex_assignment import (
+    FlexAssignmentSummary,
+    assign_and_audit,
+    clear_flex_assignments,
+)
 from app.services.flex_intake import FlexIntakeError, normalize_flex_document
 from app.services.flex_membership import (
     COVERAGE_PREVIEW_CAP,
@@ -123,6 +128,24 @@ def _reopen_as_draft(row: FlexScheme) -> None:
         row.status = FlexSchemeStatus.draft
         row.confirmed_at = None
         row.confirmed_by = None
+
+
+def _removes_scheme_entries(before: dict[str, Any], after: dict[str, Any]) -> bool:
+    """Whether a save drops a saved tier, limit row or benefit category.
+
+    Removing saved data is a firm-owner action (AGENTS.md); the editor hides
+    those controls from everyone else and this is the rule. Tiers carry no id,
+    so they pair by position — the editor never reorders them."""
+    old = _list_value(before.get("tiers"))
+    new = _list_value(after.get("tiers"))
+    if len(new) < len(old):
+        return True
+    return any(
+        len(_list_value(_dict_value(n).get(field)))
+        < len(_list_value(_dict_value(o).get(field)))
+        for o, n in zip(old, new, strict=False)
+        for field in ("limits", "benefit_categories")
+    )
 
 
 def _tier_sig(tier: dict[str, Any]) -> str:
@@ -413,6 +436,34 @@ def _validate_tier(
     return errors
 
 
+def _tier_name_errors(tiers: list[Any]) -> list[str]:
+    """Each tier needs a name no other tier shares (case-insensitive).
+
+    The name IS the tier's persisted identity: assignment stores only
+    ``flex_tier_name``, and the statement and claim checks find the tier by it.
+    An unnamed tier's members would see no flex at all, and two same-named tiers
+    would hand one tier's claimable categories and sub-limits to the other's
+    members."""
+    errors: list[str] = []
+    seen: set[str] = set()
+    reported: set[str] = set()
+    for i, tier in enumerate(tiers):
+        if not isinstance(tier, dict):
+            continue
+        name = str(tier.get("name") or "").strip()
+        if not name:
+            errors.append(f"Tier {i + 1}: needs a name.")
+            continue
+        key = name.casefold()
+        if key in seen and key not in reported:
+            reported.add(key)
+            errors.append(
+                f"Tier name '{name}' is used more than once; each tier needs its own name."
+            )
+        seen.add(key)
+    return errors
+
+
 def validate_scheme(scheme: dict[str, Any]) -> list[str]:
     """Return a list of human-readable validation errors (empty == valid)."""
     errors: list[str] = []
@@ -463,10 +514,14 @@ def validate_scheme(scheme: dict[str, Any]) -> list[str]:
     ):
         errors.append("GST rate must be a percentage between 0 and 100.")
 
-    has_system_cap = isinstance(meta.get("system_cap"), (int, float))
+    system_cap = meta.get("system_cap")
+    has_system_cap = isinstance(system_cap, (int, float))
+    if isinstance(system_cap, (int, float)) and system_cap < 0:
+        errors.append("Scheme-wide flat cap must be ≥ 0.")
 
     for i, tier in enumerate(tiers):
         errors.extend(_validate_tier(tier, i, has_system_cap))
+    errors.extend(_tier_name_errors(tiers))
 
     # Scheme-level dependant age-limit default (age next-birthday per role). This
     # feeds the real eligibility engine via get_pricing's __dep_age__ stamp; a
@@ -871,12 +926,23 @@ def save_flex(
         row = FlexScheme(policy_year_id=policy_year_id, origin=FlexSchemeOrigin.manual)
         db.add(row)
 
-    merged = dict(row.scheme or {})
+    before = dict(row.scheme or {})
+    merged = dict(before)
     for key in _SCHEME_SECTIONS:
         if key in body.scheme:
             merged[key] = body.scheme[key]
+    if not is_firm_owner(user) and _removes_scheme_entries(before, merged):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Removing saved tiers, limit rows or benefit categories requires a firm "
+            "administrator.",
+        )
+    if merged != before:
+        # An edit reopens a confirmed scheme as a draft. An unchanged save (the
+        # Confirm button re-persisting a clean form) must not, or cancelling the
+        # confirm leaves a confirmed scheme stranded in draft.
+        _reopen_as_draft(row)
     row.scheme = merged
-    _reopen_as_draft(row)  # an edit reopens a confirmed scheme as a draft
     flag_modified(row, "scheme")
 
     write_audit(db, user, "flex_scheme.save", "flex_scheme", policy_year_id)
@@ -996,5 +1062,8 @@ def discard_flex(
     row = _get_scheme(db, policy_year_id)
     if row is not None:
         db.delete(row)
+        # The wallets were sized from this scheme; with it gone nothing would
+        # ever re-run assignment to clear them.
+        clear_flex_assignments(db, policy_year_id)
         write_audit(db, user, "flex_scheme.discard", "flex_scheme", policy_year_id)
         db.commit()

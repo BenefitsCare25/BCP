@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.auth import CurrentUser, get_current_user
+from app.core.auth import ROLE_SYSTEM_ADMIN, CurrentUser, get_current_user
 from app.core.clock import today as business_today
 from app.core.deps import assert_policy_year_for_user
 from app.core.identity import accessible_clients
@@ -73,6 +73,21 @@ def _company_summary(
     )
 
 
+def _routed_clients(db: Session, user: CurrentUser, clients: list[Client]) -> list[Client]:
+    """The companies whose firm schema this request reads.
+
+    A master admin reaches several firms, but the request is routed to the
+    active company's firm (`auth._route_to_firm`), so another firm's companies
+    would be listed with no year and zero counts instead of being summarised.
+    """
+    if user.role != ROLE_SYSTEM_ADMIN:
+        return clients
+    active = db.get(Client, user.client_id) if user.client_id else None
+    if active is None:
+        return []
+    return [client for client in clients if client.broker_firm_id == active.broker_firm_id]
+
+
 def _has_work(company: CompanySummary) -> bool:
     return any(getattr(company, name) for name in _COUNT_FIELDS[2:]) or any((
         company.matching_stale, company.enrollment_open,
@@ -103,9 +118,9 @@ def get_summary(
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> DashboardSummary:
-    clients = accessible_clients(
+    clients = _routed_clients(db, user, accessible_clients(
         role=user.role, broker_firm_id=user.broker_firm_id, user_id=user.user_id, db=db,
-    )
+    ))
     years = list(db.scalars(select(PolicyYear).where(
         PolicyYear.client_id.in_([client.id for client in clients]),
     ).order_by(PolicyYear.client_id, PolicyYear.start_date.desc(), PolicyYear.id)))

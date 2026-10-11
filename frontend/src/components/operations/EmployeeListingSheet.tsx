@@ -151,9 +151,11 @@ export function EmployeeListingSheet({
                   <div className="flex flex-wrap items-center gap-3">
                     {(preview?.products ?? [])
                       .filter(
+                        // A block naming no product offers every company product.
                         (p) =>
+                          !block.code_hint ||
                           chosen.includes(p.code) ||
-                          p.code.split("-")[0] === (block.code_hint ?? ""),
+                          p.code.split("-")[0] === block.code_hint,
                       )
                       .map((p) => (
                         <label

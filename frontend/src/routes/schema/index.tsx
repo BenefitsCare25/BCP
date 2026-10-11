@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Plus } from "lucide-react";
 import { useNavigate, useSearch } from "@tanstack/react-router";
+import { useMe } from "@/api/hooks";
 import { Button } from "@/components/ui/button";
 import {
   PageTabsBar,
@@ -9,6 +10,7 @@ import {
   TabsList,
   TabsTrigger,
 } from "@/components/ui/tabs";
+import { isReadOnlyAccess } from "@/lib/roles";
 import { SchemaAttributesPage } from "./attributes";
 import { SchemaInsurersPage } from "./insurers";
 import { SchemaProductsPage } from "./products";
@@ -50,6 +52,8 @@ export function SchemaPage() {
   const setOpen = (key: SchemaTab) => (open: boolean) =>
     setAddOpen((s) => ({ ...s, [key]: open }));
   const active = TABS.find((t) => t.key === tab)!;
+  const { data: me } = useMe();
+  const readOnly = isReadOnlyAccess(me?.role, me?.platform_access);
 
   return (
     <Tabs
@@ -66,9 +70,11 @@ export function SchemaPage() {
             </TabsTrigger>
           ))}
         </TabsList>
-        <Button className="shrink-0" onClick={() => setOpen(active.key)(true)}>
-          <Plus className="size-4" /> {active.addLabel}
-        </Button>
+        {!readOnly && (
+          <Button className="shrink-0" onClick={() => setOpen(active.key)(true)}>
+            <Plus className="size-4" /> {active.addLabel}
+          </Button>
+        )}
       </PageTabsBar>
       {TABS.map(({ key, Panel }) => (
         <TabsContent key={key} value={key}>

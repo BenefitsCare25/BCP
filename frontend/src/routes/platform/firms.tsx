@@ -82,9 +82,12 @@ export function PlatformFirmsPage() {
                   </TableCell>
                   <TableCell className="text-muted-foreground">{firm.slug}</TableCell>
                   <TableCell>
-                    <Badge variant={firm.status === "active" ? "good" : "error"}>
-                      {firm.status === "active" ? "Active" : "Suspended"}
-                    </Badge>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge variant={firm.status === "active" ? "good" : "error"}>
+                        {firm.status === "active" ? "Active" : "Suspended"}
+                      </Badge>
+                      {!firm.provisioned && <Badge variant="warn">Setting up</Badge>}
+                    </div>
                   </TableCell>
                   <TableCell className="text-right tabular-nums">{firm.client_count}</TableCell>
                   <TableCell className="text-right tabular-nums">{firm.domain_count}</TableCell>

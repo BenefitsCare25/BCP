@@ -237,14 +237,19 @@ def _insurer_clock_stop(claim: Claim) -> date:
     every night forever and it sits at the top of the overdue list a broker
     works, permanently, having already been settled.
 
-    Falls back to the decision timestamp, then today: a terminal claim always
-    has one, but a hand-edited row might not, and a wrong-by-a-day figure beats
-    a crash in a report.
+    The decline date is `insurer_outcome_on`. Declines recorded before that
+    column existed wrote it into `decided_at` instead, so that is the fallback,
+    then today: a terminal claim always has one, but a hand-edited row might
+    not, and a wrong-by-a-day figure beats a crash in a report.
     """
     if claim.paid_on is not None:
         return claim.paid_on
     if claim.status in _CLOSED_UNPAID_STATUSES:
-        return _as_date(claim.decided_at) or business_today()
+        return (
+            claim.insurer_outcome_on
+            or _as_date(claim.decided_at)
+            or business_today()
+        )
     # Business date, not the UTC one (`core/clock.py`): on a UTC server every
     # open claim's age would tick over at 8am Singapore, so the overdue list a
     # broker works disagreed with itself for the first hour of the day — and it
@@ -272,6 +277,30 @@ def days_over_deadline(claim: Claim) -> int | None:
     return (_insurer_clock_stop(claim) - claim.insurer_deadline_on).days
 
 
+def _assert_settlement_order(
+    sent: date | None, deadline: date | None, paid: date | None
+) -> None:
+    """Neither the insurer deadline nor the payment may precede the dispatch.
+
+    Shared by the transitions and the amendment path, so a date one of them
+    refuses cannot be written through the other — a payment keyed a year early
+    gave negative insurer days, and then every later correction of the deadline
+    alone was refused until the payment date was fixed too.
+    """
+    if sent is None:
+        return
+    if deadline is not None and deadline < sent:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "The insurer deadline cannot precede the date sent to the insurer.",
+        )
+    if paid is not None and paid < sent:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "The payment date cannot precede the date sent to the insurer.",
+        )
+
+
 def send_to_insurer(
     db: Session,
     claim: Claim,
@@ -288,24 +317,22 @@ def send_to_insurer(
     the SLA columns are never silently blank — an unbounded claim is one nobody
     chases.
     """
-    now = datetime.now(UTC)
-    if sent_on is not None:
-        # A STATED date, widened by `stamp_for_day` — never by the current
-        # wall clock. Combining it with `now.timetz()` made the stored
-        # instant's calendar date depend on the hour it was keyed: a dispatch
-        # recorded after 16:00 UTC read as the FOLLOWING day to any reader in
-        # Singapore, silently moving the start of the insurer's SLA clock.
-        claim.sent_to_insurer_at = stamp_for_day(sent_on)
-    else:
-        claim.sent_to_insurer_at = now
+    # A STATED date, widened by `stamp_for_day` — never by the current wall
+    # clock. Combining it with `now.timetz()` made the stored instant's
+    # calendar date depend on the hour it was keyed: a dispatch recorded after
+    # 16:00 UTC read as the FOLLOWING day to any reader in Singapore, silently
+    # moving the start of the insurer's SLA clock.
+    sent_at = stamp_for_day(sent_on) if sent_on is not None else datetime.now(UTC)
+    dispatch_date = _as_date(sent_at)
+    if dispatch_date is None:
+        raise RuntimeError("A dispatched claim must have a dispatch date.")
+    _assert_settlement_order(dispatch_date, deadline_on, None)
+    claim.sent_to_insurer_at = sent_at
     claim.sent_to_insurer_by = user_id
     if deadline_on is not None:
         claim.insurer_deadline_on = deadline_on
     else:
         days = turnaround_days or DEFAULT_INSURER_TURNAROUND_DAYS
-        dispatch_date = _as_date(claim.sent_to_insurer_at)
-        if dispatch_date is None:
-            raise RuntimeError("A dispatched claim must have a dispatch date.")
         claim.insurer_deadline_on = dispatch_date + timedelta(days=days)
     claim.status = CLAIM_STATUS_SENT_TO_INSURER
     return claim
@@ -325,6 +352,7 @@ def record_payment(
     is a shortfall, and a reconciliation report that cannot see one has no
     reason to exist.
     """
+    _assert_settlement_order(_as_date(claim.sent_to_insurer_at), None, paid_on)
     claim.paid_on = paid_on
     claim.payment_amount = (
         Decimal(str(amount)) if amount is not None else claim.amount_approved
@@ -452,17 +480,21 @@ def apply_settlement_amendment(
             "This claim has been sent to the insurer, so it must keep a "
             "dispatch date. Correct the date rather than clearing it.",
         )
+    # Same rule for the payment. A paid claim with no `paid_on` restarts the
+    # insurer's clock (`_insurer_clock_stop` falls back to today), and one with
+    # no `payment_amount` reads as an unreconciled Flex payment that blocks the
+    # member's next submission.
+    if claim.status == CLAIM_STATUS_PAID and (
+        ("paid_on" in present and body.paid_on is None)
+        or ("payment_amount" in present and body.payment_amount is None)
+    ):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "This claim is recorded as paid, so it must keep its payment date "
+            "and amount. Correct them rather than clearing them.",
+        )
 
-    if sent is not None and deadline is not None and deadline < sent:
-        raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_CONTENT,
-            "The insurer deadline cannot precede the date sent to the insurer.",
-        )
-    if sent is not None and paid is not None and paid < sent:
-        raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_CONTENT,
-            "The payment date cannot precede the date sent to the insurer.",
-        )
+    _assert_settlement_order(sent, deadline, paid)
 
     if "sent_to_insurer_on" in present:
         # Same widening as `send_to_insurer` — only the DATE was ever stated,

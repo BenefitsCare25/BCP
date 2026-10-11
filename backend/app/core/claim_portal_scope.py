@@ -2,7 +2,7 @@
 from dataclasses import dataclass
 from typing import Any
 
-from fastapi import Depends, Header, HTTPException
+from fastapi import Depends, Header, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from app.core.portal_auth import (
@@ -12,9 +12,14 @@ from app.core.portal_auth import (
     resolve_member_employee,
 )
 from app.db.session import get_db
-from app.models import Employee, PolicyYear
+from app.models import Claim, Employee, PolicyYear
 from app.models.policy_year import PolicyYearStatus
-from app.services.member_access import Capability, access_for_account, refusal
+from app.services.member_access import (
+    Capability,
+    access_for_account,
+    locate_employee,
+    refusal,
+)
 
 
 @dataclass(frozen=True)
@@ -22,11 +27,42 @@ class ClaimsMember(CurrentMember):
     claims_year_id: str | None = None
 
 
+def _own_claim_year_id(
+    db: Session, member: CurrentMember, claim_id: object
+) -> str | None:
+    """The benefit year of the member's OWN claim a request addresses.
+
+    The selected period scopes the ledger and new claims; a thread opened from
+    the inbox, an email or a question names one claim, and resolving it against
+    whichever year the ledger last showed 404'd every claim from the other
+    year. Only a claim on the member's own row in its year qualifies, so this
+    grants nothing the period header could not, and reveals nothing about
+    anyone else's claim ids.
+    """
+    claim = db.get(Claim, claim_id) if isinstance(claim_id, str) else None
+    if claim is None or claim.client_id != member.client_id:
+        return None
+    employee, ambiguous = locate_employee(
+        db,
+        policy_year_id=claim.policy_year_id,
+        member_account_id=member.member_account_id,
+        staff_id=member.staff_id,
+    )
+    if ambiguous or employee is None or employee.id != claim.employee_id:
+        return None
+    return claim.policy_year_id
+
+
 def get_claims_member(
+    request: Request,
     member: CurrentMember = Depends(get_current_member),
     year_id: str | None = Header(default=None, alias="X-Inspro-Claims-Year-ID"),
     db: Session = Depends(get_db),
 ) -> CurrentMember:
+    claim_year_id = _own_claim_year_id(db, member, request.path_params.get("claim_id"))
+    if claim_year_id is not None:
+        active = active_policy_year(db, member.client_id)
+        year_id = None if active is not None and active.id == claim_year_id else claim_year_id
     if not year_id:
         return member
     year = db.get(PolicyYear, year_id)

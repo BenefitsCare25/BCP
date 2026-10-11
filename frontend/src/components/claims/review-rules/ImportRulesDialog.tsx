@@ -34,6 +34,7 @@ import {
 } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatError } from "@/lib/errors";
+import { useWriteAccess } from "@/lib/roles";
 
 export function ImportRulesDialog({
   open,
@@ -50,6 +51,7 @@ export function ImportRulesDialog({
   const source = useSourceReviewConfigs(open ? sourceId : null);
   const own = useClaimReviewConfigs();
   const importConfigs = useImportReviewConfigs();
+  const { canRemove } = useWriteAccess();
 
   // Claim types already customized HERE — an import overwrites them. Both
   // sides carry the server's own join key (see `ClaimReviewConfig.key`); a
@@ -189,6 +191,9 @@ export function ImportRulesDialog({
                   <div className="space-y-2">
                     {(source.data ?? []).map((cfg) => {
                       const overwrites = ownKeys.has(cfg.key);
+                      // Overwriting replaces saved mappings and rules — a
+                      // removal of saved data, reserved for firm owners.
+                      const locked = overwrites && !canRemove;
                       return (
                         <label
                           key={cfg.id}
@@ -196,6 +201,7 @@ export function ImportRulesDialog({
                         >
                           <Checkbox
                             checked={picked.has(cfg.id)}
+                            disabled={locked}
                             onCheckedChange={() => toggle(cfg.id)}
                           />
                           <span className="min-w-0">
@@ -219,7 +225,9 @@ export function ImportRulesDialog({
                               {cfg.claim_kind === "flex" ? "Flex" : cfg.claim_key}
                             </Badge>
                             {overwrites && (
-                              <Badge variant="warn">will overwrite</Badge>
+                              <Badge variant="warn">
+                                {locked ? "firm admin only" : "will overwrite"}
+                              </Badge>
                             )}
                           </span>
                         </label>

@@ -238,7 +238,10 @@ def _can_mutate(user: CurrentUser) -> bool:
 def _allowed_actions(claim: Claim, *, can_mutate: bool) -> list[str]:
     if not can_mutate:
         return []
-    actions = ["amend", "assessment", "message", "document_upload"]
+    actions = ["amend", "assessment", "document_upload"]
+    # Only a member's own portal claim has a member who can read the thread.
+    if claim.origin == ORIGIN_PORTAL:
+        actions.append("message")
     if claim.status in DECIDABLE_STATUSES:
         actions.extend(("approve", "reject", "needs_info", "reclassify"))
     if claim.status == CLAIM_STATUS_APPROVED:
@@ -564,6 +567,75 @@ def get_claim(
     return out
 
 
+def _approval_warnings(
+    db: Session, claim: Claim, approving: float
+) -> list[dict[str, Any]]:
+    """Every approval guard `approving` trips: above the claim value, past the
+    visit cap, past the remaining limit.
+
+    Collected rather than raised one at a time because a single `acknowledge`
+    waives them all — returning only the first let an assessor approve past a
+    limit they were never shown. Both sides of each comparison are in the policy
+    currency, and the utilization math excludes this claim (only approved
+    claims count against a limit).
+    """
+    warnings: list[dict[str, Any]] = []
+    claimed = policy_amount(claim)
+    if claimed is not None and approving > claimed:
+        warnings.append({
+            "code": "claim_amount_exceeded",
+            "message": (
+                f"Approving {POLICY_CURRENCY} {approving:,.2f} exceeds the claim "
+                f"value of {POLICY_CURRENCY} {claimed:,.2f}."
+            ),
+            "claimed": float(claimed),
+            "approving": float(approving),
+            "policy_currency": POLICY_CURRENCY,
+        })
+    employee = db.get(Employee, claim.employee_id)
+    if employee is None:
+        return warnings
+    if visits_remaining_for_claim(db, claim, employee) == 0:
+        warnings.append({
+            "code": "visit_limit_reached",
+            "message": (
+                "This member has used every visit allowed on this benefit for "
+                "the policy year."
+            ),
+            "visits_remaining": 0,
+        })
+    remaining = remaining_for_claim(db, claim, employee)
+    if remaining is not None and approving > remaining:
+        warnings.append({
+            "code": "limit_exceeded",
+            "message": (
+                f"Approving {POLICY_CURRENCY} {approving:,.2f} exceeds the "
+                f"remaining limit of {POLICY_CURRENCY} {remaining:,.2f} for this "
+                "coverage."
+            ),
+            "remaining": float(remaining),
+            "approving": float(approving),
+            "policy_currency": POLICY_CURRENCY,
+        })
+    return warnings
+
+
+def _approval_conflict(warnings: list[dict[str, Any]]) -> dict[str, Any]:
+    """One 409 detail naming every tripped guard. The first warning's fields sit
+    at the top level for callers that read a single `code`; `warnings` and the
+    combined `message` carry the full set the acknowledgement will waive."""
+    detail: dict[str, Any] = {}
+    for warning in reversed(warnings):
+        detail.update(warning)
+    detail["message"] = " ".join(
+        [*(warning["message"] for warning in warnings),
+         "Resend with acknowledge=true to approve anyway."]
+    )
+    detail["codes"] = [warning["code"] for warning in warnings]
+    detail["warnings"] = warnings
+    return detail
+
+
 @router.post("/{claim_id}/decision", response_model=BrokerClaimOut)
 def decide_claim(
     body: ClaimDecisionIn,
@@ -602,6 +674,7 @@ def decide_claim(
         "amount_approved": claim.amount_approved,
         "amount_converted": claim.amount_converted,
     }
+    overridden: list[dict[str, Any]] = []
     if body.action == "approve":
         if claim.claim_kind != CLAIM_KIND_FLEX:
             lock_claim_utilization_bucket(db, claim)
@@ -637,77 +710,20 @@ def decide_claim(
                     "incurred_date": claim.incurred_date.isoformat(),
                 },
             )
-        claimed_in_policy_currency = policy_amount(claim)
-        if (
-            claimed_in_policy_currency is not None
-            and approving > claimed_in_policy_currency
-            and not body.acknowledge
-        ):
+        overridden = _approval_warnings(db, claim, approving)
+        if overridden and not body.acknowledge:
             raise HTTPException(
-                status.HTTP_409_CONFLICT,
-                detail={
-                    "code": "claim_amount_exceeded",
-                    "message": (
-                        f"Approving {POLICY_CURRENCY} {approving:,.2f} exceeds "
-                        f"the claim value of {POLICY_CURRENCY} "
-                        f"{claimed_in_policy_currency:,.2f}. Resend with "
-                        "acknowledge=true to record this exception."
-                    ),
-                    "claimed": float(claimed_in_policy_currency),
-                    "approving": float(approving),
-                    "policy_currency": POLICY_CURRENCY,
-                },
+                status.HTTP_409_CONFLICT, detail=_approval_conflict(overridden)
             )
-        # Approving beyond the bucket's remaining limit needs an explicit
-        # acknowledgement — the utilization math already excludes this claim
-        # (only *approved* claims count against the limit). Both sides of the
-        # comparison are policy-currency now; before the conversion existed,
-        # `approving` could be a foreign figure and a USD 500 bill passed a
-        # guard holding SGD 600.
-        if not body.acknowledge:
-            employee = db.get(Employee, claim.employee_id)
-            remaining = (
-                remaining_for_claim(db, claim, employee)
-                if employee is not None
-                else None
-            )
-            visits_left = (
-                visits_remaining_for_claim(db, claim, employee)
-                if employee is not None
-                else None
-            )
-            if visits_left == 0:
-                raise HTTPException(
-                    status.HTTP_409_CONFLICT,
-                    detail={
-                        "code": "visit_limit_reached",
-                        "message": (
-                            "This member has used every visit allowed on this "
-                            "benefit for the policy year. Resend with "
-                            "acknowledge=true to approve anyway."
-                        ),
-                        "visits_remaining": 0,
-                    },
-                )
-            if remaining is not None and approving > remaining:
-                raise HTTPException(
-                    status.HTTP_409_CONFLICT,
-                    detail={
-                        "code": "limit_exceeded",
-                        "message": (
-                            f"Approving {POLICY_CURRENCY} {approving:,.2f} "
-                            f"exceeds the remaining limit of {POLICY_CURRENCY} "
-                            f"{remaining:,.2f} for this coverage. Resend with "
-                            "acknowledge=true to approve anyway."
-                        ),
-                        "remaining": float(remaining),
-                        "approving": float(approving),
-                        "policy_currency": POLICY_CURRENCY,
-                    },
-                )
         claim.amount_approved = Decimal(str(approving)).quantize(Decimal("0.01"))
         claim.decided_at = datetime.now(UTC)
         claim.decided_by = user.user_id
+    elif body.action == "reject" and claim.status == CLAIM_STATUS_SENT_TO_INSURER:
+        # The INSURER declining a claim we accepted. `decided_at`/`decided_by`
+        # stay our approval: overwriting them counted the insurer's turnaround
+        # as ours in the servicer SLA, the register and the workload report.
+        claim.amount_approved = None
+        claim.insurer_outcome_on = business_today()
     elif body.action == "reject":
         claim.amount_approved = None
         claim.decided_at = datetime.now(UTC)
@@ -745,6 +761,9 @@ def decide_claim(
             "amount_converted": claim.amount_converted,
             "fx_source": claim.fx_source,
             "note": body.note,
+            # Which approval guards the assessor acknowledged past, so an
+            # over-limit approval is distinguishable from an ordinary one.
+            "overridden": [warning["code"] for warning in overridden],
         },
         employee_id=claim.employee_id,
     )
@@ -1340,7 +1359,23 @@ def post_claim_message(
     **Everything posted here is member-visible** — there is no internal-note
     mode by design (see models/claim_message.py). Broker-only reasoning belongs
     in the decision note and the AI review.
+
+    Refused on a case the member did not file through the portal (a LOG case,
+    an HR submission): they cannot open it, no email is sent for it, and a
+    message there would read as delivered while reaching nobody.
     """
+    if claim.origin != ORIGIN_PORTAL:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={
+                "code": "claim_not_member_visible",
+                "message": (
+                    "The member cannot see this claim because it was not filed "
+                    "through their portal, so a message here would not reach "
+                    "them. Contact them or their HR directly."
+                ),
+            },
+        )
     msg = post_broker_message(
         db, claim, user_id=user.user_id, body=body.body, subject=body.subject
     )

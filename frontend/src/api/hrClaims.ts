@@ -25,6 +25,28 @@ export interface HrClaimDocument {
   id: string;
   file_name: string;
   doc_type: string | null;
+  /** HR may take this file back: anything on a draft; once sent, only a file
+   *  this HR user uploaded, before a decision, that is not the last copy of
+   *  required evidence. */
+  can_remove: boolean;
+}
+
+/** What HR typed into a draft, served only while it is a draft so the edit
+ *  form can open on it. */
+export interface HrClaimDraft {
+  revision: number;
+  staff_id: string | null;
+  product_code: string | null;
+  flex_category_name: string | null;
+  sub_type: string | null;
+  visit_type: string | null;
+  admission_date: string | null;
+  discharge_date: string | null;
+  doctor_name: string | null;
+  diagnosis: string | null;
+  remarks: string | null;
+  related_claim_id: string | null;
+  referral: { id: string; file_name: string } | null;
 }
 
 export interface HrClaim {
@@ -47,13 +69,26 @@ export interface HrClaim {
   submission_channel: "hr";
   can_add_evidence: boolean;
   can_submit: boolean;
+  /** A draft: HR may still discard it or take a file back off it. */
+  can_discard: boolean;
+  /** A draft: HR may still correct its details. */
+  can_edit: boolean;
+  /** What the broker asked for, served only while the claim is `needs_info`. */
+  decision_notes: string | null;
   created_at: string;
   submitted_at: string | null;
   doc_slots: DocSlot[];
   documents: HrClaimDocument[];
+  draft: HrClaimDraft | null;
 }
 
 export type HrClaimCreateInput = ClaimCreateInput & { employee_id: string };
+
+/** A correction to an HR draft: the create fields HR states, plus the
+ *  revision the form opened on (a mismatch 409s `claim_amended`). */
+export type HrClaimAmendInput = Partial<
+  Omit<ClaimCreateInput, "intake_id" | "intake_claim_index">
+> & { expected_revision: number };
 
 export function useHrEmployees(query: string) {
   return useQuery({
@@ -199,6 +234,63 @@ export function useUploadHrClaimDocument() {
       queryClient.setQueryData(["hr", "claims", claim.id], claim);
       void queryClient.invalidateQueries({ queryKey: ["hr", "claims"] });
     },
+    meta: { localErrorHandling: true },
+  });
+}
+
+function useStoreHrClaim() {
+  const queryClient = useQueryClient();
+  return (claim: HrClaim) => {
+    queryClient.setQueryData(["hr", "claims", claim.id], claim);
+    void queryClient.invalidateQueries({ queryKey: ["hr", "claims"] });
+  };
+}
+
+export function useAmendHrClaim() {
+  const store = useStoreHrClaim();
+  return useMutation({
+    mutationFn: (input: { claimId: string; patch: HrClaimAmendInput }) =>
+      hrApi.patch<HrClaim>(`/hr/claims/${input.claimId}`, input.patch),
+    onSuccess: store,
+    meta: { localErrorHandling: true },
+  });
+}
+
+export function useRemoveHrClaimDocument() {
+  const store = useStoreHrClaim();
+  return useMutation({
+    mutationFn: (input: { claimId: string; documentId: string }) =>
+      hrApi.delete<HrClaim>(
+        `/hr/claims/${input.claimId}/documents/${input.documentId}`,
+      ),
+    onSuccess: store,
+    meta: { localErrorHandling: true },
+  });
+}
+
+export function useDiscardHrClaim() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (claimId: string) => hrApi.delete<void>(`/hr/claims/${claimId}`),
+    onSuccess: (_, claimId) => {
+      queryClient.removeQueries({ queryKey: ["hr", "claims", claimId], exact: true });
+      void queryClient.invalidateQueries({ queryKey: ["hr", "claims"] });
+    },
+    meta: { localErrorHandling: true },
+  });
+}
+
+/** Accept the converted figure submit asked about (409
+ *  `fx_confirmation_required`). The server stamps it only if its own figure
+ *  still matches the one HR was shown. */
+export function useConfirmHrConversion() {
+  const store = useStoreHrClaim();
+  return useMutation({
+    mutationFn: (input: { claimId: string; convertedAmount: number }) =>
+      hrApi.post<HrClaim>(`/hr/claims/${input.claimId}/confirm-conversion`, {
+        converted_amount: input.convertedAmount,
+      }),
+    onSuccess: store,
     meta: { localErrorHandling: true },
   });
 }

@@ -10,6 +10,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useMe, usePolicyYears } from "@/api/hooks";
+import { Badge } from "@/components/ui/badge";
 import { defaultPolicyYear, formatPolicyRange } from "@/lib/policy-year";
 import { useSession } from "@/stores/session";
 import { requestSetupContextChange } from "@/stores/setupNavigation";
@@ -133,6 +134,11 @@ function CompanyContext({ companyOnly = false }: { companyOnly?: boolean }) {
             <span className="hidden max-w-48 truncate text-xs text-muted-foreground md:inline">
               {firmNameFor(selected)}
             </span>
+          )}
+          {me?.platform_access === "read" && (
+            <Badge variant="warn" className="shrink-0" title="Start write access under Platform → Access to make changes.">
+              Read-only access
+            </Badge>
           )}
         </div>
         {!companyOnly && <div className="flex items-center gap-2">

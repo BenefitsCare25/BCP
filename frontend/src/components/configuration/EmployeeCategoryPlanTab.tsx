@@ -66,6 +66,8 @@ interface Props {
   /** Sum-assured products: the slip's maximum sum insured per person. */
   maxSumInsured: string;
   onMaxSumInsuredChange: (value: string) => void;
+  /** The setup form holds unsaved edits (see PlanTypeSettings.saveFirst). */
+  setupDirty?: boolean;
 }
 
 export function EmployeeCategoryPlanTab(props: Props) {
@@ -123,7 +125,7 @@ export function EmployeeCategoryPlanTab(props: Props) {
       {
         policy_year_id: props.policyYearId,
         product_id: props.productId,
-        display_name: "New employee category",
+        display_name: newCategoryName(props.categories),
         participation_model: "compulsory",
       },
       {
@@ -163,6 +165,7 @@ export function EmployeeCategoryPlanTab(props: Props) {
         plans={data.planOptions}
         policyYearId={props.policyYearId}
         productId={props.productId}
+        saveFirst={props.setupDirty}
       />
       {props.basisModel === "sum_assured" && (
         <MaxSumInsuredField
@@ -209,6 +212,22 @@ export function EmployeeCategoryPlanTab(props: Props) {
       )}
     </div>
   );
+}
+
+const NEW_CATEGORY_NAME = "New employee category";
+
+/** A card-added category's name is its cohort wording, so placeholders stay distinct. */
+function newCategoryName(categories: Category[]): string {
+  const taken = new Set(
+    categories.map((category) =>
+      (category.raw_description || category.display_name).trim().toLocaleLowerCase(),
+    ),
+  );
+  let name = NEW_CATEGORY_NAME;
+  for (let n = 2; taken.has(name.toLocaleLowerCase()); n += 1) {
+    name = `${NEW_CATEGORY_NAME} ${n}`;
+  }
+  return name;
 }
 
 type OverlapEmployee = CategoryOverlap["employees"][number] & {

@@ -11,6 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useSession } from "@/stores/session";
 import { cn } from "@/lib/cn";
+import { formatError } from "@/lib/errors";
 import { DraftPeriodPanel } from "./DraftPeriodPanel";
 import { LivePeriodPanel } from "./LivePeriodPanel";
 import { PeriodForm } from "./PeriodForm";
@@ -19,7 +20,7 @@ import { PHASE_META, deadlineSentence, focusPeriod, phaseOf, useNow } from "./pe
 
 export function PeriodOverview({ readOnly }: { readOnly: boolean }) {
   const policyYearId = useSession((s) => s.currentPolicyYearId) ?? undefined;
-  const { data: windows, isLoading } = useEnrollmentWindows(policyYearId);
+  const { data: windows, isLoading, isError, error, refetch } = useEnrollmentWindows(policyYearId);
   // Re-render each minute: every phase badge here is derived from the clock.
   useNow();
   const [picked, setPicked] = useState<string | null>(null);
@@ -38,6 +39,11 @@ export function PeriodOverview({ readOnly }: { readOnly: boolean }) {
         <Loader2 className="size-4 animate-spin" aria-hidden /> Loading periods…
       </p>
     );
+  }
+  // A failed fetch is not "no period yet" — that state invites planning a
+  // second period beside one that is running.
+  if (isError && !windows) {
+    return <PeriodsLoadError error={error} onRetry={() => void refetch()} />;
   }
 
   const list = windows ?? [];
@@ -115,6 +121,26 @@ export function PeriodOverview({ readOnly }: { readOnly: boolean }) {
         </section>
       )}
     </div>
+  );
+}
+
+/** The enrolment periods could not be loaded — shared by Overview and Members. */
+export function PeriodsLoadError({
+  error,
+  onRetry,
+}: {
+  error: unknown;
+  onRetry: () => void;
+}) {
+  return (
+    <section role="alert" className="space-y-3 rounded-xl border border-border bg-card px-5 py-6 text-sm">
+      <p className="text-foreground">
+        Could not load this year's enrolment periods. {formatError(error)}
+      </p>
+      <Button size="sm" variant="outline" onClick={onRetry}>
+        Retry
+      </Button>
+    </section>
   );
 }
 

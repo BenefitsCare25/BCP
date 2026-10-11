@@ -196,6 +196,13 @@ def extract_rate_schedules(
     if not starts:
         return [], None, (), ()
     policy_range = parse_period_of_insurance(policy_period)
+    # The sheet's rates are dated for its OWN period of insurance. An off-cycle
+    # product (a GTL running April to March under a calendar benefit year) never
+    # contains the benefit year's start, so select at the sheet's start instead.
+    if policy_range and effective_date is not None and not (
+        policy_range[0] <= effective_date <= policy_range[1]
+    ):
+        effective_date = policy_range[0]
     tables: list[tuple[list[_RateRow], dict[str, str] | None]] = []
     schedules: list[dict[str, Any]] = []
     for index, start in enumerate(starts):

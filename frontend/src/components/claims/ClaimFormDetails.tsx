@@ -17,8 +17,9 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { NativeSelect } from "@/components/ui/native-select";
 import { SectionLabel } from "@/components/ui/section-label";
+import { singaporeTodayISO } from "@/lib/business-date";
 import { ConflictDetailError, formatError } from "@/lib/errors";
-import { fmtDate } from "@/lib/format";
+import { fmtDate, parseServerDate } from "@/lib/format";
 import { toast } from "sonner";
 
 type Flag = "yes" | "no";
@@ -76,7 +77,10 @@ function draftOf(claim: BrokerClaim): Draft {
     taxable: flag(claim.taxable),
     cpf_claimable: flag(claim.cpf_claimable),
     admin_remarks: claim.admin_remarks ?? "",
-    sent_to_insurer_on: dateInput(claim.sent_to_insurer_at),
+    // An instant, edited as the Singapore business date the server reads it as.
+    sent_to_insurer_on: claim.sent_to_insurer_at
+      ? singaporeTodayISO(parseServerDate(claim.sent_to_insurer_at))
+      : "",
     insurer_deadline_on: dateInput(claim.insurer_deadline_on),
     paid_on: dateInput(claim.paid_on),
     payment_amount:
@@ -261,12 +265,18 @@ export function ClaimFormDetails({
     hasSettlement(viewClaim) &&
     original.sent_to_insurer_on !== "" &&
     draft.sent_to_insurer_on === "";
+  // Mirrors `apply_settlement_amendment`: a paid claim keeps both figures.
+  const clearedPayment =
+    viewClaim.status === "paid" &&
+    ((original.paid_on !== "" && draft.paid_on === "") ||
+      (original.payment_amount !== "" && draft.payment_amount.trim() === ""));
   const pending = amend.isPending || assess.isPending;
   const canSave =
     dirty &&
     amountValid &&
     !invertedDates &&
     !clearedDispatch &&
+    !clearedPayment &&
     !movedUnderUs &&
     (!needsReason || reason.trim() !== "");
 
@@ -788,6 +798,11 @@ export function ClaimFormDetails({
           {clearedDispatch && (
             <p className="text-sm text-error">
               A claim sent to the insurer must keep a dispatch date.
+            </p>
+          )}
+          {clearedPayment && (
+            <p className="text-sm text-error">
+              A paid claim must keep its payment date and amount.
             </p>
           )}
           {overpaymentWarning && (

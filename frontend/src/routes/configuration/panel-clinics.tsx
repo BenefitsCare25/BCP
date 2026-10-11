@@ -90,6 +90,7 @@ import {
 } from "@/components/ui/table";
 import { formatError } from "@/lib/errors";
 import { downloadResponseAsFile } from "@/lib/download";
+import { useWriteAccess } from "@/lib/roles";
 import { useSession } from "@/stores/session";
 
 type TabKey = "locations" | "cards" | "history";
@@ -145,8 +146,8 @@ function ListingFormSheet({
         );
       }
       onOpenChange(false);
-    } catch {
-      // Global mutation toast already surfaced the error.
+    } catch (error) {
+      toast.error(formatError(error));
     }
   };
 
@@ -258,6 +259,8 @@ function CompaniesSheet({
   onOpenChange: (open: boolean) => void;
 }) {
   const { data: companies, isLoading } = useListingCompanies(listing.id);
+  // Unticking a saved company is a removal: firm owners only (API enforces).
+  const { canRemove } = useWriteAccess();
   const save = useSetListingCompanies();
   // null until first interaction — the server state renders untouched.
   const [selected, setSelected] = useState<Set<string> | null>(null);
@@ -282,8 +285,8 @@ function CompaniesSheet({
         `${listing.display_label} is now enabled for ${effective.size} ${effective.size === 1 ? "company" : "companies"}`,
       );
       onOpenChange(false);
-    } catch {
-      // Global mutation toast already surfaced the error.
+    } catch (error) {
+      toast.error(formatError(error));
     }
   };
 
@@ -320,7 +323,11 @@ function CompaniesSheet({
                     <span className="flex items-center gap-2.5">
                       <Checkbox
                         checked={effective.has(company.client_id)}
-                        disabled={noYear || save.isPending}
+                        disabled={
+                          noYear ||
+                          save.isPending ||
+                          (company.enabled && !canRemove)
+                        }
                         onCheckedChange={(v) =>
                           toggle(company.client_id, v === true)
                         }
@@ -363,6 +370,7 @@ function ListingRow({
   listing,
   tagged,
   tagPending,
+  canUntag,
   onToggleTag,
   onCompanies,
   onEdit,
@@ -371,6 +379,7 @@ function ListingRow({
   listing: PanelListing;
   tagged: boolean;
   tagPending: boolean;
+  canUntag: boolean;
   onToggleTag: (next: boolean) => void;
   onCompanies: () => void;
   onEdit: () => void;
@@ -441,7 +450,9 @@ function ListingRow({
       <TableCell>
         <Switch
           checked={tagged}
-          disabled={tagPending || listing.clinic_count === 0}
+          disabled={
+            tagPending || listing.clinic_count === 0 || (tagged && !canUntag)
+          }
           onCheckedChange={onToggleTag}
           aria-label={`Enable ${listing.display_label} for the selected company's policy year`}
         />
@@ -512,6 +523,7 @@ function LibraryTable({
   yearLabel,
   taggedIds,
   tagPending,
+  canUntag,
   onToggleTag,
   onCompanies,
   onEdit,
@@ -521,6 +533,7 @@ function LibraryTable({
   yearLabel: string;
   taggedIds: Set<string>;
   tagPending: boolean;
+  canUntag: boolean;
   onToggleTag: (listing: PanelListing, next: boolean) => void;
   onCompanies: (listing: PanelListing) => void;
   onEdit: (listing: PanelListing) => void;
@@ -549,6 +562,7 @@ function LibraryTable({
             listing={listing}
             tagged={taggedIds.has(listing.id)}
             tagPending={tagPending}
+            canUntag={canUntag}
             onToggleTag={(next) => onToggleTag(listing, next)}
             onCompanies={() => onCompanies(listing)}
             onEdit={() => onEdit(listing)}
@@ -570,9 +584,19 @@ export function PanelClinicsPage() {
   // for a moment after switching, which would 404 as "Policy year not found".
   const currentYear = policyYears.find((y) => y.id === policyYearId);
   const validYearId = currentYear?.id;
-  const { data: yearPanels } = usePolicyYearPanels(validYearId);
+  const yearPanelsQuery = usePolicyYearPanels(validYearId);
+  const yearPanels = yearPanelsQuery.data;
   const setPanels = useSetPolicyYearPanels();
   const remove = useDeletePanelListing();
+  const { canRemove: canUntag } = useWriteAccess();
+  // A toggle PUTs the year's whole set, so it may only build on a set that
+  // loaded and is not being refetched.
+  const tagPending =
+    setPanels.isPending ||
+    !validYearId ||
+    !yearPanels ||
+    yearPanelsQuery.isError ||
+    yearPanelsQuery.isFetching;
 
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<PanelListing | null>(null);
@@ -584,7 +608,7 @@ export function PanelClinicsPage() {
   );
 
   const toggleTag = (listing: PanelListing, next: boolean) => {
-    if (!validYearId) return;
+    if (!validYearId || tagPending) return;
     const ids = new Set(taggedIds);
     if (next) ids.add(listing.id);
     else ids.delete(listing.id);
@@ -597,6 +621,7 @@ export function PanelClinicsPage() {
               ? `${listing.display_label} enabled for policy year ${currentYear?.year ?? ""} — members can now find these clinics`
               : `${listing.display_label} disabled for policy year ${currentYear?.year ?? ""}`,
           ),
+        onError: (error) => toast.error(formatError(error)),
       },
     );
   };
@@ -607,8 +632,8 @@ export function PanelClinicsPage() {
       await remove.mutateAsync(deleting.id);
       toast.success(`${deleting.display_label} deleted`);
       setDeleting(null);
-    } catch {
-      // Global mutation toast already surfaced the error.
+    } catch (error) {
+      toast.error(formatError(error));
     }
   };
 
@@ -670,19 +695,28 @@ export function PanelClinicsPage() {
               </p>
             </div>
           ) : (
-            <LibraryTable
-              listings={listings}
-              yearLabel={currentYear ? String(currentYear.year) : ""}
-              taggedIds={taggedIds}
-              tagPending={setPanels.isPending || !validYearId}
-              onToggleTag={toggleTag}
-              onCompanies={setCompaniesFor}
-              onEdit={(listing) => {
-                setEditing(listing);
-                setFormOpen(true);
-              }}
-              onDelete={setDeleting}
-            />
+            <>
+              {yearPanelsQuery.isError && (
+                <p role="alert" className="mb-3 text-xs text-warn">
+                  Couldn&apos;t load which networks are enabled for this policy
+                  year, so the switches are locked. Refresh to try again.
+                </p>
+              )}
+              <LibraryTable
+                listings={listings}
+                yearLabel={currentYear ? String(currentYear.year) : ""}
+                taggedIds={taggedIds}
+                tagPending={tagPending}
+                canUntag={canUntag}
+                onToggleTag={toggleTag}
+                onCompanies={setCompaniesFor}
+                onEdit={(listing) => {
+                  setEditing(listing);
+                  setFormOpen(true);
+                }}
+                onDelete={setDeleting}
+              />
+            </>
           )}
         </CardContent>
       </Card>

@@ -29,6 +29,7 @@ from app.models.member_enquiry import (
     topic_label,
 )
 from app.schemas.claims import EnquiryOut, EnquiryTopicOut
+from app.services.claim_intake import person_employee_ids
 from app.services.claim_messages import (
     claim_subject,
     post_member_enquiry_message,
@@ -92,13 +93,17 @@ def open_enquiry_count(db: Session, employee_id: str, policy_year_id: str) -> in
 
 
 def load_member_enquiry(
-    db: Session, enquiry_id: str, employee_id: str
+    db: Session, enquiry_id: str, employee: Employee
 ) -> MemberEnquiry:
     """One question, or 404 — never 403, so the portal cannot be used to
     discover whose questions exist. The point-load counterpart of the scope
-    filter in `member_conversations`."""
+    filter in `member_conversations`.
+
+    Across the person's benefit YEARS (`person_employee_ids`): a question asked
+    on 30 Dec and answered after the renewal is still theirs to read.
+    """
     enquiry = db.get(MemberEnquiry, enquiry_id)
-    if enquiry is None or enquiry.employee_id != employee_id:
+    if enquiry is None or enquiry.employee_id not in person_employee_ids(db, employee):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Question not found")
     return enquiry
 
@@ -132,7 +137,13 @@ def create_enquiry(
     if about_claim_id:
         # Through the member's OWN loader: a claim they don't own 404s exactly
         # as it does everywhere else, so this reference can't be used to probe.
-        load_member_claim(db, about_claim_id, employee.id)
+        # Any of the person's benefit years: the picker lists the claims of the
+        # period the ledger shows, which need not be the current one.
+        referenced = db.get(Claim, about_claim_id)
+        owner_id = referenced.employee_id if referenced is not None else employee.id
+        if owner_id not in person_employee_ids(db, employee):
+            owner_id = employee.id
+        load_member_claim(db, about_claim_id, owner_id)
     enquiry = MemberEnquiry(
         client_id=employee.client_id,
         employee_id=employee.id,
@@ -159,6 +170,14 @@ def mark_answered(enquiry: MemberEnquiry) -> None:
     deliberate end state and not something a stray reply should undo."""
     if enquiry.status == STATUS_OPEN:
         enquiry.status = STATUS_ANSWERED
+
+
+def mark_awaiting_reply(enquiry: MemberEnquiry) -> None:
+    """The member writing again puts an answered question back with US — the
+    mirror of `mark_answered`, so their strike never reads "Answered" over a
+    follow-up nobody has replied to. A closed question stays closed."""
+    if enquiry.status == STATUS_ANSWERED:
+        enquiry.status = STATUS_OPEN
 
 
 def close_enquiry(db: Session, enquiry: MemberEnquiry, *, user_id: str) -> None:

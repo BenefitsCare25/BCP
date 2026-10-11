@@ -16,6 +16,7 @@ import { availableAfterPending } from "@/lib/claimLimits";
 import { balanceLabel, careFacts } from "./careFacts";
 import { currencySymbol, moneyText } from "./Figure";
 import { portalText as pt } from "@/i18n/portal";
+import { isHeldLine } from "../memberVisibility";
 
 export type BenefitHeadline = {
   label: string;
@@ -60,10 +61,15 @@ export function bucketHeadline(bucket: VisitBucket, currency: string): BenefitHe
   const symbol = currencySymbol(currency);
   const afterPending = availableAfterPending(bucket.remaining, bucket.pending, bucket.pending_unconverted);
   const left = afterPending ?? bucket.remaining ?? 0;
+  // A foreign claim in review with no rate yet: the figure is the confirmed
+  // balance before review, so it is never labelled as what is left.
+  const awaitingFx = bucket.pending_unconverted > 0;
   return {
-    label: isSubLimit ? pt("{0} · left", [pt(balanceLabel(bucket))]) : "Left this year",
+    label: isSubLimit ? pt("{0} · left", [pt(balanceLabel(bucket))]) : awaitingFx ? "Confirmed balance" : "Left this year",
     value: `${symbol}${moneyText(left)}`,
-    note: bucket.pending > 0 ? pt("{0}{1} in review", [symbol, moneyText(bucket.pending)]) : pt("of {0}{1}", [symbol, moneyText(bucket.limit ?? 0)]),
+    note: awaitingFx
+      ? "After-pending balance awaits currency conversion"
+      : bucket.pending > 0 ? pt("{0}{1} in review", [symbol, moneyText(bucket.pending)]) : pt("of {0}{1}", [symbol, moneyText(bucket.limit ?? 0)]),
     used: bucket.limit ? Math.min(1, bucket.approved / bucket.limit) : 0,
   };
 }
@@ -74,10 +80,18 @@ export function benefitHeadline(
   utilization: Utilization | undefined,
   currency = "SGD",
 ): BenefitHeadline | null {
-  const tracked = trackedBuckets(utilization, lines.map((line) => line.product_code));
+  const held = lines.filter(isHeldLine);
+  // Cover the member doesn't hold leads with its status, never a figure: an
+  // unconfirmed plan's amounts are extraction output, and voluntary cover not
+  // taken up can't be claimed against.
+  if (held.length === 0) {
+    if (lines.length === 0) return null;
+    return { label: lines.some((line) => line.published === false) ? "Being checked" : "Not enrolled", value: "" };
+  }
+  const tracked = trackedBuckets(utilization, held.map((line) => line.product_code));
   const rollUp = tracked.find((bucket) => bucket.benefit_key === null);
   if (rollUp) return bucketHeadline(rollUp, currency);
-  const fact = lines.map((line) => careFacts(line, routeKey)[0]).find(Boolean);
+  const fact = held.map((line) => careFacts(line, routeKey)[0]).find(Boolean);
   const sub = tracked[0] ? bucketHeadline(tracked[0], currency) : null;
   // Only a SUB-limit is tracked: the plan's own fact leads, and the sub-limit
   // rides beneath it under its own name.

@@ -27,9 +27,9 @@ import {
 import { FieldLabel } from "@/components/ui/tooltip";
 import type { ProductPayload } from "@/api/hooks";
 import {
+  useAddProductToYear,
   useCreateProduct,
   useProductSetups,
-  useRemoveProduct,
   useSetupProducts,
 } from "@/api/hooks";
 import { useRegistry } from "@/api/registry";
@@ -41,7 +41,7 @@ import {
 } from "./AddVariantSection";
 import { LINE_LABELS, isProductAdded, lineForCode } from "@/lib/insuranceLines";
 import { formatError } from "@/lib/errors";
-import type { InsuranceLine } from "@/types";
+import type { InsuranceLine, SetupProductSummary } from "@/types";
 import { toast } from "sonner";
 
 interface Props {
@@ -49,6 +49,8 @@ interface Props {
   line: InsuranceLine;
   // Called with the codes of the products created, so the parent can open them.
   onCreated: (codes: string[]) => void;
+  // Asks the parent to confirm removing an added product (its own dialog).
+  onRemove: (product: SetupProductSummary) => void;
 }
 
 const PARTICIPATION: { value: "standard" | "extended" | "eo_only"; label: string }[] = [
@@ -64,6 +66,10 @@ const DEFAULT_PROFILE: Record<InsuranceLine, string> = {
   flex: "tiered_medical",
 };
 
+// A product code travels (encoded) in URL paths; these characters still break
+// routing, so the server refuses them too (as well as control characters).
+const UNSAFE_PRODUCT_CODE = /[/\\?#%\s]/;
+
 // No insurer here: it is a per-benefit-year placement fact, entered on the
 // product's own Header & Policy tab once the product is added.
 const emptyCustom = (line: InsuranceLine) => ({
@@ -75,7 +81,7 @@ const emptyCustom = (line: InsuranceLine) => ({
   isOutpatient: false,
 });
 
-export function AddProductDialog({ policyYearId, line, onCreated }: Props) {
+export function AddProductDialog({ policyYearId, line, onCreated, onRemove }: Props) {
   const [open, setOpen] = useState(false);
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [showCustom, setShowCustom] = useState(false);
@@ -87,7 +93,8 @@ export function AddProductDialog({ policyYearId, line, onCreated }: Props) {
   const { data: setups = [] } = useProductSetups(policyYearId);
   const { data: registry } = useRegistry();
   const create = useCreateProduct();
-  const remove = useRemoveProduct(policyYearId);
+  const addToYear = useAddProductToYear(policyYearId);
+  const pending = create.isPending || addToYear.isPending;
 
   // Selectable form profiles come from the backend registry (fallback keeps
   // the dialog usable before the registry query resolves).
@@ -95,13 +102,11 @@ export function AddProductDialog({ policyYearId, line, onCreated }: Props) {
     ? registry.profiles.map((p) => ({ value: p.id, label: p.label }))
     : [{ value: DEFAULT_PROFILE[line], label: "Standard" }];
 
-  const onRemove = async (code: string, name: string) => {
-    try {
-      await remove.mutateAsync(code);
-      toast.success(`Removed ${name}`);
-    } catch (err) {
-      toast.error(formatError(err));
-    }
+  // Removal is irreversible, so it goes through the parent's confirmation.
+  const requestRemove = (product: SetupProductSummary) => {
+    setOpen(false);
+    reset();
+    onRemove(product);
   };
 
   const draftCodes = useMemo(
@@ -156,8 +161,12 @@ export function AddProductDialog({ policyYearId, line, onCreated }: Props) {
   };
 
   const customCode = custom.code.trim().toUpperCase();
+  const customCodeInvalid = UNSAFE_PRODUCT_CODE.test(customCode);
   const customValid =
-    showCustom && customCode.length > 0 && custom.displayName.trim().length > 0;
+    showCustom &&
+    customCode.length > 0 &&
+    !customCodeInvalid &&
+    custom.displayName.trim().length > 0;
   const customPartial =
     showCustom && (customCode.length > 0 || custom.displayName.trim().length > 0);
   const variantCode = showVariant ? previewVariantCode(variant) : "";
@@ -170,11 +179,18 @@ export function AddProductDialog({ policyYearId, line, onCreated }: Props) {
     !(variantPartial && !variantValid);
 
   const submit = async () => {
-    if (!canSubmit || create.isPending) return;
+    if (!canSubmit || pending) return;
     const byCode = new Map(allProducts.map((p) => [p.code, p]));
     const payloads: ProductPayload[] = [];
+    // A product another benefit year already uses keeps its catalog row, so it
+    // joins this year through a setup draft; creating the row again conflicts.
+    const reAdded: string[] = [];
     for (const code of picked) {
       const summary = byCode.get(code);
+      if (summary?.product_id) {
+        reAdded.push(code);
+        continue;
+      }
       payloads.push({
         code,
         display_name: summary?.display_name ?? code,
@@ -210,14 +226,15 @@ export function AddProductDialog({ policyYearId, line, onCreated }: Props) {
       });
     }
 
-    const results = await Promise.allSettled(
-      payloads.map((p) => create.mutateAsync(p)),
-    );
-    // The server owns the final code (a variant's is derived from its label).
-    const created = results.flatMap((r, i) =>
-      r.status === "fulfilled"
-        ? [r.value?.code ?? payloads[i].code]
-        : [],
+    const results = await Promise.allSettled([
+      ...reAdded.map((code) => addToYear.mutateAsync(code).then(() => code)),
+      // The server owns the final code (a variant's is derived from its label).
+      ...payloads.map((p) =>
+        create.mutateAsync(p).then((product) => product?.code ?? p.code),
+      ),
+    ]);
+    const created = results.flatMap((r) =>
+      r.status === "fulfilled" ? [r.value] : [],
     );
     const failed = results.length - created.length;
 
@@ -293,8 +310,7 @@ export function AddProductDialog({ policyYearId, line, onCreated }: Props) {
                       <FirmOwnerOnly><Button
                         variant="outline"
                         size="sm"
-                        disabled={remove.isPending}
-                        onClick={() => onRemove(p.code, p.display_name)}
+                        onClick={() => requestRemove(p)}
                         className="text-error hover:text-error"
                       >
                         <Trash2 className="size-3.5" /> Remove
@@ -347,8 +363,19 @@ export function AddProductDialog({ policyYearId, line, onCreated }: Props) {
                       onChange={(e) =>
                         setCustom((c) => ({ ...c, code: e.target.value }))
                       }
-                      className="font-mono uppercase"
+                      aria-invalid={customCodeInvalid || undefined}
+                      aria-describedby={customCodeInvalid ? "ap-code-error" : undefined}
+                      className={
+                        customCodeInvalid
+                          ? "font-mono uppercase border-error focus-visible:border-error"
+                          : "font-mono uppercase"
+                      }
                     />
+                    {customCodeInvalid && (
+                      <p id="ap-code-error" className="text-xs text-error">
+                        Spaces and the characters / \ ? # % are not allowed.
+                      </p>
+                    )}
                   </div>
                   <div className="space-y-1.5">
                     <Label htmlFor="ap-name">Display name</Label>
@@ -458,8 +485,8 @@ export function AddProductDialog({ policyYearId, line, onCreated }: Props) {
           <Button variant="outline" onClick={() => setOpen(false)}>
             Cancel
           </Button>
-          <Button onClick={submit} disabled={!canSubmit || create.isPending}>
-            {create.isPending
+          <Button onClick={submit} disabled={!canSubmit || pending}>
+            {pending
               ? "Adding…"
               : `Add ${
                   picked.size + (customValid ? 1 : 0) + (variantValid ? 1 : 0) || ""

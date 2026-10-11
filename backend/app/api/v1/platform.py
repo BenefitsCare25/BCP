@@ -36,8 +36,9 @@ from sqlalchemy.sql.elements import ColumnElement
 
 from app.core import identity_providers as IDP
 from app.core.audit import write_audit, write_platform_audit
-from app.core.auth import ROLE_SYSTEM_ADMIN, CurrentUser
+from app.core.auth import ROLE_FIRM_ADMIN, ROLE_SYSTEM_ADMIN, CurrentUser
 from app.core.broker_auth import SUBJECT as SUBJECT_BROKER
+from app.core.broker_auth import credential
 from app.core.deps import require_system_admin
 from app.core.request_context import get_client_ip
 from app.core.settings import get_settings
@@ -48,7 +49,12 @@ from app.core.tenant_resolution import (
     require_platform_host,
 )
 from app.db.session import get_db
-from app.db.tenancy import provision_new_firm, set_search_path
+from app.db.tenancy import (
+    firm_provisioned,
+    provision_new_firm,
+    require_firm_provisioned,
+    set_search_path,
+)
 from app.models import AuthSession, BrokerFirm, Client, User
 from app.models.auth import SUBJECT_USER
 from app.models.client import FIRM_STATUS_SUSPENDED
@@ -62,6 +68,7 @@ from app.models.platform import (
     PlatformAuditLog,
     TenantDomain,
 )
+from app.models.user import USER_STATUS_ACTIVE
 from app.services.client_slug import slugify_client_name
 
 router = APIRouter(
@@ -97,6 +104,11 @@ class FirmOut(BaseModel):
     client_count: int
     domain_count: int
     created_at: datetime
+    # False while a firm created with runtime provisioning off waits for the
+    # migration job to create its schema: inviting its staff, starting access
+    # and changing its sign-in methods answer 409 `firm_not_provisioned` until
+    # then. Always True on SQLite.
+    provisioned: bool
 
 
 class FirmCreate(BaseModel):
@@ -424,6 +436,47 @@ def _end_replaced_sessions(
     return revoked
 
 
+def _signs_in_under(db: Session, account: User, settings: IDP.SignInSettings) -> bool:
+    """Whether a staff account could sign in under ``settings``: a Microsoft-
+    bound account through the directory it was bound in (a pre-directory
+    binding: the platform directory), any other account with its password."""
+    if account.external_id:
+        platform = IDP.platform_directory()
+        directory = account.external_tid or (platform.tenant_id if platform else None)
+        return settings.entra_enabled and directory == settings.tenant_id
+    return settings.local_enabled and credential(db, account.id) is not None
+
+
+def _assert_keeps_sign_in(
+    db: Session, user: CurrentUser, firm_id: str,
+    before: IDP.SignInSettings, after: IDP.SignInSettings,
+) -> None:
+    """409 for a change that takes away the caller's own way in, or that
+    leaves none of the firm's active firm admins able to sign in."""
+    actor = db.get(User, user.user_id) if user.broker_firm_id == firm_id else None
+    if actor is not None and _signs_in_under(db, actor, before) and not _signs_in_under(
+        db, actor, after
+    ):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "This change turns off the sign-in method your own account uses, so you "
+            "could not sign in again. Ask another firm admin to make it.",
+        )
+    admins = db.execute(select(User).where(
+        User.broker_firm_id == firm_id,
+        User.role == ROLE_FIRM_ADMIN,
+        User.status == USER_STATUS_ACTIVE,
+    )).scalars().all()
+    if any(_signs_in_under(db, a, before) for a in admins) and not any(
+        _signs_in_under(db, a, after) for a in admins
+    ):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "After this change no firm admin could sign in. Keep the method a firm "
+            "admin uses on until another firm admin can sign in with the new one.",
+        )
+
+
 def update_sign_in_methods(
     db: Session, user: CurrentUser, firm: BrokerFirm, body: SignInMethodsIn
 ) -> SignInMethodsOut:
@@ -431,6 +484,7 @@ def update_sign_in_methods(
     takes away, and audit it in the firm's trail (and the platform's, for the
     master admin). Commits."""
     _load_firm(db, firm.id, lock=True)  # one change at a time per firm
+    require_firm_provisioned(db, firm.id)
     before = IDP.sign_in_settings(db, firm.id)
     after = IDP.validate_settings(db, firm.id, IDP.SignInSettings(
         entra_enabled=body.entra.enabled,
@@ -440,6 +494,7 @@ def update_sign_in_methods(
     ))
     if after == before:
         return sign_in_methods_out(db, firm.id)
+    _assert_keeps_sign_in(db, user, firm.id, before, after)
     IDP.save_settings(db, firm.id, after)
     revoked = _end_replaced_sessions(db, firm.id, before, after)
     if user.role == ROLE_SYSTEM_ADMIN:
@@ -515,10 +570,10 @@ def _firm_out(db: Session, firm: BrokerFirm) -> FirmOut:
     domains = db.scalar(
         select(func.count(TenantDomain.id)).where(TenantDomain.broker_firm_id == firm.id)
     )
-    return _firm_row(firm, int(clients or 0), int(domains or 0))
+    return _firm_row(db, firm, int(clients or 0), int(domains or 0))
 
 
-def _firm_row(firm: BrokerFirm, clients: int, domains: int) -> FirmOut:
+def _firm_row(db: Session, firm: BrokerFirm, clients: int, domains: int) -> FirmOut:
     return FirmOut(
         id=firm.id,
         name=firm.name,
@@ -529,6 +584,7 @@ def _firm_row(firm: BrokerFirm, clients: int, domains: int) -> FirmOut:
         client_count=clients,
         domain_count=domains,
         created_at=_utc(firm.created_at),
+        provisioned=firm_provisioned(db, firm.id),
     )
 
 
@@ -594,7 +650,7 @@ def list_firms(
     firms = db.execute(
         select(BrokerFirm).order_by(BrokerFirm.is_platform_owner.desc(), BrokerFirm.name)
     ).scalars().all()
-    return [_firm_row(f, clients.get(f.id, 0), domains.get(f.id, 0)) for f in firms]
+    return [_firm_row(db, f, clients.get(f.id, 0), domains.get(f.id, 0)) for f in firms]
 
 
 @router.post("/firms", response_model=FirmOut, status_code=201)
@@ -849,6 +905,7 @@ def create_access_grant(
             status.HTTP_409_CONFLICT,
             "You already have standing access to the platform owner's firm.",
         )
+    require_firm_provisioned(db, firm.id)
     now = datetime.now(UTC)
     ip = get_client_ip()
     grant = PlatformAccessGrant(

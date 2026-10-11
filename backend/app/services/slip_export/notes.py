@@ -4,6 +4,8 @@ The upload keeps every ``Label : value`` term and every titled block the
 structured parsers don't own (``answers["terms"]`` / ``answers["sections"]``).
 The export puts them back where the slip printed them, so a re-issued slip says
 everything the placed one said — configured values still win where both exist.
+A quotation slip withholds the incumbent's commercial terms
+(``QUOTATION_COMMERCIAL_TERMS``) and keeps the benefit-defining wording.
 """
 from __future__ import annotations
 
@@ -26,9 +28,52 @@ from app.services.slip_export.styles import (
 _PREMIUM_LABEL = re.compile(r"^\s*annual\s+premium\b", re.IGNORECASE)
 _QUALIFIER = re.compile(r"\(([^)]+)\)")
 
+QUOTATION_COMMERCIAL_TERMS: tuple[str, ...] = (
+    "experience refund",
+    "loss ratio",
+    "profit commission",
+    "discount",
+    "package discount",
+    "minimum premium",
+    "commission",
+    "brokerage",
+    "rated together",
+    "rate guarantee",
+)
+"""Commercial terms a quotation slip must not repeat from the placed slip.
+
+A quotation goes to insurers competing for the business, so the incumbent's
+negotiated commercials (refund formula, loss ratio, discounts, minimum premium,
+commission, rating groups, rate guarantee) are theirs to quote, not ours to
+disclose. A term or section whose label contains any of these phrases as whole
+words (the last one optionally plural) keeps its label on a quotation but goes
+out without its value or body.
+Benefit-defining wording (Non Evidence Limit, limits, eligibility, waiting
+periods) is not listed and still reaches every quoting insurer. Placement slips
+print every captured term unchanged.
+"""
+
 
 def _words(text: str) -> list[str]:
     return re.findall(r"[a-z0-9]+", (text or "").casefold())
+
+
+_COMMERCIAL_PHRASES: tuple[tuple[str, ...], ...] = tuple(
+    tuple(_words(term)) for term in QUOTATION_COMMERCIAL_TERMS
+)
+
+
+def is_commercial_term(label: str) -> bool:
+    """Whether ``label`` names a quotation-blanked commercial term
+    (``QUOTATION_COMMERCIAL_TERMS``), matched on whole words in order. The last
+    word may be plural ("Package Discounts", "Commissions")."""
+    words = _words(label)
+    return any(
+        words[i : i + len(phrase) - 1] == list(phrase[:-1])
+        and words[i + len(phrase) - 1] in (phrase[-1], f"{phrase[-1]}s")
+        for phrase in _COMMERCIAL_PHRASES
+        for i in range(len(words) - len(phrase) + 1)
+    )
 
 
 def captured_terms(answers: dict[str, Any]) -> list[tuple[str, str]]:
@@ -64,15 +109,22 @@ def _same_term(ladder_label: str, captured_label: str) -> bool:
 
 
 def merge_terms(
-    ladder: list[tuple[str, str]], answers: dict[str, Any]
+    ladder: list[tuple[str, str]],
+    answers: dict[str, Any],
+    *,
+    quotation: bool = False,
 ) -> list[tuple[str, str]]:
     """The terms ladder with captured values filled in and extras appended.
 
     A configured value always wins; a captured one only fills a blank row.
-    Captured terms matching no ladder row follow it, in slip order.
+    Captured terms matching no ladder row follow it, in slip order. On a
+    quotation every commercial term (``QUOTATION_COMMERCIAL_TERMS``) keeps its
+    label but prints blank, for the quoting insurer to fill in.
     """
     rows = list(ladder)
     for label, value in captured_terms(answers):
+        if quotation and is_commercial_term(label):
+            value = ""
         index = next(
             (i for i, (ladder_label, _) in enumerate(rows) if _same_term(ladder_label, label)),
             None,
@@ -81,12 +133,28 @@ def merge_terms(
             rows.append((f"{label} :", value))
         elif not rows[index][1]:
             rows[index] = (rows[index][0], value)
+    if quotation:
+        # A ladder row is blanked by its own label too: a non-commercial
+        # captured label can still lead a commercial ladder row's words.
+        rows = [
+            (label, "" if is_commercial_term(label) else value) for label, value in rows
+        ]
     return rows
 
 
-def write_sections(ws: Worksheet, answers: dict[str, Any], placement: str) -> None:
+def write_sections(
+    ws: Worksheet,
+    answers: dict[str, Any],
+    placement: str,
+    *,
+    quotation: bool = False,
+) -> None:
     """Render the captured sections printed at ``placement`` ("basis" /
-    "after_sob"), each as its title and a bordered, column-aligned table."""
+    "after_sob"), each as its title and a bordered, column-aligned table.
+
+    A quotation leaves out sections titled after a commercial term
+    (``QUOTATION_COMMERCIAL_TERMS``); benefit wording still prints.
+    """
     for section in answers.get("sections") or []:
         if not isinstance(section, dict) or section.get("placement") != placement:
             continue
@@ -97,6 +165,8 @@ def write_sections(ws: Worksheet, answers: dict[str, Any], placement: str) -> No
         ]
         title = str(section.get("title") or "").strip()
         if not rows and not title:
+            continue
+        if quotation and is_commercial_term(title):
             continue
         spacer_row(ws)
         if title:

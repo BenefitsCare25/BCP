@@ -20,6 +20,7 @@ import {
   toDependantQuery,
 } from "@/components/operations/DependantFilterBar";
 import { cn } from "@/lib/cn";
+import { useWriteAccess } from "@/lib/roles";
 import { useDebouncedValue } from "@/lib/use-debounced-value";
 import { useSession } from "@/stores/session";
 import { AlertDialog } from "@/components/ui/alert-dialog";
@@ -66,7 +67,12 @@ import {
   useDualCoverage,
 } from "@/api/dualCoverage";
 import { InfoHint } from "@/components/ui/tooltip";
-import { coerceAttrs } from "@/lib/attrs";
+import { changedAttrs, editableAttrs } from "@/lib/attrs";
+import {
+  dependantDob,
+  dependantName,
+  dependantRelationship,
+} from "@/lib/dependant";
 import { ConflictDetailError, formatError } from "@/lib/errors";
 import { fmtDate } from "@/lib/format";
 import type { EmployeeList } from "@/types";
@@ -164,6 +170,9 @@ function DualCell({
 
 export function DependantsPage() {
   const policyYearId = useSession((s) => s.currentPolicyYearId);
+  // The API refuses every write from a viewer and under a read-only access
+  // grant; don't offer one.
+  const { canEdit } = useWriteAccess();
   const bulkDelete = useBulkDeleteDependants();
   const updateDependant = useUpdateDependant();
   const autoMatch = useAutoMatchDependants();
@@ -175,6 +184,9 @@ export function DependantsPage() {
   const [showDeleteAll, setShowDeleteAll] = useState(false);
   const [deleteRisk, setDeleteRisk] = useState<number | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // What the form was opened on, so only the fields the broker changed are
+  // written back over the latest stored values.
+  const [editBase, setEditBase] = useState<Record<string, unknown>>({});
   const [editAttrs, setEditAttrs] = useState<Record<string, string>>({});
   const [linkStaffId, setLinkStaffId] = useState("");
   // The review sheet is opened from two places — the banner (everything) and a
@@ -188,7 +200,7 @@ export function DependantsPage() {
     () => toDependantQuery({ ...filters, q: debouncedSearch }),
     [filters, debouncedSearch],
   );
-  const { data, isLoading } = useDependantQueryList(
+  const { data, isLoading, isPlaceholderData } = useDependantQueryList(
     policyYearId ?? undefined,
     query,
     { offset: page * PAGE_SIZE, limit: PAGE_SIZE },
@@ -220,15 +232,26 @@ export function DependantsPage() {
     setPage(0);
   }, [debouncedSearch]);
 
+  // Another company or benefit year is a different roster: its page index,
+  // filters (employee cohorts are per year) and open row don't carry over.
+  useEffect(() => {
+    setPage(0);
+    setFilters(EMPTY_DEPENDANT_FILTERS);
+    setSelectedId(null);
+  }, [policyYearId]);
+
+  // A shrinking result (auto-match, unlink, another tab's edit) must not
+  // strand the table on a page past the end, where no pager renders.
+  useEffect(() => {
+    if (!data || isPlaceholderData || page === 0) return;
+    const last = Math.max(0, Math.ceil(data.total / PAGE_SIZE) - 1);
+    if (page > last) setPage(last);
+  }, [data, isPlaceholderData, page]);
+
   useEffect(() => {
     if (!selected) return;
-    setEditAttrs(
-      Object.fromEntries(
-        Object.entries(selected.attribute_values)
-          .filter(([k]) => !LINK_HINT_KEYS.has(k))
-          .map(([k, v]) => [k, v == null ? "" : String(v)]),
-      ),
-    );
+    setEditBase(selected.attribute_values);
+    setEditAttrs(editableAttrs(selected.attribute_values, LINK_HINT_KEYS));
     setLinkStaffId("");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedId]);
@@ -236,6 +259,8 @@ export function DependantsPage() {
   if (!policyYearId) return null;
   const total = data?.total ?? 0;
   const pages = Math.ceil(total / PAGE_SIZE);
+  const editChanges = changedAttrs(editBase, editAttrs);
+  const editDirty = Object.keys(editChanges).length > 0;
 
   return (
     <div className="space-y-5">
@@ -281,9 +306,10 @@ export function DependantsPage() {
                 <ListingExceptionLink
                   count={unlinkedTotal}
                   label="unlinked"
-                  onClick={() =>
-                    setFilters((f) => ({ ...f, linkState: "unlinked" }))
-                  }
+                  onClick={() => {
+                    setPage(0);
+                    setFilters((f) => ({ ...f, linkState: "unlinked" }));
+                  }}
                 />
               </>
             ) : (
@@ -300,7 +326,7 @@ export function DependantsPage() {
           label="Dependant listing"
           disabled={!total}
         />
-        <Button
+        {canEdit && <Button
           variant="outline"
           disabled={autoMatch.isPending || !total}
           onClick={async () => {
@@ -323,7 +349,7 @@ export function DependantsPage() {
             <Sparkles className="size-4" />
           )}
           Auto-match
-        </Button>
+        </Button>}
       </RosterTabActions>
 
       <Card>
@@ -335,7 +361,7 @@ export function DependantsPage() {
           <FirmOwnerOnly><Button
             variant="outline"
             size="sm"
-            disabled={!total}
+            disabled={!anyOnFile}
             onClick={() => setShowDeleteAll(true)}
             className="shrink-0 text-error hover:text-error"
           >
@@ -374,8 +400,9 @@ export function DependantsPage() {
                         Link to employee
                         <InfoHint>
                           Linked dependants inherit an employee's coverage
-                          (matched via staff ID, NRIC, or name). Unlinked rows
-                          aren't covered — use Auto-match or link manually.
+                          (matched via the employee's staff ID, or their name
+                          when only one employee has it). Unlinked rows aren't
+                          covered — use Auto-match or link manually.
                         </InfoHint>
                       </span>
                     </TableHead>
@@ -400,13 +427,13 @@ export function DependantsPage() {
                       onClick={() => setSelectedId(d.id)}
                     >
                       <TableCell className="font-medium">
-                        {(d.attribute_values.dependant_name as string) ?? "—"}
+                        {dependantName(d) ?? "—"}
                       </TableCell>
                       <TableCell>
-                        {(d.attribute_values.relationship as string) ?? "—"}
+                        {dependantRelationship(d) ?? "—"}
                       </TableCell>
                       <TableCell className="text-muted-foreground">
-                        {fmtDate(d.attribute_values.date_of_birth as string)}
+                        {fmtDate(dependantDob(d))}
                       </TableCell>
                       <TableCell>
                         {d.employee_id ? (
@@ -442,11 +469,13 @@ export function DependantsPage() {
         description={
           <>
             This will permanently delete{" "}
-            <strong>{total.toLocaleString()} dependant records</strong> for
-            the current policy year. This cannot be undone.
+            <strong>{anyOnFile.toLocaleString()} dependant records</strong>{" "}
+            for the current policy year (every dependant in every status,
+            including pending, rejected and terminated ones, regardless of any
+            active search or filter). This cannot be undone.
           </>
         }
-        confirmLabel={`Delete ${total.toLocaleString()} dependants`}
+        confirmLabel={`Delete ${anyOnFile.toLocaleString()} dependants`}
         loading={bulkDelete.isPending}
         onConfirm={async () => {
           try {
@@ -483,7 +512,7 @@ export function DependantsPage() {
             re-submit. This cannot be undone.
           </>
         }
-        confirmLabel={`Delete anyway (${total.toLocaleString()} dependants)`}
+        confirmLabel={`Delete anyway (${anyOnFile.toLocaleString()} dependants)`}
         loading={bulkDelete.isPending}
         onConfirm={async () => {
           try {
@@ -510,10 +539,7 @@ export function DependantsPage() {
           {selected && (
             <>
               <SheetHeader>
-                <SheetTitle>
-                  {(selected.attribute_values.dependant_name as string) ??
-                    "Dependant"}
-                </SheetTitle>
+                <SheetTitle>{dependantName(selected) ?? "Dependant"}</SheetTitle>
               </SheetHeader>
               <SheetBody className="space-y-4">
                 <div>
@@ -566,7 +592,7 @@ export function DependantsPage() {
                       </div>
                     );
                   })()}
-                  <div className="flex items-center gap-2">
+                  {canEdit && <div className="flex items-center gap-2">
                     <Input
                       placeholder="Link to staff ID…"
                       value={linkStaffId}
@@ -617,24 +643,35 @@ export function DependantsPage() {
                     >
                       <Link2 className="size-4" /> Link
                     </Button>
-                  </div>
+                  </div>}
                 </div>
 
                 <div>
                   <div className="flex items-center justify-between gap-2 mb-2">
                     <div className="text-2xs uppercase tracking-wider text-muted-foreground">
-                      Details (editable)
+                      {canEdit ? "Details (editable)" : "Details"}
                     </div>
-                    <Button
+                    {canEdit && <Button
                       size="sm"
                       variant="outline"
-                      disabled={updateDependant.isPending}
+                      disabled={!editDirty || updateDependant.isPending}
                       onClick={async () => {
                         try {
-                          await updateDependant.mutateAsync({
+                          // The PATCH replaces attribute_values wholesale, so
+                          // the edits are laid over the stored values: link
+                          // hints and structured fields (insurer member IDs)
+                          // are not in this form and must survive the save.
+                          const saved = await updateDependant.mutateAsync({
                             dependantId: selected.id,
-                            attribute_values: coerceAttrs(editAttrs),
+                            attribute_values: {
+                              ...selected.attribute_values,
+                              ...editChanges,
+                            },
                           });
+                          setEditBase(saved.attribute_values);
+                          setEditAttrs(
+                            editableAttrs(saved.attribute_values, LINK_HINT_KEYS),
+                          );
                           toast.success("Dependant updated");
                         } catch (err) {
                           toast.error(formatError(err));
@@ -647,7 +684,7 @@ export function DependantsPage() {
                         <Save className="size-4" />
                       )}
                       Save changes
-                    </Button>
+                    </Button>}
                   </div>
                   <div className="grid grid-cols-2 gap-2">
                     {Object.keys(editAttrs).map((k) => (
@@ -660,6 +697,7 @@ export function DependantsPage() {
                         </div>
                         <Input
                           value={editAttrs[k]}
+                          readOnly={!canEdit}
                           onChange={(e) =>
                             setEditAttrs((prev) => ({
                               ...prev,

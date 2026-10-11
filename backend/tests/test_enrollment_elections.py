@@ -195,7 +195,8 @@ def test_compulsory_dependants_are_auto_priced_when_payload_omits_ids(
 ) -> None:
     """Compulsory controls selection, not funding. Even when the window does
     not allow dependant changes and the client sends no IDs, every active
-    eligible dependant is persisted and charged to the employee wallet."""
+    eligible dependant is charged to the employee wallet. No list is stored:
+    compulsory cover follows the roster, so later dependants are covered too."""
     with SessionLocal() as s:
         category = s.get(Category, CAT_ID)
         assert category is not None
@@ -252,7 +253,7 @@ def test_compulsory_dependants_are_auto_priced_when_payload_omits_ids(
         )
         assert response.status_code == 200, response.text
         election = response.json()["elections"][0]
-        assert election["covered_dependant_ids"] == [DEP1]
+        assert election["covered_dependant_ids"] is None
         assert election["flex_price_tag"] == 25.0
     finally:
         with SessionLocal() as s:
@@ -660,7 +661,7 @@ def test_age_ineligible_dependant_excluded_from_election_pricing(
 
 
 def test_manual_override_sets_validates_and_prices_dependant_levels(
-    client: TestClient, _dependant_levels
+    client: TestClient, _dependant_levels, system_admin_request
 ) -> None:
     """The manual-admin override path handles elected dependant levels like the
     other writers: a bad id 422s, a valid one persists WITH a repriced flex
@@ -689,8 +690,11 @@ def test_manual_override_sets_validates_and_prices_dependant_levels(
     res = client.put(url, json={"plan_code": "GOLD", "covered_dependant_ids": [DEP1]})
     assert res.status_code == 200, res.text
     assert res.json()["dependant_option_ids"] == {"spouse": OPT_S40}
-    # Declining clears the level with the rest of the coverage.
+    # Declining clears the level with the rest of the coverage. It uncovers the
+    # listed spouse, a saved-data removal reserved for firm owners.
     res = client.put(url, json={"declined": True})
+    assert res.status_code == 403, res.text
+    res = system_admin_request(client, "PUT", url, json={"declined": True})
     assert res.status_code == 200, res.text
     assert res.json()["covered_dependant_ids"] is None
     assert res.json()["dependant_option_ids"] is None

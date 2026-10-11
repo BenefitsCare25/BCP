@@ -36,12 +36,17 @@ from app.models import (
     Category,
     Dependant,
     Employee,
+    EmployeePlanOverride,
     Enrollment,
     EnrollmentElection,
     EnrollmentWindow,
     LeaveElection,
     Plan,
     PolicyYear,
+    ProductSetup,
+    ProductTerm,
+    UnderwritingCase,
+    UnderwritingReview,
     User,
 )
 from app.models.report_version import (
@@ -61,13 +66,30 @@ from app.services.report_registry import (
 
 # Tables whose changes make a report stale, beyond the shared roster + config
 # set (Employee/Dependant/Category/Plan). Keyed by report_type.
-_EXTRA_STALENESS_MODELS = {
-    "benefit_selection": (
-        Enrollment,
-        EnrollmentElection,
-        LeaveElection,
-        EnrollmentWindow,
-    ),
+#
+# The insurer listings render underwriting positions (`report_uw_amounts`),
+# elected plans and voluntary participation, free cover limits and the year's
+# insurer mapping; the submission workbook adds the Benefit Selection sheet.
+_BENEFIT_SELECTION_MODELS = (
+    Enrollment,
+    EnrollmentElection,
+    LeaveElection,
+    EnrollmentWindow,
+)
+_LISTING_MODELS = (
+    UnderwritingCase,
+    UnderwritingReview,
+    EmployeePlanOverride,
+    ProductTerm,
+    ProductSetup,
+    Enrollment,
+    EnrollmentElection,
+)
+_EXTRA_STALENESS_MODELS: dict[str, tuple[Any, ...]] = {
+    "insurer_submission": (*_LISTING_MODELS, LeaveElection, EnrollmentWindow),
+    "employee_listing": _LISTING_MODELS,
+    "dependant_listing": _LISTING_MODELS,
+    "benefit_selection": _BENEFIT_SELECTION_MODELS,
 }
 
 

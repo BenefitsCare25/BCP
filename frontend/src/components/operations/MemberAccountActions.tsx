@@ -52,8 +52,8 @@ import {
   type MemberAccount,
 } from "@/api/memberAccounts";
 import { formatError, isFirmOriginUnavailable, sendErrorMessage } from "@/lib/errors";
-import { useMe } from "@/api/hooks";
 import { fmtDay, parseServerDate } from "@/lib/format";
+import { useWriteAccess } from "@/lib/roles";
 import { setPasswordLinkPath } from "@/lib/setPasswordToken";
 import { tenantSurfaceUrl } from "@/lib/tenant";
 import { cn } from "@/lib/cn";
@@ -482,8 +482,9 @@ function AccountPanel({
       const res = await resendInvite.mutateAsync(account!.id);
       setConfirmResend(false);
       if (res.mail_sent === false) {
+        // Sessions end before the send, so a failed send still signs them out.
         toast.warning(
-          "The email couldn't be sent, so nothing changed — their previous password still works.",
+          "The email couldn't be sent. Their previous password still works, but they've been signed out and need to sign in again.",
         );
       } else {
         toast.success(`New one-time password sent to ${res.email}`);
@@ -843,7 +844,7 @@ export function MemberAccountActions({
   staffId: string;
 }) {
   const [open, setOpen] = useState(false);
-  const { data: me } = useMe();
+  const { canEdit } = useWriteAccess();
   const { data } = useMemberAccounts();
   const account = data?.items.find((a) => a.staff_id === staffId);
   const phase = phaseOf(account);
@@ -881,7 +882,7 @@ export function MemberAccountActions({
           </SheetDescription>
         </SheetHeader>
         <SheetBody>
-          {me && me.role !== "broker_viewer" ? <AccountPanel
+          {canEdit ? <AccountPanel
             employeeId={employeeId}
             account={account}
             phase={phase}

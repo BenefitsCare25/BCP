@@ -24,17 +24,29 @@ firm's From address (`/platform/firms/{id}/brand/sender-verification`).
 from __future__ import annotations
 
 import re
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    UploadFile,
+    status,
+)
 from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.api.v1.firm import own_firm
-from app.api.v1.public import BrandOut, brand_out
+from app.api.v1.public import BrandOut, brand_asset_response, brand_out
 from app.core.audit import write_audit, write_platform_audit
 from app.core.auth import ROLE_SYSTEM_ADMIN, CurrentUser
 from app.core.deps import assert_platform_firm_access, require_firm_owner, require_system_admin
@@ -332,7 +344,21 @@ def _state(row: BrandProfile | None) -> dict[str, Any]:
     return state
 
 
+@contextmanager
+def _first_save_race(db: Session) -> Iterator[None]:
+    """A concurrent first save of the same row is a stale revision."""
+    try:
+        yield
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status.HTTP_409_CONFLICT, {
+            "code": "brand_revision_stale", "message": _STALE,
+        }) from None
+
+
 def _new_row(db: Session, firm: BrokerFirm, client: Client | None) -> BrandProfile:
+    """A new row, inserted at once: the loser of two concurrent first saves is
+    refused here, not at whichever later query happens to flush it."""
     row = BrandProfile(
         broker_firm_id=firm.id,
         client_id=client.id if client is not None else None,
@@ -340,6 +366,8 @@ def _new_row(db: Session, firm: BrokerFirm, client: Client | None) -> BrandProfi
         revision=0,
     )
     db.add(row)
+    with _first_save_race(db):
+        db.flush()
     return row
 
 
@@ -363,14 +391,8 @@ def _audit(
 
 
 def _commit(db: Session) -> None:
-    """Commit; a concurrent first save of the same row is a stale revision."""
-    try:
+    with _first_save_race(db):
         db.commit()
-    except IntegrityError:
-        db.rollback()
-        raise HTTPException(status.HTTP_409_CONFLICT, {
-            "code": "brand_revision_stale", "message": _STALE,
-        }) from None
 
 
 def _touch(row: BrandProfile, user: CurrentUser) -> None:
@@ -408,7 +430,8 @@ def _refuse_borrowed_helpdesk(
     db: Session, firm: BrokerFirm, client: Client | None, target: BrandProfile
 ) -> None:
     """A brand with its own product name needs its own support email, so a
-    rebranded site never sends members to the platform's helpdesk."""
+    rebranded site never sends members to the platform's helpdesk. A firm
+    keeps one while renamed companies show members the firm's."""
     firm_row = target if client is None else _row(db, firm.id, BRAND_SCOPE_FIRM)
     rows = [r for r in (firm_row, None if client is None else target) if r is not None]
     product = next((r.product_name for r in reversed(rows) if r.product_name), None)
@@ -419,6 +442,32 @@ def _refuse_borrowed_helpdesk(
             "message": "Add a support email: members of a renamed site are shown it "
                        "instead of the platform helpdesk.",
         })
+    borrowing = _companies_borrowing_support(db, firm.id) if client is None and not support else []
+    if borrowing:
+        names = ", ".join(borrowing[:3]) + (
+            f" and {len(borrowing) - 3} more" if len(borrowing) > 3 else ""
+        )
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, {
+            "code": "brand_support_email_required",
+            "message": f"Keep a support email: members of {names}, which have their own "
+                       "product name, are shown it instead of the platform helpdesk.",
+        })
+
+
+def _companies_borrowing_support(db: Session, firm_id: str) -> list[str]:
+    """Companies whose override sets a product name but leaves the support
+    email to the firm."""
+    return list(db.scalars(
+        select(Client.name)
+        .join(BrandProfile, BrandProfile.client_id == Client.id)
+        .where(
+            BrandProfile.broker_firm_id == firm_id,
+            BrandProfile.product_name.is_not(None),
+            BrandProfile.product_name != "",
+            or_(BrandProfile.support_email.is_(None), BrandProfile.support_email == ""),
+        )
+        .order_by(Client.name)
+    ))
 
 
 def _save(
@@ -559,6 +608,19 @@ def _set_asset(
         before=before, after=_state(target), client_id=client.id if client else None,
     )
     _commit(db)
+
+
+@router.get("/images/{asset_id}", include_in_schema=False)
+def get_brand_image(
+    asset_id: str,
+    user: CurrentUser = Depends(require_firm_owner),
+    db: Session = Depends(get_db),
+) -> Response:
+    """One of the firm's brand images, for the console's previews: the public
+    URL answers only on the firm's own hosts, and the master admin works on
+    the platform's."""
+    firm = _firm(db, user, write=False)
+    return brand_asset_response(db, firm.id, asset_id, cache="private")
 
 
 @router.post("/assets/{slot}", response_model=FirmBrandOut | CompanyBrandOut)

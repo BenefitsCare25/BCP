@@ -159,10 +159,11 @@ def _union_rows(rep_items: list[list[dict[str, Any]]]) -> list[dict[str, Any]]:
 
 
 # Qualifier keys the slip parser mirrors into `limits` as well as `properties`
-# (placement_slip_sob._SOB_PROPERTY_PATTERNS). `limits` is SHARED across
-# columns, so these can never be represented per-column — including them in the
-# grouping vector would split columns on a difference the model cannot store.
-# Mirrored in BenefitScheduleView.MIRRORED_INTO_LIMITS.
+# (placement_slip_sob._SOB_PROPERTY_PATTERNS). A plan's own value for these
+# already travels in its limits, which group columns (`_limit_pairs`) and are
+# kept per column in `column_limits`; counting them again as varying properties
+# would only force a needless per-column `properties` split.
+# Mirrored in frontend lib/benefitSchedule.ts MIRRORED_INTO_LIMITS.
 _SHARED_PROPERTY_KEYS = frozenset(
     {"maximum_days", "qualification_period", "co_insurance", "surgical_schedule"}
 )
@@ -182,16 +183,34 @@ def _varying_props(item: dict[str, Any] | None) -> list[tuple[str, Any]]:
 
 def _plan_vector(items: list[dict[str, Any]]) -> str:
     """Group key: only the genuinely per-plan-varying fields (item value,
-    sub-item values, varying properties). Structural fields are shared.
+    sub-item values, varying properties, the "NA" flags and the row's limits).
+    Structural fields are shared.
 
     `properties` participates for every kind, not just copay — the dental axis
     (Panel/Non-Panel) lives there too, so two plans differing only in their
     panel limits must stay separate columns instead of collapsing into one.
+    The `na` flag does too: a blank cell (inherit) and an "NA" cell (not
+    covered) both carry an empty value, and folding them into one column applies
+    the representative's meaning to both. Limits participate because the column
+    model stores them per column (`column_limits`) only for a column's
+    representative — a plan sharing its column would inherit its limits.
     """
     vec: list[Any] = []
     for b in items:
-        subs = [s.get("value") or "" for s in (b.get("sub_items") or []) if isinstance(s, dict)]
-        vec.append([b.get("value") or "", subs, _varying_props(b)])
+        subs = [
+            [s.get("value") or "", bool(s.get("na"))]
+            for s in (b.get("sub_items") or [])
+            if isinstance(s, dict)
+        ]
+        vec.append(
+            [
+                b.get("value") or "",
+                bool(b.get("na")),
+                subs,
+                _varying_props(b),
+                _limit_pairs(b.get("limits")),
+            ]
+        )
     return json.dumps(vec, sort_keys=True, default=str)
 
 

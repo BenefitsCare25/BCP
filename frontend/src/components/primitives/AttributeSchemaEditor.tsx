@@ -20,6 +20,9 @@ interface Props {
   // When it returns true, the row's edit/delete actions are disabled (e.g. a
   // firm-library default the current user isn't allowed to modify).
   lockRow?: (attr: AttributeSchema) => boolean;
+  // When it returns false, the row offers no Delete (e.g. an inherited firm
+  // default in company scope, which a company cannot remove for itself).
+  canDelete?: (attr: AttributeSchema) => boolean;
 }
 
 export function AttributeSchemaEditor({
@@ -27,6 +30,7 @@ export function AttributeSchemaEditor({
   onEdit,
   onDelete,
   lockRow,
+  canDelete,
 }: Props) {
   const hasActions = Boolean(onEdit || onDelete);
   return (
@@ -129,7 +133,7 @@ export function AttributeSchemaEditor({
                         <Pencil className="size-3.5" />
                       </Button>
                     )}
-                    {onDelete && (
+                    {onDelete && (canDelete?.(attr) ?? true) && (
                       <FirmOwnerOnly><Button
                         variant="ghost"
                         size="icon-sm"

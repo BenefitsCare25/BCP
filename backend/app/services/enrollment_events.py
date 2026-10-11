@@ -24,6 +24,12 @@ EVENT_TEXT = {
         "Your choices are saved. Review the reason, "
         "make corrections, then sign and send again before the deadline.",
     ),
+    "returned_to_draft": (
+        "Enrolment being corrected by your benefits team",
+        "Your benefits team is correcting the choices submitted for you before "
+        "confirming them. You don't need to do anything. Existing confirmed "
+        "coverage has not changed.",
+    ),
     "cancelled": (
         "Enrolment submission cancelled",
         "Your saved choices have been cleared. "

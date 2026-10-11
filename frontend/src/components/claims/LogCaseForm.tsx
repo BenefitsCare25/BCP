@@ -41,6 +41,7 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { InfoHint } from "@/components/ui/tooltip";
+import { singaporeTodayISO } from "@/lib/business-date";
 import { formatError } from "@/lib/errors";
 
 /** Mirrors `services/claim_intake.ALLOWED_CURRENCIES`. A drift here is loud,
@@ -64,10 +65,6 @@ const RECEIVED_VIA = [
 ];
 
 const SELF = "__self__";
-
-function today(): string {
-  return new Date().toISOString().slice(0, 10);
-}
 
 /** One labelled field. `optional` is stated on the label rather than marking
  * the required ones with an asterisk: on this form most fields are optional,
@@ -133,14 +130,17 @@ export function LogCaseForm({
   const [amount, setAmount] = useState("");
   const [currency, setCurrency] = useState("SGD");
   const [receivedVia, setReceivedVia] = useState("email");
-  const [receivedOn, setReceivedOn] = useState(today());
+  // The Singapore business date: a UTC date reads as yesterday before 08:00.
+  const [receivedOn, setReceivedOn] = useState(singaporeTodayISO);
   const [requestedBy, setRequestedBy] = useState("");
   const [remarks, setRemarks] = useState("");
   const [files, setFiles] = useState<File[]>([]);
   const [memberQuery, setMemberQuery] = useState("");
 
+  // The member picker's roster — fetched only once the form is open, since the
+  // queue keeps this sheet mounted on every visit.
   const { data: summary } = useCoverageSummary(
-    fixedEmployeeId ? undefined : policyYearId ?? undefined,
+    open && !fixedEmployeeId ? policyYearId ?? undefined : undefined,
   );
   const statement = useBenefitStatement(employeeId ?? null);
   const utilization = useEmployeeUtilization(employeeId ?? null);
@@ -159,7 +159,7 @@ export function LogCaseForm({
     setAmount("");
     setCurrency("SGD");
     setReceivedVia("email");
-    setReceivedOn(today());
+    setReceivedOn(singaporeTodayISO());
     setRequestedBy("");
     setRemarks("");
     setFiles([]);

@@ -16,6 +16,7 @@ import {
   type LoginSource,
 } from "@/api/hrAdmin";
 import { useMe } from "@/api/hooks";
+import { ListError } from "@/components/platform/QueryStates";
 import { PortalRolloutCard } from "@/components/settings/PortalRolloutCard";
 import { formatError, sendErrorMessage } from "@/lib/errors";
 import { setPasswordLinkPath } from "@/lib/setPasswordToken";
@@ -41,13 +42,19 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { InfoHint } from "@/components/ui/tooltip";
-import { roleLabel } from "@/lib/roles";
+import { roleLabel, useWriteAccess } from "@/lib/roles";
+
+/** Mirrors `MAX_ROTATION_DAYS` in backend/app/core/credentials.py. */
+const MAX_ROTATION_DAYS = 3650;
 
 const LOGIN_SOURCES: { value: LoginSource; label: string }[] = [
   { value: "email", label: "Email address" },
   { value: "system_id", label: "System-generated ID" },
   { value: "staff_id", label: "Employee / Staff ID" },
 ];
+// HR accounts have no staff ID, and either identifier signs them in; the
+// choice only decides which one their invitation email quotes.
+const HR_LOGIN_SOURCES = LOGIN_SOURCES.filter((source) => source.value !== "staff_id");
 
 function StatusBadge({ status }: { status: string }) {
   const variant =
@@ -103,10 +110,12 @@ function SetPasswordReveal({ token, tenantSlug, clientOrigin }: {
 function SourceSelect({
   id,
   value,
+  options,
   onChange,
 }: {
   id: string;
   value: string;
+  options: { value: LoginSource; label: string }[];
   onChange: (v: LoginSource) => void;
 }) {
   return (
@@ -116,7 +125,7 @@ function SourceSelect({
       onChange={(e) => onChange(e.target.value as LoginSource)}
       className="flex h-9 w-full min-w-[13rem] rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
     >
-      {LOGIN_SOURCES.map((s) => (
+      {options.map((s) => (
         <option key={s.value} value={s.value}>
           {s.label}
         </option>
@@ -127,14 +136,34 @@ function SourceSelect({
 
 /** Broker-controlled sign-in settings for both surfaces (HR + employee portal):
  * the login username source and whether 2FA is available (self-enrol). */
-function SignInSettingsCard({ clientId }: { clientId: string }) {
-  const { data } = useHrAuthPolicy(clientId);
+function SignInSettingsCard({ clientId, readOnly }: { clientId: string; readOnly: boolean }) {
+  const { data, isError, error, refetch } = useHrAuthPolicy(clientId);
   const update = useUpdateHrAuthPolicy(clientId);
   const [draft, setDraft] = useState<HrAuthPolicy | null>(null);
 
   useEffect(() => {
-    if (data) setDraft(data);
+    if (!data) return;
+    // Legacy values the save would now refuse: a "staff_id" choice behaves as
+    // "email" for HR (see HR_LOGIN_SOURCES), rotation of 0 or less meant none,
+    // and anything past the cap is held at the cap.
+    const rotation = data.password_rotation_days;
+    setDraft({
+      ...data,
+      hr_login_source: data.hr_login_source === "staff_id" ? "email" : data.hr_login_source,
+      password_rotation_days:
+        rotation == null || rotation <= 0 ? null : Math.min(rotation, MAX_ROTATION_DAYS),
+    });
   }, [data]);
+
+  if (!draft && isError) {
+    return (
+      <Card>
+        <CardContent className="py-4">
+          <ListError what="sign-in settings" error={error} onRetry={() => void refetch()} />
+        </CardContent>
+      </Card>
+    );
+  }
 
   if (!draft) {
     return (
@@ -170,7 +199,7 @@ function SignInSettingsCard({ clientId }: { clientId: string }) {
     }
   };
 
-  const SaveButton = () => (
+  const SaveButton = () => readOnly ? null : (
     <Button onClick={save} disabled={update.isPending} size="sm">
       {update.isPending ? <Loader2 className="size-4 animate-spin" /> : null}
       Save
@@ -195,13 +224,15 @@ function SignInSettingsCard({ clientId }: { clientId: string }) {
             <div className="flex items-center gap-1">
               <Label htmlFor={`src-${surface}`}>Login username</Label>
               <InfoHint>
-                Which identifier {who.toLowerCase()} type to sign in. Members
-                without an email should use a system-generated or employee ID.
+                {surface === "hr"
+                  ? "The identifier quoted in HR admins' invitation emails. They can sign in with either their email address or their HR ID."
+                  : `Which identifier ${who.toLowerCase()} type to sign in. Members without an email should use a system-generated or employee ID.`}
               </InfoHint>
             </div>
             <SourceSelect
               id={`src-${surface}`}
               value={draft[sourceKey]}
+              options={surface === "hr" ? HR_LOGIN_SOURCES : LOGIN_SOURCES}
               onChange={(v) => set(sourceKey, v)}
             />
           </div>
@@ -252,7 +283,7 @@ function SignInSettingsCard({ clientId }: { clientId: string }) {
   );
 
   return (
-    <div className="space-y-4">
+    <fieldset disabled={readOnly} className="min-w-0 space-y-4">
       <div className="grid gap-4 lg:grid-cols-2">
         {signInSection("hr", "HR sign-in", "HR admins")}
         {signInSection("portal", "Employee sign-in", "Employees")}
@@ -284,13 +315,15 @@ function SignInSettingsCard({ clientId }: { clientId: string }) {
               <div className="flex items-center gap-1">
                 <Label>Password rotation (days)</Label>
                 <InfoHint>
-                  Force a password reset after this many days. Blank = no forced
-                  rotation.
+                  Force a password reset once a password is this many days old
+                  (1–3650), including passwords set before the change. Blank =
+                  no forced rotation.
                 </InfoHint>
               </div>
               <Input
                 type="number"
-                min={0}
+                min={1}
+                max={MAX_ROTATION_DAYS}
                 placeholder="No rotation"
                 className="h-9 w-40"
                 value={draft.password_rotation_days ?? ""}
@@ -316,12 +349,13 @@ function SignInSettingsCard({ clientId }: { clientId: string }) {
           <SaveButton />
         </CardContent>
       </Card>
-    </div>
+    </fieldset>
   );
 }
 
-function AccountsCard({ clientId }: { clientId: string }) {
-  const { data: accounts = [], isLoading } = useHrAccounts(clientId);
+function AccountsCard({ clientId, readOnly }: { clientId: string; readOnly: boolean }) {
+  const accountsQuery = useHrAccounts(clientId);
+  const accounts = accountsQuery.data ?? [];
   const create = useCreateHrAccount(clientId);
   const reset = useResetHrPassword(clientId);
   const regen = useRegenerateHrLoginId(clientId);
@@ -400,7 +434,7 @@ function AccountsCard({ clientId }: { clientId: string }) {
         <CardTitle className="text-sm">HR admins</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+        {!readOnly && <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
           <div className="flex-1 space-y-1.5">
             <Label htmlFor="hr-new-email">Email</Label>
             <Input
@@ -439,7 +473,7 @@ function AccountsCard({ clientId }: { clientId: string }) {
             )}
             Add HR admin
           </Button>
-        </div>
+        </div>}
 
         {reveal && (
           <SetPasswordReveal
@@ -449,13 +483,19 @@ function AccountsCard({ clientId }: { clientId: string }) {
           />
         )}
 
-        {isLoading ? (
+        {accountsQuery.isLoading ? (
           <div className="flex items-center gap-2 py-4 text-sm text-muted-foreground">
             <Loader2 className="size-4 animate-spin" /> Loading…
           </div>
+        ) : accountsQuery.isError && !accountsQuery.data ? (
+          <ListError
+            what="HR admins"
+            error={accountsQuery.error}
+            onRetry={() => void accountsQuery.refetch()}
+          />
         ) : accounts.length === 0 ? (
           <p className="py-4 text-sm text-muted-foreground">
-            No HR admins yet — add the first above.
+            {readOnly ? "No HR admins yet." : "No HR admins yet — add the first above."}
           </p>
         ) : (
           <div className="overflow-x-auto">
@@ -467,7 +507,7 @@ function AccountsCard({ clientId }: { clientId: string }) {
                   <TableHead>HR ID</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead>2FA</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
+                  {!readOnly && <TableHead className="text-right">Actions</TableHead>}
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -497,7 +537,7 @@ function AccountsCard({ clientId }: { clientId: string }) {
                         <span className="text-xs text-muted-foreground">Off</span>
                       )}
                     </TableCell>
-                    <TableCell>
+                    {!readOnly && <TableCell>
                       <div className="flex items-center justify-end gap-1">
                         <Button
                           size="sm"
@@ -540,7 +580,7 @@ function AccountsCard({ clientId }: { clientId: string }) {
                           {a.status === "disabled" ? "Enable" : "Disable"}
                         </Button>
                       </div>
-                    </TableCell>
+                    </TableCell>}
                   </TableRow>
                 ))}
               </TableBody>
@@ -572,6 +612,9 @@ function AccountsCard({ clientId }: { clientId: string }) {
 export function HrAdminSettings() {
   const { data: me } = useMe();
   const clientId = me?.active_client_id ?? null;
+  // A read-only access grant shows the settings and accounts, not the
+  // controls that change them (the API refuses those changes).
+  const { canAdmin: canEdit } = useWriteAccess();
 
   if (!clientId) {
     return (
@@ -583,13 +626,13 @@ export function HrAdminSettings() {
 
   return (
     <div className="space-y-4">
-      <SignInSettingsCard clientId={clientId} />
+      <SignInSettingsCard clientId={clientId} readOnly={!canEdit} />
       {/* Rollout sits under the sign-in policy that governs it: "Login
        * username" decides what members type, this decides who has an account
        * to type it into. It used to be a button on the roster page, two
        * screens from the setting it depends on. */}
       <PortalRolloutCard />
-      <AccountsCard clientId={clientId} />
+      <AccountsCard clientId={clientId} readOnly={!canEdit} />
     </div>
   );
 }

@@ -1,5 +1,6 @@
 import { History, RotateCcw } from "lucide-react";
 import { useAuditLog } from "@/api/hooks";
+import { FirmOwnerOnly } from "@/components/auth/FirmOwnerOnly";
 import { Button } from "@/components/ui/button";
 import { SectionLabel } from "@/components/ui/section-label";
 import type { AuditLogEntry } from "@/types";
@@ -70,16 +71,20 @@ export function ConfigurationHistory({
                     }).format(new Date(entry.created_at))}
                   </p>
                 </div>
+                {/* An older version can drop saved entries, and removing saved
+                    setup is a firm-administrator action the API enforces. */}
                 {snapshot && (
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => onRestore(snapshot)}
-                  >
-                    <RotateCcw className="size-3.5" aria-hidden />
-                    <span className="ml-1">Load version</span>
-                  </Button>
+                  <FirmOwnerOnly>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => onRestore(snapshot)}
+                    >
+                      <RotateCcw className="size-3.5" aria-hidden />
+                      <span className="ml-1">Load version</span>
+                    </Button>
+                  </FirmOwnerOnly>
                 )}
               </li>
             );

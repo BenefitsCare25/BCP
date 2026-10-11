@@ -82,7 +82,21 @@ def test_claim_output_uses_document_display_name(
         },
         created_at=None,
         submitted_at=None,
+        decision_notes=None,
+        revision=0,
+        product_code=None,
+        flex_category_name=None,
+        sub_type=None,
+        visit_type=None,
+        admission_date=None,
+        discharge_date=None,
+        doctor_name=None,
+        diagnosis=None,
+        remarks=None,
+        related_claim_id=None,
+        referral_document_id=None,
     )
+    user = SimpleNamespace(user_id="user-1")
     document_slot = SimpleNamespace(
         key="invoice",
         display="Medical invoice",
@@ -97,9 +111,9 @@ def test_claim_output_uses_document_display_name(
 
     class FakeSession:
         def get(self, _model: type[Any], _entity_id: str) -> SimpleNamespace:
-            return SimpleNamespace(employee_name="Demo Employee")
+            return SimpleNamespace(employee_name="Demo Employee", staff_id="S-1")
 
-    output = hr_claims._out(FakeSession(), claim)  # type: ignore[arg-type]
+    output = hr_claims._out(FakeSession(), claim, user)  # type: ignore[arg-type]
 
     assert output["doc_slots"] == [
         {
@@ -113,6 +127,8 @@ def test_claim_output_uses_document_display_name(
     assert output["submitted_by_email"] == "hr@demo.test"
     assert output["can_add_evidence"] is True
     assert output["can_submit"] is True
+    assert output["can_edit"] is True
+    assert output["draft"]["staff_id"] == "S-1"
 
 
 def test_draft_records_hr_origin_and_submitter_snapshot(
@@ -138,7 +154,7 @@ def test_draft_records_hr_origin_and_submitter_snapshot(
     monkeypatch.setattr(hr_claims, "create_claim", lambda *_args, **_kwargs: claim)
     monkeypatch.setattr(hr_claims, "write_audit", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(hr_claims, "record_claim_command", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(hr_claims, "_out", lambda _db, value: {"id": value.id})
+    monkeypatch.setattr(hr_claims, "_out", lambda _db, value, _user: {"id": value.id})
 
     class FakeSession:
         def get(self, _model: type[Any], _entity_id: str) -> SimpleNamespace:

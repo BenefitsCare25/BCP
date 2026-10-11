@@ -89,7 +89,9 @@ function familyChange(
 }
 
 function tierLabel(ts: ProductTierSet, ps: ProductState): string {
-  if (ps.declined) return "Not taking this cover";
+  // Voluntary cover the member holds nothing of: before they pick a plan it
+  // is "not enrolled", not something they are turning down.
+  if (ps.declined) return ts.eligible_only ? "Not enrolled" : "Not taking this cover";
   return ts.tiers.find((t) => t.key === ps.tierKey)?.label ?? "Not set";
 }
 
@@ -272,7 +274,7 @@ export function ReviewMount({
                 key={ts.product_code}
                 term={ts.product_name ?? ts.product_code}
               >
-                {tierLabel(ts, ps)}
+                {pt(tierLabel(ts, ps))}
               </MountRow>
             );
           })}
@@ -383,12 +385,12 @@ export function ReviewMount({
               ) : (
                 <Send className="size-4" aria-hidden />
               )}
-              {sendLabel}
+              {pt(sendLabel)}
             </Action>
           </div>
 
           {blocked && (
-            <p className="text-row text-strike-pending">{blocked}</p>
+            <p className="text-row text-strike-pending">{pt(blocked)}</p>
           )}
         </>
       )}

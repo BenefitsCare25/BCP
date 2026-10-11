@@ -11,6 +11,7 @@ an existing record for an ADC Change/Delete.
 """
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from app.services.roster_attributes import (
@@ -23,6 +24,19 @@ from app.services.roster_attributes import (
 )
 
 DEP_NAME_KEYS = ("dependant_name", "name", "full_name")
+
+_FLOAT_TAIL = re.compile(r"^(-?\d+)\.0$")
+
+
+def staff_key(staff_id: object) -> str:
+    """A staff id as an identity key: trimmed, case-folded, float tail dropped.
+
+    An .xls numeric cell arrives as a float, so rosters loaded before the
+    parser normalised staff ids stored "1001.0". The same person re-read from
+    an .xlsx or Employee Listing is "1001"; without the tail drop they would be
+    proposed as a joiner while the stored row reads as missing.
+    """
+    return _FLOAT_TAIL.sub(r"\1", str(staff_id or "").strip()).lower()
 
 
 def _dep_signature(attrs: dict[str, Any] | None) -> str | None:
@@ -62,7 +76,7 @@ def employee_candidate_keys(
     if nric:
         keys.append(f"nric:{nric}")
     if staff_id and str(staff_id).strip():
-        keys.append(f"staff:{str(staff_id).strip().lower()}")
+        keys.append(f"staff:{staff_key(staff_id)}")
     return keys
 
 

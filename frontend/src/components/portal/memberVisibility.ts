@@ -14,6 +14,12 @@ export function isHiddenUnlessChosen(code: string | null | undefined): boolean {
   return normalizedCode(code) === "GTL";
 }
 
+/** Cover the member actually holds. A plan the broker hasn't confirmed and
+ *  voluntary cover not taken up are still listed, but never presented as cover. */
+export function isHeldLine(line: CoverageLine): boolean {
+  return line.published !== false && line.enrolment !== "eligible";
+}
+
 /** Dependant-only sheets (e.g. GHS-DEPENDANTS) describe family cover, not the employee's. */
 export function isEmployeeLine(line: CoverageLine): boolean {
   return !normalizedCode(line.product_code).includes("DEPENDANTS");

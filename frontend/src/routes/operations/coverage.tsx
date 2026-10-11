@@ -3,7 +3,7 @@ import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { Loader2, TableProperties, TriangleAlert, UserSearch } from "lucide-react";
 import { useEmployeeUtilization } from "@/api/claims";
 import { useCoverageLimits } from "@/api/coverageLimits";
-import { useBenefitStatement, useCoverageSummary, useMe } from "@/api/hooks";
+import { useBenefitStatement, useCoverageSummary } from "@/api/hooks";
 import { useSession } from "@/stores/session";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -26,6 +26,7 @@ import { MemberAccountActions } from "@/components/operations/MemberAccountActio
 import { PortalFrame } from "@/components/operations/PortalFrame";
 import { LimitAlertList } from "@/components/limits/LimitAlertList";
 import { cn } from "@/lib/cn";
+import { useWriteAccess } from "@/lib/roles";
 
 const ANY = "__any__";
 // Attention filters beside the product counts: the two states a broker
@@ -51,7 +52,7 @@ function BrokerStatementPane({ employeeId }: { employeeId: string }) {
     error,
   } = useBenefitStatement(employeeId);
   const { data: utilization } = useEmployeeUtilization(employeeId);
-  const { data: me } = useMe();
+  const { canEdit } = useWriteAccess();
 
   if (isLoading) {
     return (
@@ -88,7 +89,7 @@ function BrokerStatementPane({ employeeId }: { employeeId: string }) {
       <BenefitStatement
         data={statement}
         utilization={utilization}
-        canEdit={Boolean(me) && me?.role !== "broker_viewer"}
+        canEdit={canEdit}
         actions={
           <>
             <MemberAccountActions
@@ -223,7 +224,9 @@ export function EmployeeCoveragePage() {
       if (summary && remaining === 0) setCountFilter(ANY);
       return;
     }
-    if (countFilter !== ANY && !counts.includes(Number(countFilter))) {
+    // Only judged against a loaded roster: while another one loads (the
+    // leavers toggle is part of the query key) there are no counts at all.
+    if (summary && countFilter !== ANY && !counts.includes(Number(countFilter))) {
       setCountFilter(ANY);
     }
   }, [counts, countFilter, checkCount, eligibleCount, limitCount, summary]);

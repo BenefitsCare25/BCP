@@ -1,4 +1,4 @@
-import { usePortalTranslation } from "@/i18n/portal";
+import { portalText, usePortalTranslation } from "@/i18n/portal";
 import { useMemo, useState } from "react";
 import { Link } from "@tanstack/react-router";
 import { ArrowLeft, ChevronDown, MapPin } from "lucide-react";
@@ -13,13 +13,14 @@ import { careArt, careTone } from "./careTone";
 import { BenefitSheetButton } from "../home/BenefitSheet";
 import { productShortLabel } from "./glossary";
 import { isEmployeeLine } from "../memberVisibility";
+import { holds } from "../capabilities";
 
 /** What the member is looking at. Lives in the URL on the live portal (`?p=`,
  * `?who=`) so Back, refresh and a shared link all land on the same view. */
 export type CoverageSelection = { routeKey: string; personId: string | null };
 
 function dependantName(person: DependantSummary): string {
-  return person.name ?? person.relationship ?? "Family member";
+  return person.name ?? portalText(person.relationship ?? "Family member");
 }
 
 function coveredPeople(lines: CoverageLine[]): DependantSummary[] {
@@ -111,13 +112,16 @@ function PlanDetail({ line, routeKey, person, compact = false, showLabel = true 
 }
 
 /** Member coverage is organised around a care decision, then the matched plan. */
-export function CoverageLeaf({ data, selection, onSelectionChange, company }: {
+export function CoverageLeaf({ data, selection, onSelectionChange, company, capabilities }: {
   data: BenefitStatement;
   /** Controlled by the live portal's URL; the broker preview holds its own. */
   selection?: CoverageSelection;
   onSelectionChange?: (next: CoverageSelection) => void;
   /** Present in the live portal; preview keeps navigation inside its frame. */
   company?: string;
+  /** The member's served capabilities: "Find a clinic" needs `entitlement`,
+   *  as the shell nav and Home do, or a leaver lands on a refusal. */
+  capabilities?: readonly string[];
 }) {
   const pt = usePortalTranslation();
   const [local, setLocal] = useState<CoverageSelection>({ routeKey: "", personId: null });
@@ -191,7 +195,7 @@ export function CoverageLeaf({ data, selection, onSelectionChange, company }: {
               <PlanDetail key={`${line.product_code}-${line.plan_code ?? ""}-${index}`} line={line} routeKey={selected.key} person={person} compact={!!company} showLabel={!company || selected.lines.length > 1} />
             ))}
           </div>
-          {company && ["gp", "specialist", "dental"].includes(selected.key) && (
+          {company && holds(capabilities, "entitlement") && ["gp", "specialist", "dental"].includes(selected.key) && (
             <Link to="/portal/$company/clinics" params={{ company }} className={actionClass("quiet", { block: "phone" })}>
               <MapPin className="size-4" aria-hidden />  {pt("Find a clinic")} </Link>
           )}

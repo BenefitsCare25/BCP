@@ -17,6 +17,7 @@ import {
   TabsTrigger,
 } from "@/components/ui/tabs";
 import { useMe } from "@/api/hooks";
+import { isReadOnlyAccess } from "@/lib/roles";
 import { PeriodOverview } from "@/components/enrollment/period/PeriodOverview";
 import { EnrollmentElectionsPage } from "./elections";
 import { EnrollmentBulkPage } from "./bulk";
@@ -51,7 +52,7 @@ function resolveTab(raw: string | undefined): { tab: TabKey; section?: string } 
 export function EnrollmentPage() {
   const navigate = useNavigate();
   const { data: me } = useMe();
-  const readOnly = me?.role === "broker_viewer";
+  const readOnly = isReadOnlyAccess(me?.role, me?.platform_access);
   const search = useSearch({ strict: false }) as { tab?: string; section?: string };
   const resolved = resolveTab(search.tab);
   const tab: TabKey = readOnly && resolved.tab === "bulk" ? "overview" : resolved.tab;

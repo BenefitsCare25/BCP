@@ -21,6 +21,7 @@ decision that then rolls back.
 """
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal
@@ -33,7 +34,7 @@ from sqlalchemy.sql.elements import Case, ColumnElement
 from sqlalchemy.sql.selectable import Subquery
 
 from app.models import Claim, ClaimMessage, Employee, MemberEnquiry, User
-from app.models.claim import CLAIM_STATUS_NEEDS_INFO, member_visible_claims
+from app.models.claim import CLAIM_STATUS_NEEDS_INFO, ORIGIN_PORTAL, member_visible_claims
 from app.models.claim_message import (
     AUTHOR_BROKER,
     AUTHOR_MEMBER,
@@ -427,7 +428,28 @@ def thread_for_enquiry(db: Session, enquiry_id: str) -> list[ClaimMessage]:
     return _thread(db, enquiry_id=enquiry_id)
 
 
-def member_unread_count(db: Session, employee_id: str, policy_year_id: str) -> int:
+def _member_questions(
+    employee_id: str, policy_year_id: str, owner_ids: Sequence[str] | None
+) -> ColumnElement[bool]:
+    """Which questions are the member's. Claim threads are read per benefit
+    year; a question follows the PERSON when the caller passes their rows
+    (`person_employee_ids`), so one asked before a renewal and answered after
+    it still reaches their inbox and badge."""
+    if owner_ids:
+        return MemberEnquiry.employee_id.in_(list(owner_ids))
+    return and_(
+        MemberEnquiry.employee_id == employee_id,
+        MemberEnquiry.policy_year_id == policy_year_id,
+    )
+
+
+def member_unread_count(
+    db: Session,
+    employee_id: str,
+    policy_year_id: str,
+    *,
+    question_owner_ids: Sequence[str] | None = None,
+) -> int:
     """How many messages the member hasn't opened, across BOTH kinds of thread.
 
     Their OWN replies never count — a surface that badges you for something you
@@ -463,8 +485,7 @@ def member_unread_count(db: Session, employee_id: str, policy_year_id: str) -> i
             .select_from(ClaimMessage)
             .join(MemberEnquiry, ClaimMessage.enquiry_id == MemberEnquiry.id)
             .where(
-                MemberEnquiry.employee_id == employee_id,
-                MemberEnquiry.policy_year_id == policy_year_id,
+                _member_questions(employee_id, policy_year_id, question_owner_ids),
                 ClaimMessage.author_type != AUTHOR_MEMBER,
                 ClaimMessage.member_read_at.is_(None),
             )
@@ -617,7 +638,13 @@ def _thread_parts(
 
 
 def member_conversations(
-    db: Session, employee_id: str, policy_year_id: str, *, offset: int, limit: int
+    db: Session,
+    employee_id: str,
+    policy_year_id: str,
+    *,
+    offset: int,
+    limit: int,
+    question_owner_ids: Sequence[str] | None = None,
 ) -> tuple[int, list[ConversationRow]]:
     """(total, rows) — the member's threads, most recently active first.
 
@@ -645,10 +672,7 @@ def member_conversations(
         .where(*owned)
     )
 
-    asked = (
-        MemberEnquiry.employee_id == employee_id,
-        MemberEnquiry.policy_year_id == policy_year_id,
-    )
+    asked = (_member_questions(employee_id, policy_year_id, question_owner_ids),)
     q_agg, q_latest, q_last = _thread_parts(
         unread_case,
         ClaimMessage.enquiry_id,
@@ -955,6 +979,7 @@ def claim_subject(claim: Claim) -> ConversationSubjectOut:
         amount_claimed=float(claim.amount_claimed),
         currency=claim.currency,
         status=claim.status,
+        member_visible=claim.origin == ORIGIN_PORTAL,
     )
 
 

@@ -86,7 +86,12 @@ export function ClosePeriodDialog({
       onConfirm={confirm}
       description={
         p ? (
-          <ClosePreviewBody p={p} submitSaved={submitSaved} onSubmitSaved={setSubmitSaved} />
+          <ClosePreviewBody
+            p={p}
+            windowId={window?.id}
+            submitSaved={submitSaved}
+            onSubmitSaved={setSubmitSaved}
+          />
         ) : (
           <span className="flex items-center gap-2">
             <Loader2 className="size-4 animate-spin" aria-hidden /> Working out what
@@ -100,15 +105,18 @@ export function ClosePeriodDialog({
 
 function ClosePreviewBody({
   p,
+  windowId,
   submitSaved,
   onSubmitSaved,
 }: {
   p: WindowClosePreview;
+  windowId: string | undefined;
   submitSaved: boolean;
   onSubmitSaved: (v: boolean) => void;
 }) {
   const fallback = DEFAULT_BEHAVIOR_TEXT[p.default_behavior];
   const blocked = p.invalid_submitted_count > 0;
+  const reopened = p.reopened_unsent_count;
   return (
     <div className="space-y-3 text-sm">
       <dl className="divide-y divide-border rounded-md border border-border">
@@ -126,6 +134,18 @@ function ClosePreviewBody({
             warn={!submitSaved}
           />
         )}
+        {/* Not the default: a reopened enrolment keeps what it confirmed. */}
+        {reopened > 0 && (
+          <Row
+            n={reopened}
+            label="reopened but not sent again"
+            outcome={
+              submitSaved
+                ? "have their saved changes submitted where possible; the rest keep their confirmed coverage and leave"
+                : "keep their confirmed coverage and leave trade; their unsent changes are discarded"
+            }
+          />
+        )}
         <Row n={p.not_started} label="did nothing" outcome={fallback} />
         {/* Their own row: "decline all" is honoured whatever the default is. */}
         {p.declined > 0 && (
@@ -138,6 +158,7 @@ function ClosePreviewBody({
 
       {blocked && (
         <MemberNotes
+          windowId={windowId}
           tone="error"
           title={`${p.invalid_submitted_count} enrolment ${p.invalid_submitted_count === 1 ? "needs" : "need"} attention before closing:`}
           notes={p.invalid_submitted}
@@ -145,8 +166,18 @@ function ClosePreviewBody({
         />
       )}
 
-      {p.saved_not_sent > 0 && !blocked && (
-        <SubmitSavedOption p={p} checked={submitSaved} onChange={onSubmitSaved} />
+      {reopened > 0 && (
+        <MemberNotes
+          windowId={windowId}
+          tone="info"
+          title={`${reopened} reopened ${reopened === 1 ? "enrolment keeps" : "enrolments keep"} the coverage and leave confirmed before reopening:`}
+          notes={p.reopened_unsent}
+          extra={reopened - p.reopened_unsent.length}
+        />
+      )}
+
+      {(p.saved_not_sent > 0 || p.saved_submittable > 0) && !blocked && (
+        <SubmitSavedOption p={p} windowId={windowId} checked={submitSaved} onChange={onSubmitSaved} />
       )}
 
       <p className="text-muted-foreground">
@@ -159,10 +190,12 @@ function ClosePreviewBody({
 
 function SubmitSavedOption({
   p,
+  windowId,
   checked,
   onChange,
 }: {
   p: WindowClosePreview;
+  windowId: string | undefined;
   checked: boolean;
   onChange: (v: boolean) => void;
 }) {
@@ -180,12 +213,17 @@ function SubmitSavedOption({
           Submit the saved choices of {p.saved_submittable.toLocaleString()}{" "}
           {p.saved_submittable === 1 ? "member" : "members"} on their behalf
           <span className="block text-xs text-muted-foreground">
-            Otherwise their saved plan and leave changes are discarded and they {fallback}.
+            Otherwise their saved plan and leave changes are discarded and they {fallback}
+            {p.reopened_unsent_count
+              ? " (reopened enrolments keep what they had confirmed)"
+              : ""}
+            .
           </span>
         </span>
       </label>
       {p.saved_blocked_count > 0 && (
         <MemberNotes
+          windowId={windowId}
           tone="warn"
           title={`${p.saved_blocked_count} can't be submitted — their changes are discarded and they ${fallback}:`}
           notes={p.saved_blocked}
@@ -220,19 +258,30 @@ function Row({
 }
 
 function MemberNotes({
+  windowId,
   tone,
   title,
   notes,
   extra,
 }: {
-  tone: "error" | "warn";
+  /** The period being closed — the Members tab otherwise opens the newest one. */
+  windowId: string | undefined;
+  tone: "error" | "warn" | "info";
   title: string;
   notes: CloseMemberNote[];
   extra: number;
 }) {
   return (
     <div>
-      <p className={tone === "error" ? "font-medium text-error" : "font-medium text-warn"}>
+      <p
+        className={
+          tone === "error"
+            ? "font-medium text-error"
+            : tone === "warn"
+              ? "font-medium text-warn"
+              : "font-medium text-foreground"
+        }
+      >
         {title}
       </p>
       <ul className="mt-1 max-h-40 space-y-1 overflow-y-auto text-xs">
@@ -240,7 +289,7 @@ function MemberNotes({
           <li key={n.enrollment_id} className="text-foreground">
             <Link
               to="/client-relations/enrollment"
-              search={{ tab: "members", member: n.enrollment_id }}
+              search={{ tab: "members", window: windowId, member: n.enrollment_id }}
               className="font-medium underline underline-offset-2"
             >
               {n.employee_name ?? n.staff_id ?? "Member"}

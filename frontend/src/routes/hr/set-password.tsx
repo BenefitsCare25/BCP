@@ -1,12 +1,12 @@
-import { usePortalTranslation } from "@/i18n/portal";
+import { portalMessage, usePortalTranslation, type PortalCopy } from "@/i18n/portal";
 /** HR set / reset password: redeem a single-use token (from the emailed link
  * or a forced-rotation redirect) and choose a password. */
 import { useRef, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { Lock, ShieldCheck } from "lucide-react";
 import { adoptSession, isTokenResult, useHrMfa, useHrSetPassword } from "@/api/hr";
-import { errorCode, formatError } from "@/lib/errors";
-import { PASSWORD_MAX_LENGTH } from "@/lib/loginValidation";
+import { errorCode } from "@/lib/errors";
+import { PASSWORD_MAX_LENGTH, authStepError } from "@/lib/loginValidation";
 import { useSetPasswordToken } from "@/lib/setPasswordToken";
 import { hrPath } from "@/lib/tenant";
 import { MFA_CODE_MAX_LENGTH, canSubmitMfaCode, normalizeMfaCode } from "@/lib/mfa";
@@ -17,8 +17,8 @@ import { Label } from "@/components/ui/label";
 
 const MIN_LENGTH = 12;
 
-function strength(pw: string): { label: string; ok: boolean } {
-  if (pw.length < MIN_LENGTH) return { label: `At least ${MIN_LENGTH} characters`, ok: false };
+function strength(pw: string): { label: PortalCopy; ok: boolean } {
+  if (pw.length < MIN_LENGTH) return { label: portalMessage("At least {0} characters", [MIN_LENGTH]), ok: false };
   let classes = 0;
   if (/[a-z]/.test(pw)) classes++;
   if (/[A-Z]/.test(pw)) classes++;
@@ -76,7 +76,7 @@ export function HrSetPasswordPage() {
             setStep("mfa");
           }
         },
-        onError: (err) => setError(formatError(err)),
+        onError: (err) => setError(authStepError(err)),
         onSettled: () => { submitting.current = false; },
       },
     );
@@ -96,7 +96,7 @@ export function HrSetPasswordPage() {
         },
         onError: (err) => {
           if (errorCode(err) === "challenge_expired") { setExpired(true); setCode(""); setChallenge(""); }
-          setError(formatError(err));
+          setError(authStepError(err));
         },
         onSettled: () => { submitting.current = false; },
       },

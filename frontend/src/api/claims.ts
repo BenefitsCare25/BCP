@@ -1,5 +1,10 @@
 /** Broker claim-review queue hooks (member claim hooks live in api/portal.ts). */
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  useMutation,
+  useQuery,
+  useQueryClient,
+  type QueryClient,
+} from "@tanstack/react-query";
 import { api } from "@/api/client";
 import { isNotFoundError, isStaleConfigurationError } from "@/lib/errors";
 import { useSession } from "@/stores/session";
@@ -235,6 +240,9 @@ export interface BrokerClaim {
   sent_to_insurer_at: string | null;
   insurer_deadline_on: string | null;
   paid_on: string | null;
+  /** When the insurer declined it (`sent_to_insurer → rejected`). Kept apart
+   *  from `decided_at`, which stays our approval. Null on older declines. */
+  insurer_outcome_on?: string | null;
   /** What the insurer actually paid — may fall short of `amount_approved`. */
   payment_amount: number | null;
   hospital_type: string | null;
@@ -357,7 +365,7 @@ export function useBrokerClaims(
     queryKey: [
       "claims", cid, policyYearId, status, caseType, employeeId, search, offset, limit, filters,
     ],
-    queryFn: () => {
+    queryFn: (context) => {
       const params = new URLSearchParams({
         policy_year_id: policyYearId!,
         offset: String(offset),
@@ -368,7 +376,7 @@ export function useBrokerClaims(
       if (employeeId) params.set("employee_id", employeeId);
       if (search.trim()) params.set("search", search.trim());
       claimFilterParams(filters).forEach((value, key) => params.set(key, value));
-      return api.get<BrokerClaimList>(`/claims?${params.toString()}`);
+      return api.poll<BrokerClaimList>(context, `/claims?${params.toString()}`);
     },
     enabled: !!policyYearId,
     // Keep the operational queue and unread badges current while it is open.
@@ -415,7 +423,7 @@ export function useBrokerConversations(
       limit,
       search,
     ],
-    queryFn: () => {
+    queryFn: (context) => {
       const params = new URLSearchParams({
         policy_year_id: policyYearId!,
         awaiting,
@@ -428,11 +436,16 @@ export function useBrokerConversations(
       if (filters.incurredFrom) params.set("incurred_from", filters.incurredFrom);
       if (filters.incurredTo) params.set("incurred_to", filters.incurredTo);
       if (filters.status) params.set("status", filters.status);
-      return api.get<BrokerConversationList>(
+      return api.poll<BrokerConversationList>(
+        context,
         `/conversations?${params.toString()}`,
       );
     },
     enabled: !!policyYearId,
+    // The Messages badge is the broker's only sign that a member wrote, and a
+    // question appears nowhere else — the claims-list poll is a different key.
+    refetchInterval: 30_000,
+    refetchIntervalInBackground: false,
   });
 }
 
@@ -632,9 +645,9 @@ export function useClaimReview(
   const cid = useSession((s) => s.activeClientId);
   return useQuery({
     queryKey: ["claim-review", cid, claimId],
-    queryFn: async () => {
+    queryFn: async (context) => {
       try {
-        return await api.get<ClaimAIReview>(`/claims/${claimId}/review`);
+        return await api.poll<ClaimAIReview>(context, `/claims/${claimId}/review`);
       } catch (e) {
         if (isNotFoundError(e)) return null; // no review yet — empty state
         throw e;
@@ -643,8 +656,11 @@ export function useClaimReview(
     enabled: !!claimId,
     retry: false,
     refetchInterval: (query) => {
+      // While the claim says a review is pending, keep asking even when a
+      // finished review is cached: an amendment supersedes that one, and its
+      // `complete` status would otherwise never start the poll.
+      if (claimPending) return 5_000;
       const review = query.state.data;
-      if (review === null) return claimPending ? 5_000 : false;
       return review && ["queued", "running", "retry_wait"].includes(review.status)
         ? 5_000
         : false;
@@ -717,6 +733,8 @@ export function useDecideClaim() {
       // Approval changes the employee's usage-vs-limits view.
       void qc.invalidateQueries({ queryKey: ["employee-utilization"] });
       void qc.invalidateQueries({ queryKey: ["claim-detail"] });
+      // The decision posts its notice to the member's thread.
+      void qc.invalidateQueries({ queryKey: ["claim-messages"] });
     },
     meta: { localErrorHandling: true },
   });
@@ -816,6 +834,8 @@ export function useRecordClaimPayment() {
       // through the same buckets — refetch so a paid claim is not left showing
       // as pending beside its own limit.
       void qc.invalidateQueries({ queryKey: ["employee-utilization"] });
+      // Recording payment posts the member's "paid" notice to the thread.
+      void qc.invalidateQueries({ queryKey: ["claim-messages"] });
     },
     meta: { localErrorHandling: true },
   });
@@ -900,6 +920,8 @@ export function useAmendClaim() {
       void qc.invalidateQueries({ queryKey: ["claim-detail"] });
       // The claimed figure feeds the utilization buckets.
       void qc.invalidateQueries({ queryKey: ["employee-utilization"] });
+      // An amendment supersedes the AI review (and usually queues a new one).
+      void qc.invalidateQueries({ queryKey: ["claim-review"] });
     },
     meta: { localErrorHandling: true },
   });
@@ -1142,13 +1164,21 @@ export function useClaimDocumentSetups() {
   });
 }
 
+/** A saved claim configuration also gains a version-history (audit) entry. The
+ *  editors' history panel reads it, so a cached copy would label the previous
+ *  version "Current audit entry" and loading it would silently revert a save. */
+function invalidateClaimConfiguration(qc: QueryClient, queryKey: string): void {
+  void qc.invalidateQueries({ queryKey: [queryKey] });
+  void qc.invalidateQueries({ queryKey: ["audit-log"] });
+}
+
 export function useSaveClaimDocumentSetup() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (input: ClaimDocumentSetupInput) =>
       api.put<ClaimDocumentSetup>("/claim-document-setups", input),
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["claim-document-setups"] });
+      invalidateClaimConfiguration(qc, "claim-document-setups");
       void qc.invalidateQueries({ queryKey: ["portal", "coverage-options"] });
     },
     onError: (error) => {
@@ -1168,8 +1198,7 @@ export function useDuplicateClaimDocumentSetup() {
       target: ClaimDocumentSetupInput;
     }) =>
       api.post<ClaimDocumentSetup>("/claim-document-setups/duplicate", input),
-    onSuccess: () =>
-      void qc.invalidateQueries({ queryKey: ["claim-document-setups"] }),
+    onSuccess: () => invalidateClaimConfiguration(qc, "claim-document-setups"),
     onError: (error) => {
       if (isStaleConfigurationError(error)) {
         void qc.invalidateQueries({ queryKey: ["claim-document-setups"] });
@@ -1356,8 +1385,7 @@ export function useCreateClaimReviewConfig() {
   return useMutation({
     mutationFn: (input: ClaimReviewConfigInput) =>
       api.post<ClaimReviewConfig>("/claim-review-configs", input),
-    onSuccess: () =>
-      void qc.invalidateQueries({ queryKey: ["claim-review-configs"] }),
+    onSuccess: () => invalidateClaimConfiguration(qc, "claim-review-configs"),
     meta: { localErrorHandling: true },
   });
 }
@@ -1367,8 +1395,7 @@ export function useUpdateClaimReviewConfig() {
   return useMutation({
     mutationFn: ({ id, ...input }: ClaimReviewConfigInput & { id: string; expected_updated_at: string }) =>
       api.put<ClaimReviewConfig>(`/claim-review-configs/${id}`, input),
-    onSuccess: () =>
-      void qc.invalidateQueries({ queryKey: ["claim-review-configs"] }),
+    onSuccess: () => invalidateClaimConfiguration(qc, "claim-review-configs"),
     onError: (error) => {
       if (isStaleConfigurationError(error)) {
         void qc.invalidateQueries({ queryKey: ["claim-review-configs"] });
@@ -1385,8 +1412,7 @@ export function useDeleteClaimReviewConfig() {
       api.delete<void>(
         `/claim-review-configs/${id}?expected_updated_at=${encodeURIComponent(expected_updated_at)}`,
       ),
-    onSuccess: () =>
-      void qc.invalidateQueries({ queryKey: ["claim-review-configs"] }),
+    onSuccess: () => invalidateClaimConfiguration(qc, "claim-review-configs"),
     onError: (error) => {
       if (isStaleConfigurationError(error)) {
         void qc.invalidateQueries({ queryKey: ["claim-review-configs"] });
@@ -1449,8 +1475,7 @@ export function useImportReviewConfigs() {
         "/claim-review-configs/import",
         input,
       ),
-    onSuccess: () =>
-      void qc.invalidateQueries({ queryKey: ["claim-review-configs"] }),
+    onSuccess: () => invalidateClaimConfiguration(qc, "claim-review-configs"),
     onError: (error) => {
       if (isStaleConfigurationError(error)) {
         void qc.invalidateQueries({ queryKey: ["claim-review-configs"] });

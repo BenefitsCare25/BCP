@@ -1,6 +1,7 @@
 """Layer 2 schema endpoints — employee attributes + products."""
 from __future__ import annotations
 
+import re
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -17,7 +18,18 @@ from app.core.deps import (
     tenant_or_global,
 )
 from app.db.session import get_db
-from app.models import EmployeeAttributeSchema, Product
+from app.models import (
+    Category,
+    EmployeeAttributeSchema,
+    EmployeePlanOverride,
+    EnrollmentElection,
+    ListingAssignment,
+    Plan,
+    PolicyYearCard,
+    Product,
+    ProductTerm,
+    UnderwritingCase,
+)
 from app.schemas.api import (
     AttributeSchemaCreate,
     AttributeSchemaOut,
@@ -95,8 +107,37 @@ def _load_editable_attribute(
     )
 
 
+# A product code travels in URL path segments (encoded by the client), so only
+# characters that still break routing or read ambiguously are refused. Codes the
+# slip importer derives ("GYM_&_WELLNESS", "TRAVEL_INS.", "O&G") stay valid, and
+# export sheet titles sanitize their own characters.
+_UNSAFE_PRODUCT_CODE = re.compile(r"[/\\?#%\s\x00-\x1f\x7f]")
+
+
 def _load_editable_product(product_id: str, user: CurrentUser, db: Session) -> Product:
     return load_editable_global(Product, product_id, user, db, "Product")
+
+
+# Rows that reference a product. Deleting the product would cascade-delete them
+# (or, for categories, unlink them) in every company and benefit year.
+_PRODUCT_REFERENCES: tuple[tuple[Any, str], ...] = (
+    (Category, "employee categories"),
+    (Plan, "plans"),
+    (EnrollmentElection, "enrollment elections"),
+    (EmployeePlanOverride, "member plan changes"),
+    (ProductTerm, "policy terms"),
+    (UnderwritingCase, "underwriting cases"),
+    (PolicyYearCard, "panel cards"),
+    (ListingAssignment, "employee listing covers"),
+)
+
+
+def _product_usage(db: Session, product_id: str) -> list[str]:
+    return [
+        label
+        for model, label in _PRODUCT_REFERENCES
+        if db.execute(select(model.id).where(model.product_id == product_id).limit(1)).first()
+    ]
 
 
 def _validate_derivation_patterns(rule: object) -> None:
@@ -382,6 +423,11 @@ def create_product(
             status.HTTP_422_UNPROCESSABLE_CONTENT,
             "Product code is required.",
         )
+    if variant is None and _UNSAFE_PRODUCT_CODE.search(code):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "Product codes cannot contain spaces or the characters / \\ ? # %.",
+        )
     existing = db.execute(
         select(Product).where(
             Product.client_id.is_(None)
@@ -496,6 +542,12 @@ def delete_product(
     db: Session = Depends(get_db),
 ) -> None:
     row = _load_editable_product(product_id, user, db)
+    if in_use := _product_usage(db, product_id):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"{row.display_name} is still used by {', '.join(in_use)}. "
+            "Remove it from every benefit year before deleting it.",
+        )
     snapshot = {
         "code": row.code,
         "display_name": row.display_name,

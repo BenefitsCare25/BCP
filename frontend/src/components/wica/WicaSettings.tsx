@@ -1,12 +1,11 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
-import { useMe } from "@/api/hooks";
 import { wicaApi, type WicaSettings as Settings } from "@/api/wica";
 import { useSession } from "@/stores/session";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { isBrokerAdminRole } from "@/lib/roles";
+import { useWriteAccess } from "@/lib/roles";
 import { Failure, Field, Loading } from "./shared";
 
 export function WicaSettings() {
@@ -15,19 +14,21 @@ export function WicaSettings() {
 }
 function SettingsLoader({ clientId }: { clientId: string }) {
   const query = useQuery({ queryKey: ["wica", clientId, "settings"], queryFn: () => wicaApi(clientId).get<Settings>("/settings") });
+  // Held here because a save bumps the revision the form is keyed on, so the
+  // refetch remounts the form and would drop its own "Saved." flag.
+  const [savedRevision, setSavedRevision] = useState<number | null>(null);
   if (query.isPending) return <Loading />;
   if (query.isError) return <Failure error={query.error} retry={() => void query.refetch()} />;
-  return <SettingsForm key={query.data.revision} clientId={clientId} initial={query.data} />;
+  return <SettingsForm key={query.data.revision} clientId={clientId} initial={query.data} justSaved={savedRevision === query.data.revision} onSaved={setSavedRevision} />;
 }
-function SettingsForm({ clientId, initial }: { clientId: string; initial: Settings }) {
-  const { data: me } = useMe();
-  const editable = isBrokerAdminRole(me?.role);
+function SettingsForm({ clientId, initial, justSaved, onSaved }: { clientId: string; initial: Settings; justSaved: boolean; onSaved: (revision: number) => void }) {
+  const { canAdmin: editable } = useWriteAccess();
   const [value, setValue] = useState(initial);
-  const [saved, setSaved] = useState(false);
+  const [saved, setSaved] = useState(justSaved);
   const qc = useQueryClient();
   const mutation = useMutation({
     mutationFn: () => wicaApi(clientId).put<Settings>("/settings", { ...value, periods: value.periods.map(({ in_use: _used, ...period }) => period) }),
-    onSuccess: result => { setValue(result); setSaved(true); void qc.invalidateQueries({ queryKey: ["wica", clientId] }); },
+    onSuccess: result => { setValue(result); setSaved(true); onSaved(result.revision); void qc.invalidateQueries({ queryKey: ["wica", clientId] }); },
   });
   return <form className="space-y-5" onSubmit={e => { e.preventDefault(); mutation.mutate(); }}>
     <fieldset disabled={!editable || mutation.isPending} className="space-y-5">

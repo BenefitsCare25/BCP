@@ -277,10 +277,27 @@ export function ClaimReviewPanel({
       result.error_code === "ai_output_incomplete" &&
       result.rule.toLowerCase().includes("comparison"),
   );
+  // The verdict can rest on reasons the issue list never shows — low review
+  // confidence, a refuted vision check — and the server records them in the
+  // summary ("Flagged: …"). A flagged review must never read as all-clear.
+  const flagged = review.verdict === "flagged";
   return (
     <div className="space-y-4">
       {review.amount_breakdown && (
         <ClaimAmountBreakdown breakdown={review.amount_breakdown} />
+      )}
+      {flagged && (
+        <div className="space-y-1 rounded-md border border-warn/40 bg-warn-soft p-3 text-sm text-warn">
+          <p className="font-medium">Why the AI flagged this claim</p>
+          <p className="whitespace-pre-line text-xs">
+            {review.summary || "No reason was recorded. Review the evidence manually."}
+          </p>
+          {review.confidence != null && (
+            <p className="text-xs">
+              Review confidence {Math.round(review.confidence * 100)}%
+            </p>
+          )}
+        </div>
       )}
       <div>
         {issues.length > 0 ? (
@@ -307,11 +324,11 @@ export function ClaimReviewPanel({
               </li>
             ))}
           </ol>
-        ) : (
+        ) : review.verdict === "clean" ? (
           <div className="rounded-md border border-border bg-good-soft p-3 text-sm text-good">
             No validation issues found in the AI review.
           </div>
-        )}
+        ) : null}
       </div>
 
       <ReviewDetails

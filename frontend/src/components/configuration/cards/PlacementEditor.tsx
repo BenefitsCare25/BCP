@@ -1,4 +1,3 @@
-import { FirmOwnerOnly } from "@/components/auth/FirmOwnerOnly";
 /** Drag-to-position editor for a card's printed fields.
  *
  * Placements are fractions of the artwork box, so dragging just converts a
@@ -32,6 +31,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { cn } from "@/lib/cn";
+import { formatError } from "@/lib/errors";
+import { useWriteAccess } from "@/lib/roles";
 
 /** Plausible stand-ins so the broker can judge spacing before any member exists. */
 const SAMPLE_VALUES: Record<string, string> = {
@@ -80,6 +81,14 @@ export function PlacementEditor({
   const canvasRef = useRef<HTMLDivElement>(null);
   const front = useBrokerCardArtwork(card.id, "front");
   const back = useBrokerCardArtwork(card.id, "back", card.has_back);
+  const { canRemove: canRemoveSaved } = useWriteAccess();
+  // Dropping a SAVED field is a removal (firm owners, enforced by the API); a
+  // field added in this session is only an unsaved edit.
+  const savedKeys = useMemo(
+    () => new Set(card.placements.fields.map((f) => f.key)),
+    [card.placements],
+  );
+  const canRemove = (key: string) => canRemoveSaved || !savedKeys.has(key);
 
   const values = useMemo(() => {
     const out: Record<string, string> = {};
@@ -147,8 +156,8 @@ export function PlacementEditor({
       await save.mutateAsync({ id: card.id, fields });
       toast.success("Card layout saved");
       onClose();
-    } catch {
-      // Global mutation toast already surfaced the error.
+    } catch (error) {
+      toast.error(formatError(error));
     }
   };
 
@@ -255,14 +264,16 @@ export function PlacementEditor({
                 {options?.placement_keys.find((o) => o.key === active.key)
                   ?.label ?? active.key}
               </span>
-              <FirmOwnerOnly><Button
-                variant="ghost"
-                size="sm"
-                onClick={() => removeField(selected)}
-                title="Remove field"
-              >
-                <Trash2 className="size-4 text-error" />
-              </Button></FirmOwnerOnly>
+              {canRemove(active.key) && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => removeField(selected)}
+                  title="Remove field"
+                >
+                  <Trash2 className="size-4 text-error" />
+                </Button>
+              )}
             </div>
             <div className="grid grid-cols-2 gap-2">
               <div className="space-y-1">

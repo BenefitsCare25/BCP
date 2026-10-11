@@ -38,7 +38,11 @@ from app.core.tenancy_host import (
     resolve_host_info,
     resolve_tenant_context,
 )
-from app.core.tenant_resolution import refuse_unserved_surface, request_firm
+from app.core.tenant_resolution import (
+    refuse_unserved_surface,
+    request_firm,
+    require_firm_active,
+)
 from app.db.session import get_db
 from app.db.tenancy import set_search_path
 from app.models import Employee, MemberAccount, PolicyYear
@@ -230,6 +234,12 @@ def resolve_member_credential(
     return base.filter(MemberAccount.staff_id == identifier).one_or_none()
 
 
+PORTAL_DISABLED_DETAIL: dict[str, str] = {
+    "code": "portal_disabled",
+    "message": "Employee portal access for this company is switched off.",
+}
+
+
 def require_portal_tenant(
     request: Request,
     db: Session = Depends(get_db),
@@ -241,10 +251,29 @@ def require_portal_tenant(
     (`INSPRO_TENANT_MODE=header`) or non-prod accepts an `X-Inspro-Tenant-Slug`
     header stand-in (same as the HR surface). The alias is looked up within
     the broker firm the host belongs to."""
+    return _portal_tenant(request, db, x_inspro_tenant_slug, include_disabled=False)
+
+
+def require_portal_session_tenant(
+    request: Request,
+    db: Session = Depends(get_db),
+    x_inspro_tenant_slug: str | None = Header(default=None),
+) -> TenantContext:
+    """`require_portal_tenant` that also resolves a switched-off company.
+
+    For `/refresh` and `/logout` only, which act on an existing session: they
+    must answer `portal_disabled` to it rather than "Unknown tenant.", and they
+    refuse a disabled company themselves (`ctx.enabled`)."""
+    return _portal_tenant(request, db, x_inspro_tenant_slug, include_disabled=True)
+
+
+def _portal_tenant(
+    request: Request, db: Session, slug_header: str | None, *, include_disabled: bool,
+) -> TenantContext:
     firm = request_firm(request)
     refuse_unserved_surface(firm, DOMAIN_SURFACE_CLIENT)
-    host_info = resolve_host_info(request, SURFACE_PORTAL, x_inspro_tenant_slug)
-    ctx = resolve_tenant_context(host_info, db, firm)
+    host_info = resolve_host_info(request, SURFACE_PORTAL, slug_header)
+    ctx = resolve_tenant_context(host_info, db, firm, include_disabled=include_disabled)
     if ctx is None or ctx.surface != SURFACE_PORTAL:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
@@ -314,6 +343,8 @@ def get_current_member(
     # accept the session. Checked before the session is touched.
     if firm is not None and (client is None or client.broker_firm_id != firm.firm_id):
         raise _unauthorized("Invalid portal token")
+    if client is not None:
+        require_firm_active(db, client.broker_firm_id)
     from app.core import sessions as SESS
     from app.core.hr_auth import get_auth_policy
     from app.models.auth import SUBJECT_MEMBER
@@ -330,10 +361,7 @@ def get_current_member(
     if client is not None and not client.portal_enabled:
         # Per request, not only at sign-in: switching the portal off has to stop
         # what live sessions can do, not just new sign-ins.
-        raise HTTPException(status.HTTP_403_FORBIDDEN, {
-            "code": "portal_disabled",
-            "message": "Employee portal access for this company is switched off.",
-        })
+        raise HTTPException(status.HTTP_403_FORBIDDEN, PORTAL_DISABLED_DETAIL)
     if policy.mfa_portal_required and not session.mfa_verified:
         from app.core import mfa as MFA
 

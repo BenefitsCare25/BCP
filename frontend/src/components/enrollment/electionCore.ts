@@ -178,7 +178,8 @@ export function dependantPricing(
 }
 
 /** Baseline-only state, for a surface where no enrollment row exists yet (the
- * broker's employee-view preview). */
+ * broker's employee-view preview). Voluntary cover the member holds nothing of
+ * (`eligible_only`) starts as not enrolled, as the server snapshots it. */
 export function baselineElectionState(
   tierSets: ProductTierSet[],
 ): Record<string, ProductState> {
@@ -188,7 +189,7 @@ export function baselineElectionState(
     next[ts.product_code] = {
       productCode: ts.product_code,
       tierKey: baseline?.key ?? "",
-      declined: false,
+      declined: !!ts.eligible_only,
       dependantIds: [],
       depOptionIds: {},
     };
@@ -199,7 +200,12 @@ export function baselineElectionState(
 /** Seed the per-product election state from the saved election → baseline
  * snapshot → cohort baseline. Resolves the current tier by its
  * (tier_category_id, plan_code) pair — a category or a plan can each repeat
- * across tiers, so match on both. */
+ * across tiers, so match on both.
+ *
+ * Voluntary cover the member holds nothing of (`eligible_only`) starts as NOT
+ * enrolled, parked on the default tier: leaving it untouched sends a decline
+ * (which changes nothing), and picking any tier — the default included — is
+ * what enrols them. */
 export function seedElectionState(
   enr: EnrollmentDetail,
   tierSets: ProductTierSet[],
@@ -210,7 +216,9 @@ export function seedElectionState(
     const code = ts.product_code;
     const el = enr.elections.find((e) => e.product_code === code);
     const base = baseProducts[code];
-    const declined = el ? el.action === "decline" : base?.declined ?? false;
+    const declined = el
+      ? el.action === "decline"
+      : (base?.declined ?? false) || !!ts.eligible_only;
     const wantTierId =
       el?.tier_category_id ?? base?.tier_category_id ?? ts.baseline_tier_category_id;
     const wantPlan = el?.elected_plan_code ?? base?.plan_code ?? ts.baseline_plan_code;
@@ -267,7 +275,9 @@ export function heldElectionState(
     next[ts.product_code] = {
       productCode: ts.product_code,
       tierKey: held?.key ?? "",
-      declined: base?.declined ?? false,
+      // Voluntary cover held as nothing is "not enrolled" — the same reading
+      // as the seed, so an untouched product is never reported as a change.
+      declined: (base?.declined ?? false) || !!ts.eligible_only,
       dependantIds: base?.covered_dependant_ids ?? [],
       depOptionIds: base?.dependant_option_ids ?? {},
     };
@@ -324,7 +334,7 @@ export function sameElection(
 }
 
 /** Build the PUT /elections payload from local state — identical rules on both
- * surfaces: compulsory dependant cover persists ALL dependants; elected option
+ * surfaces: compulsory dependant cover persists every age-eligible dependant; elected option
  * levels only for roles the product actually offers. */
 export function buildElectionsPayload(
   state: Record<string, ProductState>,
@@ -341,8 +351,8 @@ export function buildElectionsPayload(
       : null;
     const coveredDeps = !allowDeps || participation === null
       ? null
-      : participation === "compulsory"
-        ? dependants.map((d) => d.id)
+      : participation === "compulsory" && ts
+        ? compulsoryDependants(ts, dependants).map((d) => d.id)
         : s.dependantIds;
     const offeredRoles = new Set<string>(
       (ts?.dependant?.option_choices ?? []).map((r) => r.role),
@@ -403,6 +413,44 @@ export function dependantParticipationFor(
   return ts.dependant_participation as "compulsory" | "voluntary" | null;
 }
 
+/** The dependants compulsory cover puts on this product: everyone the server
+ * places inside the product's age window (`eligible_dependant_ids`), so a child
+ * past the limit is neither listed as covered nor charged. */
+export function compulsoryDependants(
+  ts: ProductTierSet,
+  dependants: DependantRef[],
+): DependantRef[] {
+  const eligible = ts.eligible_dependant_ids;
+  if (!eligible) return dependants;
+  const ids = new Set(eligible);
+  return dependants.filter((dependant) => ids.has(dependant.id));
+}
+
+/** Who an election covers — the set the wallet prices.
+ *
+ * Compulsory dependant cover is priced whether or not the window lets members
+ * change dependants: `apply_elections` covers and charges it either way. Ticked
+ * (voluntary) dependants count too: with dependant changes off the server keeps
+ * the held list, which seeds `ps.dependantIds`. */
+export function coveredDependantIds(
+  ts: ProductTierSet,
+  ps: ProductState,
+  dependants: DependantRef[],
+  allowDeps: boolean,
+): string[] {
+  if (ps.declined) return [];
+  const participation = dependantParticipationFor(ts, ps.tierKey);
+  if (participation === "compulsory") {
+    return compulsoryDependants(ts, dependants).map((dependant) => dependant.id);
+  }
+  if (participation !== "voluntary") return [];
+  // With dependant changes off the server keeps (and prices) the held list,
+  // so the seeded ids still count; only dependants still on file are priced.
+  if (allowDeps) return ps.dependantIds;
+  const onFile = new Set(dependants.map((dependant) => dependant.id));
+  return ps.dependantIds.filter((id) => onFile.has(id));
+}
+
 /** Below this a negative balance is a rounding residue, not a shortfall.
  *
  * Single-sourced because the surfaces that read it sit next to each other: the
@@ -436,25 +484,16 @@ export function computeFlex(
     if (!ps || ps.declined) continue;
     const tier = ts.tiers.find((t) => t.key === ps.tierKey);
     if (tier?.price_tag) total += tier.price_tag;
-    if (allowDeps) {
-      const participation = dependantParticipationFor(ts, ps.tierKey);
-      const dependantIds =
-        participation === "compulsory"
-          ? dependants.map((dependant) => dependant.id)
-          : participation === "voluntary"
-            ? ps.dependantIds
-            : [];
-      if (participation === null) continue;
-      // `dependantPricing`, not `dependantCost`: the cost alone throws away the
-      // one thing this loop has to propagate — that a covered dependant could
-      // not be priced, which makes every figure below a lower bound rather than
-      // an answer.
-      const priced = dependantPricing(
-        ts.dependant, ps.tierKey, dependantIds, dependants, ps.depOptionIds,
-      );
-      total += priced.total;
-      if (priced.unresolved) incomplete = true;
-    }
+    // `dependantPricing`, not `dependantCost`: the cost alone throws away the
+    // one thing this loop has to propagate — that a covered dependant could
+    // not be priced, which makes every figure below a lower bound rather than
+    // an answer.
+    const priced = dependantPricing(
+      ts.dependant, ps.tierKey, coveredDependantIds(ts, ps, dependants, allowDeps),
+      dependants, ps.depOptionIds,
+    );
+    total += priced.total;
+    if (priced.unresolved) incomplete = true;
   }
   const rate = options.member_leave_rate ?? 0;
   // **Only a TRADEABLE day count moves the wallet.** `leaveDays` is live,

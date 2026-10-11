@@ -42,6 +42,7 @@ from app.core.portal_auth import (
     issue_member_mfa_challenge_token,
     issue_member_set_password_link,
     issue_member_token,
+    require_portal_session_tenant,
     require_portal_tenant,
     resolve_member_credential,
     verify_member_mfa_challenge_token,
@@ -52,7 +53,7 @@ from app.core.request_context import client_ip
 from app.core.session_logout import revoke_tab_session
 from app.core.settings import get_settings
 from app.core.tenancy_host import TenantContext
-from app.core.tenant_resolution import require_client_surface
+from app.core.tenant_resolution import require_client_surface, require_live_host_firm
 from app.db.session import get_db
 from app.models import Client, MemberAccount
 from app.models.auth import SUBJECT_MEMBER
@@ -73,10 +74,12 @@ from app.services.member_invite import clear_invite_expiry, invite_expired
 
 logger = logging.getLogger(__name__)
 
-# Only hosts that serve the client portals; the company resolves within the
-# host's broker firm (`require_portal_tenant`, `get_current_member`).
+# Only hosts that serve the client portals, of a firm that is still active;
+# the company resolves within the host's broker firm (`require_portal_tenant`,
+# `get_current_member`).
 router = APIRouter(
-    prefix="/portal/auth", tags=["portal-auth"], dependencies=[Depends(require_client_surface)],
+    prefix="/portal/auth", tags=["portal-auth"],
+    dependencies=[Depends(require_client_surface), Depends(require_live_host_firm)],
 )
 
 
@@ -131,6 +134,41 @@ def _member_out(
     )
 
 
+def _refuse_ended_access(
+    db: Session, request: Request, account: MemberAccount, client_id: str,
+) -> None:
+    """403 when the member's access has ended — the leaver refusal.
+
+    It runs AFTER the credential has been proved, so it leaks nothing an
+    attacker could enumerate: the person already holds the password or link.
+    And it fires only on a definite `ended` verdict — a member with no roster
+    row in the current year resolves to `unknown` and signs in exactly as
+    today, because absence is not evidence that anyone left.
+    """
+    access = access_for_account(
+        db,
+        member_account_id=account.id,
+        client_id=client_id,
+        staff_id=account.staff_id,
+    )
+    if access.state != "ended":
+        return
+    account_id = account.id
+    # **Discard whatever the caller had pending before recording anything.** A
+    # refusal must leave nothing behind but its own audit row — no rotated
+    # credential, no cleared invite deadline, no reset failure count.
+    db.rollback()
+    EV.write_auth_event(
+        db, event_type=EV.EVENT_LOGIN_FAIL, outcome=EV.OUTCOME_BLOCKED,
+        surface="portal", subject_type=SUBJECT_MEMBER, subject_id=account_id,
+        client_id=client_id, ip=_client_ip(request),
+        subdomain=request.headers.get("host"),
+        detail={"reason": CODE_ACCESS_ENDED},
+    )
+    db.commit()
+    raise HTTPException(status.HTTP_403_FORBIDDEN, refusal(access, Capability.RECORD))
+
+
 def _issue_member_login(
     db: Session,
     request: Request,
@@ -140,40 +178,10 @@ def _issue_member_login(
 ) -> MemberSessionOut:
     # **The one choke point for every session this surface issues** — password
     # login, MFA and set-password all end here, so the leaver refusal is
-    # checked once rather than at three call sites that could drift.
-    #
-    # It runs AFTER the credential has been proved, so it leaks nothing an
-    # attacker could enumerate: the person already holds the password. And it
-    # fires only on a definite `ended` verdict — a member with no roster row in
-    # the current year resolves to `unknown` and signs in exactly as today,
-    # because absence is not evidence that anyone left.
-    access = access_for_account(
-        db,
-        member_account_id=account.id,
-        client_id=client_id,
-        staff_id=account.staff_id,
-    )
-    if access.state == "ended":
-        account_id = account.id
-        # **Discard whatever the caller had pending before recording anything.**
-        # `member_set_password` reaches here having already written the new
-        # `password_hash`, `password_updated_at`, `must_rotate_after`, a cleared
-        # invite deadline and a reset failure count — committing those on the way
-        # to a 403 would silently rotate the credential of a member being told
-        # they cannot come in, and clear the invite deadline that bounds it. A
-        # refusal must leave nothing behind but its own audit row.
-        db.rollback()
-        EV.write_auth_event(
-            db, event_type=EV.EVENT_LOGIN_FAIL, outcome=EV.OUTCOME_BLOCKED,
-            surface="portal", subject_type=SUBJECT_MEMBER, subject_id=account_id,
-            client_id=client_id, ip=_client_ip(request),
-            subdomain=request.headers.get("host"),
-            detail={"reason": CODE_ACCESS_ENDED},
-        )
-        db.commit()
-        raise HTTPException(
-            status.HTTP_403_FORBIDDEN, refusal(access, Capability.RECORD)
-        )
+    # checked here rather than at three call sites that could drift.
+    # `member_set_password` also checks BEFORE it writes the new credential,
+    # because its MFA branch commits without reaching this function.
+    _refuse_ended_access(db, request, account, client_id)
     CRED.reset_failures(account)
     account.last_sign_in_at = datetime.now(UTC)
     if account.status == MEMBER_STATUS_INVITED:
@@ -266,7 +274,7 @@ def member_login(
     # Forced rotation — the member proved the current password, so hand them a
     # self-serve set-password token rather than locking them out. Minting it
     # cancels any earlier link, as every other issuer does.
-    if CRED.rotation_due(account):
+    if CRED.rotation_due(account, policy.password_rotation_days):
         token = issue_member_set_password_link(account)
         EV.write_auth_event(
             db, event_type=EV.EVENT_PASSWORD_RESET_REQUEST, outcome=EV.OUTCOME_SUCCESS,
@@ -361,6 +369,9 @@ def member_set_password(
         raise HTTPException(
             status.HTTP_409_CONFLICT, "Account is disabled — re-enable it first."
         )
+    # A leaver is refused before anything is written: the MFA branch below
+    # commits the new credential and only then hands over a challenge.
+    _refuse_ended_access(db, request, account, tenant.client_id)
 
     policy = get_auth_policy(db, tenant.client_id)
     ok, reason = PW.password_meets_policy(body.password, policy.password_min_entropy)
@@ -617,24 +628,40 @@ def _refuse_refresh(status_code: int, detail: object, client_id: str) -> JSONRes
     return refused
 
 
+def _unknown_tenant() -> HTTPException:
+    """What a switched-off company answers to anyone without a session there."""
+    return HTTPException(status.HTTP_404_NOT_FOUND, "Unknown tenant.")
+
+
 @router.post("/refresh", response_model=MemberSessionOut)
 @limiter.limit("30/minute")
 def member_refresh(
     request: Request, response: Response,
-    tenant: TenantContext = Depends(require_portal_tenant),
+    tenant: TenantContext = Depends(require_portal_session_tenant),
     db: Session = Depends(get_db),
 ) -> MemberSessionOut | JSONResponse:
     from app.models import AuthSession
 
     require_same_origin(request)
     token = request.cookies.get(PA.refresh_cookie_name(tenant.client_id))
-    if not token:
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "No session.")
     row = db.execute(select(AuthSession).where(
         AuthSession.refresh_hash == SESS.hash_refresh(token),
-    )).scalar_one_or_none()
-    if row is None or row.subject_type != SUBJECT_MEMBER or row.client_id != tenant.client_id:
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid session.")
+    )).scalar_one_or_none() if token else None
+    if (not token or row is None or row.subject_type != SUBJECT_MEMBER
+            or row.client_id != tenant.client_id):
+        if not tenant.enabled:
+            raise _unknown_tenant()
+        raise HTTPException(
+            status.HTTP_401_UNAUTHORIZED, "Invalid session." if token else "No session.",
+        )
+    if not tenant.enabled:
+        # The portal was switched off under a live session: end it, and say why
+        # so the sign-in page can explain instead of showing a bare form.
+        SESS.revoke_family(db, row.family_id)
+        db.commit()
+        return _refuse_refresh(
+            status.HTTP_403_FORBIDDEN, PA.PORTAL_DISABLED_DETAIL, tenant.client_id,
+        )
     account = db.get(MemberAccount, row.subject_id)
     if (account is None or account.status != MEMBER_STATUS_ACTIVE
             or account.client_id != tenant.client_id):
@@ -694,13 +721,20 @@ def member_refresh(
 @router.post("/logout")
 def member_logout(
     request: Request, response: Response, db: Session = Depends(get_db),
-    tenant: TenantContext = Depends(require_portal_tenant),
+    tenant: TenantContext = Depends(require_portal_session_tenant),
 ) -> dict[str, str]:
     require_same_origin(request)
-    row, clear_cookie = revoke_tab_session(
-        db, request, surface="portal", client_id=tenant.client_id,
-        cookie_name=PA.refresh_cookie_name(tenant.client_id),
-    )
+    try:
+        row, clear_cookie = revoke_tab_session(
+            db, request, surface="portal", client_id=tenant.client_id,
+            cookie_name=PA.refresh_cookie_name(tenant.client_id),
+        )
+    except HTTPException:
+        # Signing out still works after the portal is switched off; without a
+        # session there, the company stays unknown.
+        if not tenant.enabled:
+            raise _unknown_tenant() from None
+        raise
     if row is not None:
         EV.write_auth_event(
             db, event_type=EV.EVENT_LOGOUT, outcome=EV.OUTCOME_SUCCESS, surface="portal",

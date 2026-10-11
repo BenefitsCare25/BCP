@@ -11,6 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { InfoHint } from "@/components/ui/tooltip";
 import { LeaveRatesEditor } from "@/components/enrollment/LeaveRatesEditor";
+import { formatError } from "@/lib/errors";
 
 /** Does ANY tier grant days in this direction? The company default of 0 means
  *  "not by default", not "never" — a tier override still has to work. */
@@ -32,8 +33,11 @@ export function LeavePolicyCard({
   policyYearId: string;
   readOnly?: boolean;
 }) {
-  const { data: policy } = useLeavePolicy(policyYearId);
+  const { data: policy, isError, error, refetch } = useLeavePolicy(policyYearId);
   const upsert = useUpsertLeavePolicy(policyYearId);
+  // `undefined` until the policy resolves (null = none saved yet). Saving before
+  // then would send zeros and empty rates over the stored policy.
+  const loaded = policy !== undefined;
   const [maxBuy, setMaxBuy] = useState<string>("");
   const [maxSell, setMaxSell] = useState<string>("");
   const [increment, setIncrement] = useState<string>("");
@@ -64,10 +68,18 @@ export function LeavePolicyCard({
           Trading is only offered in windows that have leave trading switched on.
         </InfoHint>
       </div>
+      {isError && !loaded && (
+        <div role="alert" className="mt-2 space-y-2 text-sm text-error">
+          <p>Could not load the leave policy, so it can't be edited yet. {formatError(error)}</p>
+          <Button variant="outline" size="sm" onClick={() => void refetch()}>
+            Retry
+          </Button>
+        </div>
+      )}
       <p className="mt-1 text-2xs uppercase tracking-wider text-muted-foreground">
         Company default
       </p>
-      <fieldset disabled={readOnly} className="contents">
+      <fieldset disabled={readOnly || !loaded} className="contents">
       <div className="mt-1.5 grid gap-3 sm:grid-cols-3">
         <div>
           <Label htmlFor="lp-buy">Max buy (days)</Label>
@@ -128,7 +140,7 @@ export function LeavePolicyCard({
       <div className="mt-3 flex justify-end">
         <Button
           variant="outline"
-          disabled={upsert.isPending}
+          disabled={upsert.isPending || !loaded}
           onClick={() =>
             upsert.mutate(
               {
@@ -148,7 +160,7 @@ export function LeavePolicyCard({
                 max_sell_days: sell,
                 increment_days: inc || 1,
                 leave_rates: ratesToSave,
-                notes: null,
+                notes: policy?.notes ?? null,
               },
               { onSuccess: () => toast.success("Leave policy saved.") },
             )

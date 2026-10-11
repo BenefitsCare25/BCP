@@ -39,6 +39,7 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { InfoHint } from "@/components/ui/tooltip";
+import { formatError } from "@/lib/errors";
 
 function emptyForm(cardId: string): PolicyYearCardInput {
   return {
@@ -121,8 +122,8 @@ export function CardAssignmentSheet({
         toast.success("Card assigned — members can now see it in their portal");
       }
       onOpenChange(false);
-    } catch {
-      // Global mutation toast already surfaced the error.
+    } catch (error) {
+      toast.error(formatError(error));
     }
   };
 

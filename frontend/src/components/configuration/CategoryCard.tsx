@@ -34,6 +34,7 @@ import type {
 import { toast } from "sonner";
 import { DependantAssignmentFields } from "./DependantCard";
 import { AssignmentField } from "./setup/SetupPrimitives";
+import { RemoveGuard } from "./setup/savedEntries";
 import {
   assignmentGaps,
   isAgeBanded,
@@ -488,6 +489,9 @@ export function CategoryCard({
   const addableTiers = TIER_VOCAB.filter(
     (t) => !effectiveTiers.some((e) => e.code === t.code),
   );
+  // Tiers the server holds: removing one is a firm-owner action (the API
+  // refuses it otherwise); a template-seeded row not yet saved is not.
+  const savedTiers = new Set(Object.keys(assignments.rate_tiers ?? {}));
   const addTier = (code: string) => {
     setTierRates((t) => ({ ...t, [code]: { rate: 0, premium: 0 } }));
     // setTierRates is async — persist the next state explicitly.
@@ -844,6 +848,7 @@ export function CategoryCard({
           onCommit={saveTiers}
           onAdd={addTier}
           onRemove={removeTier}
+          savedTiers={savedTiers}
           flagMissing={missing.has("tier_rates")}
         />
       ) : rateModel === "flat" ? (
@@ -939,6 +944,7 @@ export function CategoryCard({
           onCommit={saveTiers}
           onAdd={addTier}
           onRemove={removeTier}
+          savedTiers={savedTiers}
           flagMissing={missing.has("tier_rates")}
         />
       )}
@@ -1019,6 +1025,7 @@ function TierRateGrid({
   onCommit,
   onAdd,
   onRemove,
+  savedTiers,
   flagMissing = false,
 }: {
   tiers: TemplateTier[];
@@ -1029,6 +1036,7 @@ function TierRateGrid({
   onCommit: () => void;
   onAdd: (code: string) => void;
   onRemove: (code: string) => void;
+  savedTiers: ReadonlySet<string>;
   /** Outline the tiers that still have no rate. */
   flagMissing?: boolean;
 }) {
@@ -1075,7 +1083,7 @@ function TierRateGrid({
                 onBlur={onCommit}
                 className="h-8 text-sm"
               />
-              <FirmOwnerOnly><Button
+              <RemoveGuard saved={savedTiers.has(t.code)}><Button
                 size="icon-sm"
                 variant="ghost"
                 aria-label={`Remove tier ${t.code}`}
@@ -1084,7 +1092,7 @@ function TierRateGrid({
                 onClick={() => onRemove(t.code)}
               >
                 <X className="size-3.5" />
-              </Button></FirmOwnerOnly>
+              </Button></RemoveGuard>
             </div>
           );
         })}

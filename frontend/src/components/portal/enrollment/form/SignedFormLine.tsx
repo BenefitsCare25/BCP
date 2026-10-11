@@ -7,7 +7,7 @@ import { toast } from "sonner";
 import type { FormSubmissionSummary } from "@/api/enrollmentForms";
 import { downloadMyEnrollmentForm } from "@/api/portalEnrollmentForms";
 import { Strike } from "@/components/portal/leaf/Strike";
-import { formatDay } from "@/components/portal/leaf/date";
+import { formatMomentDay } from "@/components/portal/leaf/date";
 import { formatError } from "@/lib/errors";
 
 function standing(form: FormSubmissionSummary): {
@@ -53,11 +53,11 @@ export function SignedFormLine({
     <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
       <div className="min-w-0">
         <p className="text-row text-record">
-          {lead ? `${lead}: ` : ""}
+          {lead ? pt("{0}: ", [pt(lead)]) : ""}
           <span className="font-medium">{form.reference_no}</span>
           {form.version > 1 ? pt(" (version {0})", [form.version]) : ""}
         </p>
-        <p className="text-row text-label">{pt("Signed")} {formatDay(form.submitted_at)}</p>
+        <p className="text-row text-label">{pt("Signed")} {formatMomentDay(form.submitted_at)}</p>
       </div>
       <div className="flex items-center gap-3">
         <Strike tone={state.tone}>{pt(state.label)}</Strike>

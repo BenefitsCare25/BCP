@@ -64,7 +64,7 @@ export function useElectionActions(enrollmentId: string, m: MemberElection) {
   // Submit carries the on-screen choices (nothing unsaved is lost), then
   // confirms: the broker acting for a member needs no hand-off to themselves.
   function submitAndConfirm(acknowledgeUnpriced: boolean) {
-    const days = Number(m.leaveDays);
+    const { days } = m.leaveInput();
     if (!Number.isFinite(days) || days < 0) {
       toast.error("Enter a valid, non-negative number of leave days.");
       return;
@@ -87,12 +87,13 @@ export function useElectionActions(enrollmentId: string, m: MemberElection) {
     submitAndConfirm,
     saveLeave: () =>
       setLeave.mutate(
-        { id: enrollmentId, action: m.leaveAction, days: Number(m.leaveDays) },
+        { id: enrollmentId, ...m.leaveInput() },
         { onSuccess: () => toast.success("Leave saved.") },
       ),
     discard: (reason: string, done: () => void) =>
       reset.mutate({ id: enrollmentId, reason }, {
         onSuccess: () => {
+          m.resync();
           toast.success("Choices cancelled. An employee portal notice has been recorded.");
           done();
         },
@@ -104,6 +105,12 @@ export function useElectionActions(enrollmentId: string, m: MemberElection) {
     returnForCorrection: (reason: string, done: () => void) =>
       returnForCorrection.mutate({ id: enrollmentId, reason }, {
         onSuccess: () => { toast.success("Returned for correction. Choices retained and employee notified in the portal."); done(); },
+      }),
+    // Broker-managed period: the same endpoint hands an unsigned submission
+    // back as the broker's own draft — nobody else is asked to act on it.
+    returnToDraft: (reason: string, done: () => void) =>
+      returnForCorrection.mutate({ id: enrollmentId, reason }, {
+        onSuccess: () => { toast.success("Returned to your draft. Correct the choices, then submit and confirm them."); done(); },
       }),
     unpriced,
     clearUnpriced: () => setUnpriced(null),

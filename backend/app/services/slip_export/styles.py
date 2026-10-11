@@ -155,8 +155,24 @@ def _content_height(ws: Worksheet, row: int, populated: list[Any]) -> float:
     return min(300, max(18, lines * 15 + 3))
 
 
+def _store_formulas_as_text(ws: Worksheet) -> None:
+    """Keep every formula-looking value literal text.
+
+    The export writes no formulas, but openpyxl stores any string starting with
+    "=" as one, so captured slip or setup text such as ``=HYPERLINK(...)`` would
+    run in the insurer's Excel. Forcing the text type keeps the wording
+    verbatim, unlike ``xlsx_safe.safe_cell``'s apostrophe, which would print on
+    this document and break its "-" bullets and not-applicable dashes.
+    """
+    for row in ws.iter_rows():
+        for cell in row:
+            if cell.data_type == "f":
+                cell.data_type = "s"
+
+
 def finalize_sheet(ws: Worksheet, doc_name: str) -> None:
     """Apply consistent workbook-level print and visual formatting."""
+    _store_formulas_as_text(ws)
     last_col = max(ws.max_column, 3)
     ws.sheet_view.showGridLines = False
     ws.sheet_properties.pageSetUpPr.fitToPage = True

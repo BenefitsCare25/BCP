@@ -52,7 +52,7 @@ export function HrDashboardPage() {
   const me = useHrSession((s) => s.me);
   const { data } = useHrMe();
   const identity = data ?? me;
-  const name = identity?.display_name?.trim() || "there";
+  const name = identity?.display_name?.trim() || pt("there");
   // Optional-2FA nudge, derived from the live identity: the company has 2FA
   // available and this person hasn't confirmed enrolment yet. Deriving it (not
   // storing a session flag) means it stays correct across token refresh and

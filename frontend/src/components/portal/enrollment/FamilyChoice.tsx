@@ -13,6 +13,7 @@ import {
   type DependantRef,
   type ProductState,
   classifyRel,
+  compulsoryDependants,
   dependantParticipationFor,
   dependantPricing,
 } from "@/components/enrollment/electionCore";
@@ -198,7 +199,7 @@ export function FamilyChoice({
   if (participation === null) return null;
   const depCompulsory = participation === "compulsory";
   const covered = depCompulsory
-    ? dependants
+    ? compulsoryDependants(ts, dependants)
     : dependants.filter((d) => ps.dependantIds.includes(d.id));
   const coveredIds = covered.map((dependant) => dependant.id);
   const pricing = dependantPricing(

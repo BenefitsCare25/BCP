@@ -95,6 +95,7 @@ from app.services.roster_dedup import (
     dependant_nric,
     employee_candidate_keys,
     employee_nric,
+    staff_key,
 )
 from app.services.roster_mapping import (
     EmployeeMapping,
@@ -187,6 +188,9 @@ class _Plan:
     # Absent from the file — terminated ONLY on the caller's explicit opt-in.
     emp_missing: list[Employee] = field(default_factory=list)
     dep_missing: list[Dependant] = field(default_factory=list)
+    # A leaver's household leaves with them — see `_plan_households`.
+    household: list[_DepDelete] = field(default_factory=list)
+    household_missing: list[Dependant] = field(default_factory=list)
     issues: list[AdcIssue] = field(default_factory=list)
     # Rows that ARE applied but look wrong (see AdcWarning).
     warnings: list[AdcWarning] = field(default_factory=list)
@@ -366,7 +370,7 @@ def _plan_employees(
         if e.national_id_normalized:
             by_key.setdefault(f"nric:{e.national_id_normalized}", []).append(e)
         if e.staff_id and e.staff_id.strip():
-            by_key.setdefault(f"staff:{e.staff_id.strip().lower()}", []).append(e)
+            by_key.setdefault(f"staff:{staff_key(e.staff_id)}", []).append(e)
 
     seen_targets: set[str] = set()
     # Everyone any row NAMED, including rows that were skipped as issues. Only
@@ -508,10 +512,20 @@ def _plan_dependants(
     employees: list[Employee],
 ) -> None:
     by_staff = {
-        e.staff_id.strip().lower(): e
+        staff_key(e.staff_id): e
         for e in employees
         if e.staff_id and e.staff_id.strip()
     }
+    # Sponsors this same file ADDS, keyed like `apply_plan` will key them once
+    # they have ids. Read only for a stored row with no sponsor at all.
+    joining_staff: dict[str, str] = {}
+    joining_names: dict[str, str] = {}
+    for a in plan.emp_add:
+        label = (a.staff_id or "").strip() or a.employee_name or ""
+        if a.staff_id and a.staff_id.strip():
+            joining_staff.setdefault(staff_key(a.staff_id), label)
+        if a.employee_name:
+            joining_names.setdefault(a.employee_name.lower().strip(), label)
     # Names shared by 2+ employees are dropped so an ambiguous name can't
     # silently link a dependant to the wrong sponsor.
     name_groups: dict[str, list[Employee]] = {}
@@ -557,11 +571,11 @@ def _plan_dependants(
     # DB constraint behind it.
     run_nric: dict[tuple[str | None, str], str] = {}
     for rec in records:
-        staff_key = (rec.employee_staff_id or "").strip().lower()
+        sponsor_key = staff_key(rec.employee_staff_id)
         name_key = (rec.employee_name or "").strip().lower()
         emp, method = None, "unlinked"
-        if staff_key and staff_key in by_staff:
-            emp, method = by_staff[staff_key], "staff_id"
+        if sponsor_key and sponsor_key in by_staff:
+            emp, method = by_staff[sponsor_key], "staff_id"
         elif name_key and name_key in by_name:
             emp, method = by_name[name_key], "name"
         emp_id = emp.id if emp else None
@@ -672,16 +686,21 @@ def _plan_dependants(
         # is on the roster but on nobody's plan, so it is not covered, does not
         # price, and does not appear on the member's statement. Only ever from
         # unlinked to linked; re-parenting a linked row would move a child
-        # between two employees on the strength of a name collision.
-        if target.employee_id is None and emp_id is not None:
-            diffs = [
-                *diffs,
-                AdcFieldDiff(
-                    field="employee",
-                    old=None,
-                    new=(emp.staff_id if emp else None) or emp_id,
-                ),
-            ]
+        # between two employees on the strength of a name collision. The
+        # sponsor may also be a joiner in this same file — a roster cleared and
+        # re-uploaded leaves every dependant unlinked, and their employees only
+        # exist once apply writes them (`apply_plan` makes that link).
+        if target.employee_id is None:
+            sponsor = (
+                emp.staff_id or emp.id
+                if emp is not None
+                else _joining_sponsor(merged, joining_staff, joining_names)[0]
+            )
+            if sponsor is not None:
+                diffs = [
+                    *diffs,
+                    AdcFieldDiff(field="employee", old=None, new=sponsor),
+                ]
         leaving = _leaving_date(rec.attributes, _DEP_LEAVING_KEYS,
                                 target.attribute_values or {})
         if leaving is not None:
@@ -702,6 +721,61 @@ def _plan_dependants(
             and d.id not in seen_targets
             and d.id not in touched
         ]
+
+
+def _joining_sponsor(
+    attrs: dict[str, Any],
+    by_staff: dict[str, str],
+    by_name: dict[str, str],
+) -> tuple[str | None, str]:
+    """The employee ADDED by this same file whom a dependant row names, and how.
+
+    Shared by the plan (which only reports the link) and the apply (which makes
+    it, once the joiner has an id), so the two can never disagree.
+    """
+    staff = staff_key(attrs.get("employee_staff_id"))
+    if staff and staff in by_staff:
+        return by_staff[staff], "staff_id"
+    name = str(attrs.get("employee_name") or "").strip().lower()
+    if name and name in by_name:
+        return by_name[name], "name"
+    return None, "unlinked"
+
+
+def _plan_households(plan: _Plan, dependants: list[Dependant]) -> None:
+    """A leaver's household leaves with them.
+
+    A listing's Dependants sheet routinely keeps the spouse and children of an
+    employee whose own row states a last day. Terminating only the employee
+    left them active: on the insurer listing with no end date and in every
+    dependant headcount. `flex_membership._counts_for` already relies on the
+    household ending in the same apply, on the employee's date.
+
+    - A stated leaver's dependants end on the employee's date, or on their own
+      earlier stated one, and show as terminations.
+    - An absent employee's dependants end only on the opt-in that ends the
+      employee, so they join the `missing` set and its digest.
+    """
+    leaving = {d.target.id: d.effective for d in plan.emp_delete}
+    absent = {e.id for e in plan.emp_missing}
+    if not leaving and not absent:
+        return
+    stated = {d.target.id: d for d in plan.dep_delete}
+    already_missing = {d.id for d in plan.dep_missing}
+    for dep in dependants:
+        if dep.status != DEPENDANT_STATUS_ACTIVE or dep.employee_id is None:
+            continue
+        sponsor_end = leaving.get(dep.employee_id)
+        own = stated.get(dep.id)
+        if sponsor_end is not None and own is not None:
+            own.effective = min(own.effective, sponsor_end)
+        elif sponsor_end is not None:
+            plan.household.append(_DepDelete(0, dep, sponsor_end))
+        elif dep.employee_id in absent and own is None and dep.id not in already_missing:
+            plan.household_missing.append(dep)
+    # Ended by the sponsor's stated date, so no longer an opt-in question.
+    ending = {d.target.id for d in plan.household}
+    plan.dep_missing = [d for d in plan.dep_missing if d.id not in ending]
 
 
 def _data_rows(path: Path | str, preferred: str) -> int:
@@ -830,9 +904,11 @@ def evaluate_records(
     plan.dropped_rows = dropped_rows
     _plan_employees(plan, emp_records, employees)
     _plan_dependants(plan, dep_records, dependants, employees)
+    _plan_households(plan, dependants)
     # The denominator for "is this a partial export?" — only the kinds this file
     # actually covers, so an employees-only upload isn't measured against a
-    # roster that includes every dependant.
+    # roster that includes every dependant. An absent employee's household is
+    # in the missing set either way, so it is always in the denominator too.
     plan.roster_total = (
         sum(1 for e in employees if e.status == EMPLOYEE_STATUS_ACTIVE)
         if emp_records
@@ -840,7 +916,7 @@ def evaluate_records(
     ) + (
         sum(1 for d in dependants if d.status == DEPENDANT_STATUS_ACTIVE)
         if dep_records
-        else 0
+        else len(plan.household_missing)
     )
     return plan, _to_preview(plan)
 
@@ -879,7 +955,7 @@ def _to_preview(plan: _Plan) -> AdcPreview:
         AdcOp(row=d.row_no, record_type="dependant",
               name=_dep_name(d.target.attribute_values),
               target_id=d.target.id, effective=d.effective.isoformat())
-        for d in plan.dep_delete
+        for d in [*plan.dep_delete, *plan.household]
     ]
     missing = [
         AdcOp(row=0, record_type="employee", name=e.employee_name,
@@ -888,7 +964,7 @@ def _to_preview(plan: _Plan) -> AdcPreview:
     ] + [
         AdcOp(row=0, record_type="dependant",
               name=_dep_name(d.attribute_values), target_id=d.id)
-        for d in plan.dep_missing
+        for d in [*plan.dep_missing, *plan.household_missing]
     ]
     return AdcPreview(
         additions=additions,
@@ -921,7 +997,10 @@ def missing_digest(plan: _Plan) -> str:
     this and refuses on drift, the same shape as `bulk_plan_update`'s
     `selection_digest`.
     """
-    ids = sorted([e.id for e in plan.emp_missing] + [d.id for d in plan.dep_missing])
+    ids = sorted(
+        [e.id for e in plan.emp_missing]
+        + [d.id for d in [*plan.dep_missing, *plan.household_missing]]
+    )
     return hashlib.sha256("|".join(ids).encode()).hexdigest()[:32]
 
 
@@ -1048,6 +1127,18 @@ def apply_listing(
     )
 
 
+def _end_dependant(
+    db: Session, user: CurrentUser, dep: Dependant, effective: date, source: str
+) -> None:
+    """Soft-terminate one dependant, audited with the evidence that ended them."""
+    dep.status = DEPENDANT_STATUS_TERMINATED
+    dep.terminated_effective = effective
+    write_audit(
+        db, user, action="adc_delete", entity_type="dependant", entity_id=dep.id,
+        after={"effective": effective.isoformat(), "source": source},
+    )
+
+
 def apply_plan(
     db: Session,
     user: CurrentUser,
@@ -1095,7 +1186,7 @@ def apply_plan(
         db.add(emp)
         db.flush()  # assign the id so a same-file dependant can reference it
         if a.staff_id:
-            new_by_staff.setdefault(a.staff_id.strip().lower(), emp.id)
+            new_by_staff.setdefault(staff_key(a.staff_id), emp.id)
         if a.employee_name:
             new_by_name.setdefault(a.employee_name.lower().strip(), emp.id)
         added += 1
@@ -1128,12 +1219,7 @@ def apply_plan(
         link_method = dep_a.link_method
         # Link to an employee added earlier in this same file, if not already linked.
         if emp_id is None:
-            staff = str(dep_a.attrs.get("employee_staff_id") or "").strip().lower()
-            name = str(dep_a.attrs.get("employee_name") or "").strip().lower()
-            if staff and staff in new_by_staff:
-                emp_id, link_method = new_by_staff[staff], "staff_id"
-            elif name and name in new_by_name:
-                emp_id, link_method = new_by_name[name], "name"
+            emp_id, link_method = _joining_sponsor(dep_a.attrs, new_by_staff, new_by_name)
         db.add(
             Dependant(
                 client_id=client_id,
@@ -1151,9 +1237,15 @@ def apply_plan(
         # Adopt an orphan onto the sponsor this file names — see `_plan_dependants`.
         # Guarded on the row being unlinked, so a file that cannot resolve its
         # employee column (emp_id None) can never detach a live coverage line.
-        if dep_c.target.employee_id is None and dep_c.employee_id is not None:
-            dep_c.target.employee_id = dep_c.employee_id
-            dep_c.target.link_method = dep_c.link_method
+        if dep_c.target.employee_id is None:
+            emp_id, link_method = dep_c.employee_id, dep_c.link_method
+            if emp_id is None:
+                emp_id, link_method = _joining_sponsor(
+                    dep_c.merged, new_by_staff, new_by_name
+                )
+            if emp_id is not None:
+                dep_c.target.employee_id = emp_id
+                dep_c.target.link_method = link_method
         write_audit(
             db, user, action="adc_change", entity_type="dependant",
             entity_id=dep_c.target.id,
@@ -1163,13 +1255,10 @@ def apply_plan(
     for dep_d in plan.dep_delete:
         if dep_d.merged is not None:
             dep_d.target.attribute_values = dep_d.merged
-        dep_d.target.status = DEPENDANT_STATUS_TERMINATED
-        dep_d.target.terminated_effective = dep_d.effective
-        write_audit(
-            db, user, action="adc_delete", entity_type="dependant",
-            entity_id=dep_d.target.id,
-            after={"effective": dep_d.effective.isoformat(), "source": "leaving_date"},
-        )
+        _end_dependant(db, user, dep_d.target, dep_d.effective, "leaving_date")
+        deleted += 1
+    for dep_h in plan.household:
+        _end_dependant(db, user, dep_h.target, dep_h.effective, "sponsor_left")
         deleted += 1
 
     # Absence-driven terminations, only on the explicit opt-in. Audited with
@@ -1192,13 +1281,10 @@ def apply_plan(
             )
             missing_terminated += 1
         for dep in plan.dep_missing:
-            dep.status = DEPENDANT_STATUS_TERMINATED
-            dep.terminated_effective = today
-            write_audit(
-                db, user, action="adc_delete", entity_type="dependant",
-                entity_id=dep.id,
-                after={"effective": today.isoformat(), "source": "absent_from_listing"},
-            )
+            _end_dependant(db, user, dep, today, "absent_from_listing")
+            missing_terminated += 1
+        for dep in plan.household_missing:
+            _end_dependant(db, user, dep, today, "sponsor_absent_from_listing")
             missing_terminated += 1
 
     write_audit(

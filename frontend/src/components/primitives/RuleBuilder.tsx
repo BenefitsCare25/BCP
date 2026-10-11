@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { Plus, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -328,24 +329,10 @@ function ComparisonRow({
           />
         </>
       ) : op === "in" || op === "not_in" ? (
-        <Input
-          className="w-[260px]"
-          placeholder="comma-separated (e.g. WP, SP)"
-          aria-label={`${attrSchema?.display_name ?? "Attribute"} values`}
-          value={
-            Array.isArray(rest[0])
-              ? (rest[0] as unknown[]).join(", ")
-              : ""
-          }
-          onChange={(e) =>
-            onChange(op, [
-              attr,
-              e.target.value
-                .split(",")
-                .map((s) => s.trim())
-                .filter(Boolean),
-            ])
-          }
+        <ListValueInput
+          value={rest[0]}
+          ariaLabel={`${attrSchema?.display_name ?? "Attribute"} values`}
+          onChange={(values) => onChange(op, [attr, values])}
         />
       ) : (
         <ValueInput
@@ -356,6 +343,49 @@ function ComparisonRow({
         />
       )}
     </div>
+  );
+}
+
+const LIST_KEY_SEPARATOR = "\u001f";
+
+const parseList = (text: string) =>
+  text
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+/** Keeps the typed text (trailing comma or space) while emitting the parsed list. */
+function ListValueInput({
+  value,
+  ariaLabel,
+  onChange,
+}: {
+  value: unknown;
+  ariaLabel: string;
+  onChange: (values: string[]) => void;
+}) {
+  const key = Array.isArray(value) ? value.map(String).join(LIST_KEY_SEPARATOR) : "";
+  const [text, setText] = useState(() => key.split(LIST_KEY_SEPARATOR).join(", "));
+  useEffect(() => {
+    // Adopt a list replaced from outside (AI suggestion, reset) without
+    // rewriting the text the broker is typing.
+    setText((current) =>
+      parseList(current).join(LIST_KEY_SEPARATOR) === key
+        ? current
+        : key.split(LIST_KEY_SEPARATOR).join(", "),
+    );
+  }, [key]);
+  return (
+    <Input
+      className="w-[260px]"
+      placeholder="comma-separated (e.g. WP, SP)"
+      aria-label={ariaLabel}
+      value={text}
+      onChange={(e) => {
+        setText(e.target.value);
+        onChange(parseList(e.target.value));
+      }}
+    />
   );
 }
 

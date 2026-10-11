@@ -33,6 +33,7 @@ from app.services.eligibility_scope import unscoped_catch_alls
 from app.services.matching_engine import (
     _build_exact_lookup,
     _entity_allows,
+    _listing_assignments,
     _normalize,
     _status_rank,
     canonicalize_category_name,
@@ -125,8 +126,9 @@ def _transient_categories(
     drafts: list[DraftCategory],
     persisted: dict[tuple[str, tuple[str, ...], str], Category],
     catalog: AttributeValueCatalog,
-) -> list[Category]:
-    """Build unpersisted ``Category`` objects from draft descriptions.
+) -> tuple[list[Category], dict[str, str]]:
+    """Build unpersisted ``Category`` objects from draft descriptions, plus
+    each reused persisted category's id → the draft row key standing in for it.
 
     ``id`` is set to the client-side row key so a match outcome maps straight
     back to the originating row. They're never added to the session.
@@ -139,6 +141,7 @@ def _transient_categories(
     catch-all "all employees"). New rows use the company-aware rule compiler.
     """
     cats: list[Category] = []
+    key_by_persisted: dict[str, str] = {}
     for index, draft in enumerate(drafts):
         desc = (draft.description or "").strip()
         match = persisted.get(_draft_identity(draft)) if desc else None
@@ -151,6 +154,7 @@ def _transient_categories(
             ]
             match = candidates[0] if len(candidates) == 1 else None
         if match is not None:
+            key_by_persisted.setdefault(match.id, draft.key)
             rule = match.matching_rule
             confidence = match.confidence
             status = match.status
@@ -194,7 +198,33 @@ def _transient_categories(
                 },
             )
         )
-    return cats
+    return cats, key_by_persisted
+
+
+def _listed_categories(
+    db: Session, policy_year_id: str, product_id: str | None
+) -> dict[str, str | None] | None:
+    """Employee id → listed category id for this product (None: listed with no
+    cover under it), or None when no Employee Listing reports on the product.
+
+    `match_policy_year` takes a listed person's category straight from the
+    company's Employee Listing and never runs the rules for them, so a preview
+    that ignored the listing would count listed exceptions where rules put them.
+    """
+    if not product_id:
+        return None
+    category_ids = set(
+        db.execute(
+            select(Category.id).where(
+                Category.policy_year_id == policy_year_id,
+                Category.product_id == product_id,
+            )
+        ).scalars()
+    )
+    listed, listed_products = _listing_assignments(db, policy_year_id, category_ids)
+    if product_id not in listed_products:
+        return None
+    return {emp_id: by_product.get(product_id) for emp_id, by_product in listed.items()}
 
 
 def _persisted_by_name(
@@ -311,7 +341,8 @@ def compute_member_counts(
     catalog, _, _ = build_attribute_catalog(
         db, client_id=catalog_client, policy_year_id=policy_year_id
     )
-    cats = _transient_categories(representatives, persisted, catalog)
+    cats, key_by_persisted = _transient_categories(representatives, persisted, catalog)
+    listed = _listed_categories(db, policy_year_id, product_id)
     cats_by_priority = sorted(cats, key=lambda c: (_status_rank(c.status), c.priority))
     exact_lookup = _build_exact_lookup(cats_by_priority)
     category_tokens = {
@@ -340,27 +371,39 @@ def compute_member_counts(
     unmatched_grades: Counter[str] = Counter()
     unmatched_employees: list[UnmatchedEmployee] = []
     for emp in employees:
-        emp_entities = employee_entity(emp.attribute_values, aliases)
-        if not any(
-            _entity_allows(gate, emp_entities)
-            for gate in insured_by_category.values()
-        ):
+        # "" = not on the Employee Listing (rules decide); None = listed with no
+        # cover under this product; otherwise the listed category's id.
+        listed_id = listed.get(emp.id, "") if listed is not None else ""
+        if listed_id is None:
             continue
+        if not listed_id:
+            emp_entities = employee_entity(emp.attribute_values, aliases)
+            if not any(
+                _entity_allows(gate, emp_entities)
+                for gate in insured_by_category.values()
+            ):
+                continue
         in_scope += 1
         view = _EmpView(
             attribute_values=emp.attribute_values or {},
             derived_attribute_values=derive(emp.attribute_values or {}, schemas),
         )
-        outcome = match_one(
-            view,
-            cats_by_priority,
-            exact_lookup,
-            category_tokens,
-            insured_by_category,
-            entity_aliases=aliases,
-            blocked_category_ids=blocked,
+        # A listed category with no draft row standing in for it reads as
+        # unmatched, as matching shows a listed category that no longer exists.
+        category_key = (
+            key_by_persisted.get(listed_id)
+            if listed_id
+            else match_one(
+                view,
+                cats_by_priority,
+                exact_lookup,
+                category_tokens,
+                insured_by_category,
+                entity_aliases=aliases,
+                blocked_category_ids=blocked,
+            ).category_id
         )
-        if outcome.category_id is None:
+        if category_key is None:
             grade = (
                 view.derived_attribute_values.get("job_category")
                 or view.attribute_values.get("job_grade")
@@ -378,9 +421,9 @@ def compute_member_counts(
             )
             continue
         matched += 1
-        emp_counts[outcome.category_id] += 1
+        emp_counts[category_key] += 1
         if has_dependants:
-            dep_counts[outcome.category_id] += deps_per_employee.get(emp.id, 0)
+            dep_counts[category_key] += deps_per_employee.get(emp.id, 0)
 
     # Echo back every requested row (including blank ones) so the UI can key by
     # the order it sent.

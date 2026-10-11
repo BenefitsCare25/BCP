@@ -14,7 +14,10 @@ from app.services.eligibility_mapping.location_cohorts import (
     _rule_without_product_location_context,
     _separate_location_cohorts,
 )
-from app.services.eligibility_mapping.predicates import is_employee_mapping_category
+from app.services.eligibility_mapping.predicates import (
+    is_employee_mapping_category,
+    is_placeholder_card_category,
+)
 from app.services.eligibility_mapping.profiles import _upsert_profile
 from app.services.eligibility_mapping.validation import (
     _source_allowed_values,
@@ -22,7 +25,7 @@ from app.services.eligibility_mapping.validation import (
     validate_matching_rule,
 )
 from app.services.eligibility_mapping.vocabulary import category_signature
-from app.services.eligibility_scope import location_allows
+from app.services.eligibility_scope import location_allows, location_scope
 from app.services.matching_engine import (
     _entity_allows,
     category_entity_gate,
@@ -179,8 +182,13 @@ def confirm_category_mapping(
     category: Category,
     client_id: str,
     batch: CategoryConfirmationBatch | None = None,
-) -> EligibilityMappingProfile:
-    """Validate and persist one broker-confirmed reusable mapping profile."""
+    broker_authored: bool = False,
+) -> EligibilityMappingProfile | None:
+    """Validate and persist one broker-confirmed reusable mapping profile.
+
+    ``broker_authored`` is set only when a broker confirms this one category's
+    rule explicitly; bulk confirmation keeps every AI guard.
+    """
 
     batch = batch or CategoryConfirmationBatch(
         db,
@@ -194,6 +202,7 @@ def confirm_category_mapping(
         category.matching_rule,
         catalog,
         location_exclusions=batch.location_cohorts.get(category.id),
+        broker_authored=broker_authored,
     )
     if not validation.valid:
         raise ValueError("; ".join(validation.errors))
@@ -247,20 +256,26 @@ def confirm_category_mapping(
         "expected_count": expected,
         "confirmed": True,
     }
-    profile = _upsert_profile(
-        db,
-        client_id=client_id,
-        policy_year_id=category.policy_year_id,
-        category=category,
-        proposal=proposal,
-        status="confirmed",
-        validation={
-            key: value
-            for key, value in payload.items()
-            if key != "product_location_exclusions"
-        },
-    )
-    category.mapping_profile_id = profile.id
+    # Like auto-mapping, a location-scoped row never writes the shared profile:
+    # its rule is narrowed to one office, and the plain wording's signature would
+    # reuse that narrowing for every unscoped category with the same wording.
+    # Nor does an unnamed card category, whose placeholder names no cohort.
+    profile = None
+    if not location_scope(category) and not is_placeholder_card_category(category):
+        profile = _upsert_profile(
+            db,
+            client_id=client_id,
+            policy_year_id=category.policy_year_id,
+            category=category,
+            proposal=proposal,
+            status="confirmed",
+            validation={
+                key: value
+                for key, value in payload.items()
+                if key != "product_location_exclusions"
+            },
+        )
+    category.mapping_profile_id = profile.id if profile else None
     category.rule_status = "validated"
     category.rule_validation = payload
     category.status = CategoryStatus.confirmed.value

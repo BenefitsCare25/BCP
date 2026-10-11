@@ -27,6 +27,7 @@ from app.core import passwords as PW
 from app.core import sessions as SESS
 from app.core.audit import write_audit
 from app.core.auth import ROLE_SYSTEM_ADMIN, CurrentUser
+from app.core.credentials import MAX_ROTATION_DAYS
 from app.core.deps import assert_platform_firm_access, require_firm_admin
 from app.core.request_context import client_ip, user_agent
 from app.core.tenant_resolution import client_origin
@@ -153,16 +154,34 @@ class AuthPolicyPatch(BaseModel):
     hr_login_source: str | None = None
     portal_login_source: str | None = None
     password_min_entropy: int | None = Field(default=None, ge=20, le=256)
-    password_rotation_days: int | None = None
+    password_rotation_days: int | None = Field(default=None, ge=1, le=MAX_ROTATION_DAYS)
     session_idle_minutes: int | None = Field(default=None, ge=5, le=1440)
     session_absolute_hours: int | None = Field(default=None, ge=1, le=168)
     breach_check_enabled: bool | None = None
+
+    @field_validator("password_rotation_days", mode="before")
+    @classmethod
+    def _rotation_off(cls, v: object) -> object:
+        # 0 (or less) always meant "no rotation"; policies saved that way must
+        # stay saveable when an unrelated setting changes.
+        if isinstance(v, int) and not isinstance(v, bool) and v <= 0:
+            return None
+        return v
 
     @field_validator("hr_login_source", "portal_login_source")
     @classmethod
     def _valid_source(cls, v: str | None) -> str | None:
         if v is not None and v not in _LOGIN_SOURCES:
             raise ValueError(f"Invalid login source: {v}")
+        return v
+
+    @field_validator("hr_login_source")
+    @classmethod
+    def _valid_hr_source(cls, v: str | None) -> str | None:
+        # HR accounts have no staff ID; the choice only picks which identifier
+        # an HR invitation quotes (`email_template_recipients`).
+        if v == "staff_id":
+            raise ValueError("HR admins sign in with an email address or HR ID.")
         return v
 
 

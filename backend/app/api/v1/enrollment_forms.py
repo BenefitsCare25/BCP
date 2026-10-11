@@ -41,7 +41,12 @@ from sqlalchemy.orm import Session
 from app.api.v1.reports import assert_masking_allowed
 from app.core.audit import write_access_audit, write_audit
 from app.core.auth import CurrentUser, get_current_user
-from app.core.deps import load_enrollment_window, load_policy_year, require_broker_admin
+from app.core.deps import (
+    is_firm_owner,
+    load_enrollment_window,
+    load_policy_year,
+    require_broker_admin,
+)
 from app.core.downloads import attachment_header
 from app.core.rate_limit import limiter
 from app.core.storage import StorageScopeError, company_firm_id, get_storage
@@ -61,7 +66,11 @@ from app.schemas.enrollment_forms import (
     FormSubmissionSummary,
 )
 from app.services.claims import assert_document_scope, attach_document
-from app.services.enrollment_forms.config import config_out, save_settings
+from app.services.enrollment_forms.config import (
+    config_out,
+    drops_saved_items,
+    save_settings,
+)
 from app.services.enrollment_forms.context import submission_summary
 from app.services.enrollment_forms.register import (
     RegisterFilter,
@@ -94,6 +103,11 @@ def put_form_config(
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> FormConfigOut:
+    if not is_firm_owner(user) and drops_saved_items(db, window, body):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Removing saved declarations, documents or rules requires a firm administrator.",
+        )
     row = save_settings(db, window, body, user.user_id)
     write_audit(
         db, user, "enrollment_form.config_saved", "enrollment_form_config", row.id,

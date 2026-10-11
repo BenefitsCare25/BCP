@@ -263,11 +263,16 @@ export function useNewClaimForm() {
   // server echoes the amount it priced, so this compares the two rather than
   // tracking the timer: the figure displayed and the figure submitted are then
   // always about the number the member actually typed.
+  // The date is in the query key, so an answer is always for this date; the
+  // server prices it as of min(date, Singapore's today), so a receipt dated
+  // with a browser "today" already past Singapore midnight comes back one day
+  // EARLIER. That clamp is an answer, never a stale quote.
   const fxMatchesInput =
     fxQuote.isSuccess &&
     fxQuote.data.amount === amountUsable &&
     fxQuote.data.currency === effectiveCurrency &&
-    fxQuote.data.as_of_date === incurredDate;
+    fxQuote.data.as_of_date !== null &&
+    fxQuote.data.as_of_date <= incurredDate;
   const fxReady = fxForeign && amountUsable !== null && Boolean(incurredDate);
   const fxUnresolved = fxReady && !fxMatchesInput;
   // Unresolved because the answer is still COMING, as opposed to having failed.
@@ -485,6 +490,12 @@ export function useNewClaimForm() {
           [])
         : (selectedClaimType?.doc_slots ?? []);
   const docSlotKey = docSlots.map((s) => s.key).join(",");
+  // Files in the slots on screen NOW. A hospital-sector switch swaps every slot
+  // key, and a file left under a key that is no longer offered is neither shown
+  // nor uploaded, so it must not count as placed: autofill re-places it, or
+  // submit attaches it as an additional document.
+  const filesInSlots = (byKey: Record<string, File | null>) =>
+    docSlots.map((slot) => byKey[slot.key]).filter((f): f is File => !!f);
 
   // Insured products offered for the current claimant: everything for the
   // member; for a dependant, only products that actually cover them.
@@ -677,7 +688,7 @@ export function useNewClaimForm() {
     if (autofillDocs.length === 0 || docSlots.length === 0) return;
     setSlotFiles((prev) => {
       const next = { ...prev };
-      const placed = new Set(Object.values(next));
+      const placed = new Set(filesInSlots(next));
       let changed = false;
       for (const { file, slot } of autofillDocs) {
         if (clearedFiles.current.has(file) || placed.has(file)) continue;
@@ -976,7 +987,7 @@ export function useNewClaimForm() {
   const uploadEvidence = async (claimId: string) => {
     // Each autofill document is evidence — attach any not already placed in a
     // slot (and not among the additional documents) as an untagged extra.
-    const slotted = Object.values(slotFiles);
+    const slotted = filesInSlots(slotFiles);
     const extras = [...files];
     for (const { file } of autofillDocs) {
       if (!slotted.includes(file) && !extras.includes(file)) extras.push(file);
@@ -1162,7 +1173,7 @@ export function useNewClaimForm() {
   // Autofill files not placed into a required-document slot are attached as
   // additional documents on submit — surfaced in that section (removable) so
   // nothing rides along invisibly.
-  const slottedSet = new Set(Object.values(slotFiles).filter(Boolean));
+  const slottedSet = new Set(filesInSlots(slotFiles));
   const unplacedAutofill = autofillDocs
     .map((d) => d.file)
     .filter((f) => !slottedSet.has(f) && !files.includes(f));
@@ -1246,7 +1257,9 @@ export function useNewClaimForm() {
     setAdmissionDate: setAdmissionDateState,
     dischargeDate,
     setDischargeDate,
-    maxDischarge: maxIncurred,
+    // The stay may straddle the claim window (admitted 28 Dec, claimed in the
+    // year starting 1 Jan): submit checks only order and the future.
+    maxStayDate: today,
     provider,
     setProvider,
     hospital,

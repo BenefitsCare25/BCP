@@ -292,12 +292,14 @@ def test_transient_failure_retries_until_the_age_ceiling(add_job) -> None:
     # Waited 45 minutes in the queue — past the old 20-minute end-to-end
     # deadline, which used to refuse the retry outright.
     waited = add_job(FIRM_BACKLOG, "company-a", age_minutes=45)
-    worker._claim_next("worker-1", (), 5, 10)
-    worker._handle_failure(waited, "worker-1", _provider_outage())
+    first = worker._claim_next("worker-1", (), 5, 10)
+    assert first is not None
+    worker._handle_failure(waited, first.lease_owner, _provider_outage())
 
     zombie = add_job(FIRM_BACKLOG, "company-b", age_minutes=25 * 60)
-    worker._claim_next("worker-2", {"company-a"}, 5, 10)
-    worker._handle_failure(zombie, "worker-2", _provider_outage())
+    second = worker._claim_next("worker-2", {"company-a"}, 5, 10)
+    assert second is not None
+    worker._handle_failure(zombie, second.lease_owner, _provider_outage())
 
     with SessionLocal() as db:
         assert db.get(ClaimReviewJob, waited).state == JOB_STATE_RETRY_WAIT

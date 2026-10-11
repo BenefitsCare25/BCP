@@ -15,6 +15,7 @@ import {
   type ListingPreview,
 } from "@/api/employeeListing";
 import { errorCode, formatError } from "@/lib/errors";
+import { useWriteAccess } from "@/lib/roles";
 import type { AdcPreview } from "@/types";
 
 /**
@@ -49,6 +50,9 @@ interface Props {
 }
 
 export function ListingImportBar({ policyYearId, stats, hasRows }: Props) {
+  // Previewing an upload is already a write the API refuses a viewer and a
+  // read-only access grant.
+  const { canEdit: canUpload } = useWriteAccess();
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<AdcPreview | null>(null);
   const [terminateMissing, setTerminateMissing] = useState(false);
@@ -278,27 +282,32 @@ export function ListingImportBar({ policyYearId, stats, hasRows }: Props) {
               // one job. On a populated one the tab row already has a filled
               // "Run matching"; two primaries in one header compete.
               primary={hasRows === false}
+              uploadable={canUpload}
             />
 
             <InfoHint side="bottom">
-              <p className="mb-1.5">
+              <p className={canUpload ? "mb-1.5" : undefined}>
                 <strong>Download listing</strong> — the company&apos;s Employee
                 Listing in its own layout, pre-filled with everyone active on
                 file: employees followed by their dependants, and a column block
                 per product. NRIC/FIN numbers are masked.
               </p>
-              <p className="mb-1.5">
-                <strong>Upload listing</strong> — the edited download or the
-                client&apos;s own Employee Listing. Each listed category is mapped
-                to its placement-slip category; mappings you confirmed before
-                are reused. New rows are added, edited rows are updated, and a
-                row whose leaving date has passed is terminated. You review all
-                of it before anything is applied.
-              </p>
-              <p>
-                Someone on file but missing from the upload is listed
-                separately, and is never terminated unless you tick it.
-              </p>
+              {canUpload && (
+                <>
+                  <p className="mb-1.5">
+                    <strong>Upload listing</strong> — the edited download or the
+                    client&apos;s own Employee Listing. Each listed category is
+                    mapped to its placement-slip category; mappings you
+                    confirmed before are reused. New rows are added, edited rows
+                    are updated, and a row whose leaving date has passed is
+                    terminated. You review all of it before anything is applied.
+                  </p>
+                  <p>
+                    Someone on file but missing from the upload is listed
+                    separately, and is never terminated unless you tick it.
+                  </p>
+                </>
+              )}
             </InfoHint>
           </div>
         </CardContent>

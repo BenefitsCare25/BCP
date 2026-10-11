@@ -24,6 +24,7 @@ from sqlalchemy.orm import Session
 
 from app.core.clock import today as business_today
 from app.models import Category, Dependant, Employee, FlexPricing, FlexScheme, PolicyYear, Product
+from app.models.dependant import DEPENDANT_STATUS_ACTIVE
 from app.models.employee_plan_override import EmployeePlanOverride
 from app.models.enrollment_window import (
     EnrollmentWindow,
@@ -43,6 +44,7 @@ from app.services.plan_hydration import (
     voluntary_rate_for_age,
 )
 from app.services.roster_attributes import age_from_attrs, band_for_age
+from app.services.voluntary_enrolment import eligible_only_product_ids
 
 
 class DependantMode:
@@ -468,11 +470,25 @@ def _product_block(
     return block if isinstance(block, dict) else None
 
 
+def _open_band(age_bands: Any) -> dict[str, Any] | None:
+    """The band with no bounds at all (the editor's "All ages"), which applies
+    whether or not the member's age is known."""
+    bands = age_bands if isinstance(age_bands, list) else []
+    return next(
+        (
+            b for b in bands
+            if isinstance(b, dict) and b.get("min") is None and b.get("max") is None
+        ),
+        None,
+    )
+
+
 def age_band_label(age_bands: list[Any], age: int | None) -> str | None:
     """Label of the band containing ``age`` (first match wins), or None. Band
     selection is shared with the life voluntary-rate bands via ``band_for_age`` so
-    the price-tag band and the premium band can't diverge."""
-    band = band_for_age(age_bands, age)
+    the price-tag band and the premium band can't diverge. With no age, only an
+    all-ages band can price the member — a fixed plan price needs no DOB."""
+    band = band_for_age(age_bands, age) if age is not None else _open_band(age_bands)
     if band is None:
         return None
     label = band.get("label")
@@ -905,12 +921,22 @@ def covered_dependant_profiles(
     ``slip_options`` pricing needs (each dependant draws its own option rate,
     age-banded rates resolve on the DEPENDANT's age).
 
-    Unclassifiable dependants are dropped. Derive counts from the profiles via
-    ``profile_counts`` so a caller loads the dependants once."""
+    Unclassifiable dependants are dropped, and so are ones no longer ACTIVE: a
+    dependant the listing has since terminated stays in the stored ids but is no
+    longer covered, so it must not keep drawing on the wallet (the compulsory
+    path and the statement's coverage lines already count active rows only).
+    Derive counts from the profiles via ``profile_counts`` so a caller loads the
+    dependants once."""
     ids = [i for i in (covered_dependant_ids or []) if i]
     if not ids:
         return []
-    deps = list(db.execute(select(Dependant).where(Dependant.id.in_(ids))).scalars().all())
+    deps = list(
+        db.execute(
+            select(Dependant).where(
+                Dependant.id.in_(ids), Dependant.status == DEPENDANT_STATUS_ACTIVE
+            )
+        ).scalars().all()
+    )
     return dependant_profiles_of(deps, age_limits=age_limits, ref=ref)
 
 
@@ -2036,10 +2062,13 @@ def summarize_employee(
             db, set(baseline_cat.values())
         )
         overrides = load_overrides(db, employee.policy_year_id, [employee.id])
+        # Voluntary cover the member has not taken up is eligibility, not
+        # coverage: like a decline it draws nothing until they enrol.
+        not_enrolled = eligible_only_product_ids(db, employee, overrides=overrides)
         for product_id, (product_code, default_plan) in defaults.items():
             ov = overrides.get((employee.id, product_id))
-            if ov is not None and ov.declined:
-                continue  # declined coverage costs no flex
+            if (ov is not None and ov.declined) or product_id in not_enrolled:
+                continue  # declined / not enrolled coverage costs no flex
             base_cat = baseline_cat.get(product_id)
             line = _member_flex_line(
                 db, pricing=pricing, source_map=source_map, rule=rule,
@@ -2066,7 +2095,11 @@ def summarize_employee(
         wallet_amount=wallet,
         currency=employee.flex_currency,
         age=age,
-        age_known=age is not None,
+        # "Unknown" only matters when a line's price actually turns on the age:
+        # a fixed plan price (or a slip premium) was still deducted without it.
+        age_known=age is not None or not any(
+            _age_priced(pricing, slip_idx, line.product_id) for line in lines
+        ),
         total_price_tag=total,
         balance=balance,
         lines=lines,
@@ -2074,6 +2107,20 @@ def summarize_employee(
         leave_days=leave.days if leave else None,
         leave_flex_amount=leave_amount,
     )
+
+
+def _age_priced(
+    pricing: dict[str, Any] | None,
+    slip_idx: dict[str, Any] | None,
+    product_id: str,
+) -> bool:
+    """Whether a product's member tag needs the member's age: matrix rows with
+    no all-ages band, or an age-rated (voluntary life) slip tier."""
+    block = _product_block(pricing, product_id) or {}
+    if block.get("price_tags") and _open_band(block.get("age_bands")) is None:
+        return True
+    tiers = (slip_idx or {}).get(product_id)
+    return isinstance(tiers, dict) and any(isinstance(v, dict) for v in tiers.values())
 
 
 def _member_flex_line(

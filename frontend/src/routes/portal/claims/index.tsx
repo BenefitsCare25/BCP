@@ -2,9 +2,10 @@ import { usePortalTranslation } from "@/i18n/portal";
 /** "My claims" — the member's claims for the current benefit year. */
 import { Link } from "@tanstack/react-router";
 import { FilePlus2, Loader2 } from "lucide-react";
-import { usePortalClaimPages, usePortalMe } from "@/api/portal";
+import { usePortalClaimPages, usePortalClaimsByStatus, usePortalMe } from "@/api/portal";
 import { holds } from "@/components/portal/capabilities";
 import { ClaimList } from "@/components/portal/leaf/ClaimMount";
+import { ATTENTION_STATUSES } from "@/components/portal/leaf/Strike";
 import { LeafSkeleton } from "@/components/portal/leaf/LeafSkeleton";
 import { actionClass } from "@/components/portal/leaf/Action";
 import { ClayEmpty } from "@/components/portal/leaf/ClayEmpty";
@@ -66,6 +67,10 @@ export function PortalClaimsPage() {
   const pt = usePortalTranslation();
   const company = useCompany();
   const claims = usePortalClaimPages();
+  // Pages run newest-first by creation, so an older claim sent back for more
+  // information sat on an unloaded page: not pinned, and "Pending Doc" said
+  // nothing was waiting. These are fetched whole and merged in.
+  const attention = usePortalClaimsByStatus(ATTENTION_STATUSES);
   // The FOURTH entry point that closes on the served capability list, beside
   // the shell nav, the home mosaic and the broker's preview frame. A settling
   // leaver keeps this page — reading their claims and answering us is the whole
@@ -83,7 +88,12 @@ export function PortalClaimsPage() {
     return <div className={MEASURE}><ClaimPeriodPicker /><PortalErrorState onRetry={() => void claims.refetch()} /></div>;
   }
 
-  const rows = claims.data?.pages.flatMap((page) => page.items) ?? [];
+  const paged = claims.data?.pages.flatMap((page) => page.items) ?? [];
+  const pagedIds = new Set(paged.map((claim) => claim.id));
+  const rows = [
+    ...paged,
+    ...(attention.data ?? []).filter((claim) => !pagedIds.has(claim.id)),
+  ];
   const total = claims.data?.pages[0]?.total ?? 0;
 
   // Nothing to scroll past, so nothing to float over: the action belongs IN the

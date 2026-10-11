@@ -14,6 +14,8 @@ from here too, but only to hosts of a firm whose brand rows reference them.
 """
 from __future__ import annotations
 
+from typing import Literal
+
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
@@ -194,21 +196,26 @@ def get_brand_asset(
     behind a URL never change and may be cached forever. An image this host's
     firm does not use is a 404, whichever other firm uses it."""
     ctx = request_firm(request)
-    if (
-        ctx is None
-        or not ASSET_ID.fullmatch(asset_id)
-        or not firm_references_asset(db, ctx.firm_id, asset_id)
-    ):
+    if ctx is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Not found")
+    return brand_asset_response(db, ctx.firm_id, asset_id, cache="public")
+
+
+def brand_asset_response(
+    db: Session, firm_id: str, asset_id: str, *, cache: Literal["public", "private"]
+) -> Response:
+    """The bytes of a brand image `firm_id`'s brand rows use, else a 404."""
+    if not ASSET_ID.fullmatch(asset_id) or not firm_references_asset(db, firm_id, asset_id):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Not found")
     try:
-        data = read_asset(ctx.firm_id, asset_id)
+        data = read_asset(firm_id, asset_id)
     except (FileNotFoundError, StorageScopeError):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Not found") from None
     return Response(
         content=data,
         media_type=content_type_for(asset_id),
         headers={
-            "Cache-Control": f"public, max-age={_ASSET_MAX_AGE}, immutable",
+            "Cache-Control": f"{cache}, max-age={_ASSET_MAX_AGE}, immutable",
             "X-Content-Type-Options": "nosniff",
         },
     )

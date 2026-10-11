@@ -83,6 +83,22 @@ export function claimTitle(claim: PortalClaim): string {
   return insuredClaimTitle(claim.claim_type, claim.product_code);
 }
 
+/** The figure a claim is summarised by: the approval once there is one, which
+ * is ALWAYS priced in `policy_currency`, otherwise what was claimed in the
+ * bill's own `currency`. */
+export function claimFigure(claim: PortalClaim): { value: number; currency: string } {
+  return claim.amount_approved != null
+    ? { value: claim.amount_approved, currency: claim.policy_currency }
+    : { value: claim.amount_claimed, currency: claim.currency };
+}
+
+/** What was claimed, in the policy currency the approval is priced in, or null
+ * when a foreign bill has no conversion to compare against. */
+function claimedInPolicyCurrency(claim: PortalClaim): number | null {
+  if (claim.currency === claim.policy_currency) return claim.amount_claimed;
+  return claim.fx_state === "converted" ? claim.amount_converted : null;
+}
+
 /** Who, where, when and how much evidence — the facts that let a member
  * recognise which receipt this was, on one line and without repeating the
  * title. The document count is part of this line rather than a row of its own:
@@ -212,9 +228,13 @@ function ClaimRow({
   // requested one moves beneath it — a member whose claim was partly approved
   // needs both numbers to see the difference, and one of them has to be the
   // answer. Equal figures print once: "of S$88.40 claimed" under S$88.40 is a
-  // difference being announced where there is none.
+  // difference being announced where there is none. The approval is priced in
+  // the policy currency, so a foreign bill is compared through its conversion.
   const approved = claim.amount_approved != null;
-  const partial = approved && claim.amount_approved !== claim.amount_claimed;
+  const figure = claimFigure(claim);
+  const claimedInPolicy = claimedInPolicyCurrency(claim);
+  const partial =
+    approved && claimedInPolicy != null && claim.amount_approved !== claimedInPolicy;
 
   const body = (
     <div className="flex flex-col gap-1.5 sm:flex-row sm:items-start sm:justify-between sm:gap-6">
@@ -237,14 +257,14 @@ function ClaimRow({
             {approved ? pt("Approved") : pt("Amount claimed")}{" "}
           </span>
           <Money
-            value={approved ? claim.amount_approved : claim.amount_claimed}
-            currency={claim.currency}
+            value={figure.value}
+            currency={figure.currency}
             emphasis={approved ? "strong" : "normal"}
           />
           {partial && (
             <span className="block text-2xs text-label">
-              {pt("of")} {currencySymbol(claim.currency)}
-              {moneyText(claim.amount_claimed)}  {pt("claimed")} </span>
+              {pt("of")} {currencySymbol(claim.policy_currency)}
+              {moneyText(claimedInPolicy)}  {pt("claimed")} </span>
           )}
         </p>
         <ClaimStrike status={claim.status} />
@@ -434,7 +454,7 @@ export function ClaimList({
             "leaf-rise rounded-tile px-4 py-5 text-row text-label sm:px-5",
           )}
         >
-          {EMPTY_VIEW[active]}
+          {pt(EMPTY_VIEW[active])}
         </p>
       )}
 

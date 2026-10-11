@@ -19,10 +19,14 @@ import { Money } from "./Figure";
 
 type Proration = { full_amount: number; note: string };
 
-/** "Pro-rated to 3/6 months of cover" — the one phrasing, everywhere. */
+/** "Pro-rated to 3/6 months of cover" — the one phrasing, everywhere. The
+ * served fraction counts months or, on a days basis, days. */
 export function prorationReason(note: string): string {
-  const months = /^(\d+)\/(\d+) months?$/.exec(note.trim());
-  return pt("Pro-rated to {0} of cover", [months ? pt("{0}/{1} months", [months[1], months[2]]) : pt(note)]);
+  const fraction = /^(\d+)\/(\d+) (month|day)s?$/.exec(note.trim());
+  const period = fraction
+    ? pt(fraction[3] === "month" ? "{0}/{1} months" : "{0}/{1} days", [fraction[1], fraction[2]])
+    : pt(note);
+  return pt("Pro-rated to {0} of cover", [period]);
 }
 
 /** The reason plus the figure it was scaled from, as one line. Used where the

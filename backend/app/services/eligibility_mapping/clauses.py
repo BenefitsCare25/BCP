@@ -18,10 +18,14 @@ from app.services.eligibility_mapping.vocabulary import (
 )
 from app.services.explicit_grade_clauses import (
     JOB_CATEGORY_RE,
+    OPEN_BOUND,
     explicit_grade_clauses,
     grade_family_values,
     split_code_pair,
 )
+
+# "16 and above", "E7 & above", "16+", "10 and below": a roster-backed open range.
+_OPEN_RANGE_RE = re.compile(rf"\b([a-z]*\d+|[a-z]+)(?:{OPEN_BOUND})", re.IGNORECASE)
 
 
 def _alpha_rank(value: str) -> int:
@@ -63,7 +67,7 @@ def _expand_finite_grade_piece(piece: str) -> list[str] | None:
     if single := re.fullmatch(r"[A-Z]*\d+|[A-Z]+", text):
         return [single.group(0)]
     match = re.fullmatch(
-        r"([A-Z]*\d+|[A-Z]+)\s*(?:TO|-)\s*([A-Z]*\d+|[A-Z]+)",
+        r"([A-Z]*\d+|[A-Z]+)\s*(?:TO|[-\u2013\u2014])\s*([A-Z]*\d+|[A-Z]+)",
         text,
     )
     if match is None:
@@ -94,6 +98,16 @@ def _expand_finite_grade_piece(piece: str) -> list[str] | None:
     return []
 
 
+def _grade_pieces(clause: str) -> list[str]:
+    """Split a code clause into single codes or ranges ("5, 6 and 7" → 5 / 6 / 7)."""
+
+    return [
+        part
+        for piece in re.split(r"\s*[,;/]\s*(?:(?:and|&)\s+)?", clause, flags=re.IGNORECASE)
+        for part in split_code_pair(piece)
+    ]
+
+
 def _values_from_grade_clause(clause: str, values: list[Any]) -> list[Any]:
     """Expand explicit closed ranges, then add roster-backed open ranges.
 
@@ -112,12 +126,7 @@ def _values_from_grade_clause(clause: str, values: list[Any]) -> list[Any]:
             selected_keys.add(key)
             selected.append(value)
 
-    pieces = [
-        part
-        for piece in re.split(r"\s*[,;/]\s*", clause)
-        for part in split_code_pair(piece)
-    ]
-    for piece in pieces:
+    for piece in _grade_pieces(clause):
         if family := grade_family_values(piece, values):
             for value in family:
                 add(value)
@@ -130,17 +139,16 @@ def _values_from_grade_clause(clause: str, values: list[Any]) -> list[Any]:
     for value in _matched_values(clause, values):
         add(value)
 
-    for match in re.finditer(
-        r"\b([a-z]*\d+|[a-z]+)\s+(?:and\s+)?above\b",
-        clause,
-        re.IGNORECASE,
-    ):
+    for match in _OPEN_RANGE_RE.finditer(clause):
         start = _ordered_code(match.group(1))
         if start is None:
             continue
+        below = "below" in match.group(0).casefold()
         for value in sorted(values, key=lambda item: _ordered_code(item) or ("", -1)):
             ordered = _ordered_code(value)
-            if ordered is not None and ordered[0] == start[0] and ordered[1] >= start[1]:
+            if ordered is None or ordered[0] != start[0]:
+                continue
+            if (ordered[1] <= start[1]) if below else (ordered[1] >= start[1]):
                 add(value)
 
     return selected
@@ -153,10 +161,7 @@ def _oversized_explicit_grade_clauses(text: str) -> list[str]:
     return [
         clause.strip()
         for clause in clauses
-        if any(
-            _expand_finite_grade_piece(piece) is None
-            for piece in re.split(r"\s*[,;/]\s*", clause)
-        )
+        if any(_expand_finite_grade_piece(piece) is None for piece in _grade_pieces(clause))
     ]
 
 

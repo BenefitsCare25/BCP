@@ -37,7 +37,7 @@ import { FirmOwnerOnly } from "@/components/auth/FirmOwnerOnly";
 import { useMemo, useState } from "react";
 import { AlertTriangle, Check, Loader2, RotateCcw, Users } from "lucide-react";
 import { toast } from "sonner";
-import { useUpdateDependant } from "@/api/hooks";
+import { useMe, useUpdateDependant } from "@/api/hooks";
 import {
   type DualCase,
   type DualOpportunity,
@@ -47,8 +47,10 @@ import {
   useReopenDualDecision,
   useSetDualCover,
 } from "@/api/dualCoverage";
-import { formatError } from "@/lib/errors";
+import { ConflictDetailError, formatError } from "@/lib/errors";
 import { cn } from "@/lib/cn";
+import { isReadOnlyAccess } from "@/lib/roles";
+import { AlertDialog } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -267,6 +269,7 @@ function SideBlock({
   p,
   policyYearId,
   canUnlink,
+  readOnly,
 }: {
   p: DualParty;
   policyYearId: string;
@@ -275,21 +278,56 @@ function SideBlock({
    *  case — the very shape where a wrong spouse link needs detaching, and where
    *  removing it orphans nobody because the person is an employee here. */
   canUnlink: boolean;
+  /** Viewers and read-only grants see the cover state but cannot move it. */
+  readOnly: boolean;
 }) {
   const setCover = useSetDualCover(policyYearId);
   const update = useUpdateDependant();
+  // A change an open enrolment period would overwrite (409
+  // `open_enrollment_election`), held until the broker accepts that.
+  const [pending, setPending] = useState<{ covered: boolean; reason: string } | null>(
+    null,
+  );
   const linked = !!p.dependant_id && !p.unlinked && !!p.employee_id;
 
-  const toggle = async (covered: boolean) => {
+  const toggle = async (covered: boolean, acknowledge = false) => {
     try {
-      await setCover.mutateAsync({ dependantId: p.dependant_id!, covered });
+      await setCover.mutateAsync({
+        dependantId: p.dependant_id!,
+        covered,
+        acknowledgeOpenEnrollment: acknowledge,
+      });
+      setPending(null);
     } catch (err) {
+      if (
+        !acknowledge &&
+        err instanceof ConflictDetailError &&
+        err.detail.code === "open_enrollment_election"
+      ) {
+        const reason = typeof err.detail.message === "string" ? err.detail.message : "";
+        setPending({ covered, reason });
+        return;
+      }
+      setPending(null);
       toast.error(formatError(err));
     }
   };
 
   return (
     <div className="min-w-0 space-y-2 p-3">
+      <AlertDialog
+        open={pending !== null}
+        onOpenChange={(open) => !open && setPending(null)}
+        title="The open enrolment period will replace this"
+        description={`${pending?.reason ?? ""} Make the change anyway, or change their selection on the Enrollment page instead.`}
+        confirmLabel="Change anyway"
+        confirmVariant="default"
+        tone="info"
+        loading={setCover.isPending}
+        onConfirm={() => {
+          if (pending) void toggle(pending.covered, true);
+        }}
+      />
       <div>
         <p className="truncate text-sm font-medium text-foreground">
           {p.employee_name ?? "Unknown employee"}
@@ -310,8 +348,8 @@ function SideBlock({
             <label className="flex items-center gap-2 text-2xs text-foreground">
               <Switch
                 checked={p.covered}
-                disabled={setCover.isPending}
-                onCheckedChange={toggle}
+                disabled={readOnly || setCover.isPending}
+                onCheckedChange={(next) => void toggle(next)}
                 aria-label={`Covered under ${p.employee_name ?? p.staff_id}`}
               />
               Covered under this employee
@@ -365,6 +403,8 @@ function verdict(c: DualCase): string {
 function CaseCard({ c, policyYearId }: { c: DualCase; policyYearId: string }) {
   const record = useRecordDualDecision(policyYearId);
   const reopen = useReopenDualDecision(policyYearId);
+  const { data: me } = useMe();
+  const readOnly = isReadOnlyAccess(me?.role, me?.platform_access);
   const [note, setNote] = useState("");
   const [noteOpen, setNoteOpen] = useState(false);
   const settled = isSettled(c);
@@ -436,6 +476,7 @@ function CaseCard({ c, policyYearId }: { c: DualCase; policyYearId: string }) {
             p={p}
             policyYearId={policyYearId}
             canUnlink={otherSides >= 1}
+            readOnly={readOnly}
           />
         ))}
       </div>
@@ -460,21 +501,24 @@ function CaseCard({ c, policyYearId }: { c: DualCase; policyYearId: string }) {
               “{c.decision!.note}”
             </span>
           )}
-          <Button
-            size="sm"
-            variant="ghost"
-            disabled={reopen.isPending}
-            onClick={async () => {
-              try {
-                await reopen.mutateAsync(c.subject_key);
-                toast.success("Reopened");
-              } catch (err) {
-                toast.error(formatError(err));
-              }
-            }}
-          >
-            <RotateCcw className="size-3.5" /> Reopen
-          </Button>
+          {/* Reopen deletes the saved decision, a firm-owner action. */}
+          <FirmOwnerOnly>
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={reopen.isPending}
+              onClick={async () => {
+                try {
+                  await reopen.mutateAsync(c.subject_key);
+                  toast.success("Reopened");
+                } catch (err) {
+                  toast.error(formatError(err));
+                }
+              }}
+            >
+              <RotateCcw className="size-3.5" /> Reopen
+            </Button>
+          </FirmOwnerOnly>
         </div>
       ) : (
         <div className="space-y-2">
@@ -491,34 +535,38 @@ function CaseCard({ c, policyYearId }: { c: DualCase; policyYearId: string }) {
               dropping the other side, once, where the consequence is written.
               What remains are the two outcomes a cover change CANNOT express:
               the dual cover is deliberate, or the match is wrong. */}
-          <div className="flex flex-wrap items-center gap-1.5">
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={record.isPending}
-              onClick={() => decide("dismissed")}
-            >
-              {record.isPending && <Loader2 className="size-3.5 animate-spin" />}
-              Mark reviewed
-            </Button>
-          </div>
-          {noteOpen ? (
-            <Input
-              value={note}
-              onChange={(e) => setNote(e.target.value)}
-              placeholder="Why — for whoever looks next"
-              aria-label="Decision note"
-              className="h-8"
-              autoFocus
-            />
-          ) : (
-            <button
-              type="button"
-              className="text-2xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
-              onClick={() => setNoteOpen(true)}
-            >
-              Add a note
-            </button>
+          {!readOnly && (
+            <>
+              <div className="flex flex-wrap items-center gap-1.5">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={record.isPending}
+                  onClick={() => decide("dismissed")}
+                >
+                  {record.isPending && <Loader2 className="size-3.5 animate-spin" />}
+                  Mark reviewed
+                </Button>
+              </div>
+              {noteOpen ? (
+                <Input
+                  value={note}
+                  onChange={(e) => setNote(e.target.value)}
+                  placeholder="Why — for whoever looks next"
+                  aria-label="Decision note"
+                  className="h-8"
+                  autoFocus
+                />
+              ) : (
+                <button
+                  type="button"
+                  className="text-2xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
+                  onClick={() => setNoteOpen(true)}
+                >
+                  Add a note
+                </button>
+              )}
+            </>
           )}
         </div>
       )}

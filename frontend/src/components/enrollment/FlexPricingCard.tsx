@@ -26,6 +26,7 @@ import {
 } from "@/api/enrollment";
 import { ALL_AGES_LABEL } from "@/lib/flexTiers";
 import { Input } from "@/components/ui/input";
+import { PriceTagInput } from "@/components/enrollment/PriceTagInput";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Segmented } from "@/components/ui/segmented";
@@ -747,19 +748,11 @@ export function ProductDependantEditor({
                                   <span className="text-2xs leading-tight text-muted-foreground">
                                     {labels[role]}
                                   </span>
-                                  <Input
-                                    type="number"
-                                    min="0"
-                                    step="0.01"
+                                  <PriceTagInput
                                     disabled={!editable}
-                                    value={override ?? recommendation ?? ""}
-                                    onChange={(event) =>
-                                      editor.setFamilyTag(
-                                        pid,
-                                        [tier.key],
-                                        role,
-                                        event.target.value,
-                                      )
+                                    value={override ?? recommendation}
+                                    onValueChange={(value) =>
+                                      editor.setFamilyTag(pid, [tier.key], role, value)
                                     }
                                     className="h-8 w-28 tabular-nums"
                                     placeholder="Required"
@@ -774,18 +767,11 @@ export function ProductDependantEditor({
                             <span className="mb-1 block text-2xs text-muted-foreground">
                               Per covered dependant
                             </span>
-                            <Input
-                              type="number"
-                              min="0"
-                              step="0.01"
+                            <PriceTagInput
                               disabled={!editable}
-                              value={
-                                dep.per_pax?.[tier.key]?.flat ??
-                                slipPerPax[tier.key] ??
-                                ""
-                              }
-                              onChange={(event) =>
-                                editor.setPerPax(pid, [tier.key], event.target.value)
+                              value={dep.per_pax?.[tier.key]?.flat ?? slipPerPax[tier.key]}
+                              onValueChange={(value) =>
+                                editor.setPerPax(pid, [tier.key], value)
                               }
                               className="h-8 tabular-nums"
                               placeholder="Required"
@@ -1156,14 +1142,11 @@ export function UnifiedDependantPricing({
                 <span className="block text-2xs font-medium text-muted-foreground">
                   {codes[role]}
                 </span>
-                <Input
-                  type="number"
-                  min="0"
-                  step="0.01"
+                <PriceTagInput
                   disabled={!editable}
-                  value={override ?? recommendation ?? ""}
-                  onChange={(event) =>
-                    editor.setFamilyTag(pid, [tier.key], role, event.target.value)
+                  value={override ?? recommendation}
+                  onValueChange={(value) =>
+                    editor.setFamilyTag(pid, [tier.key], role, value)
                   }
                   className="h-8 min-w-0 px-2 tabular-nums"
                   placeholder="Required"
@@ -1176,17 +1159,10 @@ export function UnifiedDependantPricing({
       )}
 
       {mode === "per_pax" && (
-        <Input
-          type="number"
-          min="0"
-          step="0.01"
+        <PriceTagInput
           disabled={!editable}
-          value={
-            dep.per_pax?.[tier.key]?.flat ??
-            product.slip_per_pax?.[tier.key] ??
-            ""
-          }
-          onChange={(event) => editor.setPerPax(pid, [tier.key], event.target.value)}
+          value={dep.per_pax?.[tier.key]?.flat ?? product.slip_per_pax?.[tier.key]}
+          onValueChange={(value) => editor.setPerPax(pid, [tier.key], value)}
           className="h-8 w-28 tabular-nums"
           placeholder="Required"
           aria-label={`${label} charge per covered dependant`}

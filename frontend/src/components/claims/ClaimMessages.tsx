@@ -15,15 +15,20 @@ import {
   useSendClaimMessage,
 } from "@/api/claims";
 import { useMe } from "@/api/hooks";
+import { isReadOnlyAccess } from "@/lib/roles";
 import { ThreadMessages } from "@/components/claims/ThreadMessages";
 import { formatError } from "@/lib/errors";
 
 export function ClaimMessages({
   claimId,
   stickyComposer = false,
+  memberVisible = true,
 }: {
   claimId: string;
   stickyComposer?: boolean;
+  /** False for a LOG case or an HR submission: the member cannot open the
+   *  claim, so nothing written here would reach them (the API refuses it). */
+  memberVisible?: boolean;
 }) {
   const messages = useClaimMessages(claimId);
   const send = useSendClaimMessage();
@@ -35,7 +40,7 @@ export function ClaimMessages({
   // button that always failed and — because the mutation carries
   // `localErrorHandling` — a silently 403ing read receipt on every claim they
   // opened, leaving the queue's "N new" badge lit forever with no explanation.
-  const readOnly = me?.role === "broker_viewer";
+  const readOnly = isReadOnlyAccess(me?.role, me?.platform_access);
 
   // Opening the Messages section IS reading it. Gated on there being something
   // unread so re-opening a settled claim doesn't write on every view.
@@ -62,10 +67,12 @@ export function ClaimMessages({
       disabledReason={
         readOnly
           ? "Your access is read-only, so you can't write to the member from here."
-          : undefined
+          : !memberVisible
+            ? "The member can't see this claim because it wasn't filed through their portal. Contact them or their HR directly."
+            : undefined
       }
       onSend={
-        readOnly
+        readOnly || !memberVisible
           ? undefined
           : async (body) => {
               try {

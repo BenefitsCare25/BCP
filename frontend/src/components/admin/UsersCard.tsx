@@ -4,10 +4,13 @@ import { toast } from "sonner";
 import {
   type AdminInvitation,
   type AdminUser,
+  type CreatedInvitation,
   useAdminUsers,
   useBrokerFirms,
   useInvitations,
+  useMe,
   usePatchUser,
+  useResetUserSignIn,
   useRevokeInvitation,
 } from "@/api/hooks";
 import { AlertDialog } from "@/components/ui/alert-dialog";
@@ -24,14 +27,17 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { ListError } from "@/components/platform/QueryStates";
 import { formatError } from "@/lib/errors";
 import {
   CLIENT_ROLES,
   assignableStaffRoles,
   isSystemAdminRole,
   roleLabel,
+  useWriteAccess,
 } from "@/lib/roles";
 import { FirmPicker } from "./FirmPicker";
+import { InvitationLinkNotice } from "./InvitationLinkNotice";
 import { InviteUserForm } from "./InviteUserForm";
 
 type Firm = { id: string; name: string };
@@ -49,13 +55,23 @@ function statusVariant(status: string): "good" | "warn" | "error" | "default" {
  *  except system_admin; the API enforces the same. */
 export function UsersCard({ callerRole }: { callerRole: string }) {
   const isSystemAdmin = isSystemAdminRole(callerRole);
-  const { data: users = [] } = useAdminUsers();
+  const usersQuery = useAdminUsers();
+  const users = usersQuery.data ?? [];
   const { data: invites = [] } = useInvitations();
   // The platform firm list is a system_admin surface; a firm admin acts on
   // its own firm and never names one.
   const { data: firms = [], isPending: firmsPending } = useBrokerFirms(isSystemAdmin);
   const roleOptions = assignableStaffRoles(callerRole);
   const [demotion, setDemotion] = useState<{ user: AdminUser; role: string } | null>(null);
+  const { data: me } = useMe();
+  // This card is mounted for firm owners only, so a missing write right here
+  // means a read-only access grant on this firm: its accounts and invitations
+  // are listed, not changed (the API refuses those changes). A platform
+  // admin's own firm-less row is not the firm's, so it stays editable.
+  const { canRemove: canManage } = useWriteAccess();
+  const rowReadOnly = (u: AdminUser) => !canManage && u.broker_firm_id !== null;
+  const [resetting, setResetting] = useState<AdminUser | null>(null);
+  const [resetLink, setResetLink] = useState<CreatedInvitation | null>(null);
 
   const pendingByEmail = new Map(invites.map((i) => [i.email, i]));
   // Firm-wide user management is brokerage staff only; a company's HR logins
@@ -80,12 +96,20 @@ export function UsersCard({ callerRole }: { callerRole: string }) {
         <p className="text-sm text-muted-foreground">For Microsoft sign-in, authenticator verification
           is off by default. Only a firm or system administrator can require it per account. Changing it
           signs that user out. Password sign-in always requires it.</p>
-        <InviteUserForm
-          idPrefix="broker-invite"
-          roleOptions={roleOptions}
-          defaultRole="broker_viewer"
-          firms={isSystemAdmin ? firms : []}
-        />
+        {canManage && (
+          <InviteUserForm
+            idPrefix="broker-invite"
+            roleOptions={roleOptions}
+            defaultRole="broker_viewer"
+            firms={isSystemAdmin ? firms : []}
+          />
+        )}
+        {resetLink && (
+          <InvitationLinkNotice invitation={resetLink} onDismiss={() => setResetLink(null)} />
+        )}
+        {usersQuery.isError ? (
+          <ListError what="users" error={usersQuery.error} onRetry={() => void usersQuery.refetch()} />
+        ) : (
         <ul className="divide-y divide-border rounded-md border border-border">
           {brokerUsers.map((u) => (
             <UserRow
@@ -93,7 +117,14 @@ export function UsersCard({ callerRole }: { callerRole: string }) {
               user={u}
               invitation={pendingByEmail.get(u.email)}
               roleOptions={roleOptions}
+              readOnly={rowReadOnly(u)}
               onDemote={(user, role) => setDemotion({ user, role })}
+              // Nobody resets their own sign-in (the API refuses it). A
+              // disabled account is reset straight to invited, so a
+              // compromised one is never re-enabled with its old factors.
+              onResetSignIn={
+                !rowReadOnly(u) && u.id !== me?.user_id ? () => setResetting(u) : undefined
+              }
             />
           ))}
           {brokerUsers.length === 0 && (
@@ -102,6 +133,7 @@ export function UsersCard({ callerRole }: { callerRole: string }) {
             </li>
           )}
         </ul>
+        )}
       </CardContent>
     </Card>
     {demotion && (
@@ -114,6 +146,17 @@ export function UsersCard({ callerRole }: { callerRole: string }) {
         onClose={() => setDemotion(null)}
       />
     )}
+    {resetting && (
+      <ResetSignInDialog
+        key={resetting.id}
+        user={resetting}
+        onClose={() => setResetting(null)}
+        onReset={(invitation) => {
+          setResetting(null);
+          setResetLink(invitation);
+        }}
+      />
+    )}
     </>
   );
 }
@@ -124,12 +167,18 @@ function UserRow({
   user: u,
   invitation,
   roleOptions,
+  readOnly,
   onDemote,
+  onResetSignIn,
 }: {
   user: AdminUser;
   invitation: AdminInvitation | undefined;
   roleOptions: string[];
+  /** Listed only: no rename, binding, authenticator, role or status change. */
+  readOnly: boolean;
   onDemote: (user: AdminUser, role: string) => void;
+  /** Absent when this caller may not reset this account's sign-in. */
+  onResetSignIn?: () => void;
 }) {
   const patch = usePatchUser();
   const revoke = useRevokeInvitation();
@@ -139,7 +188,7 @@ function UserRow({
   const [bindingId, setBindingId] = useState("");
   // A role this caller cannot grant (a system admin, seen by a firm admin) is
   // shown, never offered as a change.
-  const canChangeRole = roleOptions.includes(u.role);
+  const canChangeRole = !readOnly && roleOptions.includes(u.role);
 
   const run = async (change: () => Promise<unknown>, success: string) => {
     try {
@@ -223,21 +272,23 @@ function UserRow({
               <div className="truncate text-sm">{u.email}</div>
             )}
           </div>
-          <Button
-            size="sm"
-            variant="ghost"
-            className="shrink-0 text-muted-foreground"
-            onClick={() => {
-              setEditName(u.display_name ?? "");
-              setEditing(true);
-            }}
-          >
-            {u.display_name ? "Rename" : "Add name"}
-          </Button>
+          {!readOnly && (
+            <Button
+              size="sm"
+              variant="ghost"
+              className="shrink-0 text-muted-foreground"
+              onClick={() => {
+                setEditName(u.display_name ?? "");
+                setEditing(true);
+              }}
+            >
+              {u.display_name ? "Rename" : "Add name"}
+            </Button>
+          )}
         </div>
       )}
       <div className="flex flex-wrap items-center gap-2 sm:shrink-0">
-        {!u.external_id && (binding ? (
+        {!readOnly && !u.external_id && (binding ? (
           <div className="flex flex-wrap items-center gap-2">
             <Input aria-label={`Microsoft object ID for ${u.email}`} value={bindingId}
               onChange={(event) => setBindingId(event.target.value)} className="max-w-80" />
@@ -252,9 +303,13 @@ function UserRow({
           </Button>
         ))}
         <Badge variant={statusVariant(u.status)}>{u.status}</Badge>
+        {invitation?.expires_at && Date.parse(invitation.expires_at) <= Date.now() && (
+          <Badge variant="warn" title="Invite them again to issue a new link.">link expired</Badge>
+        )}
         <div className="flex flex-col gap-1">
           <Label htmlFor={`broker-mfa-${u.id}`} className="text-xs">Authenticator</Label>
-          <Select value={u.broker_mfa_required ? "required" : "off"} disabled={patch.isPending}
+          <Select value={u.broker_mfa_required ? "required" : "off"}
+            disabled={readOnly || patch.isPending}
             onValueChange={(value) => {
               const required = value === "required";
               void run(() => patch.mutateAsync({ id: u.id, patch: { broker_mfa_required: required } }),
@@ -282,7 +337,12 @@ function UserRow({
         ) : (
           <Badge variant="outline">{roleLabel(u.role)}</Badge>
         )}
-        {invitation ? (
+        {onResetSignIn && (
+          <Button size="sm" variant="outline" onClick={onResetSignIn}>
+            Reset sign-in
+          </Button>
+        )}
+        {readOnly ? null : invitation ? (
           <Button size="sm" variant="ghost" className="text-error hover:text-error" disabled={revoke.isPending}
             onClick={() => void run(() => revoke.mutateAsync(invitation.id), "Invitation revoked")}>
             Revoke
@@ -296,6 +356,65 @@ function UserRow({
         )}
       </div>
     </li>
+  );
+}
+
+/** Recovering an account whose password or authenticator is lost. The server
+ *  removes both, signs the person out and returns a new invitation link,
+ *  which the card then shows once. */
+function ResetSignInDialog({
+  user,
+  onClose,
+  onReset,
+}: {
+  user: AdminUser;
+  onClose: () => void;
+  onReset: (invitation: CreatedInvitation) => void;
+}) {
+  const reset = useResetUserSignIn();
+  const [error, setError] = useState<string | null>(null);
+  const name = user.display_name || user.email;
+
+  const confirm = async () => {
+    setError(null);
+    try {
+      const invitation = await reset.mutateAsync(user.id);
+      toast.success(`Sign-in reset for ${name}`);
+      onReset(invitation);
+    } catch (e) {
+      setError(formatError(e));
+    }
+  };
+
+  return (
+    <AlertDialog
+      open
+      onOpenChange={(open) => {
+        if (!open && !reset.isPending) onClose();
+      }}
+      title={`Reset sign-in for ${name}?`}
+      description={
+        <div className="space-y-3">
+          <p>
+            Their password and authenticator, with its recovery codes, are removed and
+            they are signed out everywhere. Their role and access stay as they are.
+          </p>
+          <p>
+            You get a new single-use invitation link to send them. They must use it to
+            sign in again: with a new password and a new authenticator, or with Microsoft
+            if their account uses it. Any earlier invitation link stops working.
+          </p>
+          {error && (
+            <p role="alert" className="text-error">
+              {error}
+            </p>
+          )}
+        </div>
+      }
+      confirmLabel="Reset sign-in"
+      loading={reset.isPending}
+      onConfirm={() => void confirm()}
+    />
   );
 }
 

@@ -145,8 +145,29 @@ def recover_unreviewed_amendments() -> int:
         return 0
 
 
+def _release_to_manual(claim: Claim, review: ClaimAIReview, code: str, detail: str) -> None:
+    review.status = REVIEW_STATUS_ERROR
+    review.error_code = review.error_code or code
+    review.error_detail = review.error_detail or detail
+    review.completed_at = datetime.now(UTC)
+    claim.status = CLAIM_STATUS_SUBMITTED
+
+
+def _review_has_job(db: Session, review_id: str) -> bool:
+    return db.scalar(
+        select(ClaimReviewJob.id).where(ClaimReviewJob.review_id == review_id).limit(1)
+    ) is not None
+
+
 def reconcile_legacy_reviews(broker_firm_id: str) -> int:
-    """Convert pre-queue pending rows after tenant schema synchronization."""
+    """Convert pre-queue pending rows after tenant schema synchronization.
+
+    A pending claim whose review already HAD a job is not pre-queue: that job
+    ended (failed or cancelled) without releasing the claim. It goes to manual
+    review, as the job's terminal failure would have — a second job for the same
+    review would break its unique review and idempotency keys and abort the
+    deploy's provisioning run.
+    """
     reconciled = 0
     with SessionLocal() as db:
         set_search_path(db, broker_firm_id)
@@ -178,13 +199,20 @@ def reconcile_legacy_reviews(broker_firm_id: str) -> int:
             elif review.status == REVIEW_STATUS_ERROR or not configuration_ready(
                 db, claim.client_id
             ):
-                review.status = REVIEW_STATUS_ERROR
-                review.error_code = review.error_code or "legacy_review_unrecoverable"
-                review.error_detail = review.error_detail or (
-                    "Legacy review could not be resumed with a validated AI configuration."
+                _release_to_manual(
+                    claim,
+                    review,
+                    "legacy_review_unrecoverable",
+                    "Legacy review could not be resumed with a validated AI configuration.",
                 )
-                review.completed_at = datetime.now(UTC)
-                claim.status = CLAIM_STATUS_SUBMITTED
+            elif _review_has_job(db, review.id):
+                _release_to_manual(
+                    claim,
+                    review,
+                    "review_job_ended",
+                    "The review's job ended without releasing the claim; "
+                    "reverted to manual review.",
+                )
             else:
                 review.status = REVIEW_STATUS_PENDING
                 review.stage = "queued"

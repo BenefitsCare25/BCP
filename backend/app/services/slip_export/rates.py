@@ -65,6 +65,21 @@ def _tier_codes(categories: list[Category]) -> list[str]:
     return sorted(codes, key=lambda c: (TIER_ORDER.get(c, 99), c))
 
 
+def _tier_block_key(pa: dict[str, Any], tiers: dict[str, Any]) -> str:
+    """Identity of a tiered premium block.
+
+    The parser (a plan-keyed rate row) and setup confirm (the plan-keyed rate
+    table) copy ONE plan's tier premiums onto every category on that plan, so an
+    identical set under the same insured and plan is one premium, not one per
+    category: the tiered twin of the flat table's block-level rule.
+    """
+    return json.dumps(
+        [insured_text(pa), str(pa.get("plan_code") or ""), tiers],
+        sort_keys=True,
+        default=str,
+    )
+
+
 def _write_tiered_rates(
     ws: Worksheet,
     categories: list[Category],
@@ -99,11 +114,15 @@ def _write_tiered_rates(
     found = False
     prev_insured: str | None = None
     prev_name = ""
+    printed_blocks: set[str] = set()
     for c in categories:
         pa = plan_assignments(c)
         tiers = pa.get("rate_tiers")
         if not isinstance(tiers, dict) or not tiers:
             continue
+        block = _tier_block_key(pa, tiers)
+        repeat = block in printed_blocks
+        printed_blocks.add(block)
         insured = insured_text(pa) or insured_default
         row: list[Any] = [
             "",
@@ -119,6 +138,8 @@ def _write_tiered_rates(
                 # (voluntary tiers) — the slips leave those cells empty.
                 rate = "" if blank else (cell.get("rate") if isinstance(cell, dict) else "")
                 row += [rate, ""]
+            elif repeat:
+                row += [cell.get("rate"), ""]  # block copy already printed above
             else:
                 row += [cell.get("rate"), premium]
                 running += float(premium)
@@ -501,9 +522,10 @@ def product_premium_total(
     """The product's annual premium, computed the same way the sheet prints it.
 
     Used by the Overview so the summary can never disagree with the per-product
-    sheet. Mirrors the writers' rules: tiered premiums sum per tier cell,
-    block-level flat premiums count once per (insured, figure), and a
-    per-S$1,000 premium is derived from the resolved sum insured.
+    sheet. Mirrors the writers' rules: tiered premiums sum per tier cell once
+    per (insured, plan, tier set), block-level flat premiums count once per
+    (insured, figure), and a per-S$1,000 premium is derived from the resolved
+    sum insured.
     """
     if ctx.blank_rates:
         return None
@@ -512,10 +534,15 @@ def product_premium_total(
     prev_display: Any = object()
     prev_insured: str | None = None
     seen_plans: set[str] = set()
+    seen_tier_blocks: set[str] = set()
     for c in categories:
         pa = plan_assignments(c)
         tiers = pa.get("rate_tiers")
         if isinstance(tiers, dict) and tiers:
+            block = _tier_block_key(pa, tiers)
+            if block in seen_tier_blocks:
+                continue
+            seen_tier_blocks.add(block)
             for cell in tiers.values():
                 premium = cell.get("premium") if isinstance(cell, dict) else None
                 if premium:

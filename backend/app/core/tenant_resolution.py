@@ -10,6 +10,11 @@ middleware, and stores it on `request.state.firm`.
 own firm, and the auth dependencies refuse a session whose firm differs from
 the request's — so a token minted on broker A's domain is useless on broker B's.
 
+The host cache is per worker, so a suspension reaches the other workers' caches
+only when their entries expire. Sign-in and every broker, HR and portal session
+check therefore re-read the firm's status (`require_firm_active`), which makes
+a suspension take effect at once everywhere.
+
 Behind Azure Front Door (`Settings.front_door_id` set) the app does not trust
 the `Host` header: the request must carry the profile's `X-Azure-FDID`, and the
 public host comes from `X-Inspro-Edge-Host`, which a Front Door rule set
@@ -34,13 +39,14 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
-from fastapi import HTTPException, Request, status
+from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from app.core.settings import Settings, get_settings
+from app.db.session import get_db
 from app.models.client import FIRM_STATUS_ACTIVE, FIRM_STATUS_SUSPENDED, BrokerFirm
 from app.models.platform import (
     DOMAIN_STATUS_ACTIVE,
@@ -57,6 +63,8 @@ FRONT_DOOR_ID_HEADER = "x-azure-fdid"
 # Probes answer without a firm: App Service and the worker call them directly.
 EXEMPT_PATHS = frozenset({"/health", "/readiness", "/readyz"})
 CACHE_TTL_SECONDS = 60.0
+FIRM_SUSPENDED_CODE = "firm_suspended"
+FIRM_SUSPENDED_MESSAGE = "This service is currently unavailable."
 
 
 @dataclass(frozen=True)
@@ -257,6 +265,45 @@ def require_client_surface(request: Request) -> None:
     refuse_unserved_surface(request_firm(request), DOMAIN_SURFACE_CLIENT)
 
 
+def firm_suspended_error() -> HTTPException:
+    """The 403 a suspended firm's sites answer (the middleware sends the same)."""
+    return HTTPException(status.HTTP_403_FORBIDDEN, {
+        "code": FIRM_SUSPENDED_CODE, "message": FIRM_SUSPENDED_MESSAGE,
+    })
+
+
+def require_firm_active(db: Session, firm_id: str | None) -> None:
+    """403 `firm_suspended` unless ``firm_id`` is an active firm right now.
+
+    The middleware refuses a suspended firm's hosts from the per-worker host
+    cache, which every other worker keeps for up to `CACHE_TTL_SECONDS` after a
+    change. Sign-in and every session check therefore read the status from the
+    database as well, so a suspension applies at once on all of them: one
+    primary-key read, never cached. A missing firm fails closed. ``None`` (the
+    firm-less master admin) passes, so the platform console stays reachable to
+    lift a suspension.
+    """
+    if firm_id is None:
+        return
+    current = db.execute(
+        select(BrokerFirm.status).where(BrokerFirm.id == firm_id)
+    ).scalar_one_or_none()
+    if current != FIRM_STATUS_ACTIVE:
+        raise firm_suspended_error()
+
+
+def require_live_host_firm(request: Request, db: Session = Depends(get_db)) -> None:
+    """Dependency for the sign-in routers: the host's firm is still active.
+
+    Covers sign-in, refresh and second-factor steps before any credential is
+    checked. Platform hosts pass, like in the middleware: the master admin
+    signs in there to lift a suspension.
+    """
+    ctx = request_firm(request)
+    if ctx is not None and not ctx.is_platform_host:
+        require_firm_active(db, ctx.firm_id)
+
+
 class FirmOriginUnavailable(Exception):
     """A firm has no web address a link could point at yet.
 
@@ -356,9 +403,7 @@ class FirmResolutionMiddleware:
             await _refuse(scope, send, 404, "unknown_site", "This site is not available.")
             return
         if ctx is not None and ctx.status == FIRM_STATUS_SUSPENDED and not ctx.is_platform_host:
-            await _refuse(
-                scope, send, 403, "firm_suspended", "This service is currently unavailable."
-            )
+            await _refuse(scope, send, 403, FIRM_SUSPENDED_CODE, FIRM_SUSPENDED_MESSAGE)
             return
         scope.setdefault("state", {})["firm"] = ctx
         await self.app(scope, receive, send)

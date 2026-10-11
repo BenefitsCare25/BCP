@@ -68,6 +68,7 @@ import {
   type ConversationFilters,
 } from "@/api/claims";
 import { useMe } from "@/api/hooks";
+import { isReadOnlyAccess } from "@/lib/roles";
 import { useSession } from "@/stores/session";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -89,6 +90,7 @@ import { cn } from "@/lib/cn";
 import { formatError } from "@/lib/errors";
 import { fmtDay, fmtMoney, parseServerDate } from "@/lib/format";
 import { useDebouncedValue } from "@/lib/use-debounced-value";
+import { useMediaQuery } from "@/lib/useMediaQuery";
 
 const PAGE_SIZE = 25;
 
@@ -293,7 +295,7 @@ function EnquiryPane({
   const send = useSendBrokerEnquiryMessage();
   const markRead = useMarkEnquiryRead();
   const { data: me } = useMe();
-  const readOnly = me?.role === "broker_viewer";
+  const readOnly = isReadOnlyAccess(me?.role, me?.platform_access);
 
   // Opening the pane IS reading it — the thread is rendered in full. Gated on
   // there being something unread so reopening a settled question doesn't fire a
@@ -393,7 +395,11 @@ function ClaimPane({
       >
         <ArrowLeft className="size-4" /> Back to messages
       </Button>
-      <ClaimMessages claimId={conversation.subject.id} stickyComposer />
+      <ClaimMessages
+        claimId={conversation.subject.id}
+        stickyComposer
+        memberVisible={conversation.subject.member_visible !== false}
+      />
     </div>
   );
 }
@@ -413,6 +419,7 @@ export function ConversationQueue() {
   const [search, setSearch] = useState("");
   const debouncedSearch = useDebouncedValue(search, 300);
   const [filters, setFilters] = useState<ConversationFilters>({});
+  const wideLayout = useMediaQuery("(min-width: 64rem)");
   const updateFilters = (patch: Partial<ConversationFilters>) => {
     setFilters((current) => ({ ...current, ...patch }));
     setPage(0);
@@ -482,6 +489,10 @@ export function ConversationQueue() {
   const selected =
     items.find((conversation) => conversationKey(conversation) === pickedKey && (!conversation.subject.policy_year_id || conversation.subject.policy_year_id === policyYearId)) ??
     items.find((conversation) => !conversation.subject.policy_year_id || conversation.subject.policy_year_id === policyYearId);
+  // Below `lg` the pane is hidden until a row is picked. Rendering it anyway
+  // marked the top thread read (opening a pane IS reading it) on a phone where
+  // nobody had seen it.
+  const showPane = pickedKey !== null || wideLayout;
 
   return (
     <section
@@ -825,7 +836,7 @@ export function ConversationQueue() {
           )}
           aria-label="Selected conversation"
         >
-                {selected ? (
+                {selected && showPane ? (
             <div className="h-full min-h-0 min-w-0 flex-1 overflow-hidden p-5">
               {selected.subject.kind === "enquiry" ? (
                 <EnquiryPane

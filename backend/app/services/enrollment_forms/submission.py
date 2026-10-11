@@ -38,7 +38,7 @@ from app.models import (
     LeaveElection,
     PolicyYear,
 )
-from app.models.enrollment import EnrollmentElection
+from app.models.enrollment import ElectionAction, EnrollmentElection
 from app.models.enrollment_form import (
     FORM_SOURCE_PAPER,
     FORM_SOURCE_PORTAL,
@@ -237,9 +237,15 @@ def build_snapshot(
 
 
 def count_changes(snapshot: dict[str, Any]) -> int:
+    # Staying out of voluntary cover the member was only eligible for is
+    # recorded as a decline, but changes nothing.
     changes = sum(
         1 for s in snapshot.get("selections", [])
-        if s.get("action") not in (None, "keep") or s.get("withdrawn")
+        if (
+            s.get("action") not in (None, "keep")
+            and not (s.get("eligible_only") and s.get("declined"))
+        )
+        or s.get("withdrawn")
     )
     changes += len(snapshot.get("pending_requests") or [])
     return changes + (1 if snapshot.get("leave") else 0)
@@ -400,7 +406,7 @@ def _reprice_saved_elections(db: Session, enrollment: Enrollment) -> None:
                 product_code=e.product_code,
                 plan_code=e.elected_plan_code,
                 tier_category_id=e.tier_category_id,
-                declined=e.elected_plan_code is None,
+                declined=e.action == ElectionAction.decline,
                 covered_dependant_ids=e.covered_dependant_ids,
                 dependant_option_ids=e.dependant_option_ids,
                 notes=e.notes,

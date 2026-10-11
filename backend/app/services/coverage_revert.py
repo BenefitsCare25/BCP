@@ -54,6 +54,7 @@ from app.services.override_writer import (
     restore_snapshot,
     upsert_override,
 )
+from app.services.voluntary_enrolment import election_take_ups
 
 
 def latest_enrollment_with_baseline(
@@ -307,6 +308,15 @@ def revert_to_baseline(
         tier = snap_tier if snap_tier in live_tiers else None
         deps = bp.get("covered_dependant_ids")
         dep_option_ids = bp.get("dependant_option_ids")
+        eligible_only = bool(bp.get("eligible_only"))
+        if eligible_only:
+            # Only eligible at window-open: back to holding nothing. Removing
+            # the override restores that, unless a confirmed enrolment election
+            # still counts as the take-up — then only a decline removes it.
+            declined = (employee.id, pid) in election_take_ups(
+                db, employee.policy_year_id, [employee.id]
+            )
+            plan_code = tier = deps = dep_option_ids = None
         ov = overrides.get((employee.id, pid))
         from_plan = _effective_from_override(ov, default_plan)
 
@@ -335,13 +345,19 @@ def revert_to_baseline(
                 )
                 changes.append(CoverageChangeOut(
                     product_code=code, outcome="reverted",
-                    from_plan=from_plan, to_plan=default_plan,
+                    from_plan=from_plan, to_plan=None if eligible_only else default_plan,
+                    detail="Not enrolled at baseline." if eligible_only else None,
                 ))
             else:
                 changes.append(CoverageChangeOut(
                     product_code=code, outcome="unchanged",
-                    from_plan=from_plan, to_plan=default_plan,
-                    detail="Already at baseline (cohort default).",
+                    from_plan=None if eligible_only else from_plan,
+                    to_plan=None if eligible_only else default_plan,
+                    detail=(
+                        "Not enrolled at baseline."
+                        if eligible_only
+                        else "Already at baseline (cohort default)."
+                    ),
                 ))
             continue
 
@@ -430,7 +446,11 @@ def revert_to_baseline(
             outcome="reverted",
             from_plan=from_plan,
             to_plan=None if declined else (plan_code or default_plan),
-            detail="Declined at baseline." if declined else None,
+            detail=(
+                "Not enrolled at baseline."
+                if eligible_only
+                else "Declined at baseline." if declined else None
+            ),
         ))
 
     # Overrides on products the snapshot never covered: the baseline has no opinion

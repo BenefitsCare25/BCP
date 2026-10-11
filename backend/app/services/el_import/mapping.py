@@ -136,10 +136,14 @@ def suggest_block_products(
     workbook: ElWorkbook, products: list[Product]
 ) -> dict[int, list[str]]:
     """Products each listing block reports: same product type as the block's
-    code hint, or the same kind of cover (GD -> DENTAL)."""
+    code hint, or the same kind of cover (GD -> DENTAL). A block naming no
+    product gets none suggested; the broker chooses its products."""
     out: dict[int, list[str]] = {}
     for index, block in enumerate(workbook.layout.blocks):
-        if block.kind != "product" or not block.code_hint:
+        if block.kind != "product":
+            continue
+        if not block.code_hint:
+            out[index] = []
             continue
         hint = product_registry.get_entry(block.code_hint)
         base = product_registry.base_code(block.code_hint)

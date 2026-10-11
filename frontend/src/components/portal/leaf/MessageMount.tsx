@@ -38,6 +38,11 @@ import { cn } from "@/lib/cn";
 import { Action } from "./Action";
 import { clockTime, dateKey, dayHeading } from "./date";
 
+/** The subject the server gives a broker's message when they set none
+ *  (`claim_messages.DEFAULT_BROKER_SUBJECT`). It is ours, not the broker's
+ *  prose, so it is translated like a system subject. */
+const DEFAULT_BROKER_SUBJECT = "A message about your claim";
+
 /** The unread count, on a chrome icon.
  *
  * A NUMBER, never a bare dot. `PortalMe` deliberately carries no unread field
@@ -153,7 +158,7 @@ function ThreadMessage({
           {message.unread && <UnreadDot />}
         </div>
         {subject && (
-          <p className="mt-0.5 text-row font-medium text-record">{message.author_type === "system" ? pt(subject) : subject}</p>
+          <p className="mt-0.5 text-row font-medium text-record">{message.author_type === "system" || subject === DEFAULT_BROKER_SUBJECT ? pt(subject) : subject}</p>
         )}
         <p className="mt-1 whitespace-pre-line text-row text-record">
           {systemClaimBody(message, pt)}

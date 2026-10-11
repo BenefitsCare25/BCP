@@ -32,12 +32,13 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { formatError } from "@/lib/errors";
-import { isBrokerAdminRole } from "@/lib/roles";
+import { isBrokerAdminRole, useWriteAccess } from "@/lib/roles";
 import { AIUsageTile } from "@/components/schema/AIUsageTile";
 import { PlatformAILimitsCard } from "@/components/configuration/PlatformAILimitsCard";
 import { PlatformAIProviderCard } from "@/components/configuration/PlatformAIProviderCard";
 import {
   DEFAULT_VERTEX_MODEL,
+  saveVertexKeyAfterProbe,
   VertexKeyDrawer,
   type VertexKeyDraft,
 } from "@/components/configuration/VertexKeyDrawer";
@@ -45,6 +46,8 @@ import {
 export function AIProviderPage() {
   const { data: me, isPending: meLoading } = useMe();
   const canAdmin = isBrokerAdminRole(me?.role);
+  // A read-only access grant shows the setup but cannot test or change it.
+  const { canAdmin: canEditKey } = useWriteAccess();
   // Wait for the active identity before loading tenant-scoped AI config, so a
   // hard reload does not fetch before the active client header is available.
   const configQuery = useAIConfig(!meLoading && canAdmin);
@@ -57,6 +60,7 @@ export function AIProviderPage() {
 
   const [open, setOpen] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
 
   if (!meLoading && !canAdmin) {
     return (
@@ -102,24 +106,24 @@ export function AIProviderPage() {
   const sourceBadge = SOURCE_BADGES[source] ?? SOURCE_BADGES.none;
 
   const submit = async (draft: VertexKeyDraft) => {
-    try {
-      await put.mutateAsync({
-        provider: "vertex",
-        endpoint: draft.location.trim() || null,
-        model: draft.model.trim() || null,
-        capacity_mode: draft.capacityMode,
-        api_key: draft.serviceAccountJson,
-      });
-      const validation = await test.mutateAsync(undefined);
-      if (!validation.ok) {
-        toast.error(validation.error ?? "Saved, but validation failed");
-        return;
-      }
-      toast.success(config ? "Company AI key updated and validated" : "Company AI key saved and validated");
-      setOpen(false);
-    } catch (err) {
-      toast.error(formatError(err));
-    }
+    const body = {
+      provider: "vertex" as const,
+      endpoint: draft.location.trim() || null,
+      model: draft.model.trim() || null,
+      capacity_mode: draft.capacityMode,
+      api_key: draft.serviceAccountJson,
+    };
+    setSubmitting(true);
+    const saved = await saveVertexKeyAfterProbe(
+      {
+        probeDraft: () => test.mutateAsync(body),
+        save: () => put.mutateAsync(body),
+        probeStored: () => test.mutateAsync(undefined),
+      },
+      config ? "Company AI key updated and validated" : "Company AI key saved and validated",
+    );
+    setSubmitting(false);
+    if (saved) setOpen(false);
   };
 
   const runTest = async (draft?: VertexKeyDraft) => {
@@ -172,7 +176,7 @@ export function AIProviderPage() {
             : null
         }
         storedKeyMasked={config?.key_masked}
-        saving={put.isPending}
+        saving={submitting}
         testing={test.isPending}
         onSave={(draft) => void submit(draft)}
         onTest={(draft) => void runTest(draft)}
@@ -255,9 +259,10 @@ export function AIProviderPage() {
             <div className="text-sm text-muted-foreground p-5 text-center border border-dashed border-border rounded-md">
               {source === "none" ? (
                 <>
-                  No key for this company, and no platform key is set — AI
-                  features stay disabled until one of them is configured. Ask
-                  your platform administrator, or set a key for this company.
+                  No key for this company, and no active platform key — AI
+                  features stay disabled until one of them is configured and
+                  validated. Ask your platform administrator, or set a key for
+                  this company.
                 </>
               ) : (
                 <>
@@ -268,7 +273,7 @@ export function AIProviderPage() {
               )}
             </div>
           )}
-          <div className="flex flex-wrap items-center justify-end gap-2">
+          {canEditKey && <div className="flex flex-wrap items-center justify-end gap-2">
             {config && (
               <>
                 <Button
@@ -306,7 +311,7 @@ export function AIProviderPage() {
                 </>
               )}
             </Button>
-          </div>
+          </div>}
         </CardContent>
       </Card>
 

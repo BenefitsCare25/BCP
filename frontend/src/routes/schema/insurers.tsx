@@ -10,6 +10,7 @@ import {
   type Insurer,
   type InsurerInput,
 } from "@/api/insurers";
+import { useMe } from "@/api/hooks";
 import { AlertDialog } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -35,6 +36,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { formatError } from "@/lib/errors";
+import { isReadOnlyAccess } from "@/lib/roles";
 
 interface Draft {
   name: string;
@@ -74,6 +76,8 @@ export function SchemaInsurersPage({
   onOpenChange: (open: boolean) => void;
 }) {
   const { data: insurers = [], isLoading } = useInsurers();
+  const { data: me } = useMe();
+  const readOnly = isReadOnlyAccess(me?.role, me?.platform_access);
   const create = useCreateInsurer();
   const update = useUpdateInsurer();
   const remove = useDeleteInsurer();
@@ -105,7 +109,8 @@ export function SchemaInsurersPage({
         await create.mutateAsync(payload);
         toast.success(`Added ${payload.name}`);
       }
-      onOpenChange(false);
+      // Radix does not report a programmatic close, so clear the edit state here.
+      onSheetOpenChange(false);
     } catch (err) {
       toast.error(formatError(err));
     }
@@ -225,14 +230,16 @@ export function SchemaInsurersPage({
                     </TableCell>
                     <TableCell>
                       <div className="flex gap-1 justify-end">
-                        <Button
-                          variant="ghost"
-                          size="icon-sm"
-                          onClick={() => beginEdit(i)}
-                          aria-label="Edit insurer"
-                        >
-                          <Pencil className="size-3.5" />
-                        </Button>
+                        {!readOnly && (
+                          <Button
+                            variant="ghost"
+                            size="icon-sm"
+                            onClick={() => beginEdit(i)}
+                            aria-label="Edit insurer"
+                          >
+                            <Pencil className="size-3.5" />
+                          </Button>
+                        )}
                         <FirmOwnerOnly><Button
                           variant="ghost"
                           size="icon-sm"

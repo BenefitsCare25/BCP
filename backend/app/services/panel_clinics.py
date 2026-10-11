@@ -141,6 +141,10 @@ def _norm_header(value: Any) -> str:
 def _clean(value: Any) -> str | None:
     if value is None:
         return None
+    # A .xls reader returns every numeric cell as a float, so a phone or code
+    # would otherwise read "62353490.0".
+    if isinstance(value, float) and value.is_integer():
+        value = int(value)
     # Undo the export's formula guard so a downloaded list re-uploads unchanged
     # (a "+65 ..." phone number comes back as "'+65 ...").
     text = _WS_RE.sub(" ", str(unescape_formula_guard(value))).strip()

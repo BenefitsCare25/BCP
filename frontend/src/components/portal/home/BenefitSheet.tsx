@@ -1,5 +1,4 @@
 import { usePortalTranslation } from "@/i18n/portal";
-import { Link } from "@tanstack/react-router";
 import { ArrowRight } from "lucide-react";
 import type { Utilization } from "@/types";
 import { cn } from "@/lib/cn";
@@ -7,7 +6,7 @@ import { benefitHeadline } from "../leaf/benefitHeadline";
 import type { CareRoute } from "../leaf/careRoutes";
 import { careArt, careTone } from "../leaf/careTone";
 import { productShortLabel } from "../leaf/glossary";
-import { useCompany } from "../useCompany";
+import { HomeLink, type HomeNav } from "./homeNav";
 
 /** A card has room for one short phrase, not the schedule's full wording.
  *  "Covered as charged · S$5 co-pay per visit" → "Covered as charged" + detail;
@@ -51,7 +50,9 @@ function SheetContent({ route, utilization, go }: { route: CareRoute; utilizatio
   const headline = benefitHeadline(route.key, route.lines, utilization);
   const art = careArt(route.key);
   const tag = productShortLabel(route.lines[0].product_code, route.lines[0].product_name);
-  const fact = headline ? conciseFact(headline.value) : null;
+  // A status headline ("Not enrolled") has no figure: the route's own
+  // description stays quiet beneath it.
+  const fact = headline?.value ? conciseFact(headline.value) : null;
   // One detail line: a tracked sub-limit outranks the rest of the wording.
   const detail = headline?.note ? conciseNote(headline.note) : fact?.rest ?? null;
   // Every child below is a ROW of the card's subgrid, rendered even when
@@ -80,21 +81,22 @@ function SheetContent({ route, utilization, go }: { route: CareRoute; utilizatio
 
 const sheetClass = (route: CareRoute) => cn("clay-sheet leaf-focus text-left", `tone-${careTone(route.key)}`);
 
+/** Home's sheet: opens this benefit on Coverage — by route for the member, by
+ *  switching the frame's tab in the broker preview (see `HomeNav`). */
 export function BenefitSheet({
   route,
   utilization,
-  to,
+  nav,
 }: {
   route: CareRoute;
   utilization: Utilization | undefined;
-  to: { tab: string; p: string };
+  nav: HomeNav;
 }) {
   usePortalTranslation();
-  const company = useCompany();
   return (
-    <Link to="/portal/$company/coverage" params={{ company }} search={to} className={sheetClass(route)}>
+    <HomeLink nav={nav} dest={{ to: "coverage", tab: "benefits", product: route.key }} className={sheetClass(route)}>
       <SheetContent route={route} utilization={utilization} go="See cover" />
-    </Link>
+    </HomeLink>
   );
 }
 

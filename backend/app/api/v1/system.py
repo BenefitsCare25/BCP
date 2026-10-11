@@ -12,7 +12,7 @@ from app.db.session import get_db
 from app.models import Client
 from app.services.ai_breaker import breaker_scope, get_breaker
 from app.services.ai_cache import get_cache
-from app.services.ai_gateway import month_to_date_tokens
+from app.services.ai_gateway import client_budget_in_force, month_to_date_tokens
 
 router = APIRouter(prefix="/system", tags=["system"])
 
@@ -40,4 +40,7 @@ def ai_status(
         client = db.get(Client, user.client_id)
         out["month_to_date_tokens"] = month_to_date_tokens(db, user.client_id)
         out["monthly_token_budget"] = client.ai_monthly_token_budget if client else 0
+        budget, budget_source = client_budget_in_force(db, client)
+        out["effective_monthly_token_budget"] = budget
+        out["budget_source"] = budget_source
     return out

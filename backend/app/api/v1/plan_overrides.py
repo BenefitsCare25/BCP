@@ -22,7 +22,12 @@ from sqlalchemy.orm import Session
 
 from app.core.audit import write_audit
 from app.core.auth import CurrentUser, get_current_user
-from app.core.deps import load_employee, load_policy_year, require_firm_owner
+from app.core.deps import (
+    is_firm_owner,
+    load_employee,
+    load_policy_year,
+    require_firm_owner,
+)
 from app.core.pagination import MAX_LIMIT
 from app.db.base import new_uuid
 from app.db.session import get_db
@@ -282,6 +287,31 @@ def _assert_no_pending_election(
         )
 
 
+def _assert_may_drop_dependants(
+    user: CurrentUser,
+    row: EmployeePlanOverride | None,
+    body: PlanOverrideUpsert,
+    participation: str | None,
+) -> None:
+    """Uncovering a saved, explicitly covered dependant (directly or by declining)
+    is a saved-data Remove, which only firm owners may perform."""
+    if participation is None or row is None or row.declined or not row.covered_dependant_ids:
+        return
+    if body.declined:
+        kept: set[str] = set()
+    elif body.covered_dependant_ids is None:
+        if participation == "compulsory":
+            return  # no dependant opinion: every eligible dependant stays covered
+        kept = set()
+    else:
+        kept = set(body.covered_dependant_ids)
+    if set(row.covered_dependant_ids) - kept and not is_firm_owner(user):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Only firm administrators may remove a covered dependant.",
+        )
+
+
 @router.get(
     "/policy-years/{policy_year_id}/plan-overrides/orphans",
     response_model=list[PlanOverrideOut],
@@ -418,6 +448,7 @@ def set_plan_override(
         or (tier_set.dependant_participation if tier_set is not None else None)
         or ("compulsory" if detected_compulsory else "voluntary"),
     )
+    _assert_may_drop_dependants(user, row, body, participation)
     age_limits = dependant_age_limits(pricing, product.id)
     if participation == "compulsory":
         dep_profiles = active_dependant_profiles(

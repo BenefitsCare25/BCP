@@ -3,6 +3,7 @@ import type { UseMutationResult, UseQueryResult } from "@tanstack/react-query";
 import { ExternalLink } from "lucide-react";
 import { toast } from "sonner";
 import type { SignInMethods, SignInMethodsUpdate } from "@/api/platform";
+import { AlertDialog } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -48,11 +49,14 @@ export function SignInMethodsCard({
   query,
   update,
   subject,
+  readOnly = false,
 }: {
   query: UseQueryResult<SignInMethods>;
   update: UseMutationResult<SignInMethods, Error, SignInMethodsUpdate>;
   /** Whose staff, in the description: "your firm's staff", "Acme's staff". */
   subject: string;
+  /** Shows the methods without the controls that change them. */
+  readOnly?: boolean;
 }) {
   return (
     <Card>
@@ -67,7 +71,12 @@ export function SignInMethodsCard({
           <ListError what="sign-in methods" error={query.error} onRetry={() => void query.refetch()} />
         ) : (
           // Remounts from the saved values after every save or refetch.
-          <SignInMethodsForm key={JSON.stringify(query.data)} saved={query.data} update={update} />
+          <SignInMethodsForm
+            key={JSON.stringify(query.data)}
+            saved={query.data}
+            update={update}
+            readOnly={readOnly}
+          />
         )}
       </CardContent>
     </Card>
@@ -77,14 +86,17 @@ export function SignInMethodsCard({
 function SignInMethodsForm({
   saved,
   update,
+  readOnly,
 }: {
   saved: SignInMethods;
   update: UseMutationResult<SignInMethods, Error, SignInMethodsUpdate>;
+  readOnly: boolean;
 }) {
   const id = useId();
   const [draft, setDraft] = useState<Draft>(() => draftOf(saved));
   const [refusal, setRefusal] = useState<string | null>(null);
   const [showErrors, setShowErrors] = useState(false);
+  const [confirming, setConfirming] = useState(false);
   const initial = draftOf(saved);
   const dirty =
     draft.entraOn !== initial.entraOn ||
@@ -94,6 +106,12 @@ function SignInMethodsForm({
   const tenantError = directoryError(draft);
   // Only a firm not yet set up starts with nothing on; it can still be edited.
   const noneOn = !draft.entraOn && !draft.localOn;
+  // Turning a method off, or moving Microsoft sign-in to another directory,
+  // signs out everyone who uses it, so the save is confirmed first.
+  const takesAway =
+    (initial.localOn && !draft.localOn) ||
+    (initial.entraOn &&
+      (!draft.entraOn || draft.tenantId.trim().toLowerCase() !== initial.tenantId.toLowerCase()));
 
   const change = (next: Partial<Draft>) => {
     const merged = { ...draft, ...next };
@@ -109,6 +127,12 @@ function SignInMethodsForm({
   const save = () => {
     setShowErrors(true);
     if (tenantError || noneOn || update.isPending) return;
+    if (takesAway) setConfirming(true);
+    else submit();
+  };
+
+  const submit = () => {
+    setConfirming(false);
     update.mutate(
       {
         entra: {
@@ -136,7 +160,7 @@ function SignInMethodsForm({
         draft={draft}
         saved={saved}
         tenantError={showErrors || draft.tenantId.trim() ? tenantError : null}
-        disabled={update.isPending}
+        disabled={readOnly || update.isPending}
         onChange={change}
       />
       <Separator />
@@ -145,7 +169,7 @@ function SignInMethodsForm({
         label="Email and password"
         help="Staff sign in with their work email and a password they set from their invitation. Two-factor verification with an authenticator app is always required for this method."
         checked={draft.localOn}
-        disabled={update.isPending}
+        disabled={readOnly || update.isPending}
         onChange={(on) => change({ localOn: on })}
       />
       {noneOn && (
@@ -155,7 +179,7 @@ function SignInMethodsForm({
       )}
       {refusal && <p role="alert" className="text-sm text-error">{refusal}</p>}
       {update.isError && <p role="alert" className="text-sm text-error">{formatError(update.error)}</p>}
-      <FormActions
+      {!readOnly && <FormActions
         dirty={dirty}
         canSave={dirty && !noneOn}
         pending={update.isPending}
@@ -165,6 +189,15 @@ function SignInMethodsForm({
           setShowErrors(false);
           update.reset();
         }}
+      />}
+      <AlertDialog
+        open={confirming}
+        onOpenChange={setConfirming}
+        title="Change how staff sign in?"
+        description="Everyone signed in with a method you are turning off or moving to another directory is signed out now, and can sign in again only with a method that stays on. Accounts that use only that method cannot sign in until it is turned back on."
+        confirmLabel="Save and sign them out"
+        loading={update.isPending}
+        onConfirm={submit}
       />
     </form>
   );

@@ -32,6 +32,7 @@ from app.schemas.claims import (
     MemberMessageIn,
     MessagesReadOut,
 )
+from app.services.claim_intake import person_employee_ids
 from app.services.claim_messages import (
     mark_member_read,
     member_conversation_out,
@@ -84,14 +85,18 @@ def list_my_conversations(
     figure would shrink as the member paged forward.
     """
     employee = resolve_member_employee(db, member, requires=Capability.RECORD)
+    questions = person_employee_ids(db, employee)
     total, rows = member_conversations(
-        db, employee.id, employee.policy_year_id, offset=offset, limit=limit
+        db, employee.id, employee.policy_year_id, offset=offset, limit=limit,
+        question_owner_ids=questions,
     )
     out = ConversationList(
         total=total,
         offset=offset,
         limit=limit,
-        unread_total=member_unread_count(db, employee.id, employee.policy_year_id),
+        unread_total=member_unread_count(
+            db, employee.id, employee.policy_year_id, question_owner_ids=questions
+        ),
         items=[member_conversation_out(r) for r in rows],
     )
     write_member_audit(

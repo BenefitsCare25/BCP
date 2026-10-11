@@ -44,7 +44,7 @@ from app.services.flex_pricing_resolver import (
     scheme_dependant_age_limits,
 )
 from app.services.flex_proration import ProrationConfig
-from app.services.roster_attributes import resolved_last_day
+from app.services.roster_attributes import has_left, resolved_last_day
 
 # Canonical family-status codes (mirror the seeded ``family_status`` enum).
 FAMILY_CODES: tuple[str, ...] = ("S", "M", "M1C", "M2C", "M3C")
@@ -85,6 +85,8 @@ _NATIONALITY_COUNTRY: dict[str, str] = {
     "filipina": "philippines", "ph": "philippines",
     "china": "china", "chinese": "china",
 }
+# Aliases this short are country codes, matched only as whole words.
+_SHORT_ALIAS_LEN = 3
 
 
 def _meta_date(meta: dict[str, Any], key: str) -> date | None:
@@ -265,8 +267,11 @@ def nationality_country(nationality: object) -> str | None:
         return None
     if exact := nationality_country_exact(s):
         return exact
+    # Short codes ("my", "th", "id") match only as whole words: as substrings
+    # they would send "Myanmar" to Malaysia and "South African" to Thailand.
+    words = set(re.findall(r"[a-z]+", s))
     for token, country in _NATIONALITY_COUNTRY.items():
-        if token in s:
+        if (token in words) if len(token) <= _SHORT_ALIAS_LEN else (token in s):
             return country
     return None
 
@@ -650,6 +655,31 @@ class ResolvedEmployee:
     proration: dict[str, Any] | None = None
 
 
+def _household_status(
+    emp_deps: list[Dependant],
+    spouse_count: int,
+    child_count: int,
+    derived: dict[str, Any],
+    raw_attrs: dict[str, Any],
+) -> tuple[str | None, str]:
+    """Family status from the age-ELIGIBLE spouse/child counts.
+
+    When every linked spouse/child is outside the age window, the listing still
+    describes the household, so the roster may only add what it does not show —
+    a spouse when none is linked. Falling straight back to the roster would
+    bring an excluded spouse (marital status "Married") back into the wallet.
+    """
+    linked_spouse, linked_child = count_dependants(emp_deps)
+    if spouse_count or child_count or not (linked_spouse or linked_child):
+        return resolve_family_status(
+            derived, raw_attrs, spouse_count, child_count, bool(emp_deps)
+        )
+    roster_code, _ = resolve_family_status(derived, raw_attrs, 0, 0, False)
+    if linked_spouse == 0 and roster_code not in (None, "S"):
+        return family_status_from_counts(True, 0), "roster"
+    return family_status_from_counts(False, 0), "dependants"
+
+
 def resolve_employee(
     emp: Employee,
     emp_deps: list[Dependant],
@@ -674,8 +704,8 @@ def resolve_employee(
         else emp_deps
     )
     spouse_count, child_count = count_dependants(eligible_deps)
-    code, source = resolve_family_status(
-        derived, raw_attrs, spouse_count, child_count, bool(emp_deps)
+    code, source = _household_status(
+        emp_deps, spouse_count, child_count, derived, raw_attrs
     )
     grade, grade_str, designation = employee_signals(derived, raw_attrs)
     country = nationality_country(raw_attrs.get("nationality"))
@@ -762,6 +792,10 @@ def _counts_for(dep: Dependant, emp: Employee) -> bool:
     """
     if dep.status != DEPENDANT_STATUS_TERMINATED:
         return True
+    # A live employee is sized on their CURRENT household: a terminated spouse
+    # (divorce, death) must not keep them on the married wallet.
+    if not has_left(emp):
+        return False
     last_day = resolved_last_day(emp)
     dep_end = resolved_last_day(dep)
     # Excluded ONLY when it is known they left first. An unresolvable date on

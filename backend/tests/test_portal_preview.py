@@ -230,6 +230,10 @@ def test_preview_context(broker: TestClient) -> None:
     assert body["policy_year"]["id"] == PY
     assert body["is_active_policy_year"] is True
     assert body["member_account"]["email"] == "alice@a.test"
+    # The preview's Home names the employer exactly as the member's own does.
+    me = broker.get("/api/v1/portal/me", headers=_member_auth(ACC_ALICE))
+    assert me.status_code == 200
+    assert body["company"] == me.json()["company"]
 
 
 def test_preview_context_unstamped_account_via_staff_id(broker: TestClient) -> None:

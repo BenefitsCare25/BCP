@@ -16,6 +16,7 @@ import {
 } from "@/components/shell/ErrorBoundary";
 import { clearLocalSession, getActiveAccount } from "@/auth/msal";
 import { clearBrokerInvite } from "@/auth/brokerInvite";
+import { rememberReturnPath, takeReturnPath } from "@/auth/returnPath";
 import { brokerAuthEnabled } from "@/auth/staffSignIn";
 import { useBrokerSession } from "@/stores/brokerSession";
 import { DENIED_SEARCH, NoAccessError, SIGN_IN_PATH } from "@/api/client";
@@ -181,6 +182,10 @@ const HrNewClaimPage = lazyRouteComponent(
   () => import("@/routes/hr/claims/new"),
   "HrNewClaimPage",
 );
+const HrEditClaimPage = lazyRouteComponent(
+  () => import("@/routes/hr/claims/new"),
+  "HrEditClaimPage",
+);
 const HrClaimDetailPage = lazyRouteComponent(
   () => import("@/routes/hr/claims/detail"),
   "HrClaimDetailPage",
@@ -235,16 +240,19 @@ const signInRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: SIGN_IN_PATH,
   beforeLoad: ({ search }) => {
+    // The page the app shell sent a signed-out visitor away from, resumed
+    // once sign-in (and any two-factor step) completes.
+    rememberReturnPath((search as { from?: unknown }).from);
     // `denied` means we just bounced a refused account here — never bounce it
     // back, even if clearing the local Microsoft session failed. This is what
     // makes a redirect loop structurally impossible.
     if ((search as { denied?: unknown }).denied) return;
-    // If we're already signed in, skip the render flash and go straight home.
+    // If we're already signed in, skip the render flash and go straight on.
     // An invitation opened while signed in is dropped, so it can never ride
     // along with a later sign-in to a different account in this tab.
     if (brokerAuthEnabled() && getActiveAccount() !== null) {
       clearBrokerInvite();
-      throw redirect({ to: "/" });
+      throw redirect({ href: takeReturnPath() });
     }
   },
   component: SignInPage,
@@ -615,7 +623,7 @@ const appLayoutRoute = createRoute({
     if (getActiveAccount() === null) {
       throw redirect({
         to: "/sign-in",
-        search: { from: location.pathname } as Record<string, string>,
+        search: { from: location.href } as Record<string, string>,
       });
     }
     const brokerSession = useBrokerSession.getState().session;
@@ -817,6 +825,12 @@ const hrClaimDetailRoute = createRoute({
   path: "/hr/claims/$claimId",
   component: HrClaimDetailPage,
 });
+
+const hrEditClaimRoute = createRoute({
+  getParentRoute: () => hrLayoutRoute,
+  path: "/hr/claims/$claimId/edit",
+  component: HrEditClaimPage,
+});
 const claimsWicaRoute = createRoute({
   getParentRoute: () => claimsLayoutRoute,
   path: "/wica",
@@ -988,6 +1002,7 @@ const routeTree = rootRoute.addChildren([
     hrClaimsRoute,
     hrNewClaimRoute,
     hrClaimDetailRoute,
+    hrEditClaimRoute,
     hrSecurityRoute,
     hrEnrollmentFormsRoute,
   ]),

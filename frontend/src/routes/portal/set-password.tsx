@@ -1,12 +1,12 @@
-import { usePortalTranslation } from "@/i18n/portal";
+import { portalMessage, usePortalTranslation, type PortalCopy } from "@/i18n/portal";
 /** Employee-portal set / reset password: redeem a single-use token and choose
  * a password, then land in the portal. */
 import { useRef, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { Lock, ShieldCheck } from "lucide-react";
 import { isMemberToken, useMemberMfa, useMemberSetPassword } from "@/api/portal";
-import { errorCode, formatError } from "@/lib/errors";
-import { PASSWORD_MAX_LENGTH } from "@/lib/loginValidation";
+import { errorCode } from "@/lib/errors";
+import { PASSWORD_MAX_LENGTH, authStepError } from "@/lib/loginValidation";
 import { useSetPasswordToken } from "@/lib/setPasswordToken";
 import { portalPath } from "@/lib/tenant";
 import { MFA_CODE_MAX_LENGTH, canSubmitMfaCode, normalizeMfaCode } from "@/lib/mfa";
@@ -19,8 +19,8 @@ import { activateNotificationClaimContext, notificationClaimId } from "@/lib/cla
 
 const MIN_LENGTH = 12;
 
-function strength(pw: string): { label: string; ok: boolean } {
-  if (pw.length < MIN_LENGTH) return { label: `At least ${MIN_LENGTH} characters`, ok: false };
+function strength(pw: string): { label: PortalCopy; ok: boolean } {
+  if (pw.length < MIN_LENGTH) return { label: portalMessage("At least {0} characters", [MIN_LENGTH]), ok: false };
   let classes = 0;
   if (/[a-z]/.test(pw)) classes++;
   if (/[A-Z]/.test(pw)) classes++;
@@ -86,7 +86,7 @@ export function PortalSetPasswordPage() {
             setStep("mfa");
           }
         },
-        onError: (err) => setError(formatError(err)),
+        onError: (err) => setError(authStepError(err)),
         onSettled: () => { submitting.current = false; },
       },
     );
@@ -103,7 +103,7 @@ export function PortalSetPasswordPage() {
         onSuccess: finish,
         onError: (err) => {
           if (errorCode(err) === "challenge_expired") { setExpired(true); setCode(""); setChallenge(""); }
-          setError(formatError(err));
+          setError(authStepError(err));
         },
         onSettled: () => { submitting.current = false; },
       },

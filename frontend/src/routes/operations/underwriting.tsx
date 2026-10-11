@@ -40,8 +40,10 @@ import {
   type UnderwritingReview,
   type UnderwritingReportDetails,
 } from "@/api/underwriting";
+import { useMe } from "@/api/hooks";
 import { useSession } from "@/stores/session";
 import { formatError } from "@/lib/errors";
+import { isReadOnlyAccess } from "@/lib/roles";
 import { fmtCurrency } from "@/lib/format";
 import { UnderwritingReminders } from "@/components/operations/UnderwritingReminders";
 import { UnderwritingReportFields, normalizedReportDetails, validReportDetails } from "@/components/operations/UnderwritingReportFields";
@@ -76,11 +78,13 @@ function ProductDecisionBlock({
   line,
   edit,
   onChange,
+  readOnly,
 }: {
   index: number;
   line: UnderwritingCaseLine;
   edit: LineEdit;
   onChange: (next: LineEdit) => void;
+  readOnly: boolean;
 }) {
   return (
     <div className="grid gap-x-6 gap-y-1.5 border-t border-border py-4 sm:grid-cols-[140px_1fr]">
@@ -111,27 +115,33 @@ function ProductDecisionBlock({
             <Label className="text-xs text-muted-foreground">Decision</Label>
             <Select
               value={edit.status}
+              disabled={readOnly}
               onValueChange={(v) => {
                 const status = v as UnderwritingCaseLine["status"];
                 // Approving means the insurer took the request as asked, so
                 // move the amount off the guaranteed floor to the full
                 // requested sum (edit down for a partial approval). Leaving it
                 // at the floor would record "approved" while quietly dropping
-                // the approved excess from cover.
-                const atFloor =
-                  Number(edit.accepted.trim()) === line.guaranteed_si;
+                // the approved excess from cover. Any other decision keeps
+                // nothing above the guaranteed amount in force, so an approved
+                // figure carried over from before falls back to the floor.
+                const trimmed = edit.accepted.trim();
+                const current = Number(trimmed);
                 const approving =
                   status === "approved_standard" ||
                   status === "approved_substandard";
-                onChange({
-                  ...edit,
-                  status,
-                  accepted:
-                    approving && atFloor
-                      ? String(line.requested_si)
-                      : edit.accepted,
-                  premiumConfirmed: false,
-                });
+                const withinFloor =
+                  trimmed !== "" &&
+                  Number.isFinite(current) &&
+                  current <= line.guaranteed_si;
+                const accepted = approving
+                  ? current === line.guaranteed_si
+                    ? String(line.requested_si)
+                    : edit.accepted
+                  : withinFloor
+                    ? edit.accepted
+                    : String(line.guaranteed_si);
+                onChange({ ...edit, status, accepted, premiumConfirmed: false });
               }}
             >
               <SelectTrigger className="h-8 w-[220px] text-sm">
@@ -152,6 +162,7 @@ function ProductDecisionBlock({
             </Label>
             <Input
               value={edit.accepted}
+              disabled={readOnly}
               onChange={(e) => onChange({ ...edit, accepted: e.target.value, premiumConfirmed: false })}
               className="h-8 w-32 text-right text-sm"
               aria-label={`${line.product_code} accepted amount`}
@@ -169,6 +180,7 @@ function ProductDecisionBlock({
           placeholder="Remarks (e.g. Accepted on 6 May 2026)"
           value={edit.remarks}
           maxLength={1024}
+          disabled={readOnly}
           onChange={(e) => onChange({ ...edit, remarks: e.target.value })}
           aria-label={`${line.product_code} remarks`}
         />
@@ -176,6 +188,7 @@ function ProductDecisionBlock({
           caseId={line.id}
           value={edit.reportDetails}
           premiumConfirmed={edit.premiumConfirmed}
+          disabled={readOnly}
           onConfirmPremium={(premiumConfirmed) => onChange({ ...edit, premiumConfirmed })}
           onChange={(reportDetails) => onChange({ ...edit, reportDetails, premiumConfirmed: false })}
         />
@@ -188,10 +201,13 @@ function ReviewDetail({
   review,
   policyYearId,
   onBack,
+  readOnly,
 }: {
   review: UnderwritingReview;
   policyYearId: string;
   onBack: () => void;
+  /** Viewers and read-only grants see the case but cannot record anything. */
+  readOnly: boolean;
 }) {
   const updateReview = useUpdateReview(policyYearId);
   const decide = useDecideUnderwriting(policyYearId);
@@ -306,6 +322,7 @@ function ReviewDetail({
           </Label>
           <Select
             value={status}
+            disabled={readOnly}
             onValueChange={(v) => setStatus(v as UnderwritingReview["status"])}
           >
             <SelectTrigger className="h-9 w-full max-w-md text-sm">
@@ -330,6 +347,7 @@ function ReviewDetail({
             placeholder="Medical / evidence requirements the insurer asked for"
             value={requirements}
             maxLength={2000}
+            disabled={readOnly}
             onChange={(e) => setRequirements(e.target.value)}
             aria-label="Underwriting requirements"
           />
@@ -345,23 +363,26 @@ function ReviewDetail({
               onChange={(next) =>
                 setEdits((prev) => ({ ...prev, [line.id]: next }))
               }
+              readOnly={readOnly}
             />
           ))}
         </div>
 
-        <div className="mt-4 flex items-center gap-2 border-t border-border pt-4">
-          <Button disabled={!dirty || !linesValid || busy} onClick={save}>
-            {busy ? <Loader2 className="size-4 animate-spin" /> : "Save changes"}
-          </Button>
-          <Button variant="outline" disabled={!dirty || busy} onClick={discard}>
-            Discard changes
-          </Button>
-          {!linesValid && (
-            <p className="text-xs text-error">
-              Accepted amounts must be numbers (0 or more).
-            </p>
-          )}
-        </div>
+        {!readOnly && (
+          <div className="mt-4 flex items-center gap-2 border-t border-border pt-4">
+            <Button disabled={!dirty || !linesValid || busy} onClick={save}>
+              {busy ? <Loader2 className="size-4 animate-spin" /> : "Save changes"}
+            </Button>
+            <Button variant="outline" disabled={!dirty || busy} onClick={discard}>
+              Discard changes
+            </Button>
+            {!linesValid && (
+              <p className="text-xs text-error">
+                Accepted amounts must be numbers (0 or more).
+              </p>
+            )}
+          </div>
+        )}
         <UnderwritingReminders key={review.id} reviewId={review.id} open={OPEN_STATUSES.has(review.status)} />
       </CardContent>
     </Card>
@@ -372,6 +393,8 @@ export function UnderwritingPage() {
   const policyYearId = useSession((s) => s.currentPolicyYearId);
   const { data, isLoading } = useUnderwritingQueue(policyYearId);
   const refresh = useRefreshUnderwriting(policyYearId ?? "");
+  const { data: me } = useMe();
+  const readOnly = isReadOnlyAccess(me?.role, me?.platform_access);
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
   const selected = useMemo(
@@ -400,6 +423,7 @@ export function UnderwritingPage() {
           review={selected}
           policyYearId={policyYearId}
           onBack={() => setSelectedId(null)}
+          readOnly={readOnly}
         />
       ) : (
         <>
@@ -412,18 +436,20 @@ export function UnderwritingPage() {
                 value={fmtCurrency(data?.pending_amount ?? 0)}
               />
             </div>
-            <Button
-              variant="outline"
-              onClick={runRefresh}
-              disabled={refresh.isPending || !policyYearId}
-            >
-              {refresh.isPending ? (
-                <Loader2 className="size-4 animate-spin" />
-              ) : (
-                <RefreshCw className="size-4" />
-              )}
-              Sync with coverage
-            </Button>
+            {!readOnly && (
+              <Button
+                variant="outline"
+                onClick={runRefresh}
+                disabled={refresh.isPending || !policyYearId}
+              >
+                {refresh.isPending ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : (
+                  <RefreshCw className="size-4" />
+                )}
+                Sync with coverage
+              </Button>
+            )}
           </div>
 
           <Card>

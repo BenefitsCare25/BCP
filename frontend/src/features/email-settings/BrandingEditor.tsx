@@ -1,12 +1,11 @@
 import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/client";
-import { useMe } from "@/api/hooks";
 import { AlertDialog } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { formatError } from "@/lib/errors";
-import { isFirmOwnerRole } from "@/lib/roles";
+import { useWriteAccess } from "@/lib/roles";
 import { useSession } from "@/stores/session";
 import { Field } from "./TemplateEditor";
 import { apiPath, clientOptions, fieldClass, SOURCE_LABELS, type Branding, type BrandingContent, type Scope } from "./types";
@@ -21,7 +20,7 @@ export function BrandingEditor({ scope, editable, onDirty }: { scope: Scope; edi
 }
 function BrandingForm({ initial, scope, editable, onDirty }: { initial: Branding; scope: Scope; editable: boolean; onDirty: (value: boolean) => void }) {
   const clientId = useSession(s => s.activeClientId);
-  const { data: me } = useMe();
+  const { canRemove } = useWriteAccess();
   const [confirmReset, setConfirmReset] = useState(false);
   const [content, setContent] = useState(initial.content);
   const [baseline, setBaseline] = useState(initial.content);
@@ -74,7 +73,7 @@ function BrandingForm({ initial, scope, editable, onDirty }: { initial: Branding
     </Field>
     {error && <p role="alert" className="text-sm text-error">{error}</p>}
     <div className="flex flex-wrap gap-2">{editable && <Button disabled={!dirty || busy || Object.keys(errors).length > 0} loading={busy} onClick={() => void save()}>Save branding</Button>}
-      {isFirmOwnerRole(me?.role) && revision > 0 && <Button variant="outline" disabled={busy} onClick={() => setConfirmReset(true)}>Restore inherited branding</Button>}</div>
+      {canRemove && revision > 0 && <Button variant="outline" disabled={busy} onClick={() => setConfirmReset(true)}>Restore inherited branding</Button>}</div>
     <p role="status" className="text-sm text-muted-foreground">{message}</p>
     <AlertDialog open={confirmReset} onOpenChange={setConfirmReset} title="Restore inherited branding?" description="This removes the saved branding at this scope and discards unsaved changes. Inherited defaults will apply." confirmLabel="Restore branding" loading={busy} onConfirm={reset} />
   </div>;

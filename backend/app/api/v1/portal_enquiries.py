@@ -42,6 +42,7 @@ from app.services.member_enquiries import (
     create_enquiry,
     enquiry_out,
     load_member_enquiry,
+    mark_awaiting_reply,
 )
 
 router = APIRouter(
@@ -99,7 +100,7 @@ def get_my_enquiry(
     db: Session = Depends(get_db),
 ) -> EnquiryOut:
     employee = resolve_member_employee(db, member, requires=Capability.RECORD)
-    return enquiry_out(db, load_member_enquiry(db, enquiry_id, employee.id))
+    return enquiry_out(db, load_member_enquiry(db, enquiry_id, employee))
 
 
 @router.get(
@@ -111,7 +112,7 @@ def list_my_enquiry_messages(
     db: Session = Depends(get_db),
 ) -> list[ClaimMessageOut]:
     employee = resolve_member_employee(db, member, requires=Capability.RECORD)
-    enquiry = load_member_enquiry(db, enquiry_id, employee.id)
+    enquiry = load_member_enquiry(db, enquiry_id, employee)
     return [member_message_out(m) for m in thread_for_enquiry(db, enquiry.id)]
 
 
@@ -135,7 +136,7 @@ def post_my_enquiry_message(
     told to open a new question, which is one tap away.
     """
     employee = resolve_member_employee(db, member, requires=Capability.RESPOND)
-    enquiry = load_member_enquiry(db, enquiry_id, employee.id)
+    enquiry = load_member_enquiry(db, enquiry_id, employee)
     if enquiry.status == STATUS_CLOSED:
         raise HTTPException(
             status.HTTP_409_CONFLICT,
@@ -148,6 +149,7 @@ def post_my_enquiry_message(
         display_name=member.display_name,
         body=body.body,
     )
+    mark_awaiting_reply(enquiry)
     write_member_audit(
         db, member, "enquiry.message_sent", "enquiry", enquiry.id,
         after={"message_id": msg.id},
@@ -168,7 +170,7 @@ def mark_my_enquiry_messages_read(
     """Called when the member opens the thread. Not audited — reading is not an
     action on the record, and one row per page view buries the trail that is."""
     employee = resolve_member_employee(db, member, requires=Capability.RECORD)
-    enquiry = load_member_enquiry(db, enquiry_id, employee.id)
+    enquiry = load_member_enquiry(db, enquiry_id, employee)
     marked = mark_member_read(db, enquiry_id=enquiry.id)
     db.commit()
     return MessagesReadOut(marked=marked)

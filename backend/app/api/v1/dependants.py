@@ -59,6 +59,7 @@ from app.services.roster_dedup import (
     dependant_agnostic_keys,
     dependant_candidate_keys,
     dependant_nric,
+    staff_key,
 )
 from app.services.roster_parser import parse_dependant_workbook
 from app.services.roster_reports import build_dependant_report_workbook
@@ -84,7 +85,7 @@ def _employee_link_indexes(
     name_groups: dict[str, list[Employee]] = {}
     for e in employees:
         if e.staff_id and str(e.staff_id).strip():
-            by_staff[str(e.staff_id).strip().lower()] = e
+            by_staff[staff_key(e.staff_id)] = e
         nm = (e.employee_name or "").strip().lower()
         if nm:
             name_groups.setdefault(nm, []).append(e)
@@ -213,9 +214,10 @@ def auto_match_dependants(
 ) -> AutoMatchResult:
     """Re-run employee-linking for all unlinked dependants.
 
-    Uses employee_staff_id / employee_name / employee_id_no stored in
-    attribute_values (populated since roster parser v2) to re-attempt the same
-    multi-key lookup used during upload.
+    Uses employee_staff_id, then employee_name (only when one employee has
+    it), stored in attribute_values (populated since roster parser v2) — the
+    same lookup the upload makes. The sponsor's NRIC (employee_id_no) is
+    stored too but is not used to link.
     """
     client_id = policy_year_company(assert_policy_year_for_user(policy_year_id, user, db), user)
 
@@ -247,8 +249,8 @@ def auto_match_dependants(
 
         emp = None
         method = None
-        if staff_id and str(staff_id).strip().lower() in by_staff:
-            emp = by_staff[str(staff_id).strip().lower()]
+        if staff_id and staff_key(staff_id) in by_staff:
+            emp = by_staff[staff_key(staff_id)]
             method = "staff_id"
         elif emp_name:
             key = str(emp_name).strip().lower()
@@ -631,9 +633,9 @@ async def upload_dependants(
         method = None
         if (
             rec.employee_staff_id
-            and rec.employee_staff_id.strip().lower() in by_staff
+            and staff_key(rec.employee_staff_id) in by_staff
         ):
-            emp = by_staff[rec.employee_staff_id.strip().lower()]
+            emp = by_staff[staff_key(rec.employee_staff_id)]
             method = "staff_id"
         elif rec.employee_name:
             key = rec.employee_name.strip().lower()

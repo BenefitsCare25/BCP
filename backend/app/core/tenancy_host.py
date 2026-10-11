@@ -182,16 +182,21 @@ def resolve_host_info(
 
 @dataclass(frozen=True)
 class TenantContext:
-    """A resolved tenant from a subdomain — the DB row exists and is enabled."""
+    """A resolved tenant from a subdomain — the DB row exists.
+
+    `enabled` is the surface's kill switch. It is False only when the caller
+    asked for switched-off companies too (`include_disabled`)."""
 
     surface: str
     slug: str
     client_id: str
     broker_firm_id: str
+    enabled: bool = True
 
 
 def resolve_tenant_context(
     host_info: HostInfo | None, db: Session, firm: FirmContext | None = None,
+    *, include_disabled: bool = False,
 ) -> TenantContext | None:
     """Resolve a `HostInfo` to a live tenant, or 404 for a bad/disabled slug.
 
@@ -202,6 +207,8 @@ def resolve_tenant_context(
       if missing or the surface's kill-switch is off.
     - No firm context (local tools, multi-firm tests) searches every firm and
       404s an alias that more than one firm uses rather than guess.
+    - `include_disabled` resolves a switched-off company instead of 404ing, for
+      the session routes that must tell a live session why it ended.
     """
     if host_info is None or host_info.surface == SURFACE_BROKER or not host_info.slug:
         return None
@@ -220,13 +227,14 @@ def resolve_tenant_context(
         if host_info.surface == SURFACE_PORTAL
         else client.hr_enabled
     )
-    if not enabled:
+    if not enabled and not include_disabled:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Unknown tenant.")
     return TenantContext(
         surface=host_info.surface,
         slug=host_info.slug,
         client_id=client.id,
         broker_firm_id=client.broker_firm_id,
+        enabled=enabled,
     )
 
 

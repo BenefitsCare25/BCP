@@ -6,6 +6,7 @@
  * - not started / saved → **Submit & confirm**, with Save as draft beside it;
  * - submitted → **Confirm** (also after the deadline — confirming is review);
  * - confirmed → Reopen, while the period still takes changes. */
+import type { ReactNode } from "react";
 import { Loader2 } from "lucide-react";
 import type { EnrollmentWindow } from "@/api/enrollment";
 import { CoverageHistory } from "@/components/enrollment/CoverageHistory";
@@ -17,7 +18,9 @@ import {
 } from "@/components/enrollment/electionShared";
 import { STATUS_META, phaseOf, useNow } from "@/components/enrollment/period/periodMeta";
 import { AlertDialog } from "@/components/ui/alert-dialog";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cn";
+import { formatError } from "@/lib/errors";
 import { ElectionActionBar } from "./ElectionActionBar";
 import { EnrollmentActivity } from "./EnrollmentActivity";
 import { type ElectionActions, useElectionActions } from "./useElectionActions";
@@ -27,20 +30,40 @@ export function MemberElectionPanel({
   enrollmentId,
   window,
   readOnly,
+  onClear,
 }: {
   enrollmentId: string;
   window: EnrollmentWindow;
   readOnly: boolean;
+  /** Drop the selected member (e.g. a link left over from another benefit year). */
+  onClear: () => void;
 }) {
   const m = useMemberElection(enrollmentId, window);
   const a = useElectionActions(enrollmentId, m);
   const phase = phaseOf(window, useNow());
 
+  if (m.isError) {
+    return (
+      <SelectionNotice onClear={onClear} onRetry={() => void m.refetch()}>
+        Could not load this member's selection. {formatError(m.error)}
+      </SelectionNotice>
+    );
+  }
   if (m.isLoading || !m.enr) {
     return (
       <div className="flex items-center gap-2 px-2 py-10 text-sm text-muted-foreground">
         <Loader2 className="size-4 animate-spin" aria-hidden /> Loading…
       </div>
+    );
+  }
+  // Editing against another period's flags (leave, dependants, deadline) would
+  // save under rules this member's enrolment is not governed by.
+  if (m.enr.window_id !== window.id) {
+    return (
+      <SelectionNotice onClear={onClear}>
+        This member's selection belongs to a different enrolment period. Pick them
+        from this period's list instead.
+      </SelectionNotice>
     );
   }
   const { enr, status } = m;
@@ -72,6 +95,8 @@ export function MemberElectionPanel({
             opensAt={window.opens_at}
             editable={editable}
             overdrawn={m.overdrawn}
+            selfService={window.member_self_service}
+            portalSigned={!!enr.portal_signed}
             actions={a}
           />
         )}
@@ -126,6 +151,7 @@ function ElectionChoices({
               allowDeps={window.allow_dependant_changes}
               dependants={m.dependants}
               flexOnChange={!!m.flex?.onChange}
+              planChanges={window.allow_plan_change}
               onChange={(next) => m.setProduct(ts.product_code, next)}
             />
           );
@@ -150,6 +176,32 @@ function ElectionChoices({
         />
       )}
     </>
+  );
+}
+
+function SelectionNotice({
+  onRetry,
+  onClear,
+  children,
+}: {
+  onRetry?: () => void;
+  onClear: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <section role="alert" className="space-y-3 rounded-xl border border-border bg-card px-5 py-6 text-sm">
+      <p className="text-foreground">{children}</p>
+      <div className="flex flex-wrap gap-2">
+        {onRetry && (
+          <Button size="sm" variant="outline" onClick={onRetry}>
+            Retry
+          </Button>
+        )}
+        <Button size="sm" variant="ghost" onClick={onClear}>
+          Clear selection
+        </Button>
+      </div>
+    </section>
   );
 }
 

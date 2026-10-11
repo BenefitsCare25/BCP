@@ -29,7 +29,13 @@ from sqlalchemy.orm import Session
 
 from app.core.audit import write_audit
 from app.core.auth import CurrentUser, get_current_user
-from app.core.deps import load_bulk_plan_update, load_policy_year, require_firm_owner
+from app.core.deps import (
+    is_firm_owner,
+    load_bulk_plan_update,
+    load_policy_year,
+    policy_year_company,
+    require_firm_owner,
+)
 from app.core.pagination import MAX_LIMIT
 from app.core.rate_limit import limiter
 from app.db.base import new_uuid
@@ -217,6 +223,18 @@ def apply_bulk_update(
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> BulkApplyResult:
+    # The audit rows below default to the actor's selected company; a stale tab
+    # on another company must not file this year's changes under it.
+    policy_year_company(py, user)
+    # A revert deletes each member's override outright — the same destructive
+    # reset as the per-member revert, reserved for firm owners (AGENTS.md).
+    if not is_firm_owner(user) and any(
+        c.action == "revert_to_default" for c in body.changes
+    ):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Reverting coverage to the cohort default requires a firm administrator.",
+        )
     changes = _resolve_changes(db, py, body)
 
     if body.request_id:
@@ -531,6 +549,7 @@ def undo_bulk_update(
     py = db.get(PolicyYear, record.policy_year_id)
     if py is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Benefit year not found")
+    policy_year_company(py, user)
 
     stored = record.result_summary or {}
     undo_id = new_uuid()

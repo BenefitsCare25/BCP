@@ -7,6 +7,7 @@ import {
   type BrandAssetSlot,
   type BrandAssets,
   brandErrorMessage,
+  useBrandImagePreview,
   useDeleteBrandAsset,
   useUploadBrandAsset,
 } from "@/api/brand";
@@ -140,6 +141,7 @@ function AssetRow({
   const input = useRef<HTMLInputElement>(null);
   const upload = useUploadBrandAsset(scope);
   const remove = useDeleteBrandAsset(scope);
+  const preview = useBrandImagePreview(previewUrl);
   const [problem, setProblem] = useState<string | null>(null);
   const [checking, setChecking] = useState(false);
   const busy = checking || upload.isPending || remove.isPending;
@@ -167,10 +169,10 @@ function AssetRow({
   return (
     <li className="flex flex-wrap items-start gap-4 px-3 py-3">
       <div className="flex h-14 w-32 shrink-0 items-center justify-center rounded-md border border-border bg-card p-1.5">
-        {previewUrl ? (
-          <img src={previewUrl} alt={`Current ${rule.label.toLowerCase()}`} className="max-h-full max-w-full object-contain" />
-        ) : (
-          <span className="text-2xs text-subtle">None</span>
+        {preview.url ? (
+          <img src={preview.url} alt={`Current ${rule.label.toLowerCase()}`} className="max-h-full max-w-full object-contain" />
+        ) : preview.status === "loading" ? null : (
+          <span className="text-2xs text-subtle">{preview.status === "error" ? "Not available" : "None"}</span>
         )}
       </div>
       <div className="min-w-0 flex-1 space-y-1">

@@ -1,4 +1,4 @@
-import { usePortalTranslation } from "@/i18n/portal";
+import { usePortalTranslation, type PortalCopy } from "@/i18n/portal";
 /** The page's controls, as two labelled record rows rather than a toolbar.
  *
  *     WHERE YOU ARE   [◎ Use my location]  or  [Postal code or building]
@@ -65,7 +65,7 @@ export interface OriginState {
 export type OriginStatus =
   | { kind: "idle" }
   | { kind: "busy" }
-  | { kind: "error"; message: string };
+  | { kind: "error"; message: PortalCopy };
 
 /** The answered question: where the list is ranked from, and a way to unsay it. */
 function OriginChip({

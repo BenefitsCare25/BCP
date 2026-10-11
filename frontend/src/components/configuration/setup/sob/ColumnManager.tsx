@@ -1,4 +1,3 @@
-import { FirmOwnerOnly } from "@/components/auth/FirmOwnerOnly";
 import { Plus, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -11,6 +10,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import type { PlanAnswer, SobColumn } from "@/types";
+import { RemoveGuard, useSavedEntries } from "../savedEntries";
 
 interface Props {
   columns: SobColumn[];
@@ -41,6 +41,7 @@ export function ColumnManager({
   const columnOf = (code: string) =>
     columns.find((c) => c.plan_codes.includes(code))?.id ??
     (columns.length === 1 ? columns[0].id : "");
+  const saved = useSavedEntries();
   return (
     <div className="flex flex-col gap-3 rounded-md border border-border bg-muted/40 p-3">
       <div className="flex items-center justify-between">
@@ -71,7 +72,7 @@ export function ColumnManager({
                 ? "no plans — unreachable"
                 : `${col.plan_codes.length} plan${col.plan_codes.length === 1 ? "" : "s"}`}
             </span>
-            <FirmOwnerOnly><Button
+            <RemoveGuard saved={!saved || saved.columnIds.has(col.id)}><Button
               size="icon-sm"
               variant="ghost"
               disabled={columns.length <= 1}
@@ -80,7 +81,7 @@ export function ColumnManager({
               className="text-error hover:text-error"
             >
               <X className="size-3.5" />
-            </Button></FirmOwnerOnly>
+            </Button></RemoveGuard>
           </div>
         ))}
       </div>

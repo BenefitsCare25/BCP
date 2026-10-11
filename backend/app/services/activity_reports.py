@@ -33,6 +33,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.audit import PLATFORM_ENTITY_TYPES
+from app.core.clock import BUSINESS_TZ, business_datetime
 from app.models import AuditLog, AuthEvent, MemberAccount, PolicyYear, User
 from app.models.auth import SUBJECT_MEMBER, SUBJECT_USER
 from app.services.insurer_reports import (
@@ -152,15 +153,22 @@ def _detail(after: object) -> str:
 
 
 def range_bounds(start: date, end: date) -> tuple[datetime, datetime]:
-    """Half-open UTC window for an inclusive date range.
+    """Half-open window, as UTC instants, for an inclusive range of business
+    (Singapore) dates — the calendar the broker picks them in.
 
     The end is the START of the day AFTER ``end`` so an event at 23:59 on the
     last day is included — a naive ``<= end`` comparison against a timestamp
-    column silently truncates the final day to midnight.
+    column silently truncates the final day to midnight. Converted to UTC
+    because SQLite compares the stored UTC text, ignoring any offset.
     """
-    lo = datetime.combine(start, time.min, tzinfo=UTC)
-    hi = datetime.combine(end + timedelta(days=1), time.min, tzinfo=UTC)
-    return lo, hi
+    lo = datetime.combine(start, time.min, tzinfo=BUSINESS_TZ)
+    hi = datetime.combine(end + timedelta(days=1), time.min, tzinfo=BUSINESS_TZ)
+    return lo.astimezone(UTC), hi.astimezone(UTC)
+
+
+def _stamp(value: datetime | None) -> datetime | None:
+    """A stored instant as the business wall-clock time a reader expects."""
+    return naive(business_datetime(value)) if value is not None else None
 
 
 @dataclass(frozen=True)
@@ -287,7 +295,7 @@ def build_portal_activity_workbook(
                 _label(_ACTIVITY_LABELS, ev.event_type),
                 _label(_OUTCOME_LABELS, ev.outcome),
                 ev.ip or "",
-                naive(ev.occurred_at),
+                _stamp(ev.occurred_at),
             ],
         )
 
@@ -350,7 +358,7 @@ def build_company_activity_workbook(
         append_safe(
             ws,
             [
-                naive(row.created_at),
+                _stamp(row.created_at),
                 "Member" if actor_type == "member" else "Platform user",
                 actor.name if actor else "",
                 _label({}, row.action),

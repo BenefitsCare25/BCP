@@ -1,9 +1,9 @@
-import { FirmOwnerOnly } from "@/components/auth/FirmOwnerOnly";
 import { Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import type { EndorsementAnswer } from "@/types";
+import { RemoveGuard, useSavedEntries } from "./savedEntries";
 
 interface Props {
   endorsements: EndorsementAnswer[];
@@ -36,6 +36,9 @@ export function EndorsementsSection({ endorsements, onChange }: Props) {
   const add = () => onChange([...endorsements, blankEndorsement()]);
   const remove = (index: number) =>
     onChange(endorsements.filter((_, i) => i !== index));
+  // Endorsements only ever append, so the stored ones are the leading entries.
+  const saved = useSavedEntries();
+  const savedCount = saved ? saved.endorsements : endorsements.length;
 
   return (
     <div className="flex flex-col gap-4">
@@ -71,7 +74,7 @@ export function EndorsementsSection({ endorsements, onChange }: Props) {
                     {endorsement.author ? <span>{endorsement.author}</span> : null}
                   </div>
                 </div>
-                <FirmOwnerOnly><Button
+                <RemoveGuard saved={index < savedCount}><Button
                   type="button"
                   variant="ghost"
                   size="icon-sm"
@@ -80,7 +83,7 @@ export function EndorsementsSection({ endorsements, onChange }: Props) {
                   title="Remove endorsement"
                 >
                   <Trash2 className="size-4 text-error" />
-                </Button></FirmOwnerOnly>
+                </Button></RemoveGuard>
               </div>
 
               <div className="grid grid-cols-1 gap-3 md:grid-cols-[8rem_1fr]">

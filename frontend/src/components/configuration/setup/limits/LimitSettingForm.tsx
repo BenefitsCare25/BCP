@@ -1,4 +1,3 @@
-import { FirmOwnerOnly } from "@/components/auth/FirmOwnerOnly";
 import { useState, type ReactNode } from "react";
 import { Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -8,6 +7,7 @@ import type { ClaimLimitBasis, ClaimLimitScope, ClaimLimitSetting } from "@/type
 import { TRACKED_BASES, memberPreview, sourceChanged } from "@/lib/claimLimits";
 import { DRAWDOWN_OPTIONS, EditorShell, Field, Notice, Preview, Segmented, type SegmentOption } from "./FormParts";
 import { ScopePicker } from "./ScopePicker";
+import { RemoveGuard } from "../savedEntries";
 
 type Choice = ClaimLimitBasis | "not_limit";
 
@@ -45,6 +45,9 @@ interface Props {
   hidden?: boolean;
   onSave: (next: ClaimLimitSetting, applyToSame: boolean) => void;
   onRemove?: () => void;
+  /** The setting is in the stored draft, so removing it is a firm-owner
+   * action; one added in this unsaved edit can be removed by anyone. */
+  saved?: boolean;
   onCancel: () => void;
 }
 
@@ -62,6 +65,7 @@ export function LimitSettingForm({
   hidden = false,
   onSave,
   onRemove,
+  saved = true,
   onCancel,
 }: Props) {
   const [choice, setChoice] = useState<Choice | null>(() => {
@@ -115,9 +119,9 @@ export function LimitSettingForm({
       </Button>
       {needsScope && <span className="text-xs text-warn">Select a claim type to allow drawdown</span>}
       {onRemove && (
-        <FirmOwnerOnly><Button type="button" size="sm" variant="ghost" className="ml-auto text-error hover:text-error" onClick={onRemove}>
+        <RemoveGuard saved={saved}><Button type="button" size="sm" variant="ghost" className="ml-auto text-error hover:text-error" onClick={onRemove}>
           <Trash2 className="size-3.5" aria-hidden /> Remove
-        </Button></FirmOwnerOnly>
+        </Button></RemoveGuard>
       )}
     </>
   );

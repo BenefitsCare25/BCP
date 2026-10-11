@@ -11,7 +11,11 @@ from sqlalchemy.orm import Session
 from app.api.v1.claim_review_configs import review_scope_options
 from app.core.audit import write_audit
 from app.core.auth import CurrentUser, get_current_user
-from app.core.deps import require_claim_configuration, require_client_id
+from app.core.deps import (
+    is_firm_owner,
+    require_claim_configuration,
+    require_client_id,
+)
 from app.core.optimistic_lock import assert_not_stale
 from app.db.session import get_db
 from app.models import ClaimDocumentSetup
@@ -175,13 +179,43 @@ def _target_setup(
     return target
 
 
+def _fold(value: str) -> str:
+    return " ".join(value.split()).casefold()
+
+
+def _removes_entries(
+    current: list[ClaimSetupDocument], incoming: list[ClaimSetupDocument]
+) -> bool:
+    """Whether saving `incoming` drops a required document, an alias or a key
+    field the setup has now. Renaming, reordering and adding are edits."""
+    kept = {document.id: document for document in incoming}
+    for document in current:
+        match = kept.get(document.id)
+        if match is None or len(match.key_fields) < len(document.key_fields):
+            return True
+        if {_fold(a) for a in document.aliases} - {_fold(a) for a in match.aliases}:
+            return True
+    return False
+
+
 def _upsert_claim_document_setup(
     body: ClaimDocumentSetupIn,
     user: CurrentUser,
     db: Session,
 ) -> str:
-    """Write one setup without committing so callers own transaction scope."""
-    _target_setup(body, user, db)
+    """Write one setup without committing so callers own transaction scope.
+
+    Removing a required document, alias or key field is a firm-owner action
+    (AGENTS.md), so a save or duplicate that would drop one is refused for
+    everyone else — the editor hides those controls, and this is the rule.
+    """
+    target = _target_setup(body, user, db)
+    if not is_firm_owner(user) and _removes_entries(target.documents, body.documents):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Removing required documents, aliases or key fields requires a firm "
+            "administrator.",
+        )
     client_id = require_client_id(user)
     data = _payload(body)
     row = find_setup_row(

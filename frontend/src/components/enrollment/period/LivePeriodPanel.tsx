@@ -93,7 +93,7 @@ export function LivePeriodPanel({
           />
         ) : (
           <>
-            <Progress progress={progress.data} loading={progress.isLoading} />
+            <Progress windowId={w.id} progress={progress.data} loading={progress.isLoading} />
             <ReadinessReview windowId={w.id} />
             {progress.data && (
               <Queue window={w} p={progress.data} readOnly={readOnly} overdue={overdue} />
@@ -133,9 +133,11 @@ function OverdueNotice() {
 }
 
 function Progress({
+  windowId,
   progress: p,
   loading,
 }: {
+  windowId: string;
   progress: WindowProgress | undefined;
   loading: boolean;
 }) {
@@ -179,7 +181,7 @@ function Progress({
       <ul className="flex flex-wrap gap-x-5 gap-y-1.5">
         {segments.map((s) => (
           <li key={s}>
-            <StatusLink status={s} count={p[s]} />
+            <StatusLink windowId={windowId} status={s} count={p[s]} />
           </li>
         ))}
       </ul>
@@ -187,12 +189,20 @@ function Progress({
   );
 }
 
-function StatusLink({ status, count }: { status: EnrollmentStatus; count: number }) {
+function StatusLink({
+  windowId,
+  status,
+  count,
+}: {
+  windowId: string;
+  status: EnrollmentStatus;
+  count: number;
+}) {
   const meta = STATUS_META[status];
   return (
     <Link
       to="/client-relations/enrollment"
-      search={{ tab: "members", status }}
+      search={{ tab: "members", window: windowId, status }}
       className="group inline-flex items-center gap-1.5 rounded text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
       title={meta.gloss}
     >
@@ -223,6 +233,7 @@ function Queue({
         key="submitted"
         text={`${p.submitted.toLocaleString()} submitted ${p.submitted === 1 ? "selection is" : "selections are"} waiting for your confirmation.`}
         action={!readOnly && <ConfirmAllButton windowId={w.id} />}
+        windowId={w.id}
         review="submitted"
       />,
     );
@@ -232,6 +243,7 @@ function Queue({
       <QueueItem
         key="saved"
         text={`${p.in_progress.toLocaleString()} ${p.in_progress === 1 ? "member has" : "members have"} saved changes but never sent them. Unsent changes are discarded at close unless you submit them.`}
+        windowId={w.id}
         review="in_progress"
       />,
     );
@@ -322,10 +334,14 @@ function AddStaffButton({ window: w, disabled }: { window: EnrollmentWindow; dis
 function QueueItem({
   text,
   action,
+  windowId,
   review,
 }: {
   text: string;
   action?: ReactNode;
+  /** The period the Review link opens — required with `review`, because the
+   *  Members tab otherwise falls back to the newest open period. */
+  windowId?: string;
   review?: EnrollmentStatus;
 }) {
   return (
@@ -335,7 +351,7 @@ function QueueItem({
         {action}
         {review && (
           <Button asChild size="sm" variant="ghost">
-            <Link to="/client-relations/enrollment" search={{ tab: "members", status: review }}>
+            <Link to="/client-relations/enrollment" search={{ tab: "members", window: windowId, status: review }}>
               Review <ArrowRight className="size-3.5" aria-hidden />
             </Link>
           </Button>

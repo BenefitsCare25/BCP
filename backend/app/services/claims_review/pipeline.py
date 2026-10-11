@@ -74,6 +74,14 @@ class ReviewDeadlineExceeded(RuntimeError):
     """The durable review exceeded its processing deadline or maximum age."""
 
 
+class ReviewLeaseExpired(RuntimeError):
+    """This worker still holds the job, but its lease ran out (heartbeats failed).
+
+    Not an ownership loss: nobody else has the job, so it is retried or failed
+    exactly as the reaper would have, never silently cancelled.
+    """
+
+
 def _env_seconds(name: str, default: int) -> int:
     raw = os.environ.get(name, "").strip()
     if not raw:
@@ -362,17 +370,13 @@ def _checkpoint(
             job is None
             or job.state != "running"
             or job.lease_owner != lease_owner
-            or job.lease_expires_at is None
-            or (
-                job.lease_expires_at.replace(tzinfo=UTC)
-                if job.lease_expires_at.tzinfo is None
-                else job.lease_expires_at
-            )
-            <= now
             or job.claim_revision != claim.revision
         ):
             db.rollback()
             raise ReviewOwnershipLost("Review lease or claim revision is no longer current")
+        if job.lease_expires_at is None or _aware(job.lease_expires_at) <= now:
+            db.rollback()
+            raise ReviewLeaseExpired("Review lease expired before the stage was saved")
         reason = review_deadline_reason(job, now)
         if reason is not None:
             db.rollback()

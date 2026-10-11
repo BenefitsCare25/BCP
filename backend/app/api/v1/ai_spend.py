@@ -13,7 +13,11 @@ from app.core.deps import require_broker_admin, require_client_id
 from app.db.session import get_db
 from app.models import AISpendLog, Client
 from app.schemas.api import AIBudgetUpdate
-from app.services.ai_gateway import month_start_utc, platform_month_to_date_tokens
+from app.services.ai_gateway import (
+    client_budget_in_force,
+    month_start_utc,
+    platform_month_to_date_tokens,
+)
 from app.services.platform_ai_settings import resolve_platform_ai_limits
 
 router = APIRouter(prefix="/ai-spend", tags=["ai-spend"])
@@ -81,12 +85,17 @@ def summary(
             ).platform_monthly_token_cap,
         }
 
+    budget, budget_source = client_budget_in_force(db, client)
     return {
         "month_to_date_tokens": int(sum(r[4] for r in rows)),
         "month_to_date_input_tokens": int(sum(r[5] for r in rows)),
         "month_to_date_output_tokens": int(sum(r[6] for r in rows)),
         "month_to_date_cost_usd": round(sum(r[3] for r in rows), 4),
         "monthly_token_budget": client.ai_monthly_token_budget,
+        # What the gateway enforces: the company's budget, else the platform's
+        # default per-company budget, else none (0).
+        "effective_monthly_token_budget": budget,
+        "budget_source": budget_source,
         **platform,
         "by_operation": [
             {
@@ -120,10 +129,12 @@ def set_budget(
     user: CurrentUser = Depends(require_broker_admin),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
-    """Set the tenant's monthly AI token budget. 0 = unlimited (tracking only).
+    """Set the tenant's monthly AI token budget. 0 = use the platform default.
 
     Tenant-admin gated (mirrors BYOK config). Enforcement lives in the AI
-    gateway's ``_check_budget``, which treats 0 as no cap.
+    gateway's ``_check_budget``: 0 falls back to the platform's default
+    per-company budget, and means no cap only when that default is unset too.
+    The response says which budget is now in force.
     """
     client_id = require_client_id(user)
     client = db.get(Client, client_id)
@@ -141,4 +152,9 @@ def set_budget(
         after={"monthly_token_budget": payload.monthly_token_budget},
     )
     db.commit()
-    return {"monthly_token_budget": payload.monthly_token_budget}
+    budget, budget_source = client_budget_in_force(db, client)
+    return {
+        "monthly_token_budget": payload.monthly_token_budget,
+        "effective_monthly_token_budget": budget,
+        "budget_source": budget_source,
+    }

@@ -129,16 +129,17 @@ def _invite_sign_in_url(db: Session, client_id: str) -> str:
         raise firm_origin_unavailable_error() from exc
 
 
-def _require_invite_delivery(db: Session, client_id: str) -> None:
-    """Refuse a bulk send that could not deliver, before any account is
-    provisioned or re-enabled: 503 when mail is not deliverable, 409 when the
-    company's broker has no web address for the link."""
+def _require_invite_delivery(db: Session, client_id: str) -> str:
+    """Refuse a send that could not deliver, before any account is provisioned
+    or re-enabled and before any credential or session changes: 503 when mail
+    is not deliverable, 409 when the company's broker has no web address for
+    the link. Returns that link."""
     if not mail_deliverable():
         raise HTTPException(
             status.HTTP_503_SERVICE_UNAVAILABLE,
             "Email delivery is not configured. No invitations were queued or credentials changed.",
         )
-    _invite_sign_in_url(db, client_id)
+    return _invite_sign_in_url(db, client_id)
 
 
 def _login_source(db: Session, client_id: str | None) -> str | None:
@@ -491,7 +492,9 @@ def resend_invite(
             status.HTTP_409_CONFLICT,
             "This email address is shared by employees. Use a set-password link instead.",
         )
-    sign_in_url = _invite_sign_in_url(db, account.client_id)
+    # Checked up front: the send revokes the member's sessions before mailing,
+    # so a mailer that cannot deliver would sign them out for nothing.
+    sign_in_url = _require_invite_delivery(db, account.client_id)
     write_audit(
         db, user, "member_account.invite_resent", "member_account", account.id,
         after={"email": account.email}, client_id=account.client_id,
@@ -631,6 +634,18 @@ def member_regenerate_login_id(
     return _account_out(db, account)
 
 
+def _enabled_status(account: MemberAccount) -> str:
+    """The status an enabled account holds: `active` once the member has signed
+    in or holds a password of their own or a broker's handover (no mailed
+    one-time value pending), otherwise `invited` — so a re-enabled account that
+    never had a credential stays in the bulk send's target set."""
+    if account.last_sign_in_at or (
+        account.password_hash and account.invite_expires_at is None
+    ):
+        return MEMBER_STATUS_ACTIVE
+    return MEMBER_STATUS_INVITED
+
+
 @router.patch("/member-accounts/{account_id}", response_model=MemberAccountOut)
 def update_member_account(
     account_id: str,
@@ -645,10 +660,12 @@ def update_member_account(
         )
     account = _load_account(account_id, user, db)
     before = account.status
-    account.status = body.status
+    account.status = (
+        _enabled_status(account) if body.status == MEMBER_STATUS_ACTIVE else body.status
+    )
     write_audit(
         db, user, "member_account.status_changed", "member_account", account.id,
-        before={"status": before}, after={"status": body.status},
+        before={"status": before}, after={"status": account.status},
         client_id=account.client_id,
     )
     db.commit()
@@ -984,11 +1001,31 @@ def bulk_invite(
     _require_invite_delivery(db, client_id)
 
     # A run already in flight has targets it has not stamped yet; re-queueing
-    # them here is how a member ends up with two emails.
+    # them here is how a member ends up with two emails. Checked and claimed in
+    # one lock hold, so a second press cannot pass the check while this one is
+    # still building its roster.
     with _SENDING_LOCK:
         if client_id in _SENDING:
             return BulkInviteResult(already_sending=True)
+        _SENDING.add(client_id)
+    targets: list[str] = []
+    try:
+        result, targets = _queue_bulk_invites(db, user, body, client_id)
+    finally:
+        # A dispatched run releases the claim once its delivery finishes.
+        if not targets:
+            with _SENDING_LOCK:
+                _SENDING.discard(client_id)
+    if targets:
+        background.add_task(_deliver_invites, targets, client_id)
+    return result
 
+
+def _queue_bulk_invites(
+    db: Session, user: CurrentUser, body: BulkInviteIn, client_id: str
+) -> tuple[BulkInviteResult, list[str]]:
+    """Provision and re-enable the roster, commit, and return the accounts to
+    mail. The caller holds the client's `_SENDING` claim throughout."""
     entries = _roster_entries(db, client_id, body.policy_year_id)
     created = no_email = already = disabled = duplicate = reenabled = 0
     targets: list[str] = []
@@ -1045,13 +1082,6 @@ def bulk_invite(
     # background task opens its own session and looks them up by id.
     db.commit()
 
-    if targets:
-        # Claimed BEFORE dispatch — a second request arriving while this one is
-        # still queueing must be refused too, not just one arriving mid-send.
-        with _SENDING_LOCK:
-            _SENDING.add(client_id)
-        background.add_task(_deliver_invites, targets, client_id)
-
     return BulkInviteResult(
         queued=len(targets),
         accounts_created=created,
@@ -1060,4 +1090,4 @@ def bulk_invite(
         already_invited=already,
         skipped_disabled=disabled,
         accounts_reenabled=reenabled,
-    )
+    ), targets

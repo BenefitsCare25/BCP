@@ -6,7 +6,8 @@
   naming a firm it may access) manage clients.
 - firm owners view and manage users and invitations: a `firm_admin` within its
   own firm, the platform master admin (`system_admin`) in any firm, which is
-  how a new firm's first `firm_admin` is invited.
+  how a new firm's first `firm_admin` is invited. A `read` access grant on the
+  firm makes the master admin's view of them read-only.
 
 Identity is DB-backed: inviting a user provisions a `User` row (status
 `invited`) plus an `Invitation` record holding only the SHA-256 of a
@@ -32,9 +33,11 @@ from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.core import auth_events, mfa, sessions
 from app.core.audit import write_audit, write_platform_audit
 from app.core.auth import ROLE_SYSTEM_ADMIN, VALID_ROLES, CurrentUser
-from app.core.broker_auth import hash_invite_token
+from app.core.broker_auth import SUBJECT as BROKER_SUBJECT
+from app.core.broker_auth import credential, hash_invite_token
 from app.core.deps import (
     assert_platform_firm_access,
     require_firm_admin,
@@ -43,6 +46,7 @@ from app.core.deps import (
 )
 from app.core.identity_providers import staff_methods
 from app.core.mailer import get_mailer
+from app.core.request_context import get_client_ip, get_user_agent
 from app.core.settings import get_settings
 from app.core.tenancy_host import SlugError
 from app.core.tenant_resolution import (
@@ -51,7 +55,7 @@ from app.core.tenant_resolution import (
     public_origin,
 )
 from app.db.session import get_db
-from app.db.tenancy import set_search_path
+from app.db.tenancy import require_firm_provisioned, set_search_path
 from app.models import (
     AuthSession,
     BrokerFirm,
@@ -95,7 +99,8 @@ def _resolve_target_firm(
     user: CurrentUser, requested_firm_id: str | None, db: Session | None = None
 ) -> str:
     """The firm an admin action targets. Firm roles → own firm; system_admin
-    names one explicitly, or falls back to the sole firm when only one exists.
+    names one explicitly, or falls back to the selected company's firm, then
+    to the sole firm when only one exists.
 
     A firm role naming another firm gets the same 404 as a firm that does not
     exist, so the console never confirms another firm's id.
@@ -103,12 +108,18 @@ def _resolve_target_firm(
     if user.role == ROLE_SYSTEM_ADMIN:
         if requested_firm_id:
             return requested_firm_id
+        # The admin console is one firm's surface: for a platform admin, the
+        # firm of the company it has selected (the firm `/me` reports). Its
+        # lists send no broker_firm_id, so without this every one of them was
+        # a 400 as soon as a second firm existed.
+        if db is not None and user.client_id:
+            active = db.get(Client, user.client_id)
+            if active is not None:
+                return active.broker_firm_id
         # A single-firm platform has exactly one answer, so demanding the caller
-        # name it is pure friction — and it made the admin page unusable for a
-        # system_admin, because the UI sends no broker_firm_id: every "Create
-        # company" and "Invite" returned 400. Resolve it here rather than
-        # guessing in the UI. With two or more firms there IS no unambiguous
-        # answer, so still refuse (mirrors _column_id_for_plan in sob_columns).
+        # name it is pure friction. With two or more firms and no selected
+        # company there IS no unambiguous answer, so still refuse (mirrors
+        # _column_id_for_plan in sob_columns).
         if db is not None:
             firm_ids = db.execute(select(BrokerFirm.id).limit(2)).scalars().all()
             if len(firm_ids) == 1:
@@ -510,6 +521,18 @@ def _load_firm_user(db: Session, user: CurrentUser, target_id: str) -> User:
     return target
 
 
+def _refuse_read_grant(db: Session, user: CurrentUser, firm_id: str | None) -> None:
+    """403 `platform_access_read_only` for a platform admin changing a firm's
+    users or invitations through a `read` grant. No grant is needed here (a
+    new firm's first admin is invited without one); a platform admin's own
+    firm-less row (``firm_id`` None) belongs to no firm."""
+    if firm_id is not None:
+        assert_platform_firm_access(
+            db, user, firm_id, write=True, not_found="Broker firm not found",
+            grant_required=False,
+        )
+
+
 def _account_scope(firm_id: str | None) -> Any:
     """Where an email must be unique: within a firm, or among platform admins."""
     return User.broker_firm_id == firm_id if firm_id else User.broker_firm_id.is_(None)
@@ -579,7 +602,8 @@ def _assert_admin_change_is_recoverable(
     platform state is what makes it unsafe. No administrator may disable their
     own account either.
     """
-    disabling = body.status is not None and body.status == USER_STATUS_DISABLED
+    # Any status but active locks the account out, so each counts as disabling.
+    disabling = body.status is not None and body.status != USER_STATUS_ACTIVE
     if target.id == actor.user_id and disabling:
         raise HTTPException(
             status.HTTP_409_CONFLICT, "You cannot disable your own account."
@@ -653,6 +677,9 @@ def patch_user(
     db: Session = Depends(get_db),
 ) -> UserOut:
     target = _load_firm_user(db, user, user_id)
+    _refuse_read_grant(db, user, target.broker_firm_id)
+    # A platform admin moved to a firm role joins the firm it names.
+    _refuse_read_grant(db, user, body.broker_firm_id)
     _assert_admin_change_is_recoverable(db, user, target, body)
     before = {"role": target.role, "status": target.status, "display_name": target.display_name,
               "external_id": target.external_id, "broker_mfa_required": target.broker_mfa_required,
@@ -690,7 +717,9 @@ def patch_user(
         target.display_name = body.display_name.strip() or None
     _apply_role_change(db, user, target, body)
     if body.status is not None:
-        if body.status not in (USER_STATUS_ACTIVE, USER_STATUS_DISABLED, USER_STATUS_INVITED):
+        # `invited` is set only by an invitation: it marks an account no one
+        # has signed in to, which a new invitation may reissue.
+        if body.status not in (USER_STATUS_ACTIVE, USER_STATUS_DISABLED):
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid status")
         target.status = body.status
     if body.client_ids is not None:
@@ -758,8 +787,11 @@ class InvitationCreatedOut(InvitationOut):
     invite_url: str | None
 
 
-def _bound_identity(db: Session, raw: str | None, firm_id: str | None, role: str) -> str | None:
-    """An administrator-supplied Microsoft object ID, validated and unused.
+def _bound_identity(
+    db: Session, raw: str | None, firm_id: str | None, role: str, *, exclude_id: str | None = None
+) -> str | None:
+    """An administrator-supplied Microsoft object ID, validated and unused
+    by any account other than ``exclude_id``.
 
     It is recorded with the directory the account will sign in through, so
     the firm must offer Microsoft sign-in.
@@ -774,9 +806,76 @@ def _bound_identity(db: Session, raw: str | None, firm_id: str | None, role: str
         raise HTTPException(
             422, "Microsoft sign-in is not enabled for this firm, so no object ID can be bound."
         )
-    if db.query(User).filter(User.external_id == oid).first():
+    taken = db.query(User).filter(User.external_id == oid)
+    if exclude_id is not None:
+        taken = taken.filter(User.id != exclude_id)
+    if taken.first():
         raise HTTPException(409, "That Microsoft identity is already registered.")
     return oid
+
+
+def _unused_account(db: Session, email: str, firm_id: str | None) -> User | None:
+    """The account ``email`` already has where an invitation would place it,
+    when no one has ever signed in to it; 409 for any other existing account.
+
+    An account still `invited` (its link expired or was lost), or `disabled`
+    by a revoked invitation with no password and no Microsoft binding, holds
+    only the email, so a new invitation reissues it instead of refusing.
+    """
+    account = db.execute(
+        select(User).where(User.email == email, _account_scope(firm_id)).with_for_update()
+    ).scalar_one_or_none()
+    if account is None:
+        return None
+    unused = account.status == USER_STATUS_INVITED or (
+        account.status == USER_STATUS_DISABLED and account.external_id is None
+    )
+    if not unused or credential(db, account.id) is not None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, _FIRM_EMAIL_TAKEN if firm_id else _PLATFORM_EMAIL_TAKEN
+        )
+    return account
+
+
+def _retire_invitation_links(db: Session, account: User) -> None:
+    """Revoke every pending invitation link for ``account``. No commit."""
+    scope = (
+        Invitation.role == ROLE_SYSTEM_ADMIN if account.broker_firm_id is None
+        else (Invitation.broker_firm_id == account.broker_firm_id)
+        & (Invitation.role != ROLE_SYSTEM_ADMIN)
+    )
+    db.execute(
+        update(Invitation)
+        .where(Invitation.email == account.email, Invitation.status == INVITE_STATUS_PENDING, scope)
+        .values(status=INVITE_STATUS_REVOKED)
+        .execution_options(synchronize_session=False)
+    )
+
+
+def _revoke_pending_invitations(db: Session, account: User) -> None:
+    """Retire every live link for ``account`` before it is reissued, with the
+    company grants the new invitation replaces. No commit."""
+    _retire_invitation_links(db, account)
+    db.execute(delete(UserClientAccess).where(UserClientAccess.user_id == account.id))
+
+
+def _issue_invitation(
+    db: Session, actor: CurrentUser, *, email: str, firm_id: str, role: str,
+    client_ids: list[str],
+) -> tuple[Invitation, str]:
+    """A new pending invitation and its raw single-use link token, which is
+    returned once and never stored (only its hash is). No commit."""
+    raw_token = secrets.token_urlsafe(32)
+    invite = Invitation(
+        email=email, broker_firm_id=firm_id, role=role,
+        token=hash_invite_token(raw_token), status=INVITE_STATUS_PENDING,
+        invited_by=actor.user_id,
+        client_ids={"ids": client_ids} if client_ids else None,
+        expires_at=datetime.now(UTC) + timedelta(days=_INVITE_TTL_DAYS),
+    )
+    db.add(invite)
+    db.flush()
+    return invite, raw_token
 
 
 def _invite_url(db: Session, firm_id: str, role: str, raw_token: str) -> str | None:
@@ -820,6 +919,9 @@ def create_invitation(
     firm_id = _resolve_target_firm(user, body.broker_firm_id, db)
     if db.get(BrokerFirm, firm_id) is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Broker firm not found")
+    # A platform-admin invitation provisions no firm account.
+    _refuse_read_grant(db, user, None if body.role == ROLE_SYSTEM_ADMIN else firm_id)
+    require_firm_provisioned(db, firm_id)
     _assert_grantable_role(user, body.role)
     email = body.email.strip().lower()
     if "@" not in email or "." not in email.split("@")[-1]:
@@ -828,26 +930,30 @@ def create_invitation(
     # Email is unique per firm (a platform admin's among platform admins).
     # Broker Microsoft sign-in uses only a bound (directory, object ID).
     account_firm = None if body.role == ROLE_SYSTEM_ADMIN else firm_id
-    _assert_email_free(db, email, account_firm)
+    reissued = _unused_account(db, email, account_firm)
     email_taken = _FIRM_EMAIL_TAKEN if account_firm else _PLATFORM_EMAIL_TAKEN
 
     client_ids = body.client_ids if body.role in _CLIENT_ROLES else []
     _clients_in_firm(db, firm_id, client_ids)
-    oid = _bound_identity(db, body.external_id, account_firm, body.role)
+    oid = _bound_identity(db, body.external_id, account_firm, body.role,
+                          exclude_id=reissued.id if reissued else None)
     directory = staff_methods(db, account_firm, body.role).entra if oid else None
 
     # Provision the user up front. The invitee binds their sign-in by opening
     # the link (Microsoft or a password, as the firm offers); an object ID an
     # administrator already supplied is bound now. A platform admin belongs to
     # no firm; its invitation row still records the issuing firm because that
-    # column is required.
+    # column is required. An account no one ever signed in to takes this
+    # invitation's details in place of its old, now revoked, ones.
     display_name = (body.display_name or "").strip() or None
-    new_user = User(
-        external_id=oid, external_tid=directory.tenant_id if directory else None,
-        email=email, display_name=display_name,
-        broker_firm_id=account_firm,
-        role=body.role, status=USER_STATUS_INVITED,
-    )
+    if reissued is not None:
+        _revoke_pending_invitations(db, reissued)
+    new_user = reissued or User(email=email, broker_firm_id=account_firm)
+    new_user.external_id = oid
+    new_user.external_tid = directory.tenant_id if directory else None
+    new_user.display_name = display_name
+    new_user.role = body.role
+    new_user.status = USER_STATUS_INVITED
     db.add(new_user)
     try:
         db.flush()
@@ -859,18 +965,11 @@ def create_invitation(
     for cid in client_ids:
         db.add(UserClientAccess(user_id=new_user.id, client_id=cid))
 
-    raw_token = secrets.token_urlsafe(32)
-    invite = Invitation(
-        email=email, broker_firm_id=firm_id, role=body.role,
-        token=hash_invite_token(raw_token), status=INVITE_STATUS_PENDING,
-        invited_by=user.user_id,
-        client_ids={"ids": client_ids} if client_ids else None,
-        expires_at=datetime.now(UTC) + timedelta(days=_INVITE_TTL_DAYS),
+    invite, raw_token = _issue_invitation(
+        db, user, email=email, firm_id=firm_id, role=body.role, client_ids=client_ids
     )
-    db.add(invite)
-    db.flush()
     after = {"email": email, "display_name": display_name,
-             "role": body.role, "broker_firm_id": firm_id}
+             "role": body.role, "broker_firm_id": firm_id, "reissued": reissued is not None}
     if user.role == ROLE_SYSTEM_ADMIN:
         # The platform's onboarding path (a new firm's first firm_admin) needs
         # no access grant, so it is on the platform trail as well.
@@ -936,6 +1035,7 @@ def revoke_invitation(
         and (inv.broker_firm_id != user.broker_firm_id or inv.role == ROLE_SYSTEM_ADMIN)
     ):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Invitation not found")
+    _refuse_read_grant(db, user, None if inv.role == ROLE_SYSTEM_ADMIN else inv.broker_firm_id)
     inv.status = INVITE_STATUS_REVOKED
     # If the invited user never signed in, disable the provisioned row.
     invited = _invitation_account(db, inv)
@@ -950,3 +1050,117 @@ def revoke_invitation(
                 after={"email": inv.email}, client_id=None)
     db.commit()
     return {"revoked": True}
+
+
+# ── Sign-in recovery ──────────────────────────────────────────────────────────
+def _record_sign_in_reset(
+    db: Session, actor: CurrentUser, target: User, event_type: str, sessions_revoked: int
+) -> None:
+    """Security-trail row for one sign-in factor an owner removed. Filed under
+    the account acted on; the owner who did it goes in `detail`."""
+    auth_events.write_auth_event(
+        db,
+        event_type=event_type,
+        outcome=auth_events.OUTCOME_SUCCESS,
+        surface="broker",
+        subject_type=BROKER_SUBJECT,
+        subject_id=target.id,
+        broker_firm_id=target.broker_firm_id,
+        ip=get_client_ip(),
+        user_agent=get_user_agent(),
+        detail={"reason": "admin_reset", "sessions_revoked": sessions_revoked,
+                "actor_user_id": actor.user_id},
+    )
+
+
+def _assert_sign_in_resettable(db: Session, actor: CurrentUser, target: User) -> None:
+    """Refuse a sign-in reset nobody should make, before anything changes.
+
+    The firm's access model first: a reset hands the caller a link that signs
+    in as that person, so outside the platform owner's firm a master admin
+    needs a `write` grant (no grant is a 404, a `read` grant is refused). Then:
+    not your own account, only broker staff (HR logins have their own reset),
+    and never the last active platform admin. A disabled account may be reset
+    directly — it moves to `invited`, which only the new link redeems, so a
+    compromised account is never re-enabled with its old factors first.
+    """
+    if target.broker_firm_id is not None:
+        assert_platform_firm_access(
+            db, actor, target.broker_firm_id, write=True, not_found="User not found"
+        )
+    if target.id == actor.user_id:
+        raise HTTPException(status.HTTP_409_CONFLICT, "You cannot reset your own sign-in.")
+    if target.role not in _BROKER_SIGN_IN_ROLES:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "HR sign-in is reset under the company's Authentication settings.",
+        )
+    # Back to `invited` locks the account out until its link is used, so this
+    # is guarded like a disable.
+    _assert_admin_change_is_recoverable(db, actor, target, UserPatch(status=USER_STATUS_INVITED))
+    if target.broker_firm_id is not None:
+        require_firm_provisioned(db, target.broker_firm_id)
+
+
+@router.post("/users/{user_id}/reset-sign-in", response_model=InvitationCreatedOut)
+def reset_user_sign_in(
+    user_id: str,
+    user: CurrentUser = Depends(require_firm_owner),
+    db: Session = Depends(get_db),
+) -> InvitationCreatedOut:
+    """Recover a staff account whose password or authenticator is lost.
+
+    Removes the account's password and authenticator (recovery codes with
+    it), ends its sessions and returns it to `invited` with a fresh
+    single-use invitation link, shown once like a new invitation's. The
+    person accepts it as an invitee: a password account sets a new password
+    and enrols a new authenticator; an account bound to Microsoft signs in
+    with Microsoft again. Role, company grants and the Microsoft binding are
+    kept. Nobody resets their own sign-in; a disabled account is reset
+    straight to `invited`; outside the owner's firm a platform admin needs a
+    `write` grant.
+    """
+    target = _load_firm_user(db, user, user_id)
+    _assert_sign_in_resettable(db, user, target)
+    # A platform admin's invitation records the issuing firm (the column is
+    # required), as `create_invitation` does.
+    firm_id = target.broker_firm_id or _resolve_target_firm(user, None, db)
+
+    before_status = target.status
+    cred = credential(db, target.id)
+    if cred is not None:
+        db.delete(cred)
+    had_authenticator = mfa.status_for(db, BROKER_SUBJECT, target.id) != "none"
+    mfa.disable(db, BROKER_SUBJECT, target.id)
+    revoked = sessions.revoke_all_for_subject(db, BROKER_SUBJECT, target.id)
+    revoked += sessions.revoke_all_for_subject(db, SUBJECT_USER, target.id)
+    _retire_invitation_links(db, target)
+    target.status = USER_STATUS_INVITED
+    invite, raw_token = _issue_invitation(
+        db, user, email=target.email, firm_id=firm_id, role=target.role, client_ids=[]
+    )
+
+    if cred is not None:
+        _record_sign_in_reset(db, user, target, auth_events.EVENT_PASSWORD_RESET_REQUEST, revoked)
+    if had_authenticator:
+        _record_sign_in_reset(db, user, target, auth_events.EVENT_MFA_RESET, revoked)
+    after = {"status": USER_STATUS_INVITED, "password_removed": cred is not None,
+             "authenticator_removed": had_authenticator, "sessions_revoked": revoked,
+             "invitation_id": invite.id}
+    if user.role == ROLE_SYSTEM_ADMIN:
+        write_platform_audit(db, user, action="user.reset_sign_in", entity_type="user",
+                             entity_id=target.id, broker_firm_id=firm_id,
+                             detail={"email": target.email, **after})
+    # Filed in the account's own firm (a platform admin's own row: `public`).
+    set_search_path(db, target.broker_firm_id)
+    write_audit(db, user, action="reset_sign_in", entity_type="user", entity_id=target.id,
+                before={"status": before_status}, after=after, client_id=None)
+    db.commit()
+    invite_url = _invite_url(db, firm_id, invite.role, raw_token)
+    if invite_url is not None:
+        _mail_invitation(db, invite.email, firm_id, invite.role, invite_url)
+    return InvitationCreatedOut(
+        id=invite.id, email=invite.email, role=invite.role, status=invite.status,
+        broker_firm_id=firm_id, user_id=target.id, expires_at=invite.expires_at,
+        invite_token=raw_token, invite_url=invite_url,
+    )

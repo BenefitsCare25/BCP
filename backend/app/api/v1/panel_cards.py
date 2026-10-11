@@ -39,6 +39,7 @@ from app.core.auth import CurrentUser, get_current_user
 from app.core.deps import (
     _deny_cross_tenant,
     assert_policy_year_for_user,
+    is_firm_owner,
     load_panel_card,
     load_policy_year,
     policy_year_company,
@@ -352,7 +353,14 @@ def set_card_placements(
 ) -> PanelCardOut:
     """Replace the card's field placements (the drag-editor's save)."""
     require_library_scope(user, card.client_id)
-    before = _placements_of(card).model_dump()
+    saved = _placements_of(card)
+    dropped = {f.key for f in saved.fields} - {f.key for f in payload.fields}
+    if dropped and not is_firm_owner(user):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Removing saved card fields requires a firm administrator.",
+        )
+    before = saved.model_dump()
     card.placements = payload.model_dump()
     write_audit(
         db,
@@ -519,10 +527,12 @@ def get_card_artwork(
         raise HTTPException(
             status.HTTP_502_BAD_GATEWAY, "Artwork could not be retrieved"
         ) from exc
+    # Revalidated on every fetch: a re-upload keeps this URL, and the layout
+    # editor must never position fields against the previous image.
     return Response(
         content=content,
         media_type=getattr(card, mime_field) or "application/octet-stream",
-        headers={"Cache-Control": "private, max-age=300"},
+        headers={"Cache-Control": "private, no-cache"},
     )
 
 

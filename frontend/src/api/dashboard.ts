@@ -76,8 +76,9 @@ export function useDashboardSummary(
   if (policyYearId) params.set("policy_year_id", policyYearId);
   return useQuery({
     queryKey: ["dashboard-summary", policyYearId ?? null, clientId],
-    queryFn: () =>
-      api.get<DashboardSummary>(
+    queryFn: (context) =>
+      api.poll<DashboardSummary>(
+        context,
         `/dashboard/summary?${params}`,
       ),
     staleTime: 30_000,

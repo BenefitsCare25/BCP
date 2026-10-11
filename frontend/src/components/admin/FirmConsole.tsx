@@ -27,6 +27,7 @@ import { GrantsTable } from "@/components/platform/GrantsTable";
 import { ListError, ListLoading } from "@/components/platform/QueryStates";
 import { CompanySelectItems } from "@/components/shell/CompanySelectItems";
 import { useAccessGrants } from "@/api/platform";
+import { useWriteAccess } from "@/lib/roles";
 import { useSession } from "@/stores/session";
 import { SignInMethodsCard } from "./SignInMethodsCard";
 import { CompanyBrandCard } from "./brand/CompanyBrandCard";
@@ -133,15 +134,26 @@ function BrandCards({ isSystemAdmin }: { isSystemAdmin: boolean }) {
   );
 }
 
+// Mounted for firm owners only, so a missing write right here is a read-only
+// access grant on this firm: its settings are shown, not changed.
 function FirmSignInMethodsCard() {
   const methods = useFirmSignInMethods();
   const update = useUpdateFirmSignInMethods();
-  return <SignInMethodsCard query={methods} update={update} subject="your firm's staff" />;
+  const { canRemove: canManage } = useWriteAccess();
+  return (
+    <SignInMethodsCard
+      query={methods}
+      update={update}
+      subject="your firm's staff"
+      readOnly={!canManage}
+    />
+  );
 }
 
 function WebAddressesCard() {
   const domains = useFirmDomains();
   const request = useRequestFirmDomain();
+  const { canRemove: canManage } = useWriteAccess();
   return (
     <Card>
       <CardHeader>
@@ -166,7 +178,7 @@ function WebAddressesCard() {
             <DomainsTable domains={domains.data} caption="Your firm's web addresses" />
           </div>
         )}
-        <section aria-labelledby="firm-domain-request" className="space-y-3">
+        {canManage && <section aria-labelledby="firm-domain-request" className="space-y-3">
           <h4 id="firm-domain-request" className="text-sm font-medium text-foreground">
             Request an address
           </h4>
@@ -182,7 +194,7 @@ function WebAddressesCard() {
               );
             }}
           />
-        </section>
+        </section>}
       </CardContent>
     </Card>
   );

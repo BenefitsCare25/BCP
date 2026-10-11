@@ -13,7 +13,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.audit import write_audit
@@ -67,11 +67,12 @@ from app.services.el_import.records import (
     unreadable_rows,
 )
 from app.services.el_import.underwriting import apply_listing_underwriting
-from app.services.el_workbook import ElCover, ElFormatError, ElLayout, ElWorkbook
+from app.services.el_workbook import ElCover, ElEmployee, ElFormatError, ElLayout, ElWorkbook
 from app.services.el_workbook import read_employee_listing as read_workbook
 from app.services.el_workbook.values import text
 from app.services.matching_engine import insured_names, normalize_entity
-from app.services.roster_dedup import employee_nric
+from app.services.roster_attributes import DOB_KEYS, first_value, iso_date
+from app.services.roster_dedup import DEP_NAME_KEYS, employee_nric, staff_key
 
 _DECISION_ROLES = {"category", "plan_type", "family_group", "admin_type"}
 
@@ -347,6 +348,17 @@ def _recorded(cover: ElCover) -> dict[str, Any]:
     }
 
 
+def _listed_employee(
+    listed: ElEmployee, by_staff: dict[str, Employee], by_nric: dict[str, Employee]
+) -> Employee | None:
+    staff_id = staff_key(listed.fields.get("staff_id"))
+    employee = by_staff.get(staff_id) if staff_id else None
+    if employee is None:
+        nric = employee_nric({"id_no": listed.fields.get("national_id")})
+        employee = by_nric.get(nric) if nric else None
+    return employee
+
+
 def _write_assignments(
     db: Session,
     client_id: str,
@@ -356,17 +368,21 @@ def _write_assignments(
     product_ids: dict[str, str],
     block_products: dict[int, list[str]],
 ) -> tuple[int, int]:
-    """Replace this year's listed cover with what the uploaded listing states.
+    """Replace the listed cover of everyone in the uploaded listing.
 
-    An employee listed with no cover at all still gets a row per listed
-    product, with no category: the listing says they are not covered, so
-    matching must not fall back to rules for them.
+    People absent from the file keep the cover an earlier listing stated, as
+    the roster keeps them. A block whose listed wording is mapped to "not
+    covered", and every block of an employee listed with no cover at all, get a
+    row per product with no category: the listing says
+    they are not covered, so matching must not fall back to rules for them.
+    A repeated row for the same person and product (a duplicate staff ID)
+    keeps the first, as the movement planner does.
     """
     employees = list(db.execute(
         select(Employee).where(Employee.policy_year_id == policy_year_id,
                                Employee.client_id == client_id)
     ).scalars())
-    by_staff = {e.staff_id.strip().lower(): e for e in employees if e.staff_id}
+    by_staff = {staff_key(e.staff_id): e for e in employees if e.staff_id}
     by_nric = {e.national_id_normalized: e for e in employees if e.national_id_normalized}
     dependants: dict[str, list[Dependant]] = {}
     for dep in db.execute(
@@ -375,38 +391,56 @@ def _write_assignments(
     ).scalars():
         dependants.setdefault(dep.employee_id or "", []).append(dep)
 
-    db.execute(delete(ListingAssignment).where(
-        ListingAssignment.policy_year_id == policy_year_id,
-        ListingAssignment.client_id == client_id,
-    ))
+    resolved = [
+        (listed, employee) for listed in workbook.employees
+        if (employee := _listed_employee(listed, by_staff, by_nric)) is not None
+    ]
+    listed_ids = {employee.id for _, employee in resolved}
+    if listed_ids:
+        # A dependant's row is keyed by the dependant, not the employee it was
+        # listed under, so one re-linked since an earlier listing is cleared too.
+        listed_dependant_ids = {d.id for e in listed_ids for d in dependants.get(e, [])}
+        db.execute(delete(ListingAssignment).where(
+            ListingAssignment.policy_year_id == policy_year_id,
+            ListingAssignment.client_id == client_id,
+            or_(
+                ListingAssignment.employee_id.in_(listed_ids),
+                ListingAssignment.dependant_id.in_(listed_dependant_ids),
+            ),
+        ))
+    written: set[tuple[str, str]] = set()
+
+    def add(row: ListingAssignment) -> int:
+        key = (row.member_key, row.product_id)
+        if key in written:
+            return 0
+        written.add(key)
+        db.add(row)
+        return 1
+
     emp_count = dep_count = 0
-    for listed in workbook.employees:
-        staff_id = text(listed.fields.get("staff_id")).lower()
-        employee = by_staff.get(staff_id) if staff_id else None
-        if employee is None:
-            nric = employee_nric({"id_no": listed.fields.get("national_id")})
-            employee = by_nric.get(nric) if nric else None
-        if employee is None:
-            continue
+    for listed, employee in resolved:
         own: dict[int, LabelSuggestion] = {}
+        not_covered = [] if listed.covers else list(block_products)
         for cover in listed.covers:
             label = normalize_label(text(cover.values.get("category")))
             decision = decisions.get((cover.block, label))
+            if decision is not None and decision.not_covered:
+                not_covered.append(cover.block)
+                continue
             if decision is None or decision.choice is None:
                 continue
             own[cover.block] = decision
-            db.add(_assignment(client_id, policy_year_id, employee.id, None, cover,
-                               decision, product_ids, listed.row))
-            emp_count += 1
-        if not listed.covers:
-            for block, codes in block_products.items():
-                for code in codes:
-                    db.add(ListingAssignment(
-                        client_id=client_id, policy_year_id=policy_year_id,
-                        employee_id=employee.id, member_key=f"E:{employee.id}",
-                        product_id=product_ids[code], category_id=None,
-                        block_index=block, recorded={}, source_row=listed.row,
-                    ))
+            emp_count += add(_assignment(client_id, policy_year_id, employee.id, None, cover,
+                                         decision, product_ids, listed.row))
+        for block in not_covered:
+            for code in block_products.get(block, []):
+                add(ListingAssignment(
+                    client_id=client_id, policy_year_id=policy_year_id,
+                    employee_id=employee.id, member_key=f"E:{employee.id}",
+                    product_id=product_ids[code], category_id=None,
+                    block_index=block, recorded={}, source_row=listed.row,
+                ))
         for listed_dep in listed.dependants:
             dependant = _find_dependant(dependants.get(employee.id, []), listed_dep.fields)
             if dependant is None:
@@ -416,9 +450,9 @@ def _write_assignments(
                 decision = decisions.get((cover.block, key)) if key else own.get(cover.block)
                 if decision is None or decision.choice is None:
                     continue
-                db.add(_assignment(client_id, policy_year_id, employee.id, dependant.id,
-                                   cover, decision, product_ids, listed_dep.row))
-                dep_count += 1
+                dep_count += add(_assignment(client_id, policy_year_id, employee.id,
+                                             dependant.id, cover, decision, product_ids,
+                                             listed_dep.row))
     db.flush()
     return emp_count, dep_count
 
@@ -429,8 +463,8 @@ def _find_dependant(candidates: list[Dependant], fields: dict[str, Any]) -> Depe
     dob_text = dob.isoformat() if isinstance(dob, date) else ""
     for dep in candidates:
         attrs = dep.attribute_values or {}
-        if text(attrs.get("dependant_name")).lower() == name and (
-            not dob_text or str(attrs.get("date_of_birth") or "")[:10] == dob_text
+        if text(first_value(attrs, DEP_NAME_KEYS)).lower() == name and (
+            not dob_text or iso_date(first_value(attrs, DOB_KEYS)) == dob_text
         ):
             return dep
     return None

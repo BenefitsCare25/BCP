@@ -165,7 +165,15 @@ def _selection_table(s: dict[str, Any]) -> str:
         f"<th>Family covered</th>{flex_head}<th class='right'>You pay (annual)</th></tr>"
     ]
     for sel in s.get("selections", []):
-        choice = "Declined" if sel.get("declined") else (sel.get("elected_plan") or "Included")
+        # Voluntary cover the member was only eligible for: before = nothing
+        # held, and staying out of it is "not enrolled", not a decline.
+        eligible_only = bool(sel.get("eligible_only"))
+        choice = (
+            ("Not enrolled" if eligible_only else "Declined")
+            if sel.get("declined")
+            else (sel.get("elected_plan") or "Included")
+        )
+        before = "Not enrolled" if eligible_only else sel.get("previous_plan")
         family = escape(", ".join(sel.get("covered") or [])) or "-"
         if sel.get("withdrawn"):
             gone = escape(", ".join(sel["withdrawn"]))
@@ -175,7 +183,7 @@ def _selection_table(s: dict[str, Any]) -> str:
             benefit += f"<br/><span class='muted small'>{_e(sel['insurer'])}</span>"
         out.append(
             f"<tr><td>{benefit}</td>"
-            f"<td>{_keep(sel.get('previous_plan'))}</td><td>{_keep(choice)}</td>"
+            f"<td>{_keep(before)}</td><td>{_keep(choice)}</td>"
             f"<td>{'-' if sel.get('declined') else _cover(sel)}</td><td>{family}</td>"
             + (
                 f"<td class='right'>{_money(sel.get('price_tag'), currency)}</td>"

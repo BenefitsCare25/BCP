@@ -1,4 +1,4 @@
-import { usePortalTranslation } from "@/i18n/portal";
+import { portalText, usePortalTranslation } from "@/i18n/portal";
 /** Which earlier visit this claim continues.
  *
  * Two claim types are continuations by definition: a pre-/post-hospitalisation
@@ -27,7 +27,7 @@ import type { NewClaimForm } from "./useNewClaimForm";
  * otherwise the one date we have. The range is what a member recognises: they
  * remember being in hospital for a week, not the date a bill was raised. */
 function anchorLabel(a: ClaimAnchor): string {
-  const where = a.provider_name?.trim() || "Hospital not recorded";
+  const where = a.provider_name?.trim() || portalText("Hospital not recorded");
   const when =
     a.admission_date && a.discharge_date
       ? `${formatDay(a.admission_date)} – ${formatDay(a.discharge_date)}`

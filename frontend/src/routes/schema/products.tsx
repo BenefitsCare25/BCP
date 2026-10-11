@@ -46,7 +46,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { formatError } from "@/lib/errors";
-import { isBrokerAdminRole } from "@/lib/roles";
+import { isBrokerAdminRole, isReadOnlyAccess } from "@/lib/roles";
 import type { Product } from "@/types";
 
 const PARTICIPATION_MODELS: ProductPayload["participation_model"][] = [
@@ -87,6 +87,7 @@ export function SchemaProductsPage({
   const { data: products = [], isLoading } = useProducts();
   const { data: me } = useMe();
   const isAdmin = isBrokerAdminRole(me?.role);
+  const readOnly = isReadOnlyAccess(me?.role, me?.platform_access);
   const create = useCreateProduct();
   const update = useUpdateProduct();
   const remove = useDeleteProduct();
@@ -128,7 +129,8 @@ export function SchemaProductsPage({
         await create.mutateAsync({ payload, scope });
         toast.success(`Added ${payload.display_name}`);
       }
-      onOpenChange(false);
+      // Radix does not report a programmatic close, so clear the edit state here.
+      onSheetOpenChange(false);
     } catch (err) {
       toast.error(formatError(err));
     }
@@ -351,20 +353,22 @@ export function SchemaProductsPage({
                       </TableCell>
                       <TableCell>
                         <div className="flex gap-1 justify-end">
-                          <Button
-                            variant="ghost"
-                            size="icon-sm"
-                            disabled={locked}
-                            title={
-                              locked
-                                ? "Firm-library defaults are admin-only"
-                                : undefined
-                            }
-                            onClick={() => beginEdit(p)}
-                            aria-label="Edit product"
-                          >
-                            <Pencil className="size-3.5" />
-                          </Button>
+                          {!readOnly && (
+                            <Button
+                              variant="ghost"
+                              size="icon-sm"
+                              disabled={locked}
+                              title={
+                                locked
+                                  ? "Firm-library defaults are admin-only"
+                                  : undefined
+                              }
+                              onClick={() => beginEdit(p)}
+                              aria-label="Edit product"
+                            >
+                              <Pencil className="size-3.5" />
+                            </Button>
+                          )}
                           <FirmOwnerOnly><Button
                             variant="ghost"
                             size="icon-sm"
@@ -397,10 +401,13 @@ export function SchemaProductsPage({
         title={`Delete product ${deleting?.display_name ?? ""}?`}
         description={
           <>
-            Product <code>{deleting?.code}</code> will be removed. Any
-            categories already mapped to this product retain the link but the
-            display name lookup will fall back to the raw code. This cannot be
-            undone.
+            Product <code>{deleting?.code}</code> will be removed.{" "}
+            {deleting?.client_id === null
+              ? "It is a firm-library default, so it is removed for every company. "
+              : ""}
+            A product still used by employee categories, plans, enrolment
+            elections or policy terms in any benefit year cannot be deleted.
+            This cannot be undone.
           </>
         }
         confirmLabel="Delete product"

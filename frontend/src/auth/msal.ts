@@ -154,8 +154,9 @@ export function getActiveAccount(): AccountInfo | null {
  */
 export async function acquireAccessToken(
   _account: AccountInfo,
+  passive = false,
 ): Promise<string | null> {
-  return brokerAccessToken();
+  return brokerAccessToken(passive);
 }
 
 export async function signIn(options?: {

@@ -48,6 +48,7 @@ from app.services.dependant_coverage import (
 from app.services.el_report_rules import ReportRules, mapping, positive_number
 from app.services.flex_membership import classify_relationship
 from app.services.plan_hydration import salary_from_attrs, salary_multiple
+from app.services.product_terms import product_ids_in_year, term_window
 from app.services.roster_attributes import (
     DOB_KEYS,
     REL_KEYS,
@@ -140,12 +141,16 @@ def product_limits(
         )
     }
     wanted = product_code.upper() if product_code else None
+    # A term row is optional: products without one inherit the year's span.
+    terms = {
+        t.product_id: t
+        for t in db.scalars(
+            select(ProductTerm).where(ProductTerm.policy_year_id == policy_year.id)
+        )
+    }
+    pids = product_ids_in_year(db, policy_year.id) | set(terms)
     out: dict[str, ProductLimits] = {}
-    for product, term in db.execute(
-        select(Product, ProductTerm)
-        .join(ProductTerm, ProductTerm.product_id == Product.id)
-        .where(ProductTerm.policy_year_id == policy_year.id)
-    ).all():
+    for product in db.scalars(select(Product).where(Product.id.in_(pids))):
         code = product.code.upper()
         if wanted and code != wanted:
             continue
@@ -174,6 +179,12 @@ def product_limits(
             for token in str(eligibility.get("member_cover_eligibility") or "").split(",")
             if token.strip()
         }
+        term = terms.get(product.id)
+        cover_start, _, _ = term_window(
+            term.coverage_start if term else None,
+            term.coverage_end if term else None,
+            policy_year,
+        )
         out[product.id] = ProductLimits(
             product_id=product.id,
             code=product.code,
@@ -185,7 +196,7 @@ def product_limits(
             max_sum_insured=positive_number(values["max_sum_insured"]),
             entry_exempt=frozenset(exempt),
             alb=ReportRules.from_answers(answers).age_basis == "ALB",
-            cover_start=term.coverage_start,
+            cover_start=cover_start,
             roles=frozenset(roles),
             setup_has_member_cover=has_member_cover_eligibility_answer(answers),
         )

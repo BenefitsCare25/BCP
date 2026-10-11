@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -26,7 +25,7 @@ from app.core.ai_config import (
     assert_vertex_location_writable,
     pack_vertex_secret,
 )
-from app.core.audit import write_audit
+from app.core.audit import write_platform_audit
 from app.core.auth import CurrentUser
 from app.core.crypto import encrypt_secret, fingerprint
 from app.core.deps import require_system_admin
@@ -42,7 +41,11 @@ from app.schemas.api import (
     PlatformAISettingsUpdate,
 )
 from app.services.platform_ai_settings import resolve_platform_ai_limits
-from app.services.vertex_probe import probe_vertex, project_id_from_service_account
+from app.services.vertex_probe import (
+    probe_vertex,
+    project_id_from_service_account,
+    record_stored_probe,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +94,31 @@ def _get_or_create(db: Session) -> tuple[PlatformAISetting, bool]:
     return row, True
 
 
+def _audit(
+    db: Session,
+    user: CurrentUser,
+    verb: str,
+    entity_type: str,
+    *,
+    before: dict[str, Any] | None,
+    after: dict[str, Any] | None,
+) -> None:
+    """Record a change in the platform trail. Caller commits.
+
+    The key and limits span every company, so they belong to none: a tenant
+    trail would file them under whichever company the admin had selected and
+    show the fleet credential's details to that company's brokers.
+    """
+    write_platform_audit(
+        db,
+        user,
+        action=f"{entity_type}.{verb}",
+        entity_type=entity_type,
+        entity_id=SINGLETON_ID,
+        detail={"before": before, "after": after},
+    )
+
+
 def _key_snapshot(row: PlatformAISetting) -> dict[str, Any]:
     return {
         "provider": row.provider,
@@ -129,12 +157,11 @@ def put_platform_ai_settings(
     row.platform_monthly_token_cap = payload.platform_monthly_token_cap
     row.default_monthly_token_budget = payload.default_monthly_token_budget
     row.max_concurrent_calls = payload.max_concurrent_calls
-    write_audit(
+    _audit(
         db,
         user,
-        action="create" if created else "update",
-        entity_type="platform_ai_settings",
-        entity_id=SINGLETON_ID,
+        "create" if created else "update",
+        "platform_ai_settings",
         before=before,
         after={
             "platform_monthly_token_cap": row.platform_monthly_token_cap,
@@ -193,12 +220,11 @@ def put_platform_ai_credentials(
     row.validation_status = "unvalidated"
     db.flush()
 
-    write_audit(
+    _audit(
         db,
         user,
-        action="update" if had_key else "create",
-        entity_type="platform_ai_credentials",
-        entity_id=SINGLETON_ID,
+        "update" if had_key else "create",
+        "platform_ai_credentials",
         before=before,
         after=_key_snapshot(row),
     )
@@ -229,14 +255,7 @@ def delete_platform_ai_credentials(
     row.validated_location = None
     row.validated_capacity_mode = None
     row.validation_status = None
-    write_audit(
-        db,
-        user,
-        action="delete",
-        entity_type="platform_ai_credentials",
-        entity_id=SINGLETON_ID,
-        before=before,
-    )
+    _audit(db, user, "delete", "platform_ai_credentials", before=before, after=None)
     db.commit()
     return _effective(db)
 
@@ -290,27 +309,26 @@ def test_platform_ai_credentials(
                 latency_ms=0,
             )
 
-    error, latency_ms, _model = probe_vertex(
+    result = probe_vertex(
         location=location,
         model=model,
         service_account_json=service_account_json,
         project_id=project_id,
         source="platform",
+        capacity_mode=capacity_mode,
     )
 
     # Draft probes may reuse the stored key, but only an explicit stored-row
     # probe is allowed to alter activation provenance.
     if payload is None and row is not None and row.encrypted_service_account:
-        if error is None:
-            row.last_validated_at = datetime.now(tz=UTC)
-            row.validated_fingerprint = row.key_fingerprint
-            row.validated_model = model or DEFAULT_VERTEX_MODEL
-            row.validated_location = location or DEFAULT_VERTEX_LOCATION
-            row.validated_capacity_mode = capacity_mode
-            row.validation_status = "active"
-        else:
-            row.validation_status = "invalid"
-        row.last_validation_error = error
+        record_stored_probe(
+            row,
+            result,
+            location=location or DEFAULT_VERTEX_LOCATION,
+            capacity_mode=capacity_mode,
+        )
         db.commit()
 
-    return AIConfigTestResult(ok=error is None, error=error, latency_ms=latency_ms)
+    return AIConfigTestResult(
+        ok=result.error is None, error=result.error, latency_ms=result.latency_ms
+    )

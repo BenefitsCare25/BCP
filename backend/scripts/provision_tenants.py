@@ -18,6 +18,8 @@ operations section in docs/PRODUCTION_RESILIENCE_RUNBOOK.md).
 """
 from __future__ import annotations
 
+import sys
+
 from sqlalchemy import select
 
 from app.db.session import SessionLocal, engine
@@ -38,8 +40,17 @@ def main() -> None:
         print(f"  {len(pending)} firm(s) awaiting provisioning: {', '.join(sorted(pending))}")
     for fid in firm_ids:
         schema = sync_firm_schema(engine, fid)
-        reconciled = reconcile_legacy_reviews(fid)
         action = "provisioned" if fid in pending else "synced"
+        # One firm's review data must never stop the remaining firms' schema sync.
+        try:
+            reconciled = reconcile_legacy_reviews(fid)
+        except Exception as exc:
+            print(
+                f"  {action} {schema}; legacy review reconcile FAILED "
+                f"({type(exc).__name__}) — fix the data and re-run",
+                file=sys.stderr,
+            )
+            continue
         print(f"  {action} {schema}; reconciled {reconciled} legacy review(s)")
     print(f"Done: {len(firm_ids)} firm schema(s) provisioned/synced.")
 

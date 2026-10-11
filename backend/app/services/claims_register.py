@@ -10,11 +10,14 @@ so the workbook style matches the other reports.
 """
 from __future__ import annotations
 
+from datetime import datetime
+
 from openpyxl import Workbook
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.elements import ColumnElement
 
+from app.core.clock import business_datetime
 from app.models import Claim, Employee, PolicyYear
 from app.models.claim import (
     CASE_TYPE_LOG,
@@ -70,6 +73,13 @@ CLAIMS_REGISTER_HEADER = [
 
 def _status_label(status: str) -> str:
     return status.replace("_", " ").title()
+
+
+def _business_time(value: datetime | None) -> datetime | None:
+    """A stored UTC instant as the Singapore wall-clock time the claims team
+    and the insurer read — a 07:30 SGT submission must not print as the
+    previous evening."""
+    return naive(business_datetime(value)) if value is not None else None
 
 
 def _anchor_ref(claim: Claim, anchors: dict[str, Claim]) -> str:
@@ -155,8 +165,8 @@ def build_claims_register_workbook(
             claim.amount_claimed,
             policy_amount(claim) if is_foreign(claim) else None,
             claim.amount_approved,
-            naive(claim.submitted_at),
-            naive(claim.decided_at),
+            _business_time(claim.submitted_at),
+            _business_time(claim.decided_at),
             f"{years[claim.policy_year_id].start_date:%d %b %Y} - "
             f"{years[claim.policy_year_id].end_date:%d %b %Y}",
             *placement_cells(db, claim),

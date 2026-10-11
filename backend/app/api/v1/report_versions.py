@@ -23,6 +23,7 @@ from app.core.deps import (
     load_report_version,
     user_owns,
 )
+from app.core.downloads import attachment_header
 from app.core.rate_limit import limiter
 from app.core.storage import (
     StorageScopeError,
@@ -243,7 +244,7 @@ def _blob_response(rv: ReportVersion, content: bytes) -> Response:
     return Response(
         content=content,
         media_type=rv.mime_type,
-        headers={"Content-Disposition": f'attachment; filename="{rv.file_name}"'},
+        headers={"Content-Disposition": attachment_header(rv.file_name)},
     )
 
 
@@ -394,7 +395,5 @@ def download_movement(
     return Response(
         content=buf.getvalue(),
         media_type=_XLSX_MEDIA_TYPE,
-        headers={
-            "Content-Disposition": f'attachment; filename="{stem}-movement.xlsx"'
-        },
+        headers={"Content-Disposition": attachment_header(f"{stem}-movement.xlsx")},
     )

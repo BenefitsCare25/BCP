@@ -436,11 +436,20 @@ test("year-specific deadlines, products, and panel networks stay isolated", asyn
     }
   }
   expect(listing).toBeDefined();
+  // Add the network to the year without unticking the ones already saved:
+  // removing a saved network is a firm-administrator action.
+  const currentPanels = await apiJson<{ panel_listing_ids: string[] }>(
+    await request.get(`${API}/policy-years/${years.current.id}/panels`, {
+      headers: years.headers,
+    }),
+  );
   const panelsResponse = await request.put(
     `${API}/policy-years/${years.current.id}/panels`,
     {
       headers: years.headers,
-      data: { panel_listing_ids: [listing!.id] },
+      data: {
+        panel_listing_ids: [...new Set([...currentPanels.panel_listing_ids, listing!.id])],
+      },
     },
   );
   expect(panelsResponse.ok(), await panelsResponse.text()).toBeTruthy();

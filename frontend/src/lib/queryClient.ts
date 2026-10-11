@@ -78,8 +78,10 @@ export const queryClient = new QueryClient({
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["dashboard-summary"] });
       // Limit crossings are recomputed from roster, matching and setup, so any
-      // saved change may add or clear one.
+      // saved change may add or clear one. Launch readiness reads the same
+      // crossings plus setup, plan and category status.
       void queryClient.invalidateQueries({ queryKey: ["coverage-limits"] });
+      void queryClient.invalidateQueries({ queryKey: ["policy-year-readiness"] });
     },
     onError: (error, _variables, _context, mutation) => {
       // Mutations that own their error UX (e.g. a structured-409 dialog on

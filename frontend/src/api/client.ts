@@ -3,7 +3,9 @@ import {
   getActiveAccount,
   clearLocalSession,
 } from "@/auth/msal";
+import { PASSIVE_ACTIVITY } from "@/auth/brokerSession";
 import { brokerAuthEnabled } from "@/auth/staffSignIn";
+import type { QueryClient, QueryKey } from "@tanstack/react-query";
 import { ApiError, errorFromText, parseErrorText, uploadRefusal } from "@/lib/errors";
 import { toast } from "sonner";
 import { useSession } from "@/stores/session";
@@ -161,11 +163,11 @@ function uploadError(text: string, res: Response): Error {
   return errorFromText(res.status, text, res.statusText);
 }
 
-async function authHeader(): Promise<Record<string, string>> {
+async function authHeader(passive = false): Promise<Record<string, string>> {
   if (!brokerAuthEnabled()) return {};
   const account = getActiveAccount();
   if (!account) return {};
-  const token = await acquireAccessToken(account);
+  const token = await acquireAccessToken(account, passive);
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
@@ -175,7 +177,9 @@ async function handleUnauthorized(): Promise<never> {
   const authEnabled = brokerAuthEnabled();
   if (authEnabled) {
     await clearLocalSession();
-    window.location.assign("/sign-in");
+    // Back to this page once signed in again (`auth/returnPath`).
+    const here = `${window.location.pathname}${window.location.search}`;
+    window.location.assign(`${SIGN_IN_PATH}?from=${encodeURIComponent(here)}`);
   }
   throw new UnauthorizedError(
     authEnabled
@@ -232,7 +236,8 @@ async function fail(
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const scope = scopeHeaders();
-  const auth = await authHeader();
+  const passive = new Headers(init.headers).get("X-Inspro-Session-Activity") === "passive";
+  const auth = await authHeader(passive);
   const res = await fetch(`${API_BASE}${path}`, {
     ...init,
     headers: {
@@ -252,6 +257,20 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 
 export const api = {
   get: <T>(path: string, init: RequestInit = {}) => request<T>(path, init),
+  /** GET for a polled query. Its first load counts as user activity; a
+   *  refetch of data already on screen (the poll itself, a refocus) is
+   *  passive, so a page left open cannot hold the session past its idle
+   *  limit. */
+  poll: <T>(
+    { client, queryKey }: { client: QueryClient; queryKey: QueryKey },
+    path: string,
+    headers: Record<string, string> = {},
+  ) =>
+    request<T>(path, {
+      headers: client.getQueryData(queryKey) === undefined
+        ? headers
+        : { ...headers, ...PASSIVE_ACTIVITY },
+    }),
   post: <T>(path: string, body: unknown, init: RequestInit = {}) =>
     request<T>(path, {
       ...init,

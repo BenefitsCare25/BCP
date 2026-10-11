@@ -41,7 +41,11 @@ from app.core.tenancy_host import (
     resolve_host_info,
     resolve_tenant_context,
 )
-from app.core.tenant_resolution import refuse_unserved_surface, request_firm
+from app.core.tenant_resolution import (
+    refuse_unserved_surface,
+    request_firm,
+    require_firm_active,
+)
 from app.db.session import get_db
 from app.db.tenancy import set_search_path
 from app.models.auth import SUBJECT_USER
@@ -365,10 +369,29 @@ def require_hr_tenant(
     header names the tenant instead — see `resolve_host_info`. The alias is
     looked up within the broker firm the host belongs to; a host that does
     not serve the client portals answers 404."""
+    return _hr_tenant(request, db, x_inspro_tenant_slug, include_disabled=False)
+
+
+def require_hr_session_tenant(
+    request: Request,
+    db: Session = Depends(get_db),
+    x_inspro_tenant_slug: str | None = Header(default=None),
+) -> TenantContext:
+    """`require_hr_tenant` that also resolves a switched-off company.
+
+    For `/refresh` and `/logout` only, which act on an existing session: they
+    must answer `hr_disabled` to it rather than "Unknown tenant.", and they
+    refuse a disabled company themselves (`ctx.enabled`)."""
+    return _hr_tenant(request, db, x_inspro_tenant_slug, include_disabled=True)
+
+
+def _hr_tenant(
+    request: Request, db: Session, slug_header: str | None, *, include_disabled: bool,
+) -> TenantContext:
     firm = request_firm(request)
     refuse_unserved_surface(firm, DOMAIN_SURFACE_CLIENT)
-    host_info = resolve_host_info(request, SURFACE_HR, x_inspro_tenant_slug)
-    ctx = resolve_tenant_context(host_info, db, firm)
+    host_info = resolve_host_info(request, SURFACE_HR, slug_header)
+    ctx = resolve_tenant_context(host_info, db, firm, include_disabled=include_disabled)
     if ctx is None or ctx.surface != SURFACE_HR:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
@@ -396,6 +419,12 @@ def optional_hr_tenant(
     )
 
 
+HR_DISABLED_DETAIL: dict[str, str] = {
+    "code": "hr_disabled",
+    "message": "HR portal access for this company is switched off.",
+}
+
+
 def require_hr_enabled(client: Client) -> None:
     """403 `hr_disabled` when the company's HR portal switch is off.
 
@@ -403,10 +432,7 @@ def require_hr_enabled(client: Client) -> None:
     has to stop what live sessions can do, not just new sign-ins.
     """
     if not client.hr_enabled:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, {
-            "code": "hr_disabled",
-            "message": "HR portal access for this company is switched off.",
-        })
+        raise HTTPException(status.HTTP_403_FORBIDDEN, HR_DISABLED_DETAIL)
 
 
 # ── Refresh cookie ─────────────────────────────────────────────────────────────
@@ -486,6 +512,7 @@ def get_current_hr_user(
     # company does not exist. Checked before the session is touched.
     if firm is not None and client.broker_firm_id != firm.firm_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Unknown tenant.")
+    require_firm_active(db, client.broker_firm_id)
     policy = get_auth_policy(db, str(client_id))
     session = SESS.validate_access_session(
         db, str(claims.get("sid", "")), subject_type=SUBJECT_USER,

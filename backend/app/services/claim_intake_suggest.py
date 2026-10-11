@@ -31,12 +31,13 @@ from app.schemas.claims import (
 )
 from app.services.claim_doc_types import (
     DocTypeDefinition,
-    classify_document,
+    classify_matches,
     definition_targets_scope,
 )
 from app.services.claim_intake import (
     ALLOWED_CURRENCIES,
     GHS_GENERIC_SCOPE_CODES,
+    GHS_SECTOR_SCOPE_CODES,
     GHS_SUB_TYPES,
     SUB_TYPE_HOSPITALISATION,
     SUB_TYPE_PHYSIO,
@@ -99,6 +100,17 @@ _PROVIDER_KEYWORDS = (
     "clinic", "hospital", "provider", "practice", "medical",
     "centre", "center", "dental", "surgery",
 )
+# The subset that names an institution even as a bare label ("Clinic").
+_PROVIDER_NOUNS = ("clinic", "hospital", "provider", "practice", "centre", "center")
+# Labels that carry a provider word but name something else: the leave a
+# clinic certified, a fee it charged, the operation performed, its number.
+_NON_PROVIDER_LABEL_RE = re.compile(
+    r"\b(?:leave|fees?|charges?|performed|procedures?|certificates?|no|number"
+    r"|ref|reference|code|date|time|amount|total|address|phone|tel|fax|email"
+    r"|stay|type|class|ward|bill|account|history|report)\b"
+)
+# Labels that name the institution itself — preferred over a bare keyword.
+_PROVIDER_NAME_LABEL_RE = re.compile(r"\b(?:name|provider|issued by)\b")
 
 # Name fields that are NOT the patient — a hospital bill carries several "…Name"
 # fields; only the patient's should drive claimant detection.
@@ -408,6 +420,34 @@ def _keyworded(
     return _val(best) or None, _conf(best)
 
 
+def _is_provider_label(label: str) -> bool:
+    if _NON_PROVIDER_LABEL_RE.search(label) or any(k in label for k in _DOCTOR_KEYWORDS):
+        return False
+    if any(k in label for k in _PROVIDER_NOUNS) or "issued by" in label:
+        return True
+    # "Medical", "Dental" and "Surgery" alone describe a leave, a fee or the
+    # operation itself; they name the institution only beside "name".
+    return "name" in label and any(k in label for k in _PROVIDER_KEYWORDS)
+
+
+def _provider_name(fields: list[dict[str, Any]]) -> tuple[str | None, float]:
+    """The treating institution named on the document.
+
+    Provider words also label fields that name something else ("Medical
+    Leave", "Surgery Performed", "Dental Fee"), so those are excluded, and a
+    label that NAMES the institution ("Hospital Name", "Provider", "Issued By")
+    beats a bare keyword match whatever their relative confidence.
+    """
+    cands = [f for f in fields if _is_provider_label(_label(f)) and _val(f)]
+    if not cands:
+        return None, 0.0
+    best = max(
+        cands,
+        key=lambda f: (bool(_PROVIDER_NAME_LABEL_RE.search(_label(f))), _conf(f)),
+    )
+    return _val(best), _conf(best)
+
+
 def _invoice_number(fields: list[dict[str, Any]]) -> tuple[str | None, float]:
     cands = [
         f for f in fields
@@ -591,6 +631,39 @@ def _gp_consult_context(document: dict[str, Any]) -> bool:
     return bool(_GP_CONSULT_RE.search(body))
 
 
+_GHS_SCOPE_CODES = GHS_GENERIC_SCOPE_CODES | GHS_SECTOR_SCOPE_CODES
+
+
+def _is_inpatient_definition(definition: DocTypeDefinition) -> bool:
+    """Whether a recognised document evidences an inpatient (GHS) claim.
+
+    Sectored bills and the legacy registry's unscoped types are inpatient by
+    construction. A claim-type setup document is inpatient only when every
+    choice it is configured for is a GHS subclaim, so a GP "Receipt" never
+    routes a clinic bill to the hospital product.
+    """
+    if definition.sector is not None or not definition.claim_scope_keys:
+        return True
+    return all(
+        key.rsplit(":", 1)[-1] in _GHS_SCOPE_CODES
+        for key in definition.claim_scope_keys
+    )
+
+
+def _recognised_inpatient(
+    document_type: str | None,
+    fields: list[dict[str, Any]],
+    doc_types: Sequence[DocTypeDefinition] | None,
+    sector_hint: str | None = None,
+) -> bool:
+    return any(
+        _is_inpatient_definition(definition)
+        for definition in classify_matches(
+            document_type, fields, definitions=doc_types, sector_hint=sector_hint
+        )
+    )
+
+
 def _target_settings(
     document: dict[str, Any],
     text: str,
@@ -614,12 +687,9 @@ def _target_settings(
     # "Endoscopy Report") or an invoice with inpatient markers (admission/
     # discharge/HRN/case/schemes) identifies an inpatient document even when
     # the free-text type carries no "discharge"/"hospital" wording.
-    if classify_document(
-        dt,
-        _fields(document),
-        definitions=doc_types,
-        sector_hint=hospital_sector(provider),
-    ) is not None:
+    if _recognised_inpatient(
+        dt, _fields(document), doc_types, hospital_sector(provider)
+    ):
         return {"inpatient_hosp", "inpatient_other"}, False
     if any(k in dt for k in ("discharge", "hospital bill", "medical report")):
         return {"inpatient_hosp", "inpatient_other"}, False
@@ -703,13 +773,13 @@ def _routing_scope_keys(
     return (*leaves, scope_key)
 
 
-def _infer_claim_type(
-    document: dict[str, Any],
-    coverage_opts: CoverageOptionsOut,
-    claimant: IntakeClaimant | None,
-    provider: str | None,
-    doc_types: Sequence[DocTypeDefinition] | None,
-) -> tuple[str | None, list[str]]:
+# (selection value, inferred setting, sub_type, stable scope key)
+_ClaimEntry = tuple[str, str, str | None, str]
+
+
+def _claim_entries(
+    coverage_opts: CoverageOptionsOut, claimant: IntakeClaimant | None
+) -> list[_ClaimEntry]:
     # Insured products offered for the resolved claimant (mirror the form's
     # claimant filter); default to all when the claimant is unknown.
     if claimant and claimant.kind == "dependant":
@@ -720,16 +790,16 @@ def _infer_claim_type(
     else:
         insured = list(coverage_opts.insured)
 
-    entries: list[tuple[str, str, str | None, str]] = []
-    # (selection value, inferred setting, sub_type, stable scope key)
-    for opt in insured:
-        for i, ct in enumerate(opt.claim_types):
-            entries.append((
-                f"insured:{opt.product_code}:{i}",
-                _entry_setting(opt, ct.sub_type, ct.label),
-                ct.sub_type,
-                ct.scope_key,
-            ))
+    entries: list[_ClaimEntry] = [
+        (
+            f"insured:{opt.product_code}:{i}",
+            _entry_setting(opt, ct.sub_type, ct.label),
+            ct.sub_type,
+            ct.scope_key,
+        )
+        for opt in insured
+        for i, ct in enumerate(opt.claim_types)
+    ]
     if coverage_opts.flex is not None:
         entries.extend(
             (
@@ -740,37 +810,69 @@ def _infer_claim_type(
             )
             for category in coverage_opts.flex.categories
         )
+    return entries
 
+
+def _entry_matches(
+    definition: DocTypeDefinition, entry: _ClaimEntry, sector: str | None
+) -> bool:
+    _, _, sub_type, scope_key = entry
+    return any(
+        definition_targets_scope(definition, candidate)
+        for candidate in _routing_scope_keys(
+            scope_key, sub_type, definition.sector or sector
+        )
+    )
+
+
+def _configured_selections(
+    matches: Sequence[DocTypeDefinition],
+    entries: list[_ClaimEntry],
+    provider: str | None,
+) -> list[str]:
+    """Claim choices the recognised document is configured for, in form order."""
+    sector = hospital_sector(provider)
+    routed = [definition for definition in matches if definition.claim_scope_keys]
+    return list(dict.fromkeys(
+        entry[0]
+        for entry in entries
+        if any(_entry_matches(definition, entry, sector) for definition in routed)
+    ))
+
+
+def _document_definition(
+    matches: Sequence[DocTypeDefinition],
+    entries: list[_ClaimEntry],
+    selection: str | None,
+) -> DocTypeDefinition | None:
+    """The recognised definition configured for the selected claim choice, so
+    the upload lands in that choice's own slot; otherwise the first match."""
+    entry = next((e for e in entries if e[0] == selection), None)
+    if entry is not None:
+        own = next((d for d in matches if _entry_matches(d, entry, None)), None)
+        if own is not None:
+            return own
+    return matches[0] if matches else None
+
+
+def _infer_claim_type(
+    document: dict[str, Any],
+    coverage_opts: CoverageOptionsOut,
+    entries: list[_ClaimEntry],
+    matches: Sequence[DocTypeDefinition],
+    provider: str | None,
+    doc_types: Sequence[DocTypeDefinition] | None,
+) -> tuple[str | None, list[str]]:
     labels = " ".join(_label(f) + " " + _val(f) for f in _fields(document))
     text = " ".join(filter(None, [document.get("document_type") or "", provider or "", labels]))
 
     # Broker-configured routing is authoritative when the recognised document
-    # type maps to one or more scopes the member actually holds. Multiple
-    # matches remain candidates; the form never guesses between two covered
-    # products that intentionally share the same document definition.
-    definition = classify_document(
-        document.get("document_type"),
-        _fields(document),
-        definitions=doc_types,
-        sector_hint=hospital_sector(provider),
-    )
-    if definition is not None and definition.claim_scope_keys:
-        inferred_sector = definition.sector or hospital_sector(provider)
-        configured = [
-            value
-            for value, _, sub_type, scope_key in entries
-            if any(
-                definition_targets_scope(definition, candidate)
-                for candidate in _routing_scope_keys(
-                    scope_key, sub_type, inferred_sector
-                )
-            )
-        ]
-        configured = list(dict.fromkeys(configured))
-        if len(configured) == 1:
-            return configured[0], []
-        if configured:
-            return None, configured
+    # maps to exactly one claim choice the member holds. Generic titles
+    # ("Receipt", "Tax invoice") are configured on many choices: the wording
+    # heuristics below may break that tie, but only inside the configured set.
+    configured = _configured_selections(matches, entries, provider)
+    if len(configured) == 1:
+        return configured[0], []
 
     targets, specialist_surgical = _target_settings(document, text, provider, doc_types)
     matched = [
@@ -803,6 +905,8 @@ def _infer_claim_type(
             if cat_tokens and cat_tokens <= text_tokens:
                 values.append(f"flex:{cat.name}")
 
+    if configured:
+        values = [value for value in values if value in configured] or configured
     if len(values) == 1:
         return values[0], []
     return None, values
@@ -897,7 +1001,7 @@ def suggest_from_extraction(
         "intake", document_type=str(document.get("document_type") or "")
     )
 
-    provider, provider_conf = _keyworded(fields, _PROVIDER_KEYWORDS)
+    provider, provider_conf = _provider_name(fields)
     amount, amount_conf = _amount(fields)
     incurred_date, date_conf = _date_field(fields, year)
     admission_date, admission_conf, admission_conflict = _stay_date_field(
@@ -946,8 +1050,15 @@ def suggest_from_extraction(
         low.append("discharge_date")
 
     claimant = _detect_claimant(fields, employee, coverage_opts.dependants)
+    entries = _claim_entries(coverage_opts, claimant)
+    matches = classify_matches(
+        document.get("document_type"),
+        fields,
+        definitions=doc_types,
+        sector_hint=hospital_sector(provider),
+    )
     selection, candidates = _infer_claim_type(
-        document, coverage_opts, claimant, provider, doc_types
+        document, coverage_opts, entries, matches, provider, doc_types
     )
 
     # Resolve the diagnosis against the catalog for the (now-known) claim group
@@ -970,12 +1081,7 @@ def suggest_from_extraction(
     # Broker document-type registry: which recognised document this is, and —
     # when unambiguous — the required-document slot it fills, so the form can
     # place the upload into the RIGHT slot instead of blindly the first.
-    defn = classify_document(
-        document.get("document_type"),
-        fields,
-        definitions=doc_types,
-        sector_hint=hospital_sector(provider),
-    )
+    defn = _document_definition(matches, entries, selection)
 
     return ClaimIntakeSuggestionOut(
         available=True,
@@ -1038,7 +1144,7 @@ def _doc_reading(
     field names read below the confidence floor — the basis for prefilling a
     later invoice's claim and warning on the fields the AI was unsure about
     (mirrors ``suggest_from_extraction``'s own low-confidence logic)."""
-    provider, provider_conf = _keyworded(fields, _PROVIDER_KEYWORDS)
+    provider, provider_conf = _provider_name(fields)
     amount, amount_conf = _amount(fields)
     incurred_date, date_conf = _date_field(fields, year)
     admission_date, admission_conf, admission_conflict = _stay_date_field(
@@ -1108,9 +1214,7 @@ def _merge_extractions(
     primary_type = ""
     for e in extractions:
         efields = [f for f in (e.get("fields") or []) if isinstance(f, dict)]
-        if classify_document(
-            e.get("document_type"), efields, definitions=doc_types
-        ) is not None:
+        if _recognised_inpatient(e.get("document_type"), efields, doc_types):
             primary_type = str(e.get("document_type") or "")
             break
     if not primary_type:
@@ -1185,16 +1289,16 @@ def build_intake_suggestion(
     # endpoint may skip unreadable files, so it can't be re-derived from order)
     # — the form joins files to documents on it, robust to duplicate names.
     per_doc: list[
-        tuple[dict[str, Any], DocTypeDefinition | None, list[dict[str, Any]],
+        tuple[dict[str, Any], tuple[DocTypeDefinition, ...], list[dict[str, Any]],
               str | None, float | None, int]
     ] = []
     for i, e in enumerate(extractions):
         efields = [f for f in (e.get("fields") or []) if isinstance(f, dict)]
-        defn = classify_document(
+        matches = classify_matches(
             e.get("document_type"), efields, definitions=doc_types
         )
         key, amount = _billing_identity(efields)
-        per_doc.append((e, defn, efields, key, amount, e.get("upload_index", i)))
+        per_doc.append((e, matches, efields, key, amount, e.get("upload_index", i)))
 
     # Claim anchors: the FIRST document to carry a given billing identity (an
     # invoice number AND an amount). Anchors with DIFFERENT invoice numbers are
@@ -1235,8 +1339,10 @@ def build_intake_suggestion(
             suggestion.low_confidence.append("amount")
 
     claim_order = {doc_i: order for order, doc_i in enumerate(anchor_idx)}
+    entries = _claim_entries(coverage_opts, suggestion.claimant)
     documents: list[IntakeDocument] = []
-    for i, (e, defn, efields, key, _, upload_index) in enumerate(per_doc):
+    for i, (e, matches, efields, key, _, upload_index) in enumerate(per_doc):
+        defn = _document_definition(matches, entries, suggestion.claim_selection)
         is_anchor = multi and i in claim_order
         idx = _claim_of(key) if multi and key else None
         is_shared = multi and key is None

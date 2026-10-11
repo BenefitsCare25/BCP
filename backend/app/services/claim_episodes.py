@@ -286,6 +286,40 @@ def resolve_anchor_root(db: Session, anchor: Claim) -> Claim:
     return root if root is not None else anchor
 
 
+def assert_anchor_owned(
+    db: Session,
+    employee: Employee,
+    *,
+    anchor_id: str | None,
+    dependant_id: str | None,
+    exclude_claim_id: str | None = None,
+) -> None:
+    """The ownership half of `resolve_anchor`, for a LOG case.
+
+    A LOG case skips the member form's episode rules, but the claim it names is
+    still projected into its detail (`anchor_out`) — on the member's portal too
+    once a reclassified claim stays visible to them — so it must be this same
+    claimant's own visit. 404 otherwise, never 403, as for any foreign load.
+    """
+    if not anchor_id:
+        return
+    if anchor_id == exclude_claim_id:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "A claim can't be a follow-up to itself.",
+        )
+    claimant = _claimant(db, employee, dependant_id)
+    anchor = db.get(Claim, anchor_id)
+    if (
+        anchor is None
+        or anchor.employee_id not in claimant.employee_ids
+        or not claimant.matches(anchor)
+    ):
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, "That previous visit could not be found."
+        )
+
+
 def resolve_anchor(
     db: Session,
     employee: Employee,

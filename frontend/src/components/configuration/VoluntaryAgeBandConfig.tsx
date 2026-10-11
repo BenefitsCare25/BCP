@@ -1,4 +1,3 @@
-import { FirmOwnerOnly } from "@/components/auth/FirmOwnerOnly";
 import { useEffect, useState } from "react";
 import { Plus, Save, X } from "lucide-react";
 import { toast } from "sonner";
@@ -7,8 +6,10 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { InfoHint } from "@/components/ui/tooltip";
 import { useSetVoluntaryRates, type VoluntaryRateBandInput } from "@/api/hooks";
+import { cn } from "@/lib/cn";
 import { formatError } from "@/lib/errors";
 import type { VoluntaryRateBand } from "@/types";
+import { RemoveGuard } from "./setup/savedEntries";
 
 // Editable row state — bounds/rate are strings so the inputs can go blank
 // ("" min/max = open-ended) without snapping to 0.
@@ -28,6 +29,9 @@ const toRow = (b: VoluntaryRateBand): Row => ({
 
 const numOrNull = (s: string): number | null =>
   s.trim() === "" ? null : Number(s);
+
+// A blank rate is not a free band: it would price every member in it at S$0.
+const rateMissing = (r: Row) => !(Number(r.rate) > 0);
 
 /**
  * One product-wide voluntary age-band rate table, shared by ALL the product's
@@ -65,12 +69,14 @@ export function VoluntaryAgeBandConfig({
   const removeRow = (i: number) =>
     setRows((rs) => rs.filter((_, idx) => idx !== i));
 
+  const ratesMissing = rows.some(rateMissing);
   const onSave = () => {
+    if (ratesMissing) return;
     const payload: VoluntaryRateBandInput[] = rows.map((r) => ({
       label: r.label.trim() || "—",
       min: numOrNull(r.min),
       max: numOrNull(r.max),
-      rate: Number(r.rate) || 0,
+      rate: Number(r.rate),
     }));
     save.mutate(
       { policyYearId, productId, bands: payload },
@@ -95,7 +101,12 @@ export function VoluntaryAgeBandConfig({
             for the member's age band.
           </InfoHint>
         </div>
-        <Button size="sm" onClick={onSave} disabled={save.isPending}>
+        <Button
+          size="sm"
+          onClick={onSave}
+          disabled={save.isPending || ratesMissing}
+          aria-describedby={ratesMissing ? "voluntary-rates-missing" : undefined}
+        >
           <Save className="size-3.5" /> Save rates
         </Button>
       </div>
@@ -141,20 +152,34 @@ export function VoluntaryAgeBandConfig({
               value={r.rate}
               onChange={(e) => setRow(i, { rate: e.target.value })}
               placeholder="0.00"
-              className="h-8 text-sm"
+              aria-invalid={rateMissing(r) || undefined}
+              aria-describedby={rateMissing(r) ? "voluntary-rates-missing" : undefined}
+              className={cn(
+                "h-8 text-sm",
+                rateMissing(r) && "border-error focus-visible:border-error",
+              )}
             />
-            <FirmOwnerOnly><Button
-              size="icon"
-              variant="ghost"
-              aria-label="Remove band"
-              className="h-8 w-8 shrink-0 text-error hover:text-error"
-              onClick={() => removeRow(i)}
-            >
-              <X className="size-4" />
-            </Button></FirmOwnerOnly>
+            {/* A band added in this edit is not saved yet, so whoever added it
+                may take it out; removing a saved band is a firm-owner action. */}
+            <RemoveGuard saved={i < bands.length}>
+              <Button
+                size="icon"
+                variant="ghost"
+                aria-label="Remove band"
+                className="h-8 w-8 shrink-0 text-error hover:text-error"
+                onClick={() => removeRow(i)}
+              >
+                <X className="size-4" />
+              </Button>
+            </RemoveGuard>
           </div>
         ))}
       </div>
+      {ratesMissing && (
+        <p id="voluntary-rates-missing" className="mt-2 text-xs text-error">
+          Enter a rate above 0 for every age band before saving.
+        </p>
+      )}
 
       <Button size="sm" variant="outline" onClick={addRow} className="mt-3">
         <Plus className="size-3.5" /> Add band

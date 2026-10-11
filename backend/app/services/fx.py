@@ -135,6 +135,12 @@ def _record_failure() -> None:
             )
 
 
+def _is_client_error(status_code: int) -> bool:
+    """A 4xx that describes the request, not the provider's health. 408 and
+    429 are excluded: a timeout or a rate limit IS the provider struggling."""
+    return 400 <= status_code < 500 and status_code not in (408, 429)
+
+
 def _record_success() -> None:
     with _breaker_lock:
         _breaker["failures"] = 0.0
@@ -296,6 +302,16 @@ def _fetch(base: str, quote: str, on: date) -> tuple[float, date] | None:
                 # only pointing at the live host can.
                 follow_redirects=True,
             )
+            if _is_client_error(resp.status_code):
+                # The provider refused THIS request (an unknown symbol, a date
+                # outside its series) — not an outage. Retrying repeats the
+                # answer, and counting it would let a few bad requests open the
+                # breaker that every tenant's lookups share.
+                logger.info(
+                    "FX rate refused for %s→%s on %s: HTTP %d",
+                    base, quote, on, resp.status_code,
+                )
+                return None
             resp.raise_for_status()
             parsed = _parse(resp.json(), quote)
             if parsed is None:

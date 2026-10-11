@@ -9,7 +9,8 @@ pricing snapshots a broker-on-behalf election does.
 """
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from dataclasses import dataclass
+from datetime import UTC, date, datetime
 from typing import Any, cast
 
 from fastapi import HTTPException, status
@@ -63,13 +64,14 @@ from app.services.enrollment_flex_guard import (
     assert_elections_priced,
     assert_within_wallet,
 )
-from app.services.enrollment_lifecycle import plan_rank
+from app.services.enrollment_lifecycle import NOT_HELD_ENTRY, plan_rank
 from app.services.enrollment_products import available_plan_codes, resolve_product_by_code
 from app.services.enrollment_validation import (
     action_for_tier,
     assert_dependants_owned,
     assert_not_compulsory_decline,
     assert_plan_available,
+    assert_plan_change_allowed,
     assert_product_in_scope,
     assert_valid_dependant_options,
     assert_window_accepts_edits,
@@ -83,6 +85,7 @@ from app.services.flex_pricing_resolver import (
     DEFAULT_FLEX_SOURCE,
     FAMILY_SCHEMES,
     DependantMode,
+    active_dependant_profiles,
     configured_voluntary_rates,
     covered_dependant_profiles,
     dependant_age_limits,
@@ -114,6 +117,7 @@ from app.services.leave_pricing_resolver import (
 from app.services.member_premium import member_premium
 from app.services.plan_hydration import apply_gst_to_financials, member_cover_view
 from app.services.plan_labels import member_plan_label
+from app.services.voluntary_enrolment import eligible_only_product_ids
 
 
 def _require_window(db: Session, enrollment: Enrollment) -> EnrollmentWindow:
@@ -208,6 +212,44 @@ def member_window_for(db: Session, employee: Employee) -> EnrollmentWindow | Non
     if window is None or not window.member_self_service:
         return None
     return window
+
+
+def eligible_only_codes(
+    db: Session,
+    employee: Employee,
+    tier_sets: dict[str, ProductTierSet],
+    snapshot: dict[str, Any] | None,
+) -> set[str]:
+    """Product codes this enrolment treats as voluntary cover the member holds
+    nothing of. The enrolment's own snapshot decides when it has the product —
+    an enrolment opened before the marker existed keeps its old reading, where
+    the cohort default counted as held — and the member's coverage today
+    decides for a product it lacks (no enrolment yet, or a later re-match)."""
+    products = (snapshot or {}).get("products") or {}
+    live: set[str] | None = None
+    out: set[str] = set()
+    for code, ts in tier_sets.items():
+        entry = products.get(code)
+        if isinstance(entry, dict):
+            if entry.get("eligible_only"):
+                out.add(code)
+            continue
+        if live is None:
+            live = eligible_only_product_ids(db, employee)
+        if ts.product_id in live:
+            out.add(code)
+    return out
+
+
+def portal_signed(db: Session, enr: Enrollment) -> bool:
+    """Did the employee sign this enrolment in the portal? A signed one goes back
+    to them to correct and re-sign; any other becomes the broker's draft."""
+    from app.models.enrollment_form import EnrollmentFormSubmission
+
+    return db.scalar(select(EnrollmentFormSubmission.id).where(
+        EnrollmentFormSubmission.enrollment_id == enr.id,
+        EnrollmentFormSubmission.source == "portal",
+    ).limit(1)) is not None
 
 
 def find_enrollment(
@@ -371,6 +413,7 @@ def enrollment_detail(db: Session, enr: Enrollment) -> EnrollmentOut:
         elections=[EnrollmentElectionOut.model_validate(e) for e in elections],
         leave=LeaveElectionOut.model_validate(leave) if leave else None,
         compulsory_product_codes=compulsory_codes,
+        portal_signed=portal_signed(db, enr),
     )
 
 
@@ -410,6 +453,17 @@ def build_enrollment_options(
     build options without materializing an enrollment row.
     """
     tier_sets = electable_tiers_for_employee(db, employee) if employee else {}
+    # Voluntary cover the member holds nothing of: no tier of it is "current",
+    # and both surfaces start it as not enrolled.
+    enrollment_row = db.get(Enrollment, enrollment_id) if enrollment_id else None
+    not_held = (
+        eligible_only_codes(
+            db, employee, tier_sets,
+            enrollment_row.baseline_snapshot if enrollment_row is not None else None,
+        )
+        if employee
+        else set()
+    )
     # Flex price tags (wallet cost of each tier), priced per the window's config:
     # source per product (slip premium vs portal matrix) + drawdown rule (full plan
     # tag vs only the upgrade/downgrade difference vs the member's default plan).
@@ -426,6 +480,9 @@ def build_enrollment_options(
     family_slip_idx = maybe_family_slip_index(db, policy_year_id, source_map)
     ref = reference_date(db, policy_year_id)
     age = employee_age(employee, ref) if employee is not None else None
+    # The wallet below is pro-rated, so every flex amount beside it is scaled by
+    # the same factor the saved snapshot applies (`member_coverage_tag`).
+    factor = flex_proration.factor_of(employee) if employee is not None else 1.0
     # {dependant_id: (role, age)} — lets age-banded dependant option levels show
     # a concrete amount per THIS member's dependants instead of "priced at save".
     dep_profiles_by_id = (
@@ -468,8 +525,12 @@ def build_enrollment_options(
             ),
             baseline_tier_category_id=ts.baseline_tier_category_id,
             baseline_plan_code=ts.baseline_plan_code,
-            allow_plan_change=ts.allow_plan_change,
+            # Effective for THIS period: a window with plan changes off locks
+            # the tier picker on both surfaces, as the server enforces.
+            allow_plan_change=ts.allow_plan_change
+            and (window is None or window.allow_plan_change),
             can_decline=ts.can_decline,
+            eligible_only=ts.product_code in not_held,
             tiers=[
                 CohortTierOut(
                     key=tier_key(t.tier_category_id, t.plan_code),
@@ -480,7 +541,7 @@ def build_enrollment_options(
                     dependant_participation=tier_dependant_participation(ts, t),
                     direction=t.direction,
                     is_baseline=t.is_baseline,
-                    is_current=t.is_current,
+                    is_current=t.is_current and ts.product_code not in not_held,
                     # Gross the displayed PREMIUM by the product's own GST only
                     # (product_premium_multiplier — never the flex-scheme default),
                     # so it matches the benefit statement's premium for this product.
@@ -496,13 +557,16 @@ def build_enrollment_options(
                         else None
                     ),
                     price_tag=(
-                        member_price_tag(
-                            source_map=source_map, rule=rule, pricing=pricing,
-                            slip_idx=slip_idx, product_id=ts.product_id, age=age,
-                            declined=False,
-                            tier_category_id=t.tier_category_id, plan_code=t.plan_code,
-                            default_tier_category_id=ts.baseline_tier_category_id,
-                            default_plan=ts.baseline_plan_code,
+                        _prorated(
+                            member_price_tag(
+                                source_map=source_map, rule=rule, pricing=pricing,
+                                slip_idx=slip_idx, product_id=ts.product_id, age=age,
+                                declined=False,
+                                tier_category_id=t.tier_category_id, plan_code=t.plan_code,
+                                default_tier_category_id=ts.baseline_tier_category_id,
+                                default_plan=ts.baseline_plan_code,
+                            ),
+                            factor,
                         )
                         if flex_active
                         else None
@@ -525,6 +589,10 @@ def build_enrollment_options(
                 ts,
                 dep_profiles_by_id,
                 expose_amounts=flex_active,
+                factor=factor,
+            ),
+            eligible_dependant_ids=_age_eligible_dependant_ids(
+                dep_profiles_by_id, dependant_age_limits(pricing, ts.product_id)
             ),
         )
         for ts in sorted(tier_sets.values(), key=lambda s: s.product_code)
@@ -546,6 +614,19 @@ def build_enrollment_options(
         ),
         leave=_member_leave_options(leave_policy, employee),
         flex_drawdown_rule=rule,
+    )
+
+
+def _age_eligible_dependant_ids(
+    profiles: dict[str, tuple[str, int | None]],
+    age_limits: dict[str, dict[str, int]] | None,
+) -> list[str]:
+    """The dependants inside a product's age window — the same filter
+    ``apply_elections`` applies before it covers and prices compulsory cover."""
+    return sorted(
+        dep_id
+        for dep_id, (role, age) in profiles.items()
+        if role_age_eligible(role, age, age_limits)
     )
 
 
@@ -585,10 +666,12 @@ def _dependant_pricing_out(
     dep_profiles_by_id: dict[str, tuple[str, int | None]] | None = None,
     *,
     expose_amounts: bool = True,
+    factor: float = 1.0,
 ) -> DependantPricingOut | None:
     """The product's dependant pricing, priced PER tier (the amount differs per
     plan), with the scheme's display labels. None when dependant pricing doesn't
-    apply (effective mode ``none``).
+    apply (effective mode ``none``). Amounts are scaled by the member's flex
+    pro-ration ``factor``, as the saved snapshot is.
 
     The source defaults to the slip (``DEFAULT_FLEX_SOURCE``) and the mode is the
     EFFECTIVE mode from ``dependant_pricing_breakdown`` (which applies the slip
@@ -611,12 +694,12 @@ def _dependant_pricing_out(
         labels = FAMILY_SCHEMES.get(bd["scheme"] or "", {})
         by_tier[tier_key(t.tier_category_id, t.plan_code)] = DependantTierPricingOut(
             mode=bd["mode"],
-            per_pax_rate=bd["per_pax_rate"] if expose_amounts else None,
+            per_pax_rate=_prorated(bd["per_pax_rate"], factor) if expose_amounts else None,
             family=[
                 DependantRoleOut(
                     role=f["role"],
                     label=labels.get(f["role"], f["role"]),
-                    amount=f["amount"] if expose_amounts else None,
+                    amount=_prorated(f["amount"], factor) if expose_amounts else None,
                 )
                 for f in bd["family"]
             ],
@@ -637,8 +720,17 @@ def _dependant_pricing_out(
             gst_multiplier_for(pricing, ts.product_id),
             configured_voluntary_rates(pricing, ts.product_id),
             expose_amounts=expose_amounts,
+            factor=factor,
         ),
     )
+
+
+def _prorated(amount: float | None, factor: float) -> float | None:
+    """A flex amount scaled by the member's pro-ration, rounded to cents — the
+    step ``_combine_tags`` applies to every saved price tag."""
+    if amount is None or factor == 1.0:
+        return amount
+    return round(amount * factor, 2)
 
 
 def _option_choices_out(
@@ -649,6 +741,7 @@ def _option_choices_out(
     voluntary_rates: list[Any] | None = None,
     *,
     expose_amounts: bool = True,
+    factor: float = 1.0,
 ) -> list[DependantOptionRoleOut]:
     """Freestanding dependant option LEVELS as API output, with each level's flex
     amount resolved per the member's own dependants (age-banded levels price on
@@ -658,9 +751,13 @@ def _option_choices_out(
 
     Amounts are grossed by the product's flex GST multiplier so the level a member
     sees equals what the wallet is drawn (``_dependant_tag_for_mode`` grosses the
-    same way); ``sum_insured`` is coverage, not premium, so it is left raw."""
+    same way), then scaled by the member's pro-ration ``factor``; ``sum_insured``
+    is coverage, not premium, so it is left raw."""
     def _g(amount: float | None) -> float | None:
-        return round(amount * gst_mult, 2) if amount is not None and gst_mult != 1.0 else amount
+        grossed = (
+            round(amount * gst_mult, 2) if amount is not None and gst_mult != 1.0 else amount
+        )
+        return _prorated(grossed, factor)
 
     out: list[DependantOptionRoleOut] = []
     for role in ("spouse", "child"):
@@ -738,6 +835,55 @@ def lock_enrollment(db: Session, enr: Enrollment) -> Enrollment:
     ).scalar_one()
 
 
+@dataclass(frozen=True)
+class _DependantCover:
+    covered_ids: list[str] | None
+    option_ids: dict[str, str] | None
+    profiles: list[tuple[str, int | None]]
+
+
+def _resolve_dependant_cover(
+    db: Session,
+    window: EnrollmentWindow,
+    employee: Employee,
+    item: EnrollmentElectionIn,
+    held: dict[str, Any],
+    participation: str | None,
+    *,
+    age_limits: dict[str, dict[str, int]],
+    ref: date,
+) -> _DependantCover:
+    """Who an election covers, its option levels, and the profiles it prices on.
+
+    Compulsory cover follows the roster: every eligible dependant is priced, but
+    no list is stored, so a dependant added after confirmation is covered too
+    and a client list (or a re-check of the saved one) is not a change. Voluntary
+    cover is the member's list; none sent, or dependant changes off, keeps what
+    they hold — the e-form's reading — so confirming a keep never drops it."""
+    if item.declined or participation is None:
+        return _DependantCover(None, None, [])
+    options = item.dependant_option_ids or None
+    if item.dependant_option_ids is None and not window.allow_dependant_changes:
+        options = held.get("dependant_option_ids") or None
+    if participation == "compulsory":
+        profiles = active_dependant_profiles(db, employee.id, age_limits=age_limits, ref=ref)
+        return _DependantCover(None, options, profiles)
+    held_ids: list[str] | None = (
+        None if held.get("declined") else held.get("covered_dependant_ids")
+    )
+    sent = item.covered_dependant_ids
+    covered = held_ids
+    if sent is not None and window.allow_dependant_changes:
+        assert_dependants_owned(db, employee, sent)
+        covered = sent
+    elif sent is not None and set(sent) != set(held_ids or []):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "Dependant changes are disabled for this window."
+        )
+    profiles = covered_dependant_profiles(db, covered, age_limits=age_limits, ref=ref)
+    return _DependantCover(covered, options, profiles)
+
+
 def apply_elections(
     db: Session,
     enr: Enrollment,
@@ -751,8 +897,6 @@ def apply_elections(
     _assert_window_for(window, prepare_edit)
     if prepare_edit:
         _prepare_enrollment_edit(db, enr)
-    if not window.allow_plan_change:
-        raise HTTPException(status.HTTP_409_CONFLICT, "Plan changes are disabled for this window.")
     py = _require_policy_year(db, enr)
     employee = _require_employee(db, enr)
     baseline_products = (enr.baseline_snapshot or {}).get("products", {})
@@ -767,6 +911,7 @@ def apply_elections(
     tier_sets = (
         electable_tiers_for_employee(db, employee, include_differences=False)
     )
+    not_held = eligible_only_codes(db, employee, tier_sets, enr.baseline_snapshot)
     # Flex price-tag snapshot inputs, resolved once: the matrix, the member's age,
     # and the window's source/rule config (slip vs matrix; full vs on-change).
     flex_active = bool(
@@ -791,14 +936,13 @@ def apply_elections(
         assert_product_in_scope(window, item.product_code)
         if item.declined:
             assert_not_compulsory_decline(item.product_code, compulsory_ids, product.id)
-        if window.allow_dependant_changes and item.covered_dependant_ids:
-            assert_dependants_owned(db, employee, item.covered_dependant_ids)
-        elif item.covered_dependant_ids and not window.allow_dependant_changes:
-            raise HTTPException(
-                status.HTTP_409_CONFLICT, "Dependant changes are disabled for this window."
-            )
 
-        previous = (baseline_products.get(item.product_code) or {}).get("plan_code")
+        held = (
+            NOT_HELD_ENTRY
+            if item.product_code in not_held
+            else baseline_products.get(item.product_code) or {}
+        )
+        previous = held.get("plan_code")
         tier_set = tier_sets.get(item.product_code)
         tier: CohortTier | None = None
         elected_plan_code: str | None = None
@@ -833,6 +977,13 @@ def apply_elections(
             action = classify_action(
                 previous, item.plan_code, item.declined, rank_cache[product.id]
             )
+        if not item.declined and held.get("eligible_only"):
+            # Any tier of cover the member holds nothing of takes it up — the
+            # default tier included, which a plan comparison would call a keep.
+            action = ElectionAction.enroll
+        assert_plan_change_allowed(
+            window, held, declined=item.declined, tier=tier, plan_code=elected_plan_code
+        )
 
         existing = db.execute(
             select(EnrollmentElection).where(
@@ -879,42 +1030,17 @@ def apply_elections(
                 ) or "voluntary",
             )
         )
-        if dependant_participation == "compulsory":
-            all_profiles = dependant_profiles_by_id(db, employee.id, ref)
-            eligible_profiles = {
-                dep_id: profile
-                for dep_id, profile in all_profiles.items()
-                if role_age_eligible(profile[0], profile[1], dep_limits)
-            }
-            resolved_covered_ids: list[str] | None = sorted(eligible_profiles)
-            dep_profiles = list(eligible_profiles.values())
-        elif dependant_participation == "voluntary":
-            resolved_covered_ids = (
-                None if item.declined else item.covered_dependant_ids
-            )
-            dep_profiles = covered_dependant_profiles(
-                db,
-                resolved_covered_ids,
-                age_limits=dep_limits,
-                ref=ref,
-            )
-        else:
-            resolved_covered_ids = None
-            dep_profiles = []
+        cover = _resolve_dependant_cover(
+            db, window, employee, item, held, dependant_participation,
+            age_limits=dep_limits, ref=ref,
+        )
 
         existing.previous_plan_code = previous
         existing.elected_plan_code = elected_plan_code
         existing.tier_category_id = None if item.declined else elected_tier_id
         existing.action = action
-        # Compulsory means every active eligible dependant is covered
-        # automatically. An omitted or partial client list must not waive the
-        # dependant charge drawn from the employee's flex wallet.
-        existing.covered_dependant_ids = resolved_covered_ids
-        existing.dependant_option_ids = (
-            None
-            if item.declined or dependant_participation is None
-            else (item.dependant_option_ids or None)
-        )
+        existing.covered_dependant_ids = cover.covered_ids
+        existing.dependant_option_ids = cover.option_ids
         # Snapshot the total flex draw-down (employee plan tag + dependant tag) for
         # the resolved tier under the window's config (None when declined). For an
         # "on_change" window the employee portion is the difference vs the member's
@@ -925,7 +1051,7 @@ def apply_elections(
         # own age; counts derive from the same load. The product's eligibility
         # windows apply here exactly as they do on every recompute surface
         # (bulk, revert, benefit statement) so the snapshot can't diverge.
-        spouse_count, child_count = profile_counts(dep_profiles)
+        spouse_count, child_count = profile_counts(cover.profiles)
         existing.flex_price_tag = (
             member_coverage_tag(
                 source_map=source_map,
@@ -944,7 +1070,7 @@ def apply_elections(
                 default_plan=tier_set.baseline_plan_code if tier_set else None,
                 spouse_count=spouse_count,
                 child_count=child_count,
-                dep_profiles=dep_profiles,
+                dep_profiles=cover.profiles,
                 dep_option_ids=existing.dependant_option_ids,
                 factor=flex_proration.factor_of(employee),
             )

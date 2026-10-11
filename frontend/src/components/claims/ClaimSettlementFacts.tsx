@@ -1,6 +1,7 @@
 import type { BrokerClaim } from "@/api/claims";
 import { SectionLabel } from "@/components/ui/section-label";
-import { fmtDate } from "@/lib/format";
+import { singaporeTodayISO } from "@/lib/business-date";
+import { fmtDate, parseServerDate } from "@/lib/format";
 
 /**
  * The insurer leg's dates and its three SLA counters.
@@ -88,7 +89,11 @@ export function ClaimSettlementFacts({ claim }: { claim: BrokerClaim }) {
   return (
     <dl className="grid grid-cols-1 gap-x-6 gap-y-4 sm:grid-cols-2">
       <Fact label="Sent to insurer">
-        {claim.sent_to_insurer_at ? fmtDate(claim.sent_to_insurer_at) : "—"}
+        {/* An instant: its Singapore business date is the day the deadline and
+            "Days with insurer" count from (`clock.business_date`). */}
+        {claim.sent_to_insurer_at
+          ? singaporeTodayISO(parseServerDate(claim.sent_to_insurer_at))
+          : "—"}
       </Fact>
       <Fact label="Insurer deadline">
         {claim.insurer_deadline_on ? fmtDate(claim.insurer_deadline_on) : "—"}
@@ -105,6 +110,9 @@ export function ClaimSettlementFacts({ claim }: { claim: BrokerClaim }) {
         <Fact label="Days we held it">{claim.servicer_days}</Fact>
       )}
       {claim.paid_on && <Fact label="Paid on">{fmtDate(claim.paid_on)}</Fact>}
+      {claim.insurer_outcome_on && (
+        <Fact label="Insurer declined on">{fmtDate(claim.insurer_outcome_on)}</Fact>
+      )}
       {claim.payment_amount != null && (
         <Fact label="Amount paid">
           {/* The POLICY currency, not the claim's. What the insurer paid is

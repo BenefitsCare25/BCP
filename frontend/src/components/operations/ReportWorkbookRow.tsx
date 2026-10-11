@@ -5,6 +5,7 @@ import { ReportContentsHint } from "@/components/operations/ReportContentsHint";
 import { ReportDownloadButton } from "@/components/operations/ReportDownloadButton";
 import { SubmissionRecord } from "@/components/operations/ReportVersionActions";
 import { Segmented } from "@/components/ui/segmented";
+import { useMe } from "@/api/hooks";
 import {
   Select,
   SelectContent,
@@ -61,7 +62,14 @@ export function ReportWorkbookRow({
   workbook: ReportWorkbook;
   year: number;
 }) {
-  const [insurer, setInsurer] = useState("");
+  const { data: me } = useMe();
+  // Unmasked NRIC/FIN is refused to a broker viewer (`assert_masking_allowed`).
+  const maskingLocked = me?.role === "broker_viewer";
+  const [picked, setInsurer] = useState("");
+  // The row outlives a benefit-year switch, so a pick the current year does not
+  // place (or no longer places) is no pick: the download would 404 on it and the
+  // record line would read another year's series.
+  const insurer = workbook.insurers.includes(picked) ? picked : "";
   // Masking is the row's OWN control, like every other one here. It arrived as
   // a prop from a section header while `supports_masking` was already served —
   // so the toggle governing the insurer submission sat in the header of the
@@ -69,7 +77,8 @@ export function ReportWorkbookRow({
   // until masking became load-bearing: an unmasked pull is what files a
   // submission, and a broker cannot be asked to discover that from a control in
   // a different section.
-  const [masked, setMasked] = useState(true);
+  const [maskChoice, setMasked] = useState(true);
+  const masked = maskChoice || maskingLocked;
   const [scope, setScope] = useState<"all" | "active">("all");
   const [start, setStart] = useState("");
   const [end, setEnd] = useState("");
@@ -131,7 +140,7 @@ export function ReportWorkbookRow({
         </div>
 
         <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:shrink-0">
-          {workbook.supports_masking && (
+          {workbook.supports_masking && !maskingLocked && (
             <Segmented
               value={masked ? "masked" : "full"}
               onChange={(v) => setMasked(v === "masked")}

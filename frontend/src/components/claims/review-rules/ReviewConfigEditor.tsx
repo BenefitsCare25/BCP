@@ -1,5 +1,6 @@
 import { FirmOwnerOnly } from "@/components/auth/FirmOwnerOnly";
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
+import { Link, useNavigate } from "@tanstack/react-router";
 import { Copy, Loader2, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -29,6 +30,7 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { InfoHint } from "@/components/ui/tooltip";
 import { formatError, isStaleConfigurationError } from "@/lib/errors";
+import { useWriteAccess } from "@/lib/roles";
 import { ReviewConfigEditorSection as EditorSection } from "./ReviewConfigEditorSection";
 import { ReviewPromptPreview } from "./ReviewPromptPreview";
 import { ConfigurationHistory } from "../ConfigurationHistory";
@@ -75,6 +77,13 @@ function isReviewAIRule(value: unknown): value is ReviewAIRule {
   );
 }
 
+/** Removing a SAVED mapping or rule is a firm-owner action, which the API
+ *  enforces; a row added during this edit is not saved data yet, so whoever
+ *  added it can always drop it again. */
+function RowRemoval({ saved, children }: { saved: boolean; children: ReactNode }) {
+  return saved ? <FirmOwnerOnly>{children}</FirmOwnerOnly> : <>{children}</>;
+}
+
 export function ReviewConfigEditor({
   target,
   portalFields,
@@ -89,24 +98,39 @@ export function ReviewConfigEditor({
   const create = useCreateClaimReviewConfig();
   const update = useUpdateClaimReviewConfig();
   const preview = usePreviewReviewPrompt();
+  const { canRemove } = useWriteAccess();
   const [draft, setDraft] = useState<ClaimReviewConfigInput | null>(null);
   const [promptText, setPromptText] = useState<string | null>(null);
   const [duplicateSourceKey, setDuplicateSourceKey] = useState("");
   const [confirmDiscard, setConfirmDiscard] = useState(false);
+  // Set when the discard prompt came from the Doc settings link, not Cancel.
+  const [leaveForDocSettings, setLeaveForDocSettings] = useState(false);
+  const navigate = useNavigate();
   useEffect(() => {
     setDraft(target ? target.draft : null);
     setPromptText(null);
     setDuplicateSourceKey("");
     setConfirmDiscard(false);
+    setLeaveForDocSettings(false);
   }, [target]);
   if (!target || !draft) return null;
   const saving = create.isPending || update.isPending;
   const dirty = JSON.stringify(draft) !== JSON.stringify(target.draft);
+  // Copying another setup over a SAVED one replaces its mappings and rules,
+  // which removes saved data — firm owners only, as the API enforces.
+  const canDuplicate = !target.configId || canRemove;
   const requestClose = () => {
     if (saving) return;
     if (dirty) setConfirmDiscard(true);
     else onClose();
   };
+
+  // The saved setup's rows (none before its first save), compared as the API
+  // does: mappings by position, rules by id.
+  const savedMapCount = target.configId ? target.draft.field_maps.length : 0;
+  const savedRuleIds = new Set(
+    target.configId ? target.draft.ai_rules.flatMap((r) => (r.id ? [r.id] : [])) : [],
+  );
 
   const patch = (p: Partial<ClaimReviewConfigInput>) => {
     setDraft({ ...draft, ...p });
@@ -192,7 +216,7 @@ export function ReviewConfigEditor({
             </InfoHint>
           </label>
 
-          <div className="space-y-2 rounded-md border border-border px-3.5 py-3">
+          {canDuplicate && <div className="space-y-2 rounded-md border border-border px-3.5 py-3">
             <div>
               <p className="text-sm font-medium text-foreground">
                 Duplicate another claim type&apos;s setup
@@ -239,7 +263,7 @@ export function ReviewConfigEditor({
                 <span className="ml-1.5">Duplicate setup</span>
               </Button>
             </div>
-          </div>
+          </div>}
 
           <EditorSection
             title="Field mappings"
@@ -288,7 +312,7 @@ export function ReviewConfigEditor({
                       aria-label="Document field"
                       onChange={(e) => patchMap(i, { document_field: e.target.value })}
                     />
-                    <FirmOwnerOnly><button
+                    <RowRemoval saved={i < savedMapCount}><button
                       type="button"
                       className="grid size-8 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-card hover:text-error"
                       aria-label={`Remove mapping for ${m.portal_field || "this field"}`}
@@ -297,7 +321,7 @@ export function ReviewConfigEditor({
                       }
                     >
                       <Trash2 className="size-3.5" />
-                    </button></FirmOwnerOnly>
+                    </button></RowRemoval>
                   </div>
                   <div className="flex flex-wrap items-center gap-x-4 gap-y-2 pl-0.5">
                     <NativeSelect
@@ -359,6 +383,13 @@ export function ReviewConfigEditor({
                 </div>
               ))}
             </div>
+            {draft.field_maps.length === 0 && (
+              <p className="rounded-md border border-error/40 bg-error-soft p-2.5 text-xs text-error">
+                Add at least one field mapping. A review compares the claim
+                against its documents field by field, so a setup cannot be
+                saved without one.
+              </p>
+            )}
             <Button
               type="button"
               variant="outline"
@@ -410,7 +441,7 @@ export function ReviewConfigEditor({
                       className="flex-1 resize-y rounded-md border border-input bg-card p-2 text-xs leading-relaxed text-foreground shadow-sm transition-colors focus-visible:border-ring focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
                       onChange={(e) => patchRule(i, { rule: e.target.value })}
                     />
-                    <FirmOwnerOnly><button
+                    <RowRemoval saved={Boolean(r.id && savedRuleIds.has(r.id))}><button
                       type="button"
                       className="grid size-8 shrink-0 place-items-center rounded-md text-muted-foreground transition-colors hover:bg-card hover:text-error"
                       aria-label={`Remove ${r.category || "this"} rule`}
@@ -419,7 +450,7 @@ export function ReviewConfigEditor({
                       }
                     >
                       <Trash2 className="size-3.5" />
-                    </button></FirmOwnerOnly>
+                    </button></RowRemoval>
                   </div>
                   <div className="flex flex-wrap items-center gap-x-4 gap-y-2 pl-0.5">
                     <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
@@ -482,12 +513,28 @@ export function ReviewConfigEditor({
             title="Submission documents"
             hint="Required uploads and recognition rules are configured independently for each claim choice under Doc settings. The AI review checks that same snapshotted list."
           >
-            <a
-              href="/claims/review?tab=settings"
+            <Link
+              to="/claims/review"
+              search={{ tab: "settings" }}
               className="inline-flex min-h-8 items-center text-xs font-medium text-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              onClick={(event) => {
+                // A new tab leaves this editor as it is.
+                if (event.metaKey || event.ctrlKey || event.shiftKey) return;
+                // Leaving goes through the same guard as closing: unsaved rule
+                // edits are confirmed before the editor is dropped.
+                if (saving || dirty) {
+                  event.preventDefault();
+                  if (!saving) {
+                    setLeaveForDocSettings(true);
+                    setConfirmDiscard(true);
+                  }
+                  return;
+                }
+                onClose();
+              }}
             >
               Manage submission documents in Doc settings
-            </a>
+            </Link>
           </EditorSection>
 
           <ConfigurationHistory
@@ -537,12 +584,20 @@ export function ReviewConfigEditor({
     </Sheet>
     <AlertDialog
       open={confirmDiscard}
-      onOpenChange={setConfirmDiscard}
+      onOpenChange={(open) => {
+        setConfirmDiscard(open);
+        if (!open) setLeaveForDocSettings(false);
+      }}
       title="Discard unsaved rule changes?"
       description="Your edits to this claim type have not been saved."
       confirmLabel="Discard changes"
       confirmVariant="destructive"
-      onConfirm={onClose}
+      onConfirm={() => {
+        onClose();
+        if (leaveForDocSettings) {
+          void navigate({ to: "/claims/review", search: { tab: "settings" } });
+        }
+      }}
     />
     </>
   );

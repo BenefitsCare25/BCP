@@ -136,7 +136,9 @@ export function useRecordDualDecision(policyYearId: string | undefined) {
  * This is the only control here that MOVES MONEY — the decision buttons record
  * who carries the life, this changes who pays for them. Both rows stay on the
  * roster either way. Invalidates the coverage-bearing queries too, since a
- * dropped side changes the benefit statement and the member's flex tier.
+ * dropped side changes the benefit statement and the member's flex tier — on
+ * settle, not only success, because a refusal part-way leaves earlier products
+ * already moved.
  */
 export function useSetDualCover(policyYearId: string | undefined) {
   const qc = useQueryClient();
@@ -145,15 +147,20 @@ export function useSetDualCover(policyYearId: string | undefined) {
     mutationFn: ({
       dependantId,
       covered,
+      acknowledgeOpenEnrollment = false,
     }: {
       dependantId: string;
       covered: boolean;
+      /** Re-send after a 409 `open_enrollment_election`: the broker has seen
+       *  that an open enrolment period will replace this change. */
+      acknowledgeOpenEnrollment?: boolean;
     }) =>
       api.put<{ covered: boolean; products_changed: string[] }>(
         `/policy-years/${policyYearId}/dual-coverage/dependants/${dependantId}/cover`,
-        { covered },
+        { covered, acknowledge_open_enrollment: acknowledgeOpenEnrollment },
       ),
-    onSuccess: () => {
+    meta: { localErrorHandling: true },
+    onSettled: () => {
       qc.invalidateQueries({
         queryKey: ["dependants", "dual-coverage", clientId, policyYearId],
       });

@@ -52,9 +52,19 @@ def business_date(value: datetime) -> date:
     Use this wherever a stored instant has to become a date someone reads or
     counts from. Keep plain ``.date()`` for arithmetic that stays wholly in UTC.
     """
+    return business_datetime(value).date()
+
+
+def business_datetime(value: datetime) -> datetime:
+    """A stored instant as business wall-clock time (aware, +08:00).
+
+    The time-of-day counterpart of ``business_date`` — for a timestamp printed
+    for a person, such as a report cell. A naive value is read as UTC, the way
+    SQLite hands back what was stored aware.
+    """
     if value.tzinfo is None:
         value = value.replace(tzinfo=UTC)
-    return value.astimezone(BUSINESS_TZ).date()
+    return value.astimezone(BUSINESS_TZ)
 
 
 def stamp_for_day(day: date) -> datetime:

@@ -1,4 +1,4 @@
-import { usePortalTranslation } from "@/i18n/portal";
+import { portalMessage, usePortalTranslation } from "@/i18n/portal";
 /** "My enrollment" — the member's own election panel, rendered by the portal
  * page (interactive) and the broker's employee-view preview (`readOnly`).
  *
@@ -57,6 +57,7 @@ import {
   type ProductState,
   baselineElectionState,
   buildElectionsPayload,
+  compulsoryDependants,
   computeFlex,
   dependantParticipationFor,
   flexShort,
@@ -72,7 +73,7 @@ import { sectionArt } from "./leaf/careTone";
 import { Mount, glassHover, glassSurface } from "@/components/portal/leaf/Mount";
 import { Strike } from "@/components/portal/leaf/Strike";
 import { currencySymbol } from "@/components/portal/leaf/Figure";
-import { formatDay } from "@/components/portal/leaf/date";
+import { formatMomentDay } from "@/components/portal/leaf/date";
 import {
   HeadBalance,
   RailHeader,
@@ -457,7 +458,7 @@ export function MemberEnrollmentPanel({
         const balance = e.detail.balance;
         toast.error(
           pt("Your choices exceed your flex dollars{0}. Reduce them before sending.", [typeof balance === "number"
-              ? ` by ${money}${fmtAmount(Math.abs(balance))}`
+              ? portalMessage(" by {0}{1}", [money, fmtAmount(Math.abs(balance))])
               : ""]),
         );
         return;
@@ -494,7 +495,7 @@ export function MemberEnrollmentPanel({
           dependantParticipationFor(
             ts,
             current[ts.product_code]?.tierKey ?? tier?.key ?? "",
-          ) === "compulsory" && dependants.length > 0
+          ) === "compulsory" && compulsoryDependants(ts, dependants).length > 0
             ? "Your family is covered on this too."
             : null,
       };
@@ -543,13 +544,20 @@ export function MemberEnrollmentPanel({
       // The rail's own short form, as on the coverage deck — a chip reading
       // "Group Comprehensive General Practitioner" is a paragraph.
       label: productShortLabel(ts.product_code, ts.product_name),
-      mark: !changed ? undefined : ps.declined ? "Declined" : "Changed",
+      mark: !changed
+        ? undefined
+        : ps.declined
+          ? "Declined"
+          : ts.eligible_only
+            ? "Enrolling"
+            : "Changed",
       render: () => (
         <ProductElectionMount
           compact={!readOnly}
           ts={ts}
           ps={ps}
           rise={false}
+          planChanges={win.allow_plan_change}
           disabled={disabled}
           allowDeps={allowDeps}
           dependants={dependants}
@@ -673,11 +681,11 @@ export function MemberEnrollmentPanel({
       {submitted && (
         <StatusNote mark="Sent" tone="review">
           {pt("Your choices were sent")} {enrollment?.submitted_at
-            ? pt(" on {0}", [formatDay(enrollment.submitted_at)])
+            ? pt(" on {0}", [formatMomentDay(enrollment.submitted_at)])
             : ""}{" "}
           {pt("and are being checked.")} {periodLocked
             ? pt("This period no longer accepts changes. Contact HR if a correction is needed.")
-            : pt("You can still change them until {0}.", [formatDay(win.closes_at)])}
+            : pt("You can still change them until {0}.", [formatMomentDay(win.closes_at)])}
         </StatusNote>
       )}
       {finalized && (

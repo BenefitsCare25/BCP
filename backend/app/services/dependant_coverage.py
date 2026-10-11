@@ -6,8 +6,11 @@ from typing import Any
 
 _EMPLOYEE_ONLY_TIERS = {"EO", "E", "EE", "EMPLOYEE", "EMPLOYEE ONLY"}
 _VALID_DEPENDANT_MODES = {"compulsory", "voluntary"}
+# "Non" negates only the word it prefixes ("non-dependant"): a cohort named
+# "Non-Executives and Dependants" covers the non-executives' dependants.
 _NEG_DEPENDANT = re.compile(
-    r"(?:\bno\b|\bnot\b|\bnon[-\s]?|\bwithout\b|\bexcl)[\w\s.,/-]{0,15}depend", re.I
+    r"\bnon[-\s]?depend|(?:\bno\b|\bnot\b|\bwithout\b|\bexcl)[\w\s.,/-]{0,15}depend",
+    re.I,
 )
 # "All Eligible Dependants on Voluntary basis" / "Voluntary - Dependents".
 _VOLUNTARY_DEPENDANT = re.compile(

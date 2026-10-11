@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 from copy import deepcopy
 from dataclasses import asdict
+from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import (
@@ -26,6 +27,7 @@ from fastapi import (
 )
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.orm import Session
+from starlette.concurrency import run_in_threadpool
 
 from app.api.v1.product_setups import _benefit_schedule, seed_draft_from_slip
 from app.core.audit import write_audit
@@ -444,22 +446,76 @@ def _confirmed_setup_codes(db: Session, policy_year_id: str) -> set[str]:
 
     The confirmed setup is the authoritative source for that product, so the
     upload must not re-write provisional ``system_generated`` Category/Plan rows
-    for it — doing so would duplicate the confirmed manual rows.
+    for it — doing so would duplicate the confirmed manual rows. A materialized
+    setup carrying unconfirmed draft edits is still live configuration.
     """
     return {
         code
         for code in db.execute(
             select(ProductSetup.product_code).where(
                 ProductSetup.policy_year_id == policy_year_id,
-                ProductSetup.status == ProductSetupStatus.confirmed,
+                or_(
+                    ProductSetup.status == ProductSetupStatus.confirmed,
+                    ProductSetup.materialized_product_id.is_not(None),
+                ),
             )
         ).scalars()
     }
 
 
+# Plan.code column length: a longer slip code cannot be stored.
+_PLAN_CODE_MAX = 64
+
 # Slip-side plan_assignments construction lives in the shared service module
 # (the confirm path builds the same shape in product_setups).
 _build_plan_assignments = build_plan_assignments
+
+
+def _assert_period_matches(
+    db: Session, policy_year: PolicyYear, client_id: str, parsed: PlacementSlip
+) -> None:
+    """Pre-commit guard: a slip's period of insurance covers the whole policy
+    year, so if it doesn't match the target year we stop *before* writing
+    (re-upload replaces this year's unreviewed auto rows) and let the user
+    switch years or acknowledge. Unparseable periods never block.
+
+    Runs before the AI fallback, which keeps each sheet's policy header, so a
+    rejected upload neither pays for an extraction nor rolls back its spend log.
+    """
+    policy_year_id = policy_year.id
+    year_start, year_end = policy_year.start_date, policy_year.end_date
+    period_text = next(
+        (p.policy_header.period for p in parsed.products if p.policy_header.period),
+        None,
+    )
+    slip_range = parse_period_of_insurance(period_text)
+    if not slip_range or (slip_range[0] == year_start and slip_range[1] == year_end):
+        return
+    db.rollback()  # discard the provisional slip_row — nothing persists
+    matching_id = (
+        db.execute(
+            select(PolicyYear.id).where(
+                PolicyYear.client_id == client_id,
+                PolicyYear.start_date == slip_range[0],
+                PolicyYear.end_date == slip_range[1],
+                PolicyYear.id != policy_year_id,
+            )
+        )
+        .scalars()
+        .first()
+    )
+    raise HTTPException(
+        status.HTTP_409_CONFLICT,
+        detail={
+            "code": "period_mismatch",
+            "detected_period": period_text,
+            "slip_start": slip_range[0].isoformat(),
+            "slip_end": slip_range[1].isoformat(),
+            "policy_year_start": year_start.isoformat(),
+            "policy_year_end": year_end.isoformat(),
+            "matching_policy_year_id": matching_id,
+        },
+    )
 
 
 @router.post("/parse", response_model=ParseResult)
@@ -480,127 +536,125 @@ async def parse_upload(
     client_id = policy_year_company(policy_year, user)
 
     async with saved_upload(file, WORKBOOK_SUFFIXES) as tmp_path:
-        slip_row = PlacementSlipRow(
-            policy_year_id=policy_year_id,
-            uploaded_by=user.user_id,
-            filename=file.filename or "untitled",
-            parse_status=ParseStatus.parsing,
-        )
-        db.add(slip_row)
-        db.flush()
-
-        # Classification resolver: a broker's stored product_metadata (form
-        # profile / layout family, set via PATCH /schemas/products after a
-        # needs_classification diagnostic) applies to the matching sheet on
-        # this and every future upload.
-        classification_by_code: dict[str, dict[str, Any]] = {
-            product_registry.resolve_code(p.code): dict(p.product_metadata)
-            for p in db.execute(
-                select(Product).where(tenant_or_global(Product.client_id, client_id))
-            ).scalars()
-            if p.product_metadata
-        }
-
-        def _classification(code: str) -> dict[str, Any] | None:
-            return classification_by_code.get(product_registry.resolve_code(code))
-
-        try:
-            raw_parsed = parse_placement_slip(
+        # Workbook parsing, the AI fallback, auto-mapping and the whole-roster
+        # re-match are BLOCKING work. Inline in this `async def` they would hold
+        # the event loop and its worker heartbeat (see adc.apply_listing_upload).
+        return await run_in_threadpool(
+            lambda: _ingest_slip(
+                db,
+                user,
+                policy_year,
+                client_id,
                 tmp_path,
-                client_label=client_id,
-                profile_resolver=make_resolver(db, client_id),
-                classification_resolver=_classification,
-                rate_date=policy_year.start_date,
+                filename=file.filename or "untitled",
+                acknowledge_period_mismatch=acknowledge_period_mismatch,
             )
-        except Exception as exc:
-            slip_row.parse_status = ParseStatus.error
-            # Don't echo raw exception text to the client — it can contain
-            # file paths or library internals. Log full detail server-side.
-            logger.exception(
-                "placement slip parse failed (slip_id=%s file=%s)",
-                slip_row.id, file.filename,
-            )
-            slip_row.parse_log = {"error_type": type(exc).__name__}
-            db.commit()
-            raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_CONTENT,
-                "Parser error — workbook could not be processed. See server logs.",
-            ) from exc
+        )
 
-        # Reconcile so every category's plan_code resolves to a real plan (fan
-        # out descriptive/sum-assured products, split composite plan headers,
-        # assign the sole plan to unlinked categories) and capture per-product
-        # diagnostics. Then, for products the parser still couldn't read and
-        # only while the workbook is on disk, try the AI fallback (no-op without
-        # a configured provider).
-        # Several sheets of one product type are either one policy (merge) or
-        # distinct policies (variants) — decided from each sheet's own header
-        # before reconciliation so diagnostics already carry the final codes.
-        client_codes = frozenset(
-            code.upper()
-            for code in db.execute(
-                select(Product.code).where(Product.client_id == client_id)
-            ).scalars()
+
+def _ingest_slip(
+    db: Session,
+    user: CurrentUser,
+    policy_year: PolicyYear,
+    client_id: str,
+    tmp_path: Path,
+    *,
+    filename: str,
+    acknowledge_period_mismatch: bool,
+) -> ParseResult:
+    """Parse, persist and re-match one uploaded slip. Synchronous: runs in the
+    threadpool while the workbook is still on disk."""
+    policy_year_id = policy_year.id
+    slip_row = PlacementSlipRow(
+        policy_year_id=policy_year_id,
+        uploaded_by=user.user_id,
+        filename=filename,
+        parse_status=ParseStatus.parsing,
+    )
+    db.add(slip_row)
+    db.flush()
+
+    # Classification resolver: a broker's stored product_metadata (form
+    # profile / layout family, set via PATCH /schemas/products after a
+    # needs_classification diagnostic) applies to the matching sheet on
+    # this and every future upload.
+    classification_by_code: dict[str, dict[str, Any]] = {
+        product_registry.resolve_code(p.code): dict(p.product_metadata)
+        for p in db.execute(
+            select(Product).where(tenant_or_global(Product.client_id, client_id))
+        ).scalars()
+        if p.product_metadata
+    }
+
+    def _classification(code: str) -> dict[str, Any] | None:
+        return classification_by_code.get(product_registry.resolve_code(code))
+
+    try:
+        raw_parsed = parse_placement_slip(
+            tmp_path,
+            client_label=client_id,
+            profile_resolver=make_resolver(db, client_id),
+            classification_resolver=_classification,
+            rate_date=policy_year.start_date,
         )
-        raw_parsed = assign_variants(raw_parsed, client_codes)
-        # A second slip for this year (e.g. a separate directors' policy) adds
-        # its own policies rather than overwriting the first slip's products.
-        raw_parsed = separate_existing_policies(
-            raw_parsed, _setup_policy_numbers(db, policy_year_id)
+    except Exception as exc:
+        slip_row.parse_status = ParseStatus.error
+        # Don't echo raw exception text to the client — it can contain
+        # file paths or library internals. Log full detail server-side.
+        logger.exception(
+            "placement slip parse failed (slip_id=%s file=%s)",
+            slip_row.id, filename,
         )
-        reconciled = reconcile_slip(raw_parsed)
-        reconciled = maybe_ai_augment(
-            db, client_id, policy_year_id, tmp_path, reconciled
-        )
+        slip_row.parse_log = {"error_type": type(exc).__name__}
+        db.commit()
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "Parser error — workbook could not be processed. See server logs.",
+        ) from exc
+
+    # Reconcile so every category's plan_code resolves to a real plan (fan
+    # out descriptive/sum-assured products, split composite plan headers,
+    # assign the sole plan to unlinked categories) and capture per-product
+    # diagnostics. Then, for products the parser still couldn't read and
+    # only while the workbook is on disk, try the AI fallback (no-op without
+    # a configured provider).
+    # Several sheets of one product type are either one policy (merge) or
+    # distinct policies (variants) — decided from each sheet's own header
+    # before reconciliation so diagnostics already carry the final codes.
+    client_codes = frozenset(
+        code.upper()
+        for code in db.execute(
+            select(Product.code).where(Product.client_id == client_id)
+        ).scalars()
+    )
+    raw_parsed = assign_variants(raw_parsed, client_codes)
+    # A second slip for this year (e.g. a separate directors' policy) adds
+    # its own policies rather than overwriting the first slip's products.
+    raw_parsed = separate_existing_policies(
+        raw_parsed, _setup_policy_numbers(db, policy_year_id)
+    )
+    reconciled = reconcile_slip(raw_parsed)
+    if not acknowledge_period_mismatch:
+        _assert_period_matches(db, policy_year, client_id, reconciled.slip)
+    reconciled = maybe_ai_augment(
+        db, client_id, policy_year_id, tmp_path, reconciled
+    )
     parsed = reconciled.slip
     diagnostics = reconciled.diagnostics
 
-    # Pre-commit guard: a slip's period of insurance covers the whole policy
-    # year, so if it doesn't match the target year we stop *before* writing
-    # (re-upload replaces this year's unreviewed auto rows) and let the user
-    # switch years or acknowledge. Unparseable periods never block.
-    if not acknowledge_period_mismatch:
-        year_start, year_end = policy_year.start_date, policy_year.end_date
-        period_text = next(
-            (p.policy_header.period for p in parsed.products if p.policy_header.period),
-            None,
-        )
-        slip_range = parse_period_of_insurance(period_text)
-        if slip_range and (slip_range[0] != year_start or slip_range[1] != year_end):
-            db.rollback()  # discard the provisional slip_row — nothing persists
-            matching_id = (
-                db.execute(
-                    select(PolicyYear.id).where(
-                        PolicyYear.client_id == client_id,
-                        PolicyYear.start_date == slip_range[0],
-                        PolicyYear.end_date == slip_range[1],
-                        PolicyYear.id != policy_year_id,
-                    )
-                )
-                .scalars()
-                .first()
-            )
-            raise HTTPException(
-                status.HTTP_409_CONFLICT,
-                detail={
-                    "code": "period_mismatch",
-                    "detected_period": period_text,
-                    "slip_start": slip_range[0].isoformat(),
-                    "slip_end": slip_range[1].isoformat(),
-                    "policy_year_start": year_start.isoformat(),
-                    "policy_year_end": year_end.isoformat(),
-                    "matching_policy_year_id": matching_id,
-                },
-            )
-
-    products_cache: dict[str, Product] = {
-        p.code: p
-        for p in db.execute(
-            select(Product).where(tenant_or_global(Product.client_id, client_id))
-        )
-        .scalars()
-        .all()
-    }
+    # A firm-library (global) row and the client's own row can share a code (a
+    # confirmed guided setup creates the latter). The client row wins, as in
+    # every other product lookup, instead of whichever the database returns last.
+    tenant_products = list(
+        db.execute(
+            select(Product)
+            .where(tenant_or_global(Product.client_id, client_id))
+            .order_by(Product.client_id.is_(None))
+        ).scalars()
+    )
+    products_cache: dict[str, Product] = {}
+    for tenant_product in tenant_products:
+        products_cache.setdefault(tenant_product.code, tenant_product)
 
     variants_created = _ensure_variant_products(
         db, user, client_id, parsed, products_cache
@@ -616,8 +670,9 @@ async def parse_upload(
     # by a confirmed guided setup — those products are skipped on insert too,
     # so deleting them would lose data we don't regenerate. Orphan rows
     # (product_id IS NULL) are still cleared (NOT IN is NULL-blind otherwise).
+    # Every same-code row counts, so the exclusion holds whichever one owns them.
     confirmed_product_ids = {
-        products_cache[c].id for c in confirmed_codes if c in products_cache
+        p.id for p in tenant_products if p.code in confirmed_codes
     }
     preserved_by_key: dict[
         tuple[str | None, str, str, tuple[str, ...]], Category
@@ -847,6 +902,7 @@ async def parse_upload(
     # Persist parsed plans (Schedule of Benefits data).
     plans_created = 0
     plans_dup_skipped = 0
+    plans_preserved = 0
     plans_skipped_products: list[str] = []
     # Plans are unique on (product_id, policy_year_id, code). Several sheets can
     # resolve to the SAME product (e.g. VDL's "GHS - Locals/Secondees/Dependants"
@@ -876,6 +932,23 @@ async def parse_upload(
             )
             continue
         for extracted_plan in product_slip.plans:
+            if len(extracted_plan.code) > _PLAN_CODE_MAX:
+                # The database rejects the over-long key at flush, failing the
+                # whole upload; truncating it would orphan the categories that
+                # cite it by exact code. Leave it out and say so.
+                logger.warning(
+                    "Plan code longer than %d characters skipped for product %s "
+                    "sheet=%s (slip_id=%s)",
+                    _PLAN_CODE_MAX, product.code, product_slip.sheet, slip_row.id,
+                )
+                diag = diag_by_sheet.get(product_slip.sheet)
+                if diag is not None:
+                    diag.issues.append(
+                        f"Plan code {extracted_plan.code[:40]!r}... is longer than "
+                        f"{_PLAN_CODE_MAX} characters and was not stored. Shorten it "
+                        "on the slip and upload again."
+                    )
+                continue
             plan_key = (product.id, extracted_plan.code)
             if plan_key in seen_plan_keys:
                 plans_dup_skipped += 1
@@ -904,6 +977,14 @@ async def parse_upload(
                     Plan.code == extracted_plan.code,
                 )
             ).scalar_one_or_none()
+            if existing is not None:
+                # Only reviewed, human-edited or manual plans survive the clear
+                # above, and they stay authoritative (the invariant
+                # `_sync_provisional_plan_schedules` relies on). Rewriting one
+                # here stored the raw per-plan payload, whose blanks for benefits
+                # stated once across plan columns that projection never repairs.
+                plans_preserved += 1
+                continue
             schedule_json = {
                 "items": [
                     {
@@ -941,38 +1022,31 @@ async def parse_upload(
                     for item in extracted_plan.items
                 ]
             }
-            if existing:
-                existing.benefit_schedule = schedule_json
-                existing.cover_description = extracted_plan.cover_description
-                existing.annual_policy_limit = (
-                    str(extracted_plan.annual_policy_limit)
+            # Free-text fields are clipped to their columns: a fanned
+            # descriptive plan is named after its full category text.
+            db.add(Plan(
+                product_id=product.id,
+                policy_year_id=policy_year_id,
+                code=extracted_plan.code,
+                display_name=extracted_plan.display_name[:255],
+                benefit_schedule=schedule_json,
+                cover_description=(
+                    extracted_plan.cover_description[:512]
+                    if extracted_plan.cover_description else None
+                ),
+                annual_policy_limit=(
+                    str(extracted_plan.annual_policy_limit)[:128]
                     if extracted_plan.annual_policy_limit else None
-                )
-                existing.source_ref = (
+                ),
+                source=SourceKind.system_generated.value,
+                source_ref=(
                     f"placement_slip://{slip_row.id}/{product_slip.sheet}"
                     f"/sob_row_{extracted_plan.source_row}"
-                )
-            else:
-                db.add(Plan(
-                    product_id=product.id,
-                    policy_year_id=policy_year_id,
-                    code=extracted_plan.code,
-                    display_name=extracted_plan.display_name,
-                    benefit_schedule=schedule_json,
-                    cover_description=extracted_plan.cover_description,
-                    annual_policy_limit=(
-                        str(extracted_plan.annual_policy_limit)
-                        if extracted_plan.annual_policy_limit else None
-                    ),
-                    source=SourceKind.system_generated.value,
-                    source_ref=(
-                        f"placement_slip://{slip_row.id}/{product_slip.sheet}"
-                        f"/sob_row_{extracted_plan.source_row}"
-                    ),
-                    confidence=0.9,
-                    status=CategoryStatus.needs_review.value,
-                ))
-                plans_created += 1
+                ),
+                confidence=0.9,
+                status=CategoryStatus.needs_review.value,
+            ))
+            plans_created += 1
 
     # Route each extracted policy period into the product term's start/end
     # dates. Life sheets may additionally auto-fill their FCL / NEL thresholds.
@@ -1049,6 +1123,7 @@ async def parse_upload(
         "plans_created": plans_created,
         "plans_skipped_no_product": plans_skipped_products,
         "plans_skipped_duplicate": plans_dup_skipped,
+        "plans_preserved": plans_preserved,
         "prefilled_setups": prefilled_setups,
         "variants_created": variants_created,
         "period_terms_autofilled": period_autofilled,

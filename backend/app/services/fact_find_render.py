@@ -275,6 +275,24 @@ def _matrix_row_text(product: OtherProductContext) -> str:
     return f"{product.title} ({product.code})\n-  for employees\n-  for dependants"
 
 
+def _mark_mode(cells: list[_Cell], mode: str | None) -> None:
+    """Tick Compulsory (column 1) or Voluntary (column 2) for one matrix row.
+
+    A product compulsory for some categories and voluntary for others
+    (``mixed``) ticks both rather than claiming either; the completeness notes
+    ask the broker to say which category is which.
+    """
+    if not mode:
+        return
+    if mode == "mixed":
+        columns: tuple[int, ...] = (1, 2)
+    else:
+        columns = (2,) if mode.startswith("vol") else (1,)
+    for column in columns:
+        if len(cells) > column:
+            _mark(cells[column])
+
+
 def _apply_matrix_modes(
     employee_row: _Row,
     dependant_row: _Row,
@@ -288,12 +306,8 @@ def _apply_matrix_modes(
             _set(cells[1], "")
         if len(cells) > 2:
             _set(cells[2], "")
-    for cells, mode in (
-        (employee_cells, product.employee_participation),
-        (dependant_cells, product.dependant_participation),
-    ):
-        if mode:
-            _mark(cells[2 if mode.startswith("vol") else 1])
+    _mark_mode(employee_cells, product.employee_participation)
+    _mark_mode(dependant_cells, product.dependant_participation)
 
 
 def _split_clinical_matrix_rows(ctx: FactFindContext, table: Table) -> None:
@@ -355,17 +369,13 @@ def _fill_matrix(ctx: FactFindContext, table: Table) -> None:
         code = section_for_code(raw_code) if raw_code else None
         if code and code in ctx.sections:
             sec = ctx.sections[code]
-            employee_cells = _physical_cells(rows[i])
             mode = sec.employee_participation or sec.participation
-            col = 2 if (mode or "").startswith("vol") else 1
-            if mode and len(employee_cells) > col:
-                _mark(employee_cells[col])
+            _mark_mode(_physical_cells(rows[i]), mode)
             if sec.has_dependants and i + 1 < len(rows):
-                dependant_cells = _physical_cells(rows[i + 1])
-                dep_mode = sec.dependant_participation or mode
-                dep_col = 2 if (dep_mode or "").startswith("vol") else 1
-                if dep_mode and len(dependant_cells) > dep_col:
-                    _mark(dependant_cells[dep_col])
+                _mark_mode(
+                    _physical_cells(rows[i + 1]),
+                    sec.dependant_participation or mode,
+                )
             i += 2
         else:
             i += 1
@@ -395,8 +405,7 @@ def _fill_matrix(ctx: FactFindContext, table: Table) -> None:
                     _set(cells[1], "")
                 if len(cells) > 2:
                     _set(cells[2], "")
-                if mode:
-                    _mark(cells[2 if mode.startswith("vol") else 1])
+                _mark_mode(cells, mode)
 
 
 def _fill_other_products(ctx: FactFindContext, table: Table) -> None:

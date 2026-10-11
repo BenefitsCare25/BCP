@@ -16,6 +16,7 @@ import {
 import type { LucideIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Segmented } from "@/components/ui/segmented";
+import { SkeletonTable } from "@/components/ui/skeleton";
 import {
   PageTabsBar,
   Tabs,
@@ -165,18 +166,24 @@ function BenefitSelectionDownload({
   setNric: (v: NricMode) => void;
 }) {
   const qc = useQueryClient();
+  const { data: me } = useMe();
+  // Unmasked NRIC/FIN is refused to a broker viewer (`assert_masking_allowed`).
+  const maskingLocked = me?.role === "broker_viewer";
+  const unmasked = nric === "full" && !maskingLocked;
   return (
     <div className="flex items-center justify-end gap-2">
-      <Segmented
-        value={nric}
-        onChange={setNric}
-        options={[
-          { value: "masked", label: "Masked" },
-          { value: "full", label: "Unmasked" },
-        ]}
-      />
+      {!maskingLocked && (
+        <Segmented
+          value={nric}
+          onChange={setNric}
+          options={[
+            { value: "masked", label: "Masked" },
+            { value: "full", label: "Unmasked" },
+          ]}
+        />
+      )}
       <ReportDownloadButton
-        path={`/policy-years/${year.id}/reports/benefit-selection${nric === "full" ? "?masked=false" : ""}`}
+        path={`/policy-years/${year.id}/reports/benefit-selection${unmasked ? "?masked=false" : ""}`}
         filename={`benefit-selection-status-with-buy-sell-leave-report-${stamp(year)}.xlsx`}
         label="Download"
         size="sm"
@@ -248,12 +255,46 @@ function ReportSection({
  *  on the server appears with its real sheet list; an unknown key is simply not
  *  rendered rather than throwing. */
 function Workbooks({ keys, year }: { keys: string[]; year: PolicyYear }) {
-  const { data: workbooks = [] } = useReportWorkbooks(year.id);
+  const {
+    data: workbooks = [],
+    isPending,
+    isError,
+    isFetching,
+    refetch,
+  } = useReportWorkbooks(year.id);
   const byKey = useMemo(
     () => new Map(workbooks.map((w) => [w.key, w])),
     [workbooks],
   );
   const shown = keys.map((k) => byKey.get(k)).filter((w) => w !== undefined);
+  if (isPending) {
+    return (
+      <div className="rounded-xl border border-border bg-card px-4 py-2">
+        <SkeletonTable rows={keys.length} columns={3} />
+      </div>
+    );
+  }
+  if (isError) {
+    return (
+      <div
+        role="alert"
+        className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-error/40 bg-error-soft/40 px-3 py-2 text-sm text-error"
+      >
+        <span className="flex items-center gap-2">
+          <AlertTriangle className="size-4 shrink-0" aria-hidden="true" />
+          Couldn&apos;t load these reports. Retry, or check your connection.
+        </span>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => void refetch()}
+          loading={isFetching}
+        >
+          Retry
+        </Button>
+      </div>
+    );
+  }
   if (!shown.length) return null;
   return (
     <div className="divide-y divide-border overflow-visible rounded-xl border border-border bg-card">
@@ -284,6 +325,8 @@ function CrReports({ year }: { year: PolicyYear }) {
           reportType="fact_find"
           scopeKey={null}
           createInput={{ report_type: "fact_find" }}
+          livePath={`/policy-years/${year.id}/fact-find-form`}
+          liveFilename={`fact-find-${year.year}.docx`}
         />
       ),
     },
@@ -299,6 +342,8 @@ function CrReports({ year }: { year: PolicyYear }) {
           reportType="quotation_slip"
           scopeKey={null}
           createInput={{ report_type: "quotation_slip" }}
+          livePath={`/policy-years/${year.id}/reports/quotation-slip`}
+          liveFilename={`quotation-slips-by-insurer-${stamp(year)}.zip`}
         />
       ),
     },
@@ -314,6 +359,8 @@ function CrReports({ year }: { year: PolicyYear }) {
           reportType="placement_slip"
           scopeKey={null}
           createInput={{ report_type: "placement_slip" }}
+          livePath={`/policy-years/${year.id}/reports/placement-slip`}
+          liveFilename={`placement-slip-${stamp(year)}.xlsx`}
         />
       ),
     },

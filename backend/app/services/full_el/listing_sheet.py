@@ -8,10 +8,11 @@ from openpyxl.styles import Alignment, Font
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 
-from app.models import Employee
+from app.models import Dependant, Employee
 from app.services.el_workbook import ElBlock
 from app.services.full_el.cells import (
     DATE_ROLES,
+    FLAT_RATE_BASES,
     Cover,
     Refs,
     dependant_value,
@@ -21,7 +22,8 @@ from app.services.full_el.cells import (
     product_age_basis,
     product_value,
 )
-from app.services.full_el.context import ElContext
+from app.services.full_el.context import CategoryInfo, ElContext
+from app.services.roster_attributes import family_tier_bucket
 
 DATE_FORMAT = "dd/mmm/yy"
 MONEY_FORMAT = "#,##0.00"
@@ -39,12 +41,39 @@ def _anb(dob: Any, reference: date) -> int | None:
     return reference.year - born.year - before_birthday + 1
 
 
-def _family_group(relationships: list[str]) -> str:
-    spouse = any(r.lower().startswith("s") for r in relationships)
-    child = any(r.lower().startswith("c") for r in relationships)
-    return {(False, False): "EO", (True, False): "ES", (False, True): "EC"}.get(
-        (spouse, child), "EF"
+def _held_category(
+    ctx: ElContext, emp: Employee, matched: dict[Any, Any], codes: list[str]
+) -> CategoryInfo | None:
+    """The employee's category under one block once enrolment applies: none
+    when declined or when voluntary cover was never taken up, the elected
+    tier's category when the member changed tier."""
+    info = next(
+        (ctx.categories[cid] for code in codes
+         if (cid := matched.get(code)) and cid in ctx.categories),
+        None,
     )
+    if info is None:
+        return None
+    key = (emp.id, info.product.id)
+    override = ctx.overrides.get(key)
+    if (override is not None and override.declined) or (
+        info.voluntary and key not in ctx.enrolled
+    ):
+        return None
+    elected = ctx.categories.get(override.tier_category_id or "") if override else None
+    return elected or info
+
+
+def _dependant_covered(
+    ctx: ElContext, dep: Dependant, info: CategoryInfo,
+    elected: list[str] | None, deps_with_listing: set[str],
+) -> bool:
+    """The member's election decides; else the listing; else the category default."""
+    if elected is not None:
+        return dep.id in elected and dep.status == "active"
+    if (f"D:{dep.id}", info.product.id) in ctx.listed:
+        return True
+    return dep.id not in deps_with_listing and info.covers_dependants and dep.status == "active"
 
 
 def employee_covers(ctx: ElContext, emp: Employee, deps_with_listing: set[str]) -> dict[int, Cover]:
@@ -54,26 +83,20 @@ def employee_covers(ctx: ElContext, emp: Employee, deps_with_listing: set[str]) 
     }
     out: dict[int, Cover] = {}
     for block, codes in ctx.block_products.items():
-        info = next(
-            (ctx.categories[cid] for code in codes
-             if (cid := matched.get(code)) and cid in ctx.categories),
-            None,
-        )
+        info = _held_category(ctx, emp, matched, codes)
         if info is None:
             continue
         product_id = info.product.id
-        covered = []
-        for dep in ctx.dependants.get(emp.id, []):
-            if (f"D:{dep.id}", product_id) in ctx.listed or (
-                dep.id not in deps_with_listing and info.covers_dependants
-                and dep.status == "active"
-            ):
-                covered.append(dep)
-        relationships = [str((d.attribute_values or {}).get("relationship") or "") for d in covered]
+        override = ctx.overrides.get((emp.id, product_id))
+        elected = override.covered_dependant_ids if override is not None else None
+        covered = [
+            dep for dep in ctx.dependants.get(emp.id, [])
+            if _dependant_covered(ctx, dep, info, elected, deps_with_listing)
+        ]
         out[block] = Cover(
             info=info,
             assignment=ctx.listed.get((f"E:{emp.id}", product_id)),
-            family_group=_family_group(relationships),
+            family_group=family_tier_bucket(d.attribute_values or {} for d in covered),
             covered_dependants=covered,
             uw_case=ctx.uw_cases.get((emp.id, product_id)),
         )
@@ -157,7 +180,9 @@ def write_listing(ws: Worksheet, ctx: ElContext, *, masked: bool) -> dict[str, A
         cell.value, cell.font, cell.alignment = column.header, bold, wrap
 
     deps_with_listing = {key[2:] for key, _ in ctx.listed if key.startswith("D:")}
-    stats = {"employees": 0, "dependants": 0, "uw": 0, "missing_salary": 0, "missing_dob": 0}
+    stats: dict[str, Any] = {"employees": 0, "dependants": 0, "uw": 0, "missing_salary": 0,
+                             "missing_dob": 0}
+    unpriced: set[tuple[str, str]] = set()  # (product, category) without a dependant rate
     row = FIRST_ROW
     for emp in ordered_employees(ctx):
         covers = employee_covers(ctx, emp, deps_with_listing)
@@ -194,9 +219,14 @@ def write_listing(ws: Worksheet, ctx: ElContext, *, masked: bool) -> dict[str, A
             }
             _write_covers(ws, ctx, dep_covers, row, refs, rate_cells, uw, dep,
                           dep.attribute_values or {})
+            unpriced.update(
+                (c.info.product.code, c.info.category.display_name) for c in dep_covers.values()
+                if c.info.rate_basis in FLAT_RATE_BASES and c.info.dependant_rate is None
+            )
             stats["dependants"] += 1
             row += 1
     stats["last_row"] = row - 1
+    stats["unpriced_dependants"] = sorted(unpriced)
 
     for column in [c for b in layout.blocks for c in b.columns] + list(layout.trailing):
         ws.column_dimensions[column.letter].width = 14 if column.role not in {

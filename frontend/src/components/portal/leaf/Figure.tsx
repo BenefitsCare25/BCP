@@ -1,4 +1,4 @@
-import { usePortalTranslation } from "@/i18n/portal";
+import { getPortalLocale, usePortalTranslation } from "@/i18n/portal";
 /** Figures on the leaf.
  *
  * The Tabular-Figure Rule: every figure a member could compare to another
@@ -18,7 +18,9 @@ import { formatValue } from "@/lib/benefitSchedule";
  * a decorative ".00". */
 export function moneyText(v: number): string {
   const cents = Math.round(Math.abs(v) * 100) % 100 !== 0;
-  return v.toLocaleString(undefined, {
+  // The portal's locale, not the device's: grouping must match the server's
+  // notices ("S$1,234.50") whatever language the phone is set to.
+  return v.toLocaleString(getPortalLocale(), {
     minimumFractionDigits: cents ? 2 : 0,
     maximumFractionDigits: 2,
   });

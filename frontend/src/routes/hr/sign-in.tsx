@@ -6,8 +6,8 @@ import { useRef, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { ArrowRight } from "lucide-react";
 import { adoptSession, isTokenResult, useHrLogin, useHrMfa } from "@/api/hr";
-import { errorCode, formatError } from "@/lib/errors";
-import { loginError, validateCredentials, type LoginFieldErrors } from "@/lib/loginValidation";
+import { errorCode } from "@/lib/errors";
+import { authStepError, loginError, validateCredentials, type LoginFieldErrors } from "@/lib/loginValidation";
 import { handOverSetPasswordChallenge } from "@/lib/setPasswordToken";
 import { useSessionEndNotice } from "@/lib/surfaceSession";
 import { useHrSession } from "@/stores/hrSession";
@@ -109,7 +109,7 @@ export function HrSignInPage() {
           if (errorCode(err) === "challenge_expired") {
             setStep("credentials"); setCode(""); setChallenge(""); setPassword("");
           }
-          setError(formatError(err));
+          setError(authStepError(err));
         },
         onSettled: () => { submitting.current = false; },
       },

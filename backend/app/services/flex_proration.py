@@ -39,6 +39,7 @@ the cover charged against it can never disagree about the period.
 """
 from __future__ import annotations
 
+import calendar
 from dataclasses import dataclass
 from datetime import date
 from typing import Any
@@ -213,17 +214,26 @@ def proration_errors(scheme: dict[str, Any] | None) -> list[str]:
 # ── Periods ──────────────────────────────────────────────────────────────────
 
 
-def _month_index(d: date) -> int:
-    return d.year * 12 + d.month
+def _add_months(anchor: date, months: int) -> date:
+    """``anchor`` moved by whole months, its day clamped to the target month."""
+    index = anchor.month - 1 + months
+    year, month = anchor.year + index // 12, index % 12 + 1
+    return date(year, month, min(anchor.day, calendar.monthrange(year, month)[1]))
 
 
-def _months_touched(start: date, end: date) -> int:
-    """Distinct calendar months the inclusive range touches (a part month counts
-    whole — see the module docstring)."""
-    return _month_index(end) - _month_index(start) + 1
+def _policy_month(anchor: date, d: date) -> int:
+    """Zero-based policy month ``d`` falls in, months anchored on ``anchor``'s
+    day — so a 15 Apr → 14 Apr year is twelve months, not thirteen calendar
+    months touched."""
+    months = (d.year - anchor.year) * 12 + d.month - anchor.month
+    return months - 1 if _add_months(anchor, months) > d else months
 
 
-def _days_touched(start: date, end: date) -> int:
+def _units(basis: str, anchor: date, start: date, end: date) -> int:
+    """Policy months (a part month counts whole — see the module docstring) or
+    days the inclusive range touches."""
+    if basis == BASIS_MONTHS:
+        return _policy_month(anchor, end) - _policy_month(anchor, start) + 1
     return (end - start).days + 1
 
 
@@ -299,13 +309,12 @@ def prorate(
         return None
 
     period_start, period_end = period
-    count = _months_touched if config.basis == BASIS_MONTHS else _days_touched
-    total = count(period_start, period_end)
+    total = _units(config.basis, period_start, period_start, period_end)
     if total <= 0:
         return None
 
     window = service_period(member, period, config)
-    served = 0 if window is None else count(*window)
+    served = 0 if window is None else _units(config.basis, period_start, *window)
     factor = min(1.0, max(0.0, served / total))
     if served >= total:
         # Covered for the whole entitlement period — there is nothing to

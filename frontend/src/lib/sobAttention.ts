@@ -28,14 +28,14 @@ function rowValues(item: SobItemAnswer, columns: SobColumn[]): string[] {
   return columns.map((col) => cellValue(item, col.id));
 }
 
-/** `canRemove`: only system admins have the row Remove control, so everyone
+/** `canRemove`: only firm administrators can remove a saved row, so everyone
  * else is told who can remove a row rather than to do it themselves. */
 export function rowIssues(
   items: SobItemAnswer[],
   columns: SobColumn[],
   canRemove: boolean,
 ): Map<string, string[]> {
-  const removeAdvice = canRemove ? "remove" : "ask a system admin to remove";
+  const removeAdvice = canRemove ? "remove" : "ask a firm administrator to remove";
   const issues = new Map<string, string[]>();
   const add = (uid: string, message: string) =>
     issues.set(uid, [...(issues.get(uid) ?? []), message]);

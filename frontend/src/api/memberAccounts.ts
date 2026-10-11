@@ -238,8 +238,9 @@ export function usePortalRollout(policyYearId: string | null) {
   const cid = useSession((s) => s.activeClientId);
   return useQuery({
     queryKey: ["portal-rollout", cid, policyYearId],
-    queryFn: () =>
-      api.get<PortalRollout>(
+    queryFn: (context) =>
+      api.poll<PortalRollout>(
+        context,
         `/member-accounts/rollout?policy_year_id=${policyYearId}`,
       ),
     enabled: Boolean(policyYearId),

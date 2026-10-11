@@ -64,6 +64,9 @@ class DualCoverIn(BaseModel):
 
     covered: bool
     products_changed: list[str] = Field(default_factory=list)
+    # The broker has seen that an open enrolment period will replace this
+    # change (the 409 ``open_enrollment_election`` the first attempt returned).
+    acknowledge_open_enrollment: bool = False
 
 
 class DualLifeRefOut(BaseModel):

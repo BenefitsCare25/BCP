@@ -8,9 +8,11 @@ import { toast } from "sonner";
 import {
   useAddDependant,
   usePortalDependants,
+  usePortalMe,
   usePortalStatement,
   useUploadDependantProof,
 } from "@/api/portal";
+import { holds } from "@/components/portal/capabilities";
 import { formatError, isNotFoundError } from "@/lib/errors";
 import { DependantsLeaf } from "@/components/portal/leaf/DependantsLeaf";
 import { Field, FormAlert, leafControl } from "@/components/portal/leaf/Field";
@@ -28,6 +30,10 @@ export function PortalDependantsPage() {
   // status, which stopped being the same fact once cover could be set per
   // person.
   const statement = usePortalStatement();
+  const me = usePortalMe();
+  // Self-add needs `elect`, which a leaver's served capabilities drop; the
+  // form used to be filled in full before the server refused it.
+  const canAdd = holds(me.data?.access.capabilities, "elect");
   const addDependant = useAddDependant();
   const uploadProof = useUploadDependantProof();
 
@@ -45,7 +51,25 @@ export function PortalDependantsPage() {
     relationship?: string;
   }>({});
   const [busy, setBusy] = useState(false);
+  // The request already on file when only its certificate failed to upload.
+  // A retry re-sends the file to it; creating again filed a second pending
+  // family member that HR could approve alongside the first.
+  const [sentId, setSentId] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
+
+  const finish = () => {
+    toast.success(pt("Sent to your HR team for approval"));
+    setShowForm(false);
+    setSentId(null);
+    setError(null);
+    setName("");
+    setRelationship("");
+    setDob("");
+    setGender("");
+    setIdNo("");
+    setOccupation("");
+    setProof(null);
+  };
 
   const submit = async () => {
     setError(null);
@@ -59,26 +83,23 @@ export function PortalDependantsPage() {
 
     setBusy(true);
     try {
-      const created = await addDependant.mutateAsync({
-        name: name.trim(),
-        relationship: relationship.trim(),
-        dob: dob || null,
-        gender: gender || null,
-        id_no: idNo.trim() || null,
-        occupation: occupation.trim() || null,
-      });
-      if (proof) {
-        await uploadProof.mutateAsync({ dependantId: created.id, file: proof });
+      let dependantId = sentId;
+      if (dependantId === null) {
+        const created = await addDependant.mutateAsync({
+          name: name.trim(),
+          relationship: relationship.trim(),
+          dob: dob || null,
+          gender: gender || null,
+          id_no: idNo.trim() || null,
+          occupation: occupation.trim() || null,
+        });
+        dependantId = created.id;
+        setSentId(dependantId);
       }
-      toast.success(pt("Sent to your HR team for approval"));
-      setShowForm(false);
-      setName("");
-      setRelationship("");
-      setDob("");
-      setGender("");
-      setIdNo("");
-      setOccupation("");
-      setProof(null);
+      if (proof) {
+        await uploadProof.mutateAsync({ dependantId, file: proof });
+      }
+      finish();
     } catch (err) {
       setError(formatError(err));
     } finally {
@@ -103,15 +124,18 @@ export function PortalDependantsPage() {
           inside the form, and adding a family member is the step BEFORE the
           member has anything to submit. Full width on a phone so it lands where
           every other member action does. */}
-      {!showForm && (
+      {!showForm && canAdd && (
         <div className="flex sm:justify-end">
           <Action block="phone" onClick={() => setShowForm(true)}>
             <UserPlus className="size-4" aria-hidden />
             {pt("Add a family member")} </Action>
         </div>
       )}
+      {!canAdd && (
+        <p className="text-row text-label">{pt("Your cover has ended, so you can no longer add family members.")}</p>
+      )}
 
-      {showForm && (
+      {showForm && canAdd && (
         <Mount
           label={pt("Add a family member")}
           gloss="HR approval is required. You can attach a birth or marriage certificate."
@@ -125,9 +149,13 @@ export function PortalDependantsPage() {
               // the member nothing at all.
               disabled={busy}
               onClick={() => {
+                setFieldErrors({});
+                if (sentId) {
+                  finish();
+                  return;
+                }
                 setShowForm(false);
                 setError(null);
-                setFieldErrors({});
               }}
               aria-label={pt("Cancel adding a family member")}
               className="leaf-focus -mr-2 -mt-2 inline-flex size-11 items-center justify-center text-label disabled:opacity-50"
@@ -145,7 +173,9 @@ export function PortalDependantsPage() {
           >
             {/* One column on a phone. A frame is either full width or it is not
                 on this breakpoint — never a half-width field (The Whole-Frame
-                Rule); the two-up grid used to hold a ~147px date input. */}
+                Rule); the two-up grid used to hold a ~147px date input. Locked
+                once the request is on file: only the certificate can follow. */}
+            <fieldset className="min-w-0 space-y-4" disabled={sentId !== null}>
             <Field label={pt("Full name")} required error={fieldErrors.name}>
               {(p) => (
                 <input
@@ -234,6 +264,7 @@ export function PortalDependantsPage() {
                 )}
               </Field>
             </div>
+            </fieldset>
 
             <div>
               <input
@@ -266,6 +297,11 @@ export function PortalDependantsPage() {
             </div>
 
             {error && <FormAlert>{pt(error)}</FormAlert>}
+            {sentId && (
+              <p className="text-row text-label">
+                {pt("Your request was sent to HR, but the certificate didn't upload. Attach a file and send it again, or close this form to leave the request without one.")}
+              </p>
+            )}
 
             {/* The page's one brand fill. */}
             <Action
@@ -275,7 +311,7 @@ export function PortalDependantsPage() {
               block="phone"
             >
               {busy && <Loader2 className="size-4 animate-spin" aria-hidden />}
-              {pt("Send for approval")} </Action>
+              {pt(sentId ? "Send certificate" : "Send for approval")} </Action>
           </form>
         </Mount>
       )}

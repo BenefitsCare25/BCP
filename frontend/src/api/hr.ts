@@ -79,6 +79,9 @@ export function useHrMe() {
     queryFn: () => hrApi.get<HrMe>("/hr/auth/me"),
     enabled: !!token,
     staleTime: 60_000,
+    // The shell and overview fall back to the session identity, and the
+    // security page renders its own error state.
+    meta: { localErrorHandling: true },
   });
 }
 
@@ -111,6 +114,8 @@ export function useHrMfaEnrollConfirm() {
         "/hr/auth/mfa/enroll/confirm",
         { code },
       ),
+    // A mistyped code is shown on the form, never in the notification centre.
+    meta: { localErrorHandling: true },
   });
 }
 
@@ -120,5 +125,7 @@ export function useHrMfaDisable() {
     mutationFn: (password: string) =>
       hrApi.verify<{ status: string }>("/hr/auth/mfa/disable", { password }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["hr-me"] }),
+    // A wrong password or a lockout is shown on the form, not in the bell.
+    meta: { localErrorHandling: true },
   });
 }

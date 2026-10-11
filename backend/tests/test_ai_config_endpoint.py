@@ -26,6 +26,7 @@ from app.db.base import Base  # noqa: E402
 from app.db.session import SessionLocal, engine  # noqa: E402
 from app.main import app  # noqa: E402
 from app.models import AuditLog, Client, ClientAIConfig  # noqa: E402
+from app.services.vertex_probe import VertexProbeResult  # noqa: E402
 from scripts.seed_demo import seed  # noqa: E402
 
 CLIENT_B_ID = "00000000-0000-0000-0000-0000000000c0"
@@ -261,7 +262,7 @@ def test_only_stored_probe_activates_saved_configuration(
     )
     with patch(
         "app.api.v1.ai_config.probe_vertex",
-        return_value=(None, 5, "gemini-draft"),
+        return_value=VertexProbeResult(None, 5, "gemini-draft"),
     ):
         draft = client_as_admin_a.post(
             "/api/v1/ai-config/test",
@@ -275,7 +276,7 @@ def test_only_stored_probe_activates_saved_configuration(
 
     with patch(
         "app.api.v1.ai_config.probe_vertex",
-        return_value=(None, 5, "gemini-2.5-flash"),
+        return_value=VertexProbeResult(None, 5, "gemini-2.5-flash"),
     ):
         stored = client_as_admin_a.post("/api/v1/ai-config/test")
     assert stored.status_code == 200

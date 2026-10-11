@@ -4,7 +4,8 @@ A session is bound to a broker firm: the session row records the user's firm
 (`auth_sessions.broker_firm_id`, NULL for the firm-less master admin), and a
 request on a host that names a different firm (`tenant_resolution`) is refused.
 The binding lives on the row rather than in a token claim, so access tokens
-issued before it existed keep working.
+issued before it existed keep working. Every request re-reads that firm's
+status, so a suspended firm's sessions stop at once on every worker.
 
 Staff sign in with Microsoft (`idp` "entra": the account is bound to a
 directory and object id) or with email + password (`idp` "local": the account
@@ -22,7 +23,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, NamedTuple
 
 import jwt
-from fastapi import HTTPException, Response
+from fastapi import HTTPException, Request, Response
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
@@ -30,7 +31,11 @@ from app.core import sessions
 from app.core.auth import Principal
 from app.core.identity_providers import SignInMethods, staff_methods
 from app.core.settings import get_settings
-from app.core.tenant_resolution import FirmContext, refuse_unserved_surface
+from app.core.tenant_resolution import (
+    FirmContext,
+    refuse_unserved_surface,
+    require_firm_active,
+)
 from app.models import AuthCredential, AuthSession, User
 from app.models.invitation import INVITE_STATUS_ACCEPTED, INVITE_STATUS_PENDING, Invitation
 from app.models.platform import DOMAIN_SURFACE_STAFF, IDP_ENTRA, IDP_LOCAL
@@ -85,6 +90,17 @@ def invitation_invalid() -> HTTPException:
     return HTTPException(403, {
         "code": "invitation_invalid",
         "message": "This invitation link is no longer valid. Ask your administrator for a new one.",
+    })
+
+
+def invitation_requires_microsoft() -> HTTPException:
+    """A live invitation whose account cannot use a password (a platform
+    admin, or an account already bound to a Microsoft identity). Distinct
+    from `invitation_invalid` so the page keeps the link for Microsoft."""
+    return HTTPException(403, {
+        "code": "invitation_requires_microsoft",
+        "message": "This invitation is accepted by signing in with Microsoft, "
+        "not with a password.",
     })
 
 
@@ -210,9 +226,15 @@ def staff_policy(db: Session, user: User) -> StaffPolicy:
     )
 
 
+def touches_activity(request: Request) -> bool:
+    """False for a background poll (`X-Inspro-Session-Activity: passive`),
+    which must not keep an unattended session alive past its idle limit."""
+    return request.headers.get("X-Inspro-Session-Activity") != "passive"
+
+
 def authenticate(
     authorization: str | None, db: Session, *, lock_user: bool = False,
-    firm: FirmContext | None = None,
+    firm: FirmContext | None = None, touch_activity: bool = True,
 ) -> Authenticated:
     claims = decode(bearer(authorization))
     user = active_user(
@@ -222,6 +244,7 @@ def authenticate(
     issued = db.get(AuthSession, claims["sid"])
     if issued is not None and not bound_to_firm(user, issued.broker_firm_id, firm):
         raise HTTPException(401, SESSION_ENDED)
+    require_firm_active(db, session_firm(user))
     policy = staff_policy(db, user)
     if not policy.method_enabled:
         raise HTTPException(401, SESSION_ENDED)
@@ -232,12 +255,14 @@ def authenticate(
         subject_id=user.id,
         client_id=None,
         idle_minutes=IDLE_MINUTES,
+        touch_activity=touch_activity,
     )
     return Authenticated(user, row, policy.authenticator_required)
 
 
 def broker_principal(
     authorization: str | None, db: Session, *, firm: FirmContext | None = None,
+    touch_activity: bool = True,
 ) -> Principal:
     """The broker user behind a bearer token, on a host that serves staff.
 
@@ -246,7 +271,9 @@ def broker_principal(
     host that serves only the client portals answers 404.
     """
     refuse_unserved_surface(firm, DOMAIN_SURFACE_STAFF)
-    user, row, authenticator_required = authenticate(authorization, db, firm=firm)
+    user, row, authenticator_required = authenticate(
+        authorization, db, firm=firm, touch_activity=touch_activity
+    )
     if authenticator_required and not row.mfa_verified:
         raise HTTPException(
             403, {"code": "broker_mfa_required", "message": "Complete two-factor verification."}

@@ -13,8 +13,15 @@ const COOKIE_WRITERS = new Set([
   "/refresh", "/logout", "/mfa/confirm", "/mfa/verify",
 ]);
 
-export async function brokerAuthRequest<T>(path: string, body?: unknown, token?: string): Promise<T> {
-  const send = () => sendBrokerAuthRequest<T>(path, body, token);
+/** Marks a background poll: the server does not count it as user activity. */
+export const PASSIVE_ACTIVITY: Readonly<Record<string, string>> = {
+  "X-Inspro-Session-Activity": "passive",
+};
+
+export async function brokerAuthRequest<T>(
+  path: string, body?: unknown, token?: string, headers: Record<string, string> = {},
+): Promise<T> {
+  const send = () => sendBrokerAuthRequest<T>(path, body, token, headers);
   // Serialize every cookie writer across tabs.
   if (navigator.locks && COOKIE_WRITERS.has(path)) {
     return await navigator.locks.request("inspro-refresh:broker", send);
@@ -47,15 +54,30 @@ function failureOf(payload: unknown): { message: string; code?: string } {
   return { message: DEFAULT_FAILURE };
 }
 
-async function sendBrokerAuthRequest<T>(path: string, body?: unknown, token?: string): Promise<T> {
+/** The rate limiter's 429 carries no `detail`, so say how long to wait. The
+ *  two authenticator-code checks share a 15-minute bucket per account. */
+function throttled(path: string): string {
+  return path === "/mfa/confirm" || path === "/mfa/verify"
+    ? "Too many attempts. Wait 15 minutes, then try again."
+    : "Too many attempts. Wait a minute, then try again.";
+}
+
+async function sendBrokerAuthRequest<T>(
+  path: string, body: unknown, token: string | undefined, headers: Record<string, string>,
+): Promise<T> {
   const response = await fetch(`${base}/broker/auth${path}`, {
     method: body === undefined ? "GET" : "POST", credentials: "same-origin",
-    headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    headers: {
+      "Content-Type": "application/json",
+      ...headers,
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
   if (!response.ok) {
     const { message, code } = failureOf(await response.json().catch(() => null));
-    throw new ApiError(message, response.status, code);
+    const said = response.status === 429 && message === DEFAULT_FAILURE ? throttled(path) : message;
+    throw new ApiError(said, response.status, code);
   }
   return response.status === 204 ? undefined as T : await response.json() as T;
 }
@@ -130,12 +152,16 @@ export function acceptInviteWithPassword(body: {
 
 // ── Session lifetime ─────────────────────────────────────────────────────────
 
-export function refreshBrokerSession(): Promise<BrokerSession | null> {
+/** `passive` when only a background poll needs the new token, so the refresh
+ *  does not count as user activity either. */
+export function refreshBrokerSession(passive = false): Promise<BrokerSession | null> {
   if (!refreshing) {
     const expected = useBrokerSession.getState().session?.user.id;
     const refresh = async () => {
       try {
-        const session = await brokerAuthRequest<BrokerSession>("/refresh", {});
+        const session = await brokerAuthRequest<BrokerSession>(
+          "/refresh", {}, undefined, passive ? PASSIVE_ACTIVITY : {},
+        );
         if (expected && session.user.id !== expected) {
           useBrokerSession.getState().set(null);
           return null; // Never replay this tab's requests as another account.
@@ -155,9 +181,9 @@ export function refreshBrokerSession(): Promise<BrokerSession | null> {
   return refreshing!;
 }
 
-export async function brokerAccessToken(): Promise<string | null> {
+export async function brokerAccessToken(passive = false): Promise<string | null> {
   let session = useBrokerSession.getState().session;
   if (session && Date.parse(session.expires_at) > Date.now() + 30_000) return session.access_token;
-  session = await refreshBrokerSession();
+  session = await refreshBrokerSession(passive);
   return session?.access_token ?? null;
 }

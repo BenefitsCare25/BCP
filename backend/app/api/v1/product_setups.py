@@ -48,13 +48,17 @@ from app.core.deps import (
 from app.db.session import get_db
 from app.models import (
     Category,
+    Claim,
     Employee,
+    EmployeePlanOverride,
+    EnrollmentElection,
     FlexPricing,
     Plan,
     PolicyYear,
     Product,
     ProductSetup,
     ProductTerm,
+    UnderwritingCase,
 )
 from app.models.category import CategoryStatus, SourceKind
 from app.models.product_setup import ProductSetupOrigin, ProductSetupStatus
@@ -105,6 +109,9 @@ from app.services.sob_columns import resolve_plan_schedule
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["product-setup"])
+# Reads served over POST (the draft rows do not fit a query string). main.py
+# registers this outside the method-based write gate, like member_query.
+read_router = APIRouter(tags=["product-setup"])
 
 _MANUAL = "manual"
 _SETUP_REF = "product_setup"
@@ -247,17 +254,22 @@ class SetupProductSummary(BaseModel):
     has_slip_data: bool
     # Medical / General / Life / Flex line for tab routing.
     line: InsuranceLineStr = "medical"
-    # True when the client has its own catalog row for this code (i.e. the user
-    # added it, or a slip created it) — vs a bare global recognition row. Drives
-    # whether the product surfaces as a configurable card in its tab.
+    # True when the client's own catalog row for this code (the user added it,
+    # or a slip created it) belongs to THIS year: the year has a category, plan,
+    # coverage term or setup for it, or the row is not yet used in any year (just
+    # added). Drives whether the product surfaces as a configurable card in its
+    # tab, so a product removed from this year leaves it even while another year
+    # still uses it. A bare global recognition row is never a client product.
     is_client_product: bool = False
     # Structural classification (registry + product_metadata override) so the
     # frontend needs no hardcoded code→profile map.
     form_profile: str | None = None
     layout_family: str | None = None
     has_dependants: bool = False
-    # The client Product row id, when one exists — the target for the
-    # classification PATCH (/schemas/products/{id}).
+    # The client Product row id, when one exists (in any year) — the target for
+    # the classification PATCH (/schemas/products/{id}). Set while
+    # is_client_product is False, it means the product is re-added to this year
+    # by creating its setup draft, not by creating the catalog row again.
     product_id: str | None = None
     # Product-variant identity (see ProductOut): None on a base product.
     base_code: str | None = None
@@ -294,18 +306,40 @@ def list_setup_products(
         ).scalars()
     )
     pids = {p for p in (cat_pids | plan_pids) if p}
+    term_pids = set(
+        db.execute(
+            select(ProductTerm.product_id).where(
+                ProductTerm.policy_year_id == policy_year_id
+            )
+        ).scalars()
+    )
+    year_setup_codes = {
+        c.strip().upper()
+        for c in db.execute(
+            select(ProductSetup.product_code).where(
+                ProductSetup.policy_year_id == policy_year_id
+            )
+        ).scalars()
+    }
     catalog = list(
         db.execute(
             select(Product).where(tenant_or_global(Product.client_id, client_id))
         ).scalars()
     )
+    used_pids = _products_in_use(
+        db, [p.id for p in catalog if p.client_id is not None]
+    )
+    used_setup_codes = _setup_codes_in_use(db, client_id)
     out: dict[str, SetupProductSummary] = {}
     for p in catalog:
         # A code can have both a global (client_id NULL) and a client-specific
         # row; collapse them, OR-ing slip data and preferring the client display.
         code = p.code.strip().upper()
         has_slip = p.id in pids
-        is_client = p.client_id is not None
+        has_client_row = p.client_id is not None
+        in_year = p.id in pids or p.id in term_pids or code in year_setup_codes
+        unused = p.id not in used_pids and code not in used_setup_codes
+        is_client = has_client_row and (in_year or unused)
         meta = p.product_metadata or {}
         entry = product_registry.resolve_entry(p.code, meta)
         existing = out.get(code)
@@ -320,13 +354,13 @@ def list_setup_products(
                 form_profile=infer_profile(p.code, meta.get("form_profile")),
                 layout_family=entry.layout_family,
                 has_dependants=bool(p.has_dependants or entry.has_dependants),
-                product_id=p.id if is_client else None,
+                product_id=p.id if has_client_row else None,
                 **product_registry.variant_fields(p.code, meta),
             )
         else:
             existing.has_slip_data = existing.has_slip_data or has_slip
             existing.is_client_product = existing.is_client_product or is_client
-            if is_client:
+            if has_client_row:
                 existing.display_name = p.display_name
                 existing.line = p.line
                 existing.form_profile = infer_profile(
@@ -512,7 +546,7 @@ def get_entity_vocab(
     return EntityVocabOut(**asdict(vocab))
 
 
-@router.post(
+@read_router.post(
     "/policy-years/{policy_year_id}/member-counts",
     response_model=MemberCountsOut,
 )
@@ -679,16 +713,7 @@ def save_setup(
             status.HTTP_404_NOT_FOUND,
             f"No template or slip data for product {product_code!r}",
         )
-    from app.services.policy_numbers import require_assignment_removal_permission
-    old_setup = _find_setup(db, policy_year_id, tpl.code)
-    if old_setup is not None and "policy_number_mappings" not in body.answers:
-        if "policy_number_mappings" in old_setup.answers:
-            body.answers["policy_number_mappings"] = old_setup.answers["policy_number_mappings"]
-    if old_setup is not None and "policy_number_mappings" in body.answers:
-        require_assignment_removal_permission(
-            old_setup.answers.get("policy_number_mappings"),
-            body.answers["policy_number_mappings"], user.role,
-        )
+    _guard_saved_removals(db, policy_year_id, tpl.code, body, user)
     setup = _upsert_draft(db, policy_year_id, tpl.code, body, lock=True)
     setup.status = ProductSetupStatus.draft
     write_audit(
@@ -750,9 +775,11 @@ def remove_product_from_year(
 ) -> None:
     """Remove a product from this policy year's tab: delete its categories,
     plans, setup draft, and coverage override for this year. The client catalog
-    row is also dropped when no *other* policy year still uses it, so the
-    product leaves the tab and becomes re-addable — while a product configured
-    in another year is preserved. Idempotent."""
+    row is also dropped when no *other* policy year still uses it. A product
+    configured in another year keeps its row but still leaves this year's tab
+    (nothing here references it any more), and is re-added by creating its setup
+    draft. Refused (409) while members hold enrolment, override, underwriting or
+    claim records for it this year. Idempotent."""
     assert_policy_year_editable(py)
     client_id = policy_year_company(py, user)
     code = product_code.strip().upper()
@@ -765,6 +792,7 @@ def remove_product_from_year(
         ).scalars()
     )
     pids = {p.id for p in products}
+    _refuse_removal_with_records(db, policy_year_id, pids, code)
 
     cats = (
         list(
@@ -810,26 +838,16 @@ def remove_product_from_year(
         db.delete(setup)
 
     # Drop the client catalog row only when nothing in another policy year still
-    # references it (so a product set up elsewhere survives).
-    for p in (p for p in products if p.client_id is not None):
-        used_elsewhere = db.execute(
-            select(Category.id)
-            .where(Category.product_id == p.id, Category.policy_year_id != policy_year_id)
-            .limit(1)
-        ).first() or db.execute(
-            select(Plan.id)
-            .where(Plan.product_id == p.id, Plan.policy_year_id != policy_year_id)
-            .limit(1)
-        ).first() or db.execute(
-            select(ProductTerm.id)
-            .where(
-                ProductTerm.product_id == p.id,
-                ProductTerm.policy_year_id != policy_year_id,
-            )
-            .limit(1)
-        ).first()
-        if used_elsewhere is None:
-            db.delete(p)
+    # references it (so a product set up elsewhere, and its member records, survive).
+    # A setup there, even a draft with no plans yet, resolves its form through it.
+    client_rows = [p for p in products if p.client_id is not None]
+    used_elsewhere = _products_in_use(
+        db, [p.id for p in client_rows], outside_year=policy_year_id
+    )
+    if code not in _setup_codes_in_use(db, client_id, outside_year=policy_year_id):
+        for p in client_rows:
+            if p.id not in used_elsewhere:
+                db.delete(p)
 
     # Sessions disable autoflush. Apply the removals before matching so its
     # category index cannot retain rows that disappear at the first batch flush.
@@ -860,6 +878,85 @@ def remove_product_from_year(
         )
     db.commit()
     return None
+
+
+# Member records that reference a product by id and cascade with its catalog row.
+_PRODUCT_RECORD_MODELS: tuple[tuple[str, Any], ...] = (
+    ("enrolment elections", EnrollmentElection),
+    ("plan overrides", EmployeePlanOverride),
+    ("underwriting cases", UnderwritingCase),
+)
+
+
+def _products_in_use(
+    db: Session, product_ids: Sequence[str], *, outside_year: str | None = None
+) -> set[str]:
+    """The catalog rows among ``product_ids`` that some policy year references
+    through its categories, plans, coverage terms or member records.
+    ``outside_year`` ignores that one year's references."""
+    if not product_ids:
+        return set()
+    referencing: tuple[Any, ...] = (
+        Category, Plan, ProductTerm, *(model for _, model in _PRODUCT_RECORD_MODELS)
+    )
+    used: set[str] = set()
+    for model in referencing:
+        stmt = select(model.product_id).where(model.product_id.in_(product_ids))
+        if outside_year is not None:
+            stmt = stmt.where(model.policy_year_id != outside_year)
+        used.update(db.execute(stmt.distinct()).scalars())
+    return used
+
+
+def _setup_codes_in_use(
+    db: Session, client_id: str, *, outside_year: str | None = None
+) -> set[str]:
+    """Product codes that some policy year of the client holds a setup (draft or
+    confirmed) for. ``outside_year`` ignores that one year's setups."""
+    stmt = (
+        select(ProductSetup.product_code)
+        .join(PolicyYear, PolicyYear.id == ProductSetup.policy_year_id)
+        .where(PolicyYear.client_id == client_id)
+    )
+    if outside_year is not None:
+        stmt = stmt.where(ProductSetup.policy_year_id != outside_year)
+    return {c.strip().upper() for c in db.execute(stmt).scalars()}
+
+
+def _refuse_removal_with_records(
+    db: Session, policy_year_id: str, pids: set[str], code: str
+) -> None:
+    """409 when members already hold enrolment, override, underwriting or claim
+    records for this product in the year. Removing it would cascade-delete them
+    or leave claims pointing at a product that no longer exists."""
+    counts = {
+        label: db.scalar(
+            select(func.count()).select_from(model).where(
+                model.policy_year_id == policy_year_id, model.product_id.in_(pids)
+            )
+        ) or 0
+        for label, model in (_PRODUCT_RECORD_MODELS if pids else ())
+    }
+    counts["claims"] = db.scalar(
+        select(func.count(Claim.id)).where(
+            Claim.policy_year_id == policy_year_id,
+            func.upper(Claim.product_code) == code,
+        )
+    ) or 0
+    records = {label: int(n) for label, n in counts.items() if n}
+    if records:
+        summary = ", ".join(f"{n} {label}" for label, n in records.items())
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            {
+                "code": "product_has_member_records",
+                "message": (
+                    f"{code} cannot be removed because this benefit year already "
+                    f"has {summary} for it."
+                ),
+                "records": records,
+            },
+        )
 
 
 def _sync_term_policy_number(
@@ -943,16 +1040,7 @@ def confirm_setup(
     # Confirm has materializing side effects (plans, category seeds, matching).
     # Lock the one setup row so two fast confirms serialize instead of both
     # observing the first-materialization state.
-    from app.services.policy_numbers import require_assignment_removal_permission
-    old_setup = _find_setup(db, policy_year_id, tpl.code)
-    if old_setup is not None and "policy_number_mappings" not in body.answers:
-        if "policy_number_mappings" in old_setup.answers:
-            body.answers["policy_number_mappings"] = old_setup.answers["policy_number_mappings"]
-    if old_setup is not None and "policy_number_mappings" in body.answers:
-        require_assignment_removal_permission(
-            old_setup.answers.get("policy_number_mappings"),
-            body.answers["policy_number_mappings"], user.role,
-        )
+    _guard_saved_removals(db, policy_year_id, tpl.code, body, user)
     setup = _upsert_draft(db, policy_year_id, tpl.code, body, lock=True)
 
     staged_terms = parse_setup_policy_terms(setup.answers.get("policy_terms", {}))
@@ -1265,11 +1353,54 @@ def _find_setup(
     return db.execute(stmt).scalar_one_or_none()
 
 
+def _guard_saved_removals(
+    db: Session, policy_year_id: str, code: str, body: SetupSaveIn, user: CurrentUser
+) -> None:
+    """Carry saved policy-number assignments forward, and refuse removals of
+    saved assignments or setup entries unless the user is a firm owner."""
+    from app.services.policy_numbers import require_assignment_removal_permission
+    from app.services.setup_removals import require_setup_removal_permission
+
+    old_setup = _find_setup(db, policy_year_id, code)
+    if old_setup is None:
+        return
+    # A stale form must get the reload prompt, not a 403 for entries it never saw.
+    _require_current_setup(old_setup, body)
+    if "policy_number_mappings" not in body.answers:
+        if "policy_number_mappings" in old_setup.answers:
+            body.answers["policy_number_mappings"] = old_setup.answers["policy_number_mappings"]
+    if "policy_number_mappings" in body.answers:
+        require_assignment_removal_permission(
+            old_setup.answers.get("policy_number_mappings"),
+            body.answers["policy_number_mappings"], user.role,
+        )
+    require_setup_removal_permission(old_setup.answers, body.answers, user.role)
+
+
 def _stale_setup(message: str) -> HTTPException:
     return HTTPException(
         status.HTTP_409_CONFLICT,
         {"code": "stale_configuration", "message": message},
     )
+
+
+def _require_current_setup(setup: ProductSetup, body: SetupSaveIn) -> None:
+    """409 ``stale_configuration`` unless the write was made from the stored version."""
+    if body.expected_updated_at is None:
+        raise _stale_setup(
+            "This setup has changed. Reload the latest version before saving."
+        )
+    expected = body.expected_updated_at
+    current_utc = setup.updated_at.replace(tzinfo=None)
+    expected_utc = (
+        expected.astimezone(UTC).replace(tzinfo=None)
+        if expected.tzinfo
+        else expected
+    )
+    if current_utc != expected_utc:
+        raise _stale_setup(
+            "This setup was updated by another user. Reload the latest version before saving."
+        )
 
 
 def _upsert_draft(
@@ -1299,22 +1430,7 @@ def _upsert_draft(
         db.add(setup)
         db.flush()
     else:
-        if body.expected_updated_at is None:
-            raise _stale_setup(
-                "This setup has changed. Reload the latest version before saving."
-            )
-        current = setup.updated_at
-        expected = body.expected_updated_at
-        current_utc = current.replace(tzinfo=None)
-        expected_utc = (
-            expected.astimezone(UTC).replace(tzinfo=None)
-            if expected.tzinfo
-            else expected
-        )
-        if current_utc != expected_utc:
-            raise _stale_setup(
-                "This setup was updated by another user. Reload the latest version before saving."
-            )
+        _require_current_setup(setup, body)
         if setup.status == ProductSetupStatus.confirmed and setup.materialized_product_id:
             from app.services.el_report_rules import apply_report_rules
 
@@ -1931,9 +2047,13 @@ def _category_plan_assignments(
                       earnings (``rate_basis="earnings_based"``).
     """
     plan_code = str(row.get("plan_code") or "").strip()
-    tier_counts = {
-        str(k): _coerce_count(v) for k, v in (row.get("tiers") or {}).items()
-    }
+    # The basis model decides, not the row: an untiered draft can still carry the
+    # starter scaffold's zero-filled EO/ES/EC/EF dict beside its synced headcount.
+    tier_counts = (
+        {str(k): _coerce_count(v) for k, v in (row.get("tiers") or {}).items()}
+        if basis_model == "tiered"
+        else {}
+    )
     # Headcount: tiered rows sum their per-tier counts; untiered rows carry a
     # single num_employees on the row itself (no tier columns to sum).
     num_employees = (

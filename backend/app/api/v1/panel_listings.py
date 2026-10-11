@@ -34,6 +34,7 @@ from app.core.clock import today as business_today
 from app.core.deps import (
     _deny_cross_tenant,
     assert_policy_year_for_user,
+    is_firm_owner,
     load_panel_listing,
     load_policy_year,
     policy_year_company,
@@ -133,6 +134,16 @@ def require_library_scope(user: CurrentUser, owner_id: str | None = None) -> Non
     active = require_client_id(user)
     if owner_id is not None and owner_id != active:
         raise client_selection_stale()
+
+
+def _require_tag_removal_access(user: CurrentUser) -> None:
+    """Unticking a saved panel network takes its clinics away from members, so
+    it is a firm-owner removal like withdrawing an e-card (AGENTS.md)."""
+    if not is_firm_owner(user):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Removing saved panel assignments requires a firm administrator.",
+        )
 
 
 def _assert_unique_combo(
@@ -471,6 +482,13 @@ def _listing_companies(
         user_id=user.user_id,
         db=db,
     )
+    if user.role == ROLE_SYSTEM_ADMIN:
+        # The library belongs to the selected company's firm; a platform
+        # admin's other firms keep their own libraries and policy years.
+        firm_id = next(
+            (c.broker_firm_id for c in clients if c.id == user.client_id), None
+        )
+        clients = [c for c in clients if c.broker_firm_id == firm_id]
     if listing.client_id is not None:
         # Legacy pinned listing — only its own company may use it.
         clients = [c for c in clients if c.id == listing.client_id]
@@ -539,6 +557,8 @@ def set_listing_companies(
                 "client_ids": no_year,
             },
         )
+    if any(c.enabled and c.client_id not in wanted for c in companies):
+        _require_tag_removal_access(user)
 
     changed_on, changed_off = [], []
     for company in companies:
@@ -648,6 +668,7 @@ def set_policy_year_panels(
     to_remove = before - set(wanted)
     to_add = [i for i in wanted if i not in before]
     if to_remove:
+        _require_tag_removal_access(user)
         db.execute(
             delete(PolicyYearPanel).where(
                 PolicyYearPanel.policy_year_id == policy_year.id,

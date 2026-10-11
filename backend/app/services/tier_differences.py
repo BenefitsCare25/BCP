@@ -24,6 +24,7 @@ from __future__ import annotations
 import re
 from typing import Any, NamedTuple
 
+from app.services.member_schedule import member_hidden
 from app.services.sob_columns import benefit_row_key
 
 # A schedule that differs on more rows than this is not a comparison any more,
@@ -144,9 +145,14 @@ def _rows(items: list[dict[str, Any]]) -> dict[str, _Row]:
     joined into one string. Joined, the name read as one long sentence with no
     hierarchy; kept apart, the UI can set the parent quietly and the specific
     benefit in full ink, which is what makes a list of them scannable.
+
+    Rows hidden from members (the broker's choice, else insurer-admin rows) are
+    skipped, so a comparison never surfaces what the coverage tab hides.
     """
     out: dict[str, _Row] = {}
     for it in items:
+        if member_hidden(it):
+            continue
         raw_name = str(it.get("name") or "").strip()
         kind = _text(it.get("kind"))
         if raw_name:

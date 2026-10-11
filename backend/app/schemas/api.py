@@ -6,7 +6,15 @@ import json
 from datetime import date, datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    computed_field,
+    field_validator,
+    model_validator,
+)
 
 from app.core.ai_config import assert_service_account_endpoints
 from app.schemas.coverage_limits import CoverageLimitAlert
@@ -478,7 +486,8 @@ class CategoryPatch(BaseModel):
     # Merge-patched as a whole dict by the card (employee or dependant scope).
     participation_detail: dict[str, Any] | None = None
     plan_assignments: dict[str, Any] | None = None
-    status: str | None = None
+    # No ``status``: confirmation must go through POST /categories/{id}/confirm,
+    # which validates the rule, checks overlaps and records the mapping profile.
     confidence: float | None = Field(default=None, ge=0.0, le=1.0)
 
 
@@ -762,11 +771,32 @@ class EmployeeOut(_Base):
     # "active" | "terminated" — terminated leavers are excluded from coverage.
     status: str = "active"
     matched_plans: list[MatchedPlan] = Field(default_factory=list)
+    # Every category the match holds, read from `Employee.matched_categories`.
+    # `matched_plans` omits a product the member declined in enrolment, but the
+    # match keeps its category, and a manual mapping save replaces the whole
+    # set — so the mapping editor seeds from these ids, not from the plans.
+    matched_category_ids: list[str] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("matched_categories", "matched_category_ids"),
+    )
     unmatched_product_codes: list[str] = Field(default_factory=list)
     updated_at: datetime | None = None
     # Detail/edit responses include mapped columns even when this member has
     # no value. Listing responses omit the catalog to keep pagination light.
     roster_fields: list[EmployeeRosterField] = Field(default_factory=list)
+    # Set on edit responses only: the automatic flex re-assignment failed and
+    # the broker must re-assign from the Flex tab. The edit itself was saved.
+    flex_errors: list[str] = Field(default_factory=list)
+
+    @field_validator("matched_category_ids", mode="before")
+    @classmethod
+    def _category_ids(cls, value: Any) -> list[str]:
+        # Raw match entries from the model; plain ids when re-validated.
+        ids = (
+            entry.get("category_id") if isinstance(entry, dict) else entry
+            for entry in value or []
+        )
+        return [i for i in ids if isinstance(i, str) and i]
 
 
 class EmployeeList(BaseModel):
@@ -820,6 +850,10 @@ class DependantOut(_Base):
     link_method: str | None
     # "active" | "pending_approval" | "rejected" — portal self-adds start pending.
     status: str = "active"
+    # "spouse" | "child" | None — the pricing role (see DependantSummary.role).
+    # Served on the member lists (`member_dependants`) that feed the election
+    # deck; None elsewhere and for a relationship that is neither.
+    role: str | None = None
     # Set on approval responses only: user-facing errors from the automatic
     # flex wallet re-assignment (empty = re-assign succeeded or wasn't needed).
     # The dependant itself was still approved — the broker must re-assign from

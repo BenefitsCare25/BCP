@@ -1,7 +1,7 @@
 import { useId, useState, type FormEvent } from "react";
-import { Link, useNavigate } from "@tanstack/react-router";
+import { Link } from "@tanstack/react-router";
 import { toast } from "sonner";
-import { type PlatformFirm, useCreatePlatformFirm } from "@/api/platform";
+import { type PlatformFirm, useCreatePlatformFirm, usePlatformFirms } from "@/api/platform";
 import { InviteUserForm } from "@/components/admin/InviteUserForm";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -17,11 +17,13 @@ import {
 } from "@/components/ui/sheet";
 import { formatError } from "@/lib/errors";
 import { aliasProblem } from "./domainMeta";
+import { FirmProvisioningNotice, UntilProvisioned } from "./FirmProvisioning";
 
 /** Create a broker firm, then invite its first firm admin through the same
  *  invitation flow as the Users card (role fixed to firm_admin, firm fixed to
  *  the new one). The invite can be skipped and sent later from the firm's
- *  page. */
+ *  page. A firm left for the migration job to provision keeps the invite off,
+ *  with a waiting notice, until its schema exists. */
 export function NewFirmSheet({
   open,
   onOpenChange,
@@ -148,8 +150,15 @@ function CreateFirmStep({
   );
 }
 
-function FirstAdminStep({ firm, onDone }: { firm: PlatformFirm; onDone: () => void }) {
-  const navigate = useNavigate();
+function FirstAdminStep({ firm: created, onDone }: { firm: PlatformFirm; onDone: () => void }) {
+  // The invitation link is returned once and shown by the form below, so an
+  // invite keeps this step open until the admin has copied it.
+  const [invited, setInvited] = useState(false);
+  const pendingNoticeId = useId();
+  // The polled firm list, so a firm left for the migration job to provision
+  // opens the invitation as soon as its schema exists.
+  const firms = usePlatformFirms();
+  const firm = firms.data?.find((f) => f.id === created.id) ?? created;
   return (
     <div className="flex h-full flex-col">
       <SheetHeader>
@@ -165,16 +174,16 @@ function FirstAdminStep({ firm, onDone }: { firm: PlatformFirm; onDone: () => vo
           <span className="font-medium text-foreground">{firm.slug}</span>. Its
           web addresses are added on the firm&apos;s page.
         </p>
-        <InviteUserForm
-          idPrefix="first-firm-admin"
-          roleOptions={["firm_admin"]}
-          defaultRole="firm_admin"
-          firmId={firm.id}
-          onInvited={() => {
-            onDone();
-            void navigate({ to: "/platform/firms/$firmId", params: { firmId: firm.id } });
-          }}
-        />
+        <FirmProvisioningNotice firm={firm} id={pendingNoticeId} />
+        <UntilProvisioned firm={firm} describedBy={pendingNoticeId}>
+          <InviteUserForm
+            idPrefix="first-firm-admin"
+            roleOptions={["firm_admin"]}
+            defaultRole="firm_admin"
+            firmId={firm.id}
+            onInvited={() => setInvited(true)}
+          />
+        </UntilProvisioned>
       </SheetBody>
       <SheetFooter>
         <Button asChild variant="outline">
@@ -183,7 +192,7 @@ function FirstAdminStep({ firm, onDone }: { firm: PlatformFirm; onDone: () => vo
           </Link>
         </Button>
         <Button type="button" variant="ghost" onClick={onDone}>
-          Skip for now
+          {invited ? "Done" : "Skip for now"}
         </Button>
       </SheetFooter>
     </div>

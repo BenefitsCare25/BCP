@@ -414,10 +414,18 @@ class ProductTierSetOut(BaseModel):
     baseline_plan_code: str | None
     allow_plan_change: bool
     can_decline: bool
+    # Voluntary cover the member holds nothing of (``voluntary_enrolment``): the
+    # enrolment starts it as not enrolled, no tier is current, and electing any
+    # tier enrols them. Read from the enrolment's own snapshot when it has one.
+    eligible_only: bool = False
     tiers: list[CohortTierOut]
     # Dependant pricing for this product (None when not configured), priced for the
     # baseline tier so the UI can preview "add spouse +$X".
     dependant: DependantPricingOut | None = None
+    # The member's active, classifiable dependants inside THIS product's age
+    # window — exactly who compulsory dependant cover covers and prices at save
+    # (`apply_elections`), so the live balance never charges an aged-out child.
+    eligible_dependant_ids: list[str] = Field(default_factory=list)
 
 
 class MemberLeaveOptionsOut(BaseModel):
@@ -518,6 +526,9 @@ class EnrollmentOut(BaseModel):
     leave: LeaveElectionOut | None
     # Product codes that are compulsory for this employee — cannot be declined.
     compulsory_product_codes: list[str] = Field(default_factory=list)
+    # The employee signed this enrolment in the portal. Returning or reopening a
+    # signed one needs member self-service, since only they can sign again.
+    portal_signed: bool = False
 
 
 class WindowCloseSummary(BaseModel):
@@ -583,6 +594,13 @@ class WindowClosePreview(BaseModel):
     saved_submittable: int
     saved_blocked: list[CloseMemberNote]
     saved_blocked_count: int
+    # Confirmed, then reopened and never sent again. Close keeps their
+    # confirmed coverage and leave trade (only the unsent edits are dropped)
+    # unless their saved choices are submitted on their behalf — which
+    # ``saved_submittable`` counts them in. Not in ``saved_not_sent`` or
+    # ``not_started``, whose rows say the period's default applies.
+    reopened_unsent: list[CloseMemberNote] = Field(default_factory=list)
+    reopened_unsent_count: int = 0
 
 
 class PortalEnrollmentOut(BaseModel):

@@ -162,6 +162,11 @@ def resolve_electable_tier(
                 status.HTTP_422_UNPROCESSABLE_CONTENT,
                 f"Tier is not electable for product '{tier_set.product_code}'.",
             )
+        # A category with no plan code is itself a tier, sharing its id with the
+        # Plan-row tiers synthesized beside it: (category, None) names it exactly.
+        planless = next((t for t in matches if t.plan_code is None), None)
+        if planless is not None:
+            return planless
         if len(matches) > 1:
             raise HTTPException(
                 status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -225,6 +230,39 @@ def action_for_tier(
     if tier.direction == "same":
         return ElectionAction.keep
     return classify_action(previous_plan_code, tier.plan_code, False, plan_rank)
+
+
+def assert_plan_change_allowed(
+    window: EnrollmentWindow,
+    held: dict[str, Any],
+    *,
+    declined: bool,
+    tier: CohortTier | None,
+    plan_code: str | None,
+) -> None:
+    """With plan changes off, an election may only keep what the member holds:
+    the same tier, or the same decline. Every surface sends an election per
+    product, so rejecting keeps too left a leave-only period unsubmittable.
+
+    ``held`` is the product's baseline-snapshot entry; the tier flagged
+    ``is_current`` (the standing override, read live) also counts as held.
+    Voluntary cover the member is only eligible for is held as a decline, so
+    such a period leaves it not enrolled: taking it up is a plan change."""
+    if window.allow_plan_change:
+        return
+    held_declined = bool(held.get("declined"))
+    if declined or held_declined:
+        unchanged = declined == held_declined
+    elif tier is not None and tier.is_current:
+        unchanged = True
+    else:
+        unchanged = plan_code == held.get("plan_code") and (
+            tier is None or held.get("tier_category_id") in (None, tier.tier_category_id)
+        )
+    if not unchanged:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "Plan changes are disabled for this window."
+        )
 
 
 def assert_dependants_owned(

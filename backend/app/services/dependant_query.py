@@ -108,7 +108,7 @@ def resolve_listing(
     out = [
         dep
         for dep in idx.dependants
-        if _matches(dep, filters, employee_ids, py.start_date)
+        if _matches(dep, filters, employee_ids, py.start_date, idx)
     ]
     # A family reads as a family: sponsor first, then the dependant's own name.
     # An unlinked row has no sponsor, so it sorts LAST rather than leading every
@@ -126,6 +126,7 @@ def _matches(
     f: DependantFilters,
     employee_ids: set[str] | None,
     year_start: date,
+    idx: DependantIndex,
 ) -> bool:
     attrs = dep.attribute_values or {}
 
@@ -169,25 +170,36 @@ def _matches(
 
     if f.q:
         if not _matches_needle(
-            dep, attrs, _norm(f.q), normalize_nric(f.q) or ""
+            dep, attrs, _norm(f.q), normalize_nric(f.q) or "", idx
         ):
             return False
     return True
 
 
 def _matches_needle(
-    dep: Dependant, attrs: dict[str, Any], needle: str, nric_needle: str
+    dep: Dependant,
+    attrs: dict[str, Any],
+    needle: str,
+    nric_needle: str,
+    idx: DependantIndex,
 ) -> bool:
-    """Same fields the existing dependants search covers: the dependant's name
-    and NRIC, plus the sponsoring employee's staff id and name."""
+    """The dependant's name and NRIC, plus the sponsoring employee's staff id
+    and name — read off the LINKED employee, so a portal self-add (no roster
+    hints) or a relinked row (stale hints) is found under its real sponsor. An
+    unlinked row has only the hints the parser wrote."""
+    sponsor = idx.employees_by_id.get(dep.employee_id or "")
     hay = (
         dependant_name(attrs),
-        str(attrs.get("employee_staff_id") or ""),
-        str(attrs.get("employee_name") or ""),
+        idx.staff_id(dep),
+        sponsor.employee_name or ""
+        if sponsor is not None
+        else str(attrs.get("employee_name") or ""),
     )
     if any(needle in _norm(v) for v in hay):
         return True
-    if not nric_needle:
+    # Same shape test as the employee search: without it, a partial staff-id
+    # search like "1023" also returns every dependant whose NRIC contains it.
+    if not mq.looks_like_nric(nric_needle):
         return False
     stored = dep.national_id_normalized or dependant_nric(attrs) or ""
     return nric_needle in stored

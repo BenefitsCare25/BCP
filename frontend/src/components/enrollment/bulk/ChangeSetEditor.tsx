@@ -67,13 +67,20 @@ export function toChanges(drafts: ChangeDraft[]): BulkCoverageChange[] {
 }
 
 /** The first thing wrong with the set, or null. Mirrors the server's validators
- *  so a broker is told before a request rather than by a 422. */
-export function changeSetError(drafts: ChangeDraft[]): string | null {
+ *  so a broker is told before a request rather than by a 422 — or, for a
+ *  revert, the firm-owner 403: it deletes overrides outright. */
+export function changeSetError(
+  drafts: ChangeDraft[],
+  canRevert = true,
+): string | null {
   if (!drafts.length) return "Add a product to change.";
   for (const d of drafts) {
     if (!d.productCode) return "Pick a product for every change.";
     if (d.action === "set_plan" && !d.targetPlan) {
       return `Pick the plan to move members to on ${d.productCode}.`;
+    }
+    if (d.action === "revert_to_default" && !canRevert) {
+      return `Reverting ${d.productCode} to the cohort default needs a firm administrator.`;
     }
   }
   const codes = drafts.map((d) => d.productCode);
@@ -87,11 +94,14 @@ export function ChangeSetEditor({
   drafts,
   products,
   disabled,
+  canRevert,
   onChange,
 }: {
   drafts: ChangeDraft[];
   products: ProductOption[];
   disabled?: boolean;
+  /** Revert deletes overrides — a firm-owner reset (AGENTS.md). */
+  canRevert: boolean;
   onChange: (next: ChangeDraft[]) => void;
 }) {
   const used = new Set(drafts.map((d) => d.productCode).filter(Boolean));
@@ -181,9 +191,13 @@ export function ChangeSetEditor({
                       {ACTION_LABEL.set_plan}
                     </option>
                     <option value="decline">{ACTION_LABEL.decline}</option>
-                    <option value="revert_to_default">
-                      {ACTION_LABEL.revert_to_default}
-                    </option>
+                    {/* Shown to other roles only when a re-run past batch
+                        already carries it, so the select still names it. */}
+                    {(canRevert || draft.action === "revert_to_default") && (
+                      <option value="revert_to_default" disabled={!canRevert}>
+                        {ACTION_LABEL.revert_to_default}
+                      </option>
+                    )}
                   </NativeSelect>
                 </div>
 

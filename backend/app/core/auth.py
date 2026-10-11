@@ -432,9 +432,12 @@ def get_current_user(
     # carries a broker session token, which is held to every check Entra mode
     # applies; password sign-in works in development that way.
     if settings.auth_mode == "entra" or _carries_broker_session(authorization):
-        from app.core.broker_auth import broker_principal
+        from app.core.broker_auth import broker_principal, touches_activity
 
-        principal = broker_principal(authorization, db, firm=request_firm(request))
+        principal = broker_principal(
+            authorization, db, firm=request_firm(request),
+            touch_activity=touches_activity(request),
+        )
         user = _build_current_user(principal, requested, db, read_only=read_only)
     elif not requested:
         # Mock mode, no explicit client selection: fixed demo user, no DB hit

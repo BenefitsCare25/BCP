@@ -9,7 +9,7 @@ import { useRef } from "react";
 import { AlertTriangle, Paperclip } from "lucide-react";
 import { RequiredMark, FieldGroup, leafControl } from "@/components/portal/leaf/Field";
 import { Action } from "@/components/portal/leaf/Action";
-import { formatDay } from "@/components/portal/leaf/date";
+import { formatMomentDay } from "@/components/portal/leaf/date";
 import { ACCEPT, type ReferralMode } from "./claimForm";
 import type { NewClaimForm } from "./useNewClaimForm";
 
@@ -93,7 +93,7 @@ export function ReferralField({ form }: { form: NewClaimForm }) {
           <option value="">{pt("Select a letter")}</option>
           {letters.map((d) => (
             <option key={d.id} value={d.id}>
-              {d.file_name} ({formatDay(d.created_at)})
+              {d.file_name} ({formatMomentDay(d.created_at)})
             </option>
           ))}
         </select>

@@ -1,4 +1,3 @@
-import { FirmOwnerOnly } from "@/components/auth/FirmOwnerOnly";
 import { memo } from "react";
 import {
   AlertTriangle,
@@ -32,6 +31,7 @@ import {
 } from "@/lib/sob";
 import { isAbsentValue } from "@/lib/sobValues";
 import { rowVisibility } from "@/lib/sobAttention";
+import { RemoveGuard, useSavedEntries } from "../savedEntries";
 import { SobCell } from "./SobCell";
 
 // Short labels so a copay group's three figures fit one table cell.
@@ -119,6 +119,7 @@ export const SobRow = memo(function SobRow({
   const limitCount = item.limits?.length ?? 0;
   const subCount = item.sub_items?.length ?? 0;
   const visibility = rowVisibility(item, columns);
+  const saved = useSavedEntries();
 
   return (
     <tr
@@ -317,7 +318,7 @@ export const SobRow = memo(function SobRow({
             </button>
           </div>
           )}
-          <FirmOwnerOnly><Button
+          <RemoveGuard saved={!saved || saved.uids.has(item.uid)}><Button
             size="icon-sm"
             variant="ghost"
             onClick={() => setSob((s) => removeItem(s, idx))}
@@ -325,7 +326,7 @@ export const SobRow = memo(function SobRow({
             className={cn("text-error hover:text-error")}
           >
             <X className="size-3.5" />
-          </Button></FirmOwnerOnly>
+          </Button></RemoveGuard>
         </div>
       </td>
     </tr>

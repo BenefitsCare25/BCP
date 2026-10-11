@@ -64,10 +64,14 @@ export function PortalNewClaimPage() {
       <LeafSkeleton label={pt("Loading the claim form")} />
     </div>
   );
+  // Cover that does not depend on the claimant: `hasFlex` is false for a
+  // dependant outside the flex age band, and that case belongs to
+  // ClaimTypeFields' `noTypesForClaimant`, which keeps the claimant picker on
+  // screen instead of replacing the whole form.
   if (
     options.isError ||
     !options.data ||
-    (form.insured.length === 0 && !form.hasFlex)
+    (form.insured.length === 0 && (options.data.flex?.categories.length ?? 0) === 0)
   ) {
     /* The server's own sentence, in the two different ways it can arrive.
        `claimBlock` is the 200 that withheld a claim kind (cover that ended
@@ -88,7 +92,8 @@ export function PortalNewClaimPage() {
          benefits, and the thing that ended is the window. */
       <Mount className="mx-auto w-full max-w-4xl" label={blocked ? pt("This window has closed") : pt("No benefits to claim against")}>
         <p className="text-row text-label">
-          {blocked ??
+          {/* Served sentences, so they translate on render like any error. */}
+          {blocked !== null ? pt(blocked) :
             pt("We don't have any cover recorded against your name for this ") +
               pt("period, so there's nothing to claim against yet. Your HR team ") +
               pt("can check your record.")}

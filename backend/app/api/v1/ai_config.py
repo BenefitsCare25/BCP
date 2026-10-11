@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
@@ -36,7 +35,11 @@ from app.schemas.api import (
     AIConfigUpsert,
 )
 from app.services import ai_cache
-from app.services.vertex_probe import probe_vertex, project_id_from_service_account
+from app.services.vertex_probe import (
+    probe_vertex,
+    project_id_from_service_account,
+    record_stored_probe,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -286,36 +289,27 @@ def _run_vertex_test(
                 latency_ms=0,
             )
 
-    error, latency_ms, model = probe_vertex(
+    result = probe_vertex(
         location=location,
         model=model,
         service_account_json=service_account_json,
         project_id=project_id,
         source="byok",
+        capacity_mode=capacity_mode,
     )
 
     # Only a no-payload probe activates the persisted configuration. A draft
     # model/location may borrow the stored key for testing, but must not replace
     # the provenance of the configuration that is currently live.
-    is_stored_test = row is not None and payload is None
-    if is_stored_test and row is not None:
-        if error is None:
-            row.last_validated_at = datetime.now(tz=UTC)
-            row.validated_fingerprint = row.key_fingerprint
-            row.validated_model = model
-            row.validated_location = location
-            row.validated_capacity_mode = capacity_mode
-            row.validation_status = "active"
-        else:
-            row.validation_status = "invalid"
-        row.last_validation_error = error
+    if row is not None and payload is None:
+        record_stored_probe(row, result, location=location, capacity_mode=capacity_mode)
         db.flush()
 
     db.add(
         AISpendLog(
             client_id=client_id,
             operation="validate_ai_config",
-            model=model,
+            model=result.model,
             input_tokens=0,
             output_tokens=0,
             cost_estimate_usd=0.0,
@@ -323,4 +317,6 @@ def _run_vertex_test(
         )
     )
     db.commit()
-    return AIConfigTestResult(ok=error is None, error=error, latency_ms=latency_ms)
+    return AIConfigTestResult(
+        ok=result.error is None, error=result.error, latency_ms=result.latency_ms
+    )

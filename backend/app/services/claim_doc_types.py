@@ -318,14 +318,18 @@ def _label_text(fields: list[dict[str, Any]]) -> str:
     )
 
 
-def classify_document(
+def classify_matches(
     document_type: str | None,
     fields: list[dict[str, Any]],
     *,
     definitions: Sequence[DocTypeDefinition] | None = None,
     sector_hint: str | None = None,
-) -> DocTypeDefinition | None:
-    """Which broker-recognised document this extraction is, or None.
+) -> tuple[DocTypeDefinition, ...]:
+    """Every broker-recognised definition this extraction equally matches.
+
+    Per-claim-type document setups deliberately repeat generic titles
+    ("Receipt", "Tax invoice") across claim choices, so callers that route on
+    the result must see all of them rather than whichever row sorts first.
 
     ``sector_hint`` is the claim's hospital sector (from `hospital_sector` on
     the provider) — the tie-break when an invoice shows inpatient markers but
@@ -334,7 +338,7 @@ def classify_document(
     defs = tuple(definitions) if definitions is not None else DEFAULT_DOC_TYPES
     dt = _norm(document_type or "")
     if not dt:
-        return None
+        return ()
     labels = _label_text(fields)
 
     # Sectored invoice types are MORE SPECIFIC than a generic sector-neutral
@@ -345,23 +349,34 @@ def classify_document(
     # classification just by carrying the same alias.
     sectored = [d for d in defs if d.sector is not None and dt in d.aliases]
     if sectored and (any(m in labels for m in _INPATIENT_MARKERS) or sector_hint is not None):
-        def _by_sector(sector: str) -> DocTypeDefinition | None:
-            return next((d for d in sectored if d.sector == sector), None)
-
+        sector: str | None = None
         if any(m in labels for m in _GOVT_MARKERS):
-            return _by_sector(SECTOR_GOVT)
-        if any(m in labels for m in _PRIVATE_MARKERS):
-            return _by_sector(SECTOR_PRIVATE)
-        if sector_hint in (SECTOR_GOVT, SECTOR_PRIVATE):
-            return _by_sector(sector_hint)
+            sector = SECTOR_GOVT
+        elif any(m in labels for m in _PRIVATE_MARKERS):
+            sector = SECTOR_PRIVATE
+        elif sector_hint in (SECTOR_GOVT, SECTOR_PRIVATE):
+            sector = sector_hint
+        if sector is not None:
+            return tuple(d for d in sectored if d.sector == sector)
         # Markers present but sector genuinely ambiguous — fall through to a
         # sector-neutral match rather than guessing govt vs private.
 
     # Sector-neutral types (discharge summary, custom types) match on title.
-    for d in defs:
-        if d.sector is None and dt in d.aliases:
-            return d
-    return None
+    return tuple(d for d in defs if d.sector is None and dt in d.aliases)
+
+
+def classify_document(
+    document_type: str | None,
+    fields: list[dict[str, Any]],
+    *,
+    definitions: Sequence[DocTypeDefinition] | None = None,
+    sector_hint: str | None = None,
+) -> DocTypeDefinition | None:
+    """Which broker-recognised document this extraction is, or None."""
+    matches = classify_matches(
+        document_type, fields, definitions=definitions, sector_hint=sector_hint
+    )
+    return matches[0] if matches else None
 
 
 def missing_key_fields(

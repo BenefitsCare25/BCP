@@ -44,7 +44,11 @@ function DependantState({
   if (status === "pending_approval")
     return <Strike tone="pending">{pt("Waiting for approval")}</Strike>;
   if (status === "rejected") return <Strike tone="rejected">{pt("Not approved")}</Strike>;
-  if (covered === false) return <Strike tone="rejected">{pt("Not covered")}</Strike>;
+  if (status === "terminated") return <Strike tone="rejected">{pt("No longer covered")}</Strike>;
+  // Without a statement only an active row may read as covered.
+  if (covered === false || (covered === undefined && status !== "active")) {
+    return <Strike tone="rejected">{pt("Not covered")}</Strike>;
+  }
   return <Strike tone="approved">{pt("Covered")}</Strike>;
 }
 

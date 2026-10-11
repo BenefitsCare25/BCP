@@ -1,4 +1,4 @@
-import { portalText as pt, usePortalTranslation } from "@/i18n/portal";
+import { portalMessage, portalText as pt, usePortalTranslation, type PortalCopy } from "@/i18n/portal";
 /** Conversations, on the member's leaf.
  *
  * A list of THREADS, replacing a stream of messages. The stream could not
@@ -106,10 +106,13 @@ const ENQUIRY_TONE: Record<string, "approved" | "pending" | "review"> = {
   closed: "review",
 };
 
-const ENQUIRY_LABEL: Record<string, string> = {
+/** The catalog's bare "Closed" is a clinic's opening hours (休息), so a closed
+ * question is looked up under its own source; in English it still reads
+ * "Closed". */
+const ENQUIRY_LABEL: Record<string, PortalCopy> = {
   open: "Waiting",
   answered: "Answered",
-  closed: "Closed",
+  closed: portalMessage("Closed{0}", [""]),
 };
 
 /** A question's state, struck. Its own export because three surfaces need it
@@ -118,10 +121,10 @@ const ENQUIRY_LABEL: Record<string, string> = {
  * private copies of the same two maps is how "Waiting" comes to read "open" on
  * one of them. */
 export function EnquiryStrike({ status }: { status: string }) {
-  usePortalTranslation();
+  const pt = usePortalTranslation();
   return (
     <Strike tone={ENQUIRY_TONE[status] ?? "review"}>
-      {ENQUIRY_LABEL[status] ?? status}
+      {pt(ENQUIRY_LABEL[status] ?? status)}
     </Strike>
   );
 }

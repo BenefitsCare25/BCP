@@ -1,4 +1,4 @@
-import { usePortalTranslation } from "@/i18n/portal";
+import { portalMessage, usePortalTranslation } from "@/i18n/portal";
 /** Find a clinic — the one portal screen a member opens while already standing
  * somewhere, deciding where to walk.
  *
@@ -43,6 +43,7 @@ import type {
   PanelCountry,
 } from "@/api/panelListings";
 import { PortalErrorState } from "@/components/portal/PortalErrorState";
+import { capabilityRefusal } from "@/components/portal/capabilities";
 import { LeafSkeleton } from "@/components/portal/leaf/LeafSkeleton";
 import { Mount } from "@/components/portal/leaf/Mount";
 import { actionClass } from "@/components/portal/leaf/Action";
@@ -182,13 +183,15 @@ function useOrigin(onChange: () => void) {
       },
       (err) => {
         if (seq !== lookupSeq.current) return;
+        // Kept as its catalogued halves so each is translated, then joined.
         setStatus({
           kind: "error",
-          message:
-            (err.code === err.PERMISSION_DENIED
+          message: portalMessage("{0}{1}", [
+            portalMessage(err.code === err.PERMISSION_DENIED
               ? "Location access was denied"
-              : "We couldn't work out where you are") +
-            " — type a postal code, building or street name instead.",
+              : "We couldn't work out where you are"),
+            portalMessage(" — type a postal code, building or street name instead."),
+          ]),
         });
       },
       { enableHighAccuracy: true, timeout: 10_000, maximumAge: 60_000 },
@@ -217,11 +220,12 @@ function useOrigin(onChange: () => void) {
       } else {
         setStatus({
           kind: "error",
-          message:
-            (postal
+          message: portalMessage("{0}{1}", [
+            portalMessage(postal
               ? "That postal code didn't resolve — check it, or try a building or street name"
-              : "We couldn't find that — try a postal code, or another building or street name") +
-            ", or use my location instead. (For Johor Bahru clinics, use your device location.)",
+              : "We couldn't find that — try a postal code, or another building or street name"),
+            portalMessage(", or use my location instead. (For Johor Bahru clinics, use your device location.)"),
+          ]),
         });
       }
     } catch (error) {
@@ -293,6 +297,14 @@ export function ClinicLocator({
   });
 
   if (query.isLoading) return <LeafSkeleton label={pt("Loading clinics")} />;
+  const refused = capabilityRefusal(query.error);
+  if (refused) {
+    return (
+      <Mount>
+        <p className="text-row text-label">{pt(refused)}</p>
+      </Mount>
+    );
+  }
   if (query.isError && !isNotFoundError(query.error)) {
     return <PortalErrorState onRetry={() => void query.refetch()} />;
   }

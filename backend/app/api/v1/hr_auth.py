@@ -33,17 +33,19 @@ from app.core.rate_limit import limiter
 from app.core.request_context import client_ip, user_agent
 from app.core.session_logout import revoke_tab_session
 from app.core.tenancy_host import TenantContext
-from app.core.tenant_resolution import require_client_surface
+from app.core.tenant_resolution import require_client_surface, require_live_host_firm
 from app.db.session import get_db
 from app.models import AuthCredential, User
 from app.models.auth import SUBJECT_USER
 from app.models.user import USER_STATUS_ACTIVE
 from app.services.brand import resolve_client_brand
 
-# Only hosts that serve the client portals; the company resolves within the
-# host's broker firm (`require_hr_tenant`, `get_current_hr_user`).
+# Only hosts that serve the client portals, of a firm that is still active;
+# the company resolves within the host's broker firm (`require_hr_tenant`,
+# `get_current_hr_user`).
 router = APIRouter(
-    prefix="/hr/auth", tags=["hr-auth"], dependencies=[Depends(require_client_surface)],
+    prefix="/hr/auth", tags=["hr-auth"],
+    dependencies=[Depends(require_client_surface), Depends(require_live_host_firm)],
 )
 
 
@@ -326,9 +328,11 @@ def login(
     if PW.needs_rehash(cred.password_hash):
         cred.password_hash = PW.hash_password(body.password)
 
-    # Forced rotation — the password is past its configured rotation deadline.
-    # Minting the link cancels any earlier one, as every other issuer does.
-    if HR.rotation_due(cred, now):
+    # Forced rotation — the password is past the company's CURRENT rotation
+    # deadline. Minting the link cancels any earlier one, as every other
+    # issuer does.
+    policy = HR.get_auth_policy(db, tenant.client_id)
+    if HR.rotation_due(cred, policy.password_rotation_days, now):
         token = HR.issue_set_password_link(cred)
         EV.write_auth_event(
             db,
@@ -349,7 +353,6 @@ def login(
 
     # MFA — challenge only when the company has 2FA enabled AND this user has
     # actually enrolled (enrolment is self-service + optional).
-    policy = HR.get_auth_policy(db, tenant.client_id)
     enrolled = HR.user_has_confirmed_mfa(db, user.id)
     if policy.mfa_hr_enabled and enrolled:
         challenge = HR.issue_mfa_challenge_token(user.id, tenant.client_id)
@@ -512,7 +515,7 @@ def mfa_disable(
 
 
 # ── Refresh ────────────────────────────────────────────────────────────────────
-def _refuse_refresh(status_code: int, detail: str, client_id: str) -> JSONResponse:
+def _refuse_refresh(status_code: int, detail: object, client_id: str) -> JSONResponse:
     """A refresh refusal that also drops the dead refresh cookie.
 
     Returned, not raised: FastAPI discards headers set on the injected
@@ -525,12 +528,17 @@ def _refuse_refresh(status_code: int, detail: str, client_id: str) -> JSONRespon
     return refused
 
 
+def _unknown_tenant() -> HTTPException:
+    """What a switched-off company answers to anyone without a session there."""
+    return HTTPException(status.HTTP_404_NOT_FOUND, "Unknown tenant.")
+
+
 @router.post("/refresh", response_model=TokenOut)
 @limiter.limit("30/minute")
 def refresh(
     request: Request,
     response: Response,
-    tenant: TenantContext = Depends(HR.require_hr_tenant),
+    tenant: TenantContext = Depends(HR.require_hr_session_tenant),
     db: Session = Depends(get_db),
 ) -> TokenOut | JSONResponse:
     from app.models import AuthSession
@@ -538,17 +546,28 @@ def refresh(
     require_same_origin(request)
 
     token = request.cookies.get(HR.refresh_cookie_name(tenant.client_id))
-    if not token:
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "No session.")
     # Validate the presented token BEFORE rotating it. Rotation spends the
     # token, so an employee-portal or another company's refresh token sent here
     # used to be consumed on its way to a refusal — signing that session out,
     # and revoking its family as a "replay" when its owner next refreshed.
     row = db.execute(select(AuthSession).where(
         AuthSession.refresh_hash == SESS.hash_refresh(token),
-    )).scalar_one_or_none()
-    if row is None or row.subject_type != SUBJECT_USER or row.client_id != tenant.client_id:
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid session.")
+    )).scalar_one_or_none() if token else None
+    if (not token or row is None or row.subject_type != SUBJECT_USER
+            or row.client_id != tenant.client_id):
+        if not tenant.enabled:
+            raise _unknown_tenant()
+        raise HTTPException(
+            status.HTTP_401_UNAUTHORIZED, "Invalid session." if token else "No session.",
+        )
+    if not tenant.enabled:
+        # HR access was switched off under a live session: end it, and say why
+        # so the sign-in page can explain instead of showing a bare form.
+        SESS.revoke_family(db, row.family_id)
+        db.commit()
+        return _refuse_refresh(
+            status.HTTP_403_FORBIDDEN, HR.HR_DISABLED_DETAIL, tenant.client_id,
+        )
     user = db.get(User, row.subject_id)
     if (user is None or user.role not in HR.HR_ROLES or user.status != USER_STATUS_ACTIVE
             or HR.resolve_hr_credential(db, tenant, user.email) is None):
@@ -618,14 +637,21 @@ def logout(
     request: Request,
     response: Response,
     db: Session = Depends(get_db),
-    tenant: TenantContext = Depends(HR.require_hr_tenant),
+    tenant: TenantContext = Depends(HR.require_hr_session_tenant),
 ) -> dict[str, str]:
     require_same_origin(request)
     client_id = tenant.client_id
-    revoked, clear_cookie = revoke_tab_session(
-        db, request, surface="hr", client_id=client_id,
-        cookie_name=HR.refresh_cookie_name(client_id),
-    )
+    try:
+        revoked, clear_cookie = revoke_tab_session(
+            db, request, surface="hr", client_id=client_id,
+            cookie_name=HR.refresh_cookie_name(client_id),
+        )
+    except HTTPException:
+        # Signing out still works after HR access is switched off; without a
+        # session there, the company stays unknown.
+        if not tenant.enabled:
+            raise _unknown_tenant() from None
+        raise
     if revoked is not None:
         # Repeated sign-out of an already revoked session adds no audit event.
         EV.write_auth_event(

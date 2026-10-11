@@ -21,7 +21,11 @@ from sqlalchemy.orm import Session
 
 from app.core.audit import write_audit
 from app.core.auth import CurrentUser, get_current_user
-from app.core.deps import require_claim_configuration, require_client_id
+from app.core.deps import (
+    is_firm_owner,
+    require_claim_configuration,
+    require_client_id,
+)
 from app.core.identity import accessible_clients, assert_client_accessible
 from app.core.optimistic_lock import assert_not_stale
 from app.core.portal_auth import active_policy_year
@@ -152,6 +156,36 @@ def _assert_key_free(
                     "edit that setup instead."
                 ),
             },
+        )
+
+
+def _fold(value: str) -> str:
+    return " ".join(value.split()).casefold()
+
+
+def _assert_keeps_saved_entries(
+    user: CurrentUser, row: ClaimReviewConfig, data: dict[str, Any]
+) -> None:
+    """Removing a saved field mapping, business rule or extra document is a
+    firm-owner action (AGENTS.md); editing one is not. Mappings carry no
+    identity, so they are compared by count; rules by their stable id."""
+    if is_firm_owner(user):
+        return
+    current = config_from_row(row)
+    kept_rules = {rule["id"] for rule in data["ai_rules"]}
+    kept_documents = {_fold(name) for name in data["required_documents"]}
+    if (
+        len(data["field_maps"]) < len(current.field_maps)
+        or any(rule.id not in kept_rules for rule in current.ai_rules)
+        or any(
+            _fold(name) not in kept_documents
+            for name in current.required_documents or ()
+        )
+    ):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Removing saved field mappings, review rules or documents requires "
+            "a firm administrator.",
         )
 
 
@@ -351,6 +385,7 @@ def update_review_config(
     )
     _assert_key_free(db, client_id, body, exclude_id=row.id)
     data = _payload(body)
+    _assert_keeps_saved_entries(user, row, data)
     before = {
         "claim_kind": row.claim_kind,
         "claim_key": row.claim_key,
@@ -712,6 +747,7 @@ def import_review_configs(
                 actual=target.updated_at,
                 label=f'Rules for "{target.display_label}"',
             )
+            _assert_keeps_saved_entries(user, target, data)
             before = {
                 "claim_kind": target.claim_kind,
                 "claim_key": target.claim_key,

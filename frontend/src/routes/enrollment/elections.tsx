@@ -19,6 +19,7 @@ import {
 } from "@/api/enrollment";
 import { EmployeePicker } from "@/components/operations/EmployeePicker";
 import { MemberElectionPanel } from "@/components/enrollment/members/MemberElectionPanel";
+import { PeriodsLoadError } from "@/components/enrollment/period/PeriodOverview";
 import {
   PHASE_META,
   STATUS_META,
@@ -42,7 +43,8 @@ export function EnrollmentElectionsPage({ readOnly = false }: { readOnly?: boole
   const search = useSearch({ strict: false }) as Search;
   const navigate = useNavigate();
   const now = useNow();
-  const { data: windows } = useEnrollmentWindows(policyYearId);
+  const windowsQuery = useEnrollmentWindows(policyYearId);
+  const windows = windowsQuery.data;
   const liveWindows = useMemo(
     () => (windows ?? []).filter((w) => w.status === "open"),
     [windows],
@@ -68,6 +70,14 @@ export function EnrollmentElectionsPage({ readOnly = false }: { readOnly?: boole
 
   if (!policyYearId) {
     return <p className="text-sm text-muted-foreground">Select a benefit year first.</p>;
+  }
+  if (windowsQuery.isError && !windows) {
+    return (
+      <PeriodsLoadError
+        error={windowsQuery.error}
+        onRetry={() => void windowsQuery.refetch()}
+      />
+    );
   }
   if (!window) return windows ? <NoOpenPeriod /> : null;
   const overdue = phaseOf(window, now) === "overdue";
@@ -107,6 +117,7 @@ export function EnrollmentElectionsPage({ readOnly = false }: { readOnly?: boole
             enrollmentId={search.member}
             window={window}
             readOnly={readOnly}
+            onClear={() => setSearch({ member: undefined })}
           />
         ) : (
           <div className="rounded-xl border border-dashed border-border p-10 text-center">

@@ -7,7 +7,7 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Literal
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
@@ -15,7 +15,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
-from app.core.audit import write_audit
+from app.core.audit import write_platform_audit
 from app.core.auth import CurrentUser, get_current_user
 from app.core.deps import require_system_admin
 from app.core.downloads import attachment_header
@@ -67,6 +67,15 @@ def actor(db: Session, user: CurrentUser) -> str:
     return (identity.display_name or identity.email) if identity else (user.email or user.user_id)
 
 
+def audit(db: Session, user: CurrentUser, action: str, row: AIPolicyVersion) -> None:
+    """The library is platform-wide, so its changes go to the platform trail, not
+    to the trail of whichever company the system admin had selected."""
+    write_platform_audit(
+        db, user, action=action, entity_type="ai_policy", entity_id=row.id,
+        detail={"policy_id": row.policy_id, "version": row.version},
+    )
+
+
 def load(db: Session, user: CurrentUser, version_id: str) -> AIPolicyVersion:
     row = db.get(AIPolicyVersion, version_id)
     if not row or (user.role != "system_admin" and row.published_at is None):
@@ -96,7 +105,6 @@ def list_policies(
 
 @router.post("", response_model=PolicyOut, status_code=201)
 async def upload_policy(
-    request: Request,
     title: str = Form(..., min_length=1, max_length=160),
     category: Category = Form("AI usage policy"),
     review_due: date | None = Form(None),
@@ -112,13 +120,13 @@ async def upload_policy(
             if not stream.read(5).startswith(b"%PDF-"):
                 raise HTTPException(415, "Upload a PDF document.")
         return await run_in_threadpool(
-            _save, db, user, request, path, file.filename or "policy.pdf",
+            _save, db, user, path, file.filename or "policy.pdf",
             title.strip(), category, review_due, previous_id,
         )
 
 
 def _save(
-    db: Session, user: CurrentUser, request: Request, path: Path, filename: str,
+    db: Session, user: CurrentUser, path: Path, filename: str,
     title: str, category: str, review_due: date | None, previous_id: str | None,
 ) -> PolicyOut:
     policy_id, version = new_uuid(), 1
@@ -144,8 +152,7 @@ def _save(
             uploaded_by=actor(db, user), uploaded_by_id=user.user_id,
         )
         db.add(row)
-        write_audit(db, user, "ai_policy.uploaded", "ai_policy", version_id,
-                    after={"policy_id": policy_id, "version": version}, request=request)
+        audit(db, user, "ai_policy.uploaded", row)
         db.flush()
         result = PolicyOut.model_validate(row)
         db.commit()
@@ -165,7 +172,6 @@ def _save(
 @router.post("/{version_id}/publish", response_model=PolicyOut)
 def publish_policy(
     version_id: str,
-    request: Request,
     user: CurrentUser = Depends(require_system_admin),
     db: Session = Depends(get_db),
 ) -> PolicyOut:
@@ -181,8 +187,7 @@ def publish_policy(
             previous.status, previous.archived_at, previous.archived_by = "archived", now, who
     db.flush()
     row.status, row.published_at, row.published_by = "published", now, who
-    write_audit(db, user, "ai_policy.published", "ai_policy", row.id,
-                after={"policy_id": row.policy_id, "version": row.version}, request=request)
+    audit(db, user, "ai_policy.published", row)
     try:
         db.commit()
     except IntegrityError:
@@ -195,7 +200,6 @@ def publish_policy(
 @router.post("/{version_id}/archive", response_model=PolicyOut)
 def archive_policy(
     version_id: str,
-    request: Request,
     user: CurrentUser = Depends(require_system_admin),
     db: Session = Depends(get_db),
 ) -> PolicyOut:
@@ -207,7 +211,7 @@ def archive_policy(
     if row.status == "archived":
         raise HTTPException(409, "This version is already archived. Refresh the library.")
     row.status, row.archived_at, row.archived_by = "archived", datetime.now(UTC), actor(db, user)
-    write_audit(db, user, "ai_policy.archived", "ai_policy", row.id, request=request)
+    audit(db, user, "ai_policy.archived", row)
     db.commit()
     db.refresh(row)
     return PolicyOut.model_validate(row)

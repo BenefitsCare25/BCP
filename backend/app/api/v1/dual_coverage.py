@@ -276,7 +276,14 @@ def set_dependant_cover_endpoint(
     if dep is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No such dependant.")
     try:
-        changed = set_dependant_cover(db, py, user, dependant=dep, covered=body.covered)
+        changed = set_dependant_cover(
+            db,
+            py,
+            user,
+            dependant=dep,
+            covered=body.covered,
+            acknowledge_open_enrollment=body.acknowledge_open_enrollment,
+        )
     except ValueError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
     # No audit row here: each product's move is filed inside the service, in the

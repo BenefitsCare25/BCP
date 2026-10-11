@@ -9,8 +9,9 @@ same way the fact-find form fills its member tables.
 This module is the single place that answers "who is in this category right
 now". It resolves effective coverage through ``coverage_resolver`` (category
 default + sparse override), exactly like the fact-find and the benefit
-statement, so a declined member is dropped and an enrollment-elected dependant
-subset binds. Counting ``matched_categories`` directly would ignore both.
+statement, so a declined member is dropped, an enrollment-elected tier counts
+under its own category and an enrollment-elected dependant subset binds.
+Counting ``matched_categories`` directly would ignore all three.
 
 Read-only and product-agnostic: nothing here knows any product code. Whether a
 category reports dependants and a per-tier split is decided by the product's own
@@ -25,7 +26,14 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import Category, Dependant, Employee, Product, ProductSetup
+from app.models import (
+    Category,
+    Dependant,
+    Employee,
+    EmployeePlanOverride,
+    Product,
+    ProductSetup,
+)
 from app.models.employee import EMPLOYEE_STATUS_ACTIVE
 from app.services.coverage_resolver import load_overrides, resolve_plan
 from app.services.dependant_coverage import (
@@ -57,6 +65,24 @@ class CategoryMembers:
     # caller multiplies) or unresolvable (relative to another product, or no
     # salary on file).
     sum_insured: float | None = None
+
+
+def _counted_category(
+    override: EmployeePlanOverride | None,
+    matched_id: str,
+    product_id: str | None,
+    cat_product: dict[str, str | None],
+) -> str:
+    """The category a member is counted and priced under.
+
+    An enrollment-elected tier (voluntary upgrade/downgrade) carries the
+    member's actual category and basis, as in plan hydration and the fact-find.
+    A stale or cross-product election falls back to the matched baseline.
+    """
+    tier_id = override.tier_category_id if override is not None else None
+    if tier_id and tier_id in cat_product and cat_product[tier_id] == product_id:
+        return tier_id
+    return matched_id
 
 
 def build_category_member_counts(
@@ -159,6 +185,7 @@ def build_category_member_counts(
             # they are not in this category's count either.
             if resolve_plan(override, None).declined:
                 continue
+            cid = _counted_category(override, cid, product_id, cat_product)
             emp_counts[cid] += 1
             # Accumulate the member's own sum assured. A single member missing a
             # salary makes the AGGREGATE wrong rather than merely incomplete, so

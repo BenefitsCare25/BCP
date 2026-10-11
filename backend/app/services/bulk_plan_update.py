@@ -286,6 +286,26 @@ class _Dependants:
     active_by_employee: dict[str, list[Dependant]]
     by_id: dict[str, Dependant]
 
+    def priced(
+        self, emp: Employee, participation: str | None, covered: list[str] | None
+    ) -> list[Dependant]:
+        """The dependants a tier with this participation prices for ``emp``.
+
+        Compulsory cover auto-includes the ACTIVE household only, exactly as
+        ``active_dependant_profiles`` does for the benefit statement; voluntary
+        cover prices the covered ids (see the class docstring for why those span
+        every status).
+        """
+        if participation == "compulsory":
+            return self.active_by_employee.get(emp.id, [])
+        if participation == "voluntary":
+            return [
+                dep
+                for dep in (self.by_id.get(i) for i in (covered or []) if i)
+                if dep is not None
+            ]
+        return []
+
 
 def _load_dependants(db: Session, employee_ids: list[str]) -> _Dependants:
     if not employee_ids:
@@ -465,6 +485,12 @@ def evaluate(
         db, py, employees, plans, idx=idx, deps=deps, flex=flex,
         codes_by_employee=codes_by_employee,
     )
+    # Member-major order: a member's rows (one per product) sit together, so a
+    # preview page shows every row an exclusion removes — unticking a member
+    # drops them from every product in the set. Stable, so a single-product
+    # run keeps selection order and unresolved references stay first.
+    position = {e.id: i for i, e in enumerate(employees)}
+    rows.sort(key=lambda r: position.get(r.employee_id or "", -1))
 
     buckets = warn.buckets(codes_by_employee)
     if apply:
@@ -629,7 +655,7 @@ def _evaluate_change(
             to_plan=to_plan,
             default_plan=default_plan,
             covered=covered_for_price,
-            dependants=deps.by_id,
+            deps=deps,
             dep_options=dep_options,
             participation=participation,
             age_limits=age_limits,
@@ -694,6 +720,16 @@ def _evaluate_change(
             )
             and not current.declined
         )
+        # What the member draws before the change: the stored tag when the
+        # override carries one, otherwise the recomputed cohort-default (or
+        # untagged override) price. Reading only the stored tag counted every
+        # default member's "before" as zero, so the flex delta quoted the full
+        # new price instead of the difference.
+        tag_before = (
+            ov.flex_price_tag
+            if ov is not None and ov.flex_price_tag is not None
+            else _current_tag(flex, idx, deps, emp, product.id)
+        )
 
         row = _row(
             emp, "would_apply", None,
@@ -702,7 +738,7 @@ def _evaluate_change(
             to_plan=to_plan,
             declined_before=current.declined,
             declined_after=declined_after,
-            tag_before=ov.flex_price_tag if ov else None,
+            tag_before=tag_before,
             tag_after=tag,
             override_cleared=sparse,
             si_before=None if current.declined else before_fig.sum_insured,
@@ -815,38 +851,7 @@ def _flag_overdrafts(
                     continue  # declined coverage costs no flex
                 tag = on_product.tag
             else:
-                ov = idx.overrides.get((emp.id, product_id))
-                if ov is not None and ov.declined:
-                    continue
-                base_cat = flex.baseline_cat.get((emp.id, product_id))
-                tier_category_id = (
-                    ov.tier_category_id
-                    if ov is not None and ov.tier_category_id
-                    else base_cat
-                )
-                plan_code = (
-                    (ov.plan_code if ov else None)
-                    or idx.default_plan(emp.id, product_id)
-                )
-                tag = _price_tag(
-                    flex, product_id, emp,
-                    declined=False,
-                    base_cat=base_cat,
-                    tier_category_id=tier_category_id,
-                    to_plan=plan_code,
-                    default_plan=idx.default_plan(emp.id, product_id),
-                    covered=ov.covered_dependant_ids if ov else None,
-                    dependants=deps.by_id,
-                    dep_options=ov.dependant_option_ids if ov else None,
-                    participation=_dependant_participation(
-                        flex,
-                        product_id,
-                        base_cat=base_cat,
-                        tier_category_id=tier_category_id,
-                        plan_code=plan_code,
-                    ),
-                    age_limits=flex.age_limits(product_id),
-                )
+                tag = _current_tag(flex, idx, deps, emp, product_id)
             total += tag or 0.0
         balance = round(wallets[emp.id] - total + leave.get(emp.id, 0.0), 2)
         if balance < -_EPSILON:
@@ -854,6 +859,49 @@ def _flag_overdrafts(
             for planned in changed.values():
                 if warn.FLEX_OVERDRAFT not in planned.row.warnings:
                     planned.row.warnings.append(warn.FLEX_OVERDRAFT)
+
+
+def _current_tag(
+    flex: _FlexContext,
+    idx: RosterIndex,
+    deps: _Dependants,
+    emp: Employee,
+    product_id: str,
+) -> float | None:
+    """The flex price tag the member's coverage on one product draws TODAY.
+
+    Recomputed from the effective coverage rather than read off the stored
+    override: a member on their cohort default has no override, and so no
+    stored tag, yet still spends. Declined coverage draws nothing (None).
+    """
+    ov = idx.overrides.get((emp.id, product_id))
+    if ov is not None and ov.declined:
+        return None
+    base_cat = flex.baseline_cat.get((emp.id, product_id))
+    default_plan = idx.default_plan(emp.id, product_id)
+    tier_category_id = (
+        ov.tier_category_id if ov is not None and ov.tier_category_id else base_cat
+    )
+    plan_code = (ov.plan_code if ov else None) or default_plan
+    return _price_tag(
+        flex, product_id, emp,
+        declined=False,
+        base_cat=base_cat,
+        tier_category_id=tier_category_id,
+        to_plan=plan_code,
+        default_plan=default_plan,
+        covered=ov.covered_dependant_ids if ov else None,
+        deps=deps,
+        dep_options=ov.dependant_option_ids if ov else None,
+        participation=_dependant_participation(
+            flex,
+            product_id,
+            base_cat=base_cat,
+            tier_category_id=tier_category_id,
+            plan_code=plan_code,
+        ),
+        age_limits=flex.age_limits(product_id),
+    )
 
 
 def _row(
@@ -970,7 +1018,7 @@ def _price_tag(
     to_plan: str | None,
     default_plan: str | None,
     covered: list[str] | None,
-    dependants: dict[str, Dependant],
+    deps: _Dependants,
     dep_options: dict[str, Any] | None,
     participation: str | None,
     age_limits: dict[str, dict[str, int]] | None,
@@ -981,23 +1029,12 @@ def _price_tag(
     categories.  Pricing and the stored override therefore use the same exact
     tier key that ``summarize_employee`` will resolve during a later recompute.
 
-    Dependants are resolved BY ID out of the batch-wide map, not from the
-    member's electable list: the ids being priced come from the override's
+    Voluntary dependants are resolved BY ID out of the batch-wide map, not from
+    the member's electable list: the ids being priced come from the override's
     existing coverage as often as from a new dependant action, and the two sets
-    are not the same (see ``_Dependants``).
+    are not the same (see ``_Dependants.priced``).
     """
-    if participation == "compulsory":
-        dep_rows = [
-            dep for dep in dependants.values() if dep.employee_id == emp.id
-        ]
-    elif participation == "voluntary":
-        dep_rows = [
-            dep
-            for dep in (dependants.get(i) for i in (covered or []) if i)
-            if dep is not None
-        ]
-    else:
-        dep_rows = []
+    dep_rows = deps.priced(emp, participation, covered)
     dep_profiles = dependant_profiles_of(dep_rows, age_limits=age_limits, ref=flex.ref)
     spouse_count, child_count = profile_counts(dep_profiles)
     return member_coverage_tag(

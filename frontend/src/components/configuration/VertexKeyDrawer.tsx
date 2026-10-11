@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Loader2, Lock, Wand2 } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -12,6 +13,8 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { FieldLabel, InfoHint } from "@/components/ui/tooltip";
+import { formatError } from "@/lib/errors";
+import type { AIConfigTestResult } from "@/types";
 
 // Vertex/Gemini is the sole provider (AWS Bedrock + Anthropic were removed).
 // The location is FIXED, not a default: claim documents are Singapore-resident
@@ -56,6 +59,50 @@ export function isValidServiceAccountJson(value: string): boolean {
 export function isValidVertexDraft(draft: VertexKeyDraft): boolean {
   if (!draft.location.trim()) return false;
   return isValidServiceAccountJson(draft.serviceAccountJson);
+}
+
+interface VertexKeySaveSteps {
+  /** Probe the unsaved draft; nothing is stored. */
+  probeDraft: () => Promise<AIConfigTestResult>;
+  save: () => Promise<unknown>;
+  /** Probe the stored key, which is what activates it in production. */
+  probeStored: () => Promise<AIConfigTestResult>;
+}
+
+/**
+ * Save a Vertex key only after the draft passes the probe, then activate it.
+ *
+ * Saving replaces the live key and resets its activation, so storing a key
+ * that cannot work would switch AI off for everyone on it. Toasts the outcome
+ * and returns whether the key was saved, so the caller can close the drawer.
+ */
+export async function saveVertexKeyAfterProbe(
+  steps: VertexKeySaveSteps,
+  successMessage: string,
+): Promise<boolean> {
+  let saved = false;
+  const notValidated = (reason: string) =>
+    toast.error(
+      `Key saved but not validated: ${reason} Use "Test stored key" to try again.`,
+    );
+  try {
+    const precheck = await steps.probeDraft();
+    if (!precheck.ok) {
+      toast.error(
+        `Key not saved. ${precheck.error ?? "The connection test failed."} Nothing was changed.`,
+      );
+      return false;
+    }
+    await steps.save();
+    saved = true;
+    const activation = await steps.probeStored();
+    if (activation.ok) toast.success(successMessage);
+    else notValidated(activation.error ?? "the connection test failed.");
+  } catch (err) {
+    if (saved) notValidated(formatError(err));
+    else toast.error(formatError(err));
+  }
+  return saved;
 }
 
 interface Props {

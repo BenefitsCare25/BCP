@@ -25,6 +25,7 @@ from app.services.eligibility_mapping.location_cohorts import (
 from app.services.eligibility_mapping.predicates import (
     is_bulk_confirmable,
     is_employee_mapping_category,
+    is_placeholder_card_category,
 )
 from app.services.eligibility_mapping.profiles import (
     _candidate_for_category,
@@ -120,11 +121,15 @@ def auto_map_policy_year(
             )
         )
         if preserve:
+            # Only an explicitly confirmed rule keeps its broker leniency:
+            # ``human_modified`` is also set by edits that never touch the rule
+            # (rate tiers, name), and a rule edit returns the row to review.
             validation = validate_ai_matching_rule(
                 category.raw_description,
                 category.matching_rule,
                 catalog,
                 location_exclusions=location_exclusions[category.id],
+                broker_authored=category.status == CategoryStatus.confirmed.value,
             )
             proposal = RuleProposal(
                 rule=category.matching_rule,
@@ -232,11 +237,13 @@ def auto_map_policy_year(
         category.rule_validation = payload
         # A location-narrowed rule is specific to this product's office split;
         # stored under the shared "All Employees" signature it would overwrite
-        # (and later be reused for) every other product's catch-all.
+        # (and later be reused for) every other product's catch-all. An unnamed
+        # card category's placeholder wording names no cohort at all.
         if (
             persist_profiles
             and proposal.rule is not None
             and category.id not in location_scoped
+            and not is_placeholder_card_category(category)
         ):
             profile = _upsert_profile(
                 db,

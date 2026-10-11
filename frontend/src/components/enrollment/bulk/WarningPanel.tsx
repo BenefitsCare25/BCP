@@ -23,6 +23,7 @@ const TITLES: Record<string, string> = {
   dependant_ineligible: "Dependant outside the age window",
   unpriced: "No flex price",
   underwriting_triggered: "Needs underwriting",
+  dual_coverage: "Dependant already covered under another employee",
 };
 
 export function WarningPanel({

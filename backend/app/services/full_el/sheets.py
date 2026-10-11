@@ -199,6 +199,10 @@ def setup_gaps(ctx: ElContext, stats: dict[str, Any]) -> list[tuple[str, str, st
         if not (cat.rate or cat.tiers):
             gaps.append((cat.product.code, f"No rate: {cat.category.display_name}",
                          "Premium is left blank; enter the rate in the product setup."))
+    for code, category in stats.get("unpriced_dependants", ()):
+        gaps.append((code, f"No dependant rate: {category}",
+                     "Covered dependants' premium is left blank; enter the dependant rate "
+                     "in the product setup."))
     unmatched = sum(1 for e in ctx.employees if not e.matched_categories)
     if unmatched:
         gaps.append(("All", f"{unmatched} employees without cover",

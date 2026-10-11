@@ -9,6 +9,8 @@
  * - `client_admin` / `client_hr`: a company's HR logins, provisioned per
  *   company under Company settings → Authentication. */
 
+import { useMe } from "@/api/hooks";
+
 export const ROLE_LABELS: Readonly<Record<string, string>> = {
   system_admin: "System admin",
   firm_admin: "Firm admin",
@@ -44,6 +46,36 @@ export function isBrokerAdminRole(role: Role): boolean {
 /** Every broker staff role, read-only viewers included. */
 export function isBrokerStaffRole(role: Role): boolean {
   return role === "broker_viewer" || isBrokerAdminRole(role);
+}
+
+/** Changes to the active company's data are refused: a broker viewer, or a
+ *  platform admin reaching that company's firm through a `read` access grant
+ *  (`/me` `platform_access`). */
+export function isReadOnlyAccess(role: Role, platformAccess?: string | null): boolean {
+  return role === "broker_viewer" || platformAccess === "read";
+}
+
+/** What the signed-in caller may change in the active company, from `/me`.
+ *  Every flag is false while `/me` loads, for a broker viewer and under a
+ *  `read` access grant, so a read grant hides write controls exactly as the
+ *  viewer role does. */
+export interface WriteAccess {
+  /** Edit the company's data: any broker staff role but a viewer. */
+  canEdit: boolean;
+  /** Company settings and configuration: broker admins and firm owners. */
+  canAdmin: boolean;
+  /** Remove, clear, unlink or reset saved data: firm owners. */
+  canRemove: boolean;
+}
+
+export function useWriteAccess(): WriteAccess {
+  const { data: me } = useMe();
+  const canEdit = Boolean(me) && !isReadOnlyAccess(me?.role, me?.platform_access);
+  return {
+    canEdit,
+    canAdmin: canEdit && isBrokerAdminRole(me?.role),
+    canRemove: canEdit && isFirmOwnerRole(me?.role),
+  };
 }
 
 /** HR logins live under Company settings → Authentication, never the firm-wide

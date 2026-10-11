@@ -393,7 +393,7 @@ export function ClaimDetailLeaf({
             <MountRow term="Approved">
               <Money
                 value={claim.amount_approved}
-                currency={claim.currency}
+                currency={claim.policy_currency}
                 emphasis="strong"
               />
             </MountRow>
@@ -736,7 +736,7 @@ export function ClaimDetailLeaf({
                   do, and the assessor will ask if something is missing. */}
               {claim.member_can_submit && !allSlotsSatisfied && (
                 <p className="text-row text-label">
-                  {pt("Attach")} {missing.map((s) => s.label).join(" and ")}  {pt("first.")} </p>
+                  {pt("Attach {0} first.", [missing.map((s) => pt(s.label)).join(pt(" and "))])}</p>
               )}
               {/* What the claim converts to. Placed beside the Send control
                   rather than up beside the amount: pressing Send accepts this
@@ -760,7 +760,7 @@ export function ClaimDetailLeaf({
                       note:
                         conversion.state === "converted"
                           ? conversion.stale && conversion.rateDate
-                            ? `Using the rate published on ${conversion.rateDate} — none is published for ${claim.incurred_date}.`
+                            ? pt("Using the rate published on {0} — none is published for {1}.", [conversion.rateDate, claim.incurred_date])
                             : null
                           : null,
                     }}
@@ -813,7 +813,9 @@ function ClaimTimeline({ claim }: { claim: PortalClaim }) {
     { label: "Submitted", date: claim.submitted_at, done: Boolean(claim.submitted_at) },
     {
       label: refused ? "Not approved" : asked ? "More needed from you" : approved ? "Approved" : "Being reviewed",
-      date: claim.decided_at,
+      // An insurer decline keeps our approval in `decided_at`; the refusal is
+      // dated on the decline itself.
+      date: (refused && claim.insurer_outcome_on) || claim.decided_at,
       done: Boolean(claim.decided_at) || refused || approved,
     },
     ...(refused ? [] : [{ label: "Paid", date: claim.paid_on, done: Boolean(claim.paid_on) || claim.status === "paid" }]),

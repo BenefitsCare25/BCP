@@ -1,4 +1,4 @@
-import { usePortalTranslation } from "@/i18n/portal";
+import { usePortalTranslation, type PortalTranslator } from "@/i18n/portal";
 /** The member's panel cards, as leaves.
  *
  * This is the one screen in the portal that gets used standing at a counter
@@ -52,9 +52,9 @@ function keyLabel(key: string): string {
   return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
-function holderLabel(card: MemberCard): string {
-  if (card.holder_type === "employee") return "You";
-  return card.holder_name ?? "Family member";
+function holderLabel(card: MemberCard, pt: PortalTranslator): string {
+  if (card.holder_type === "employee") return pt("You");
+  return card.holder_name ?? pt("Family member");
 }
 
 function MemberCardLeaf({
@@ -114,7 +114,7 @@ function MemberCardLeaf({
       gloss={glossBeside(card.product_name, card.product_code, card.product_name)}
       aside={
         <span className="leaf-label block max-w-28 truncate sm:max-w-40">
-          {holderLabel(card)}
+          {holderLabel(card, pt)}
         </span>
       }
     >

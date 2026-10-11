@@ -535,6 +535,20 @@ def test_claim_type_document_setup_is_enforced_and_duplicates_independently(
                 ClaimDocumentSetup.claim_key == "NOT-A-COMPANY-PRODUCT"
             ).count()
 
+        # Replacing the scope's current documents removes them, which only a
+        # firm owner may do (AGENTS.md); the rest of the flow runs as one.
+        assert source["documents"]
+        refused = broker.put(
+            "/api/v1/claim-document-setups", json=payload(source, [document])
+        )
+        assert refused.status_code == 403, refused.text
+        app.dependency_overrides[get_current_user] = lambda: CurrentUser(
+            user_id="00000000-0000-0000-0000-000000000001",
+            broker_firm_id=DEMO_BROKER_FIRM_ID,
+            client_id=DEMO_CLIENT_ID,
+            role="firm_admin",
+        )
+
         saved_response = broker.put(
             "/api/v1/claim-document-setups", json=payload(source, [document])
         )

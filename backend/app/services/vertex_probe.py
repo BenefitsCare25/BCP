@@ -11,6 +11,8 @@ from __future__ import annotations
 import json
 import logging
 import time
+from datetime import UTC, datetime
+from typing import NamedTuple
 
 from anthropic import (
     APIConnectionError,
@@ -19,14 +21,17 @@ from anthropic import (
     AuthenticationError,
     BadRequestError,
     PermissionDeniedError,
+    RateLimitError,
 )
 
 from app.core.ai_config import (
+    DEFAULT_VERTEX_CAPACITY_MODE,
     DEFAULT_VERTEX_LOCATION,
     DEFAULT_VERTEX_MODEL,
     AIConfig,
     assert_vertex_residency,
 )
+from app.models import ClientAIConfig, PlatformAISetting
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +53,16 @@ def project_id_from_service_account(service_account_json: str) -> str | None:
     return project_id or None
 
 
+class VertexProbeResult(NamedTuple):
+    error: str | None
+    latency_ms: int
+    model: str
+    # The failure says nothing about the credential or its configuration (a
+    # timeout, an unreachable endpoint, a 429 or a 5xx): a stored key that is
+    # active stays active rather than being switched off by a diagnostic click.
+    transient: bool = False
+
+
 def probe_vertex(
     *,
     location: str | None,
@@ -55,18 +70,21 @@ def probe_vertex(
     service_account_json: str | None,
     project_id: str | None,
     source: str,
-) -> tuple[str | None, int, str]:
-    """Make a minimal structured Gemini call. Returns ``(error, latency_ms, model)``.
+    capacity_mode: str | None = None,
+) -> VertexProbeResult:
+    """Make a minimal structured Gemini call with the saved capacity mode.
 
     ``error`` is None on success. Never raises: every provider failure is
     translated to a short operator-readable string, because this runs behind a
-    "Test connection" button and a stack trace would be useless there.
+    "Test connection" button and a stack trace would be useless there. The
+    probe sends the same capacity-pool header live calls will, so a validated
+    mode is one that was actually exercised.
     """
     resolved_location = (location or DEFAULT_VERTEX_LOCATION).strip() or DEFAULT_VERTEX_LOCATION
     resolved_model = (model or DEFAULT_VERTEX_MODEL).strip() or DEFAULT_VERTEX_MODEL
 
     if not project_id or not service_account_json:
-        return (
+        return VertexProbeResult(
             "Enter the GCP location and service-account JSON key to test.",
             0,
             resolved_model,
@@ -74,7 +92,7 @@ def probe_vertex(
     try:
         assert_vertex_residency(resolved_location)
     except RuntimeError as exc:
-        return str(exc), 0, resolved_model
+        return VertexProbeResult(str(exc), 0, resolved_model)
 
     from app.services.vertex_gemini import build_gemini_client
 
@@ -86,10 +104,12 @@ def probe_vertex(
         gcp_project=project_id,
         gcp_location=resolved_location,
         source=source,  # type: ignore[arg-type]
+        capacity_mode=capacity_mode or DEFAULT_VERTEX_CAPACITY_MODE,
     )
 
     started = time.perf_counter()
     error: str | None = None
+    transient = False
     try:
         # Validate the production claim-review contract, not a toy boolean.
         # A provider can support a one-field function while rejecting or
@@ -130,10 +150,19 @@ def probe_vertex(
         error = "Vertex rejected the model, region, capacity, or probe request."
     except APITimeoutError:
         error = f"Vertex did not respond within {int(VERTEX_TEST_TIMEOUT_SECONDS)}s."
+        transient = True
     except APIConnectionError:
         error = "Could not reach Vertex. Check network access and the configured region."
+        transient = True
+    except RateLimitError:
+        error = (
+            "Vertex returned HTTP 429: the project's quota or its Provisioned "
+            "Throughput capacity is exhausted."
+        )
+        transient = True
     except APIStatusError as exc:
         error = f"Vertex returned HTTP {exc.status_code}."
+        transient = exc.status_code >= 500
     except RuntimeError as exc:
         # e.g. google-genai not installed, or credential build failure.
         error = f"Vertex client could not start: {exc.__class__.__name__}."
@@ -149,4 +178,32 @@ def probe_vertex(
         )
         error = f"Unexpected Vertex probe error: {exc.__class__.__name__}."
     latency_ms = int((time.perf_counter() - started) * 1000)
-    return error, latency_ms, resolved_model
+    return VertexProbeResult(error, latency_ms, resolved_model, transient)
+
+
+def record_stored_probe(
+    row: ClientAIConfig | PlatformAISetting,
+    result: VertexProbeResult,
+    *,
+    location: str,
+    capacity_mode: str,
+) -> None:
+    """Stamp a stored credential row with a probe of exactly its saved settings.
+
+    Success activates the row for the location, model and capacity mode that
+    were probed. A definitive failure (refused key, rejected model, region or
+    capacity, unusable structured output) deactivates it. A transient one only
+    records the error: it says nothing about the key, and in production an
+    active key going inactive switches AI off for everyone who runs on it.
+    Caller commits.
+    """
+    if result.error is None:
+        row.last_validated_at = datetime.now(tz=UTC)
+        row.validated_fingerprint = row.key_fingerprint
+        row.validated_model = result.model
+        row.validated_location = location
+        row.validated_capacity_mode = capacity_mode
+        row.validation_status = "active"
+    elif not result.transient:
+        row.validation_status = "invalid"
+    row.last_validation_error = result.error

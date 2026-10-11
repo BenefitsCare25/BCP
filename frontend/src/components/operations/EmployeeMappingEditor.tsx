@@ -3,22 +3,26 @@ import { createPortal } from "react-dom";
 import { useBlocker } from "@tanstack/react-router";
 import { Save } from "lucide-react";
 import { toast } from "sonner";
-import { useMe, useSetMatchOverride } from "@/api/hooks";
+import { useSetMatchOverride } from "@/api/hooks";
 import { AlertDialog } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { formatError } from "@/lib/errors";
 import { employeeMappingChoices, mappingPlanDescription } from "@/lib/employeeMappingChoices";
-import { isFirmOwnerRole } from "@/lib/roles";
+import { useWriteAccess } from "@/lib/roles";
 import type { CategoryGroup, Employee } from "@/types";
 
 export function EmployeeMappingEditor({ employee, groups, actionContainer, disabled, onDirtyChange }: {
   employee: Employee; groups: CategoryGroup[]; actionContainer: HTMLElement | null;
   disabled: boolean; onDirtyChange: (dirty: boolean) => void;
 }) {
-  const { data: me } = useMe();
+  const { canEdit: editable, canRemove } = useWriteAccess();
   const override = useSetMatchOverride();
-  const initial = () => new Set(employee.matched_plans.flatMap((p) => p.category_id ? [p.category_id] : []));
+  const plannedIds = new Set(employee.matched_plans.flatMap((p) => p.category_id ? [p.category_id] : []));
+  // `matched_plans` leaves out a product the member declined, but the match keeps
+  // its category and a save replaces the whole set — seed from every category held.
+  const declinedIds = new Set((employee.matched_category_ids ?? []).filter((id) => !plannedIds.has(id)));
+  const initial = () => new Set([...plannedIds, ...declinedIds]);
   const [baseline, setBaseline] = useState(initial);
   const [selected, setSelected] = useState(initial);
   const [version, setVersion] = useState(employee.updated_at);
@@ -32,7 +36,6 @@ export function EmployeeMappingEditor({ employee, groups, actionContainer, disab
     ? activeProduct
     : initialGroup ? productKey(initialGroup) : undefined;
   const dirty = selected.size !== baseline.size || [...selected].some((id) => !baseline.has(id));
-  const editable = Boolean(me && me.role !== "broker_viewer");
   useEffect(() => {
     if (dirty || override.isPending) return;
     const latest = initial();
@@ -51,11 +54,14 @@ export function EmployeeMappingEditor({ employee, groups, actionContainer, disab
   const save = async () => {
     if (!dirty || override.isPending) return;
     setError(null);
-    const committed = new Set(selected);
+    // A category deleted since matching (slip re-parse) can't be shown or sent.
+    const known = new Set(groups.flatMap((group) => group.categories.map((c) => c.id)));
+    const committed = new Set([...selected].filter((id) => known.has(id)));
     try {
       const result = await override.mutateAsync({ employeeId: employee.id,
         categoryIds: [...committed], expectedUpdatedAt: version ?? undefined });
       setBaseline(committed);
+      setSelected(new Set(committed));
       setVersion(result.updated_at ?? undefined);
       setSaved(true);
       onDirtyChange(false);
@@ -98,7 +104,7 @@ export function EmployeeMappingEditor({ employee, groups, actionContainer, disab
             const planDescription = mappingPlanDescription(category);
             const choiceLabel = `${category.display_name}${plan != null && plan !== "" ? ` · Plan ${String(plan)}` : ""}`;
             // A broker may replace a category. Removing saved product coverage requires an administrator.
-            const canUncheck = isFirmOwnerRole(me?.role) || !baseline.has(category.id);
+            const canUncheck = canRemove || !baseline.has(category.id);
             return <label key={category.id} className="flex clear-both items-start gap-2 py-1 text-sm">
               <input type="checkbox" className="mt-1 accent-primary" checked={selected.has(category.id)}
                 aria-label={choiceLabel}
@@ -121,6 +127,7 @@ export function EmployeeMappingEditor({ employee, groups, actionContainer, disab
                   {planDescription && ` · ${planDescription}`}
                 </span>
                 {Boolean(insured) && <span className="block text-xs text-muted-foreground">{String(insured)}</span>}
+                {declinedIds.has(category.id) && <span className="block text-xs text-muted-foreground">Mapped, but declined by the member in enrolment</span>}
               </span>
             </label>;
           })}

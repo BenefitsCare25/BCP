@@ -5,10 +5,10 @@ import { useRef, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { ArrowRight, User } from "lucide-react";
 import { isMemberToken, useMemberLogin, useMemberMfa } from "@/api/portal";
-import { errorCode, formatError } from "@/lib/errors";
+import { errorCode } from "@/lib/errors";
 import { handOverSetPasswordChallenge } from "@/lib/setPasswordToken";
 import { useSessionEndNotice } from "@/lib/surfaceSession";
-import { loginError, validateCredentials, IDENTIFIER_MAX_LENGTH, type LoginFieldErrors } from "@/lib/loginValidation";
+import { authStepError, loginError, validateCredentials, IDENTIFIER_MAX_LENGTH, type LoginFieldErrors } from "@/lib/loginValidation";
 import { usePortalSession } from "@/stores/portalSession";
 import { MFA_CODE_MAX_LENGTH, canSubmitMfaCode, normalizeMfaCode } from "@/lib/mfa";
 import { PortalLoginScene } from "@/components/auth/PortalLoginScene";
@@ -162,7 +162,7 @@ export function PortalSignInPage() {
           if (errorCode(err) === "challenge_expired") {
             setStep("credentials"); setCode(""); setChallenge(""); setPassword("");
           }
-          setError(formatError(err));
+          setError(authStepError(err));
         },
         onSettled: () => { submitting.current = false; },
       },

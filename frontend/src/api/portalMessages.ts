@@ -54,6 +54,9 @@ export interface ConversationSubject {
   currency: string | null;
   /** A claim's own status, or a question's `open | answered | closed`. */
   status: string | null;
+  /** Claims only: false for an HR- or broker-filed claim, whose thread the
+   *  member never sees and which takes no replies. */
+  member_visible?: boolean | null;
   // ── question ───────────────────────────────────────────────────────────────
   /** The member's own headline — a question's title. */
   subject: string | null;

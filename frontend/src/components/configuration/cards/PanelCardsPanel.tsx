@@ -107,8 +107,8 @@ function CardFormSheet({
         toast.success("Card created — upload its artwork to make it usable");
       }
       onOpenChange(false);
-    } catch {
-      // Global mutation toast already surfaced the error.
+    } catch (error) {
+      toast.error(formatError(error));
     }
   };
 
@@ -340,6 +340,7 @@ export function PanelCardsPanel({
   const [editing, setEditing] = useState<PanelCard | null>(null);
   const [layoutFor, setLayoutFor] = useState<PanelCard | null>(null);
   const [deleting, setDeleting] = useState<PanelCard | null>(null);
+  const [withdrawing, setWithdrawing] = useState<PolicyYearCard | null>(null);
   const [assignOpen, setAssignOpen] = useState(false);
   const [editingAssignment, setEditingAssignment] =
     useState<PolicyYearCard | null>(null);
@@ -356,8 +357,24 @@ export function PanelCardsPanel({
       await removeCard.mutateAsync(deleting.id);
       toast.success(`${deleting.display_label} deleted`);
       setDeleting(null);
-    } catch {
-      // Global mutation toast already surfaced the error.
+    } catch (error) {
+      toast.error(formatError(error));
+    }
+  };
+
+  const confirmWithdraw = async () => {
+    if (!withdrawing || !policyYearId) return;
+    try {
+      await removeAssignment.mutateAsync({
+        policyYearId,
+        assignmentId: withdrawing.id,
+      });
+      toast.success(
+        `${withdrawing.product_name} card withdrawn — members no longer see it`,
+      );
+      setWithdrawing(null);
+    } catch (error) {
+      toast.error(formatError(error));
     }
   };
 
@@ -472,20 +489,7 @@ export function PanelCardsPanel({
                           variant="ghost"
                           size="sm"
                           disabled={removeAssignment.isPending}
-                          onClick={() =>
-                            removeAssignment.mutate(
-                              {
-                                policyYearId: policyYearId!,
-                                assignmentId: assignment.id,
-                              },
-                              {
-                                onSuccess: () =>
-                                  toast.success(
-                                    `${assignment.product_name} card withdrawn — members no longer see it`,
-                                  ),
-                              },
-                            )
-                          }
+                          onClick={() => setWithdrawing(assignment)}
                           title="Withdraw this card"
                         >
                           <Trash2 className="size-4 text-error" />
@@ -546,6 +550,20 @@ export function PanelCardsPanel({
         }
         loading={removeCard.isPending}
         onConfirm={() => void confirmDelete()}
+      /></FirmOwnerOnly>
+
+      <FirmOwnerOnly><AlertDialog
+        open={withdrawing !== null}
+        onOpenChange={(open) => !open && setWithdrawing(null)}
+        title="Withdraw this card?"
+        description={
+          withdrawing
+            ? `The ${withdrawing.card_name} card for ${withdrawing.product_name} will be withdrawn from this benefit year. Members covered under that product will no longer see it in their portal.`
+            : ""
+        }
+        confirmLabel="Withdraw"
+        loading={removeAssignment.isPending}
+        onConfirm={() => void confirmWithdraw()}
       /></FirmOwnerOnly>
     </div>
   );

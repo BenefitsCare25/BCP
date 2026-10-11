@@ -32,6 +32,9 @@ export interface MeResponse {
   /** True only for a system_admin on a platform host: the platform console is
    *  available. Missing means false. */
   platform_console?: boolean;
+  /** Platform admin only: how it reaches the active company's firm. Under a
+   *  `read` access grant every change to that firm's data is refused. */
+  platform_access?: "standing" | "read" | "write" | null;
 }
 
 /** Keyed by the active client so a switch refetches /me (active_client_id +

@@ -14,7 +14,8 @@ and safe to cache forever.
 Blobs are filed under the owning firm's storage prefix,
 `<firm id>/brand/<asset id>` (core/storage.py's firm-first layout, like the
 firm's panel-card library), and served by `GET /api/v1/public/brand-assets/<id>`
-only on a host of a firm whose brand rows reference them. Removing an asset
+only on a host of a firm whose brand rows reference them (the firm console
+previews them through `GET /api/v1/firm/brand/images/<id>`). Removing an asset
 only unreferences it: content-addressed blobs may be shared by the firm row and
 its company rows, and a firm's whole prefix goes with the firm at offboarding.
 """

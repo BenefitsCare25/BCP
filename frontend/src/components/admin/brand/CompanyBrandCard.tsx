@@ -24,7 +24,7 @@ import { ListError, ListLoading } from "@/components/platform/QueryStates";
 import { errorCode } from "@/lib/errors";
 import { BrandAssetsSection } from "./BrandAssetsSection";
 import { BrandFormFooter, ColorFields, ContactFields, IdentityFields } from "./BrandFieldsets";
-import { BUILT_IN_EXTRA, type Draft, fieldRefusal, fieldsOf, useBrandDraft, validateDraft } from "./brandForm";
+import { type Draft, fieldRefusal, fieldsOf, nameFallbacks, useBrandDraft, validateDraft } from "./brandForm";
 
 /** Per-company overrides of the firm brand, shown on that company's HR and
  *  employee portals. Blank fields use the firm's brand. The From address, the
@@ -148,15 +148,14 @@ function CompanyBrandForm({
     );
   };
 
+  const names = nameFallbacks(draft, firm.settings);
   const fieldProps = {
     id,
     draft,
     errors: shownErrors,
     disabled,
-    inherited: data.inherited,
-    inheritedExtra: {
-      email_sender_name: firm.settings.email_sender_name ?? BUILT_IN_EXTRA.email_sender_name,
-    },
+    inherited: { ...data.inherited, short_name: names.short_name },
+    inheritedExtra: { email_sender_name: names.email_sender_name },
     onChange: change,
   };
 

@@ -13,7 +13,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.clock import today as business_today
-from app.models import Claim, Dependant, PolicyYear, StoredDocument
+from app.models import Claim, Dependant, Employee, PolicyYear, StoredDocument
 from app.models.claim import CLAIM_KIND_FLEX, LIVE_STATUSES
 from app.models.stored_document import DOC_ENTITY_CLAIM, STORAGE_AVAILABLE
 from app.schemas.api import BenefitStatementOut
@@ -24,13 +24,14 @@ from app.services.claim_fx import (
     fx_state,
     policy_amount,
 )
-from app.services.claim_intake import normalize_invoice_number
+from app.services.claim_intake import normalize_invoice_number, person_employee_ids
 from app.services.claim_limits import (
     enforceable_policy_year_amount,
     item_setting,
     product_setting,
 )
 from app.services.fx import POLICY_CURRENCY
+from app.services.utilization import build_utilization
 
 
 def _result(rule: str, status: str, evidence: str) -> dict[str, Any]:
@@ -158,6 +159,11 @@ def _check_shared_documents(db: Session, claim: Claim) -> dict[str, Any] | None:
     ).scalars().all()
     if not hashes:
         return None
+    # Employee rows are per benefit year, so "another member" means another
+    # PERSON: last year's row of this member (a December admission's discharge
+    # summary on a January follow-up) is the same member, not someone else.
+    employee = db.get(Employee, claim.employee_id)
+    own_ids = person_employee_ids(db, employee) if employee else [claim.employee_id]
     others = db.execute(
         select(Claim.id)
         .join(StoredDocument, StoredDocument.entity_id == Claim.id)
@@ -166,7 +172,7 @@ def _check_shared_documents(db: Session, claim: Claim) -> dict[str, Any] | None:
             StoredDocument.sha256.in_(hashes),
             StoredDocument.storage_state == STORAGE_AVAILABLE,
             Claim.client_id == claim.client_id,
-            Claim.employee_id != claim.employee_id,
+            Claim.employee_id.notin_(own_ids),
             Claim.status.in_(LIVE_STATUSES),
         )
         .distinct()
@@ -181,31 +187,41 @@ def _check_shared_documents(db: Session, claim: Claim) -> dict[str, Any] | None:
     )
 
 
+def _check_flex_balance(
+    db: Session, claim: Claim, statement: BenefitStatementOut
+) -> dict[str, Any]:
+    """The claim against what is LEFT in the flex wallet.
+
+    That is the utilization ``available`` — the allowance after elected price
+    tags, less flex claims already approved — the figure the member's usage tab
+    and the approve guard read. The allowance alone ignored every earlier
+    claim, so a S$500 claim on a wallet with S$100 left passed "within flex
+    balance 1000.00". Pending claims are not netted (one may yet be rejected),
+    and this claim is unsettled, so it never counts against itself.
+    """
+    rule = "Claimed amount does not exceed the flex balance."
+    claimed = policy_amount(claim)
+    employee = db.get(Employee, claim.employee_id)
+    flex = build_utilization(db, employee, statement).flex if employee else None
+    if flex is None or flex.available is None:
+        return _result(rule, "pass", "No flex balance recorded — not enforced.")
+    if claimed is None:
+        return _result(
+            rule,
+            "pass",
+            "Policy-currency amount is awaiting conversion — not enforced.",
+        )
+    remaining = (
+        f"remaining flex balance of {flex.available:.2f} "
+        f"(after {flex.approved:.2f} already approved)"
+    )
+    if claimed > flex.available:
+        return _result(rule, "fail", f"Claimed {claimed:.2f} exceeds the {remaining}.")
+    return _result(rule, "pass", f"Claimed {claimed:.2f} is within the {remaining}.")
+
+
 def _check_amount_vs_limit(claim: Claim, statement: BenefitStatementOut) -> dict[str, Any]:
     claimed = policy_amount(claim)
-    if claim.claim_kind == CLAIM_KIND_FLEX:
-        rule = "Claimed amount does not exceed the flex balance."
-        flex = statement.flex
-        balance = flex.flex_balance if flex is not None else None
-        if balance is None:
-            return _result(rule, "pass", "No flex balance recorded — not enforced.")
-        if claimed is None:
-            return _result(
-                rule,
-                "pass",
-                "Policy-currency amount is awaiting conversion — not enforced.",
-            )
-        if claimed > float(balance):
-            return _result(
-                rule, "fail",
-                f"Claimed {claimed:.2f} exceeds the remaining "
-                f"flex balance of {float(balance):.2f}.",
-            )
-        return _result(
-            rule, "pass",
-            f"Claimed {claimed:.2f} within flex balance {float(balance):.2f}.",
-        )
-
     rule = "Claimed amount does not exceed the verified annual policy limit."
     line = next(
         (c for c in statement.coverage if c.product_code == claim.product_code), None
@@ -612,7 +628,11 @@ def deterministic_rule_results(
         _check_period(db, claim),
         _check_has_documents(db, claim),
         _check_duplicate_invoice(db, claim),
-        _check_amount_vs_limit(claim, statement),
+        (
+            _check_flex_balance(db, claim, statement)
+            if claim.claim_kind == CLAIM_KIND_FLEX
+            else _check_amount_vs_limit(claim, statement)
+        ),
         _check_currency(claim),
     ]
     for extra in (

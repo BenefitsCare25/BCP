@@ -71,6 +71,13 @@ const CLAIM_STATE: Record<
 // `cancelled_by_broker` would slip past.
 const SETTLED_PREFIX = /^(cancel|withdraw|void|clos)/;
 
+/** The statuses that put a claim in the MEMBER's hands. The paged ledger asks
+ * for these on their own, so the pinned group never depends on how far back
+ * the member has scrolled. */
+export const ATTENTION_STATUSES: readonly string[] = Object.keys(CLAIM_STATE).filter(
+  (status) => CLAIM_STATE[status].bucket === "attention",
+);
+
 /** The ledger group for a claim status.
  *
  * Lives HERE because this module already owns the member-facing claim

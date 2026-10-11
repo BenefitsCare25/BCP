@@ -187,8 +187,18 @@ def _has_rate_data(fin: PlanFinancials) -> bool:
     )
 
 
-def _next_plan_code(plans: list[Plan]) -> str:
+def _next_plan_code(plans: list[Plan], setup: ProductSetup) -> str:
+    """Next free plan code, skipping plans the setup draft already selected.
+
+    Unselected template stubs stay available: the new plan adopts that entry."""
     used = {plan.code.strip().casefold() for plan in plans}
+    draft_plans = (setup.answers or {}).get("plans")
+    if isinstance(draft_plans, list):
+        used |= {
+            str(item.get("code") or "").strip().casefold()
+            for item in draft_plans
+            if isinstance(item, dict) and item.get("selected")
+        }
     numeric = [int(code) for code in used if code.isdigit()]
     candidate = max(numeric, default=0) + 1
     while str(candidate).casefold() in used:
@@ -202,10 +212,17 @@ def _append_plan_to_setup(setup: ProductSetup, plan: Plan) -> None:
     if not isinstance(plans, list):
         plans = []
         answers["plans"] = plans
-    if not any(
-        isinstance(item, dict) and str(item.get("code") or "") == plan.code
-        for item in plans
-    ):
+    stub = next(
+        (
+            item for item in plans
+            if isinstance(item, dict) and str(item.get("code") or "") == plan.code
+        ),
+        None,
+    )
+    if stub is not None:
+        stub["label"] = plan.display_name
+        stub["selected"] = True
+    else:
         plans.append(
             {
                 "code": plan.code,
@@ -323,7 +340,7 @@ def create_plan(
     plan = Plan(
         product_id=product.id,
         policy_year_id=py.id,
-        code=_next_plan_code(existing),
+        code=_next_plan_code(existing, setup),
         display_name=display_name,
         report_label=report_label,
         source="manual",

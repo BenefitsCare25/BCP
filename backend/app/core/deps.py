@@ -97,7 +97,8 @@ def require_firm_owner(
 
 
 def assert_platform_firm_access(
-    db: Session, user: CurrentUser, firm_id: str, *, write: bool, not_found: str
+    db: Session, user: CurrentUser, firm_id: str, *, write: bool, not_found: str,
+    grant_required: bool = True,
 ) -> None:
     """Confine a master admin's direct reach into a firm to its access model.
 
@@ -106,12 +107,19 @@ def assert_platform_firm_access(
     grant on ``firm_id``; without one the firm's records are a 404, like any
     other firm's. A `read` grant refuses changes with
     `platform_access_read_only`.
+
+    ``grant_required=False`` is for a firm's users and invitations, which the
+    master admin manages without a grant (that is how a new firm's first
+    admin is invited): no grant is needed, but a `read` grant still refuses
+    changes.
     """
     if user.role != ROLE_SYSTEM_ADMIN:
         return
     level = platform_access_level(db, user.user_id, firm_id)
     if level is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, not_found)
+        if grant_required:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, not_found)
+        return
     if write and level == "read":
         raise platform_access_read_only()
 

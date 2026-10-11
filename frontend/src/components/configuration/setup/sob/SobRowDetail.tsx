@@ -1,4 +1,3 @@
-import { FirmOwnerOnly } from "@/components/auth/FirmOwnerOnly";
 import { Plus, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -33,6 +32,7 @@ import {
   setSubField,
   subCellValue,
 } from "@/lib/sob";
+import { RemoveGuard, subLimitsKey, useSavedEntries } from "../savedEntries";
 import { SobCell } from "./SobCell";
 
 // Line types a broker can pick when a schedule needs structure the template
@@ -257,6 +257,8 @@ function CopayGrid({
   columns: SobColumn[];
   setSob: (fn: (s: SobSchedule) => SobSchedule) => void;
 }) {
+  const saved = useSavedEntries();
+  const savedKeys = saved?.fieldKeys.get(item.uid);
   const fields = copayFields(item);
   const present = new Set(fields.map((f) => f.key));
   const addable = COPAY_FIELD_PRESETS.filter((p) => !present.has(p.key));
@@ -287,7 +289,7 @@ function CopayGrid({
                   <div className="flex items-center gap-1">
                     {f.label}
                     {!STANDARD_COPAY_KEYS.has(f.key) && (
-                      <FirmOwnerOnly><Button
+                      <RemoveGuard saved={!saved || Boolean(savedKeys?.has(f.key))}><Button
                         size="icon-sm"
                         variant="ghost"
                         onClick={() => setSob((s) => removeCopayField(s, idx, f.key))}
@@ -295,7 +297,7 @@ function CopayGrid({
                         className="text-error hover:text-error"
                       >
                         <X className="size-3" />
-                      </Button></FirmOwnerOnly>
+                      </Button></RemoveGuard>
                     )}
                   </div>
                 </td>
@@ -354,6 +356,10 @@ function ItemLimits({
   setSob: (fn: (s: SobSchedule) => SobSchedule) => void;
 }) {
   const perColumn = item.column_limits;
+  // Falling back to the first plan's list drops the plans' own lists, which is
+  // a removal once one is saved (the API diffs them in setup_removals.py).
+  const saved = useSavedEntries();
+  const ownListsSaved = !saved || saved.columnLimitRows.has(item.uid);
   const setShared = (limits: BenefitLimit[]) =>
     setSob((s) => setItemField(s, idx, { limits }));
   if (!perColumn || columns.length < 2) {
@@ -369,14 +375,14 @@ function ItemLimits({
     <div className="flex flex-col gap-2">
       <div className="flex items-center justify-between gap-2">
         <p className="text-2xs text-muted-foreground">Limits differ by plan</p>
-        <Button
+        <RemoveGuard saved={ownListsSaved}><Button
           size="sm"
           variant="ghost"
           onClick={() => setSob((s) => setItemField(s, idx, { column_limits: undefined }))}
           className="text-2xs text-muted-foreground"
         >
           Use {columns[0].label}&rsquo;s limits for every plan
-        </Button>
+        </Button></RemoveGuard>
       </div>
       {columns.map((col, ci) => (
         <div key={col.id} className="flex flex-col gap-1">
@@ -404,6 +410,9 @@ function LimitRows({
 }) {
   const set = (i: number, patch: Partial<BenefitLimit>) =>
     onChange(limits.map((l, j) => (j === i ? { ...l, ...patch } : l)));
+  // Limits only ever append, so the stored ones are the leading entries.
+  const saved = useSavedEntries();
+  const savedCount = saved ? (saved.limitCounts.get(uid) ?? 0) : limits.length;
   return (
     <div className="flex flex-col gap-1">
       {limits.length > 0 && (
@@ -427,7 +436,7 @@ function LimitRows({
             onChange={(e) => set(i, { value: e.target.value || null })}
             className="h-7 max-w-40 text-xs"
           />
-          <FirmOwnerOnly><Button
+          <RemoveGuard saved={i < savedCount}><Button
             size="icon-sm"
             variant="ghost"
             onClick={() => onChange(limits.filter((_, j) => j !== i))}
@@ -435,7 +444,7 @@ function LimitRows({
             className="text-error hover:text-error"
           >
             <X className="size-3.5" />
-          </Button></FirmOwnerOnly>
+          </Button></RemoveGuard>
         </div>
       ))}
       <Button
@@ -464,6 +473,7 @@ function SubItems({
   kind: string;
   setSob: (fn: (s: SobSchedule) => SobSchedule) => void;
 }) {
+  const saved = useSavedEntries();
   return (
     <div className="flex flex-col gap-2">
       {item.sub_items.length > 0 && (
@@ -512,7 +522,7 @@ function SubItems({
                 ))}
               </SelectContent>
             </Select>
-            <FirmOwnerOnly><Button
+            <RemoveGuard saved={!saved || saved.uids.has(sub.uid)}><Button
               size="icon-sm"
               variant="ghost"
               onClick={() => setSob((s) => removeSub(s, idx, subIdx))}
@@ -520,7 +530,7 @@ function SubItems({
               className="ml-auto text-error hover:text-error"
             >
               <X className="size-3.5" />
-            </Button></FirmOwnerOnly>
+            </Button></RemoveGuard>
           </div>
           <div className="flex flex-wrap gap-2">
             {columns.map((col, ci) => (
@@ -558,7 +568,7 @@ function SubItems({
             className="h-7 max-w-96 text-xs text-muted-foreground"
           />
           <LimitRows
-            uid={sub.uid}
+            uid={subLimitsKey(item.uid, subIdx)}
             limits={sub.limits ?? []}
             onChange={(limits) => setSob((s) => setSubField(s, idx, subIdx, { limits }))}
           />
@@ -589,6 +599,7 @@ function ListRows({
   showKey: boolean;
   setSob: (fn: (s: SobSchedule) => SobSchedule) => void;
 }) {
+  const saved = useSavedEntries();
   return (
     <div className="flex flex-col gap-1.5">
       <Label className="text-2xs uppercase tracking-wider text-muted-foreground">
@@ -616,7 +627,7 @@ function ListRows({
             }
             className="h-7 max-w-96 text-xs"
           />
-          <FirmOwnerOnly><Button
+          <RemoveGuard saved={!saved || saved.uids.has(sub.uid)}><Button
             size="icon-sm"
             variant="ghost"
             onClick={() => setSob((s) => removeSub(s, idx, subIdx))}
@@ -624,7 +635,7 @@ function ListRows({
             className="text-error hover:text-error"
           >
             <X className="size-3.5" />
-          </Button></FirmOwnerOnly>
+          </Button></RemoveGuard>
         </div>
       ))}
       <Button

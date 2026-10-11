@@ -26,6 +26,8 @@ import {
   type FlexSummary,
   type ProductState,
   classifyRel,
+  compulsoryDependants,
+  coveredDependantIds,
   dependantParticipationFor,
   dependantPricing,
   leaveTrade,
@@ -364,7 +366,12 @@ export function LeaveTradingCard({
 
 /** One product's election card: tier picker with direction + flex tags,
  * decline toggle, dependant cover (checkboxes + freestanding option levels)
- * and the live flex readouts. Fully controlled via `ps` + `onChange`. */
+ * and the live flex readouts. Fully controlled via `ps` + `onChange`.
+ *
+ * Voluntary cover the member holds nothing of (`eligible_only`) starts as not
+ * enrolled: the toggle reads "Not enrolled" rather than "Decline", the plan
+ * picker stays open so choosing any tier enrols them, and no tier is marked
+ * current. */
 export function ElectionProductCard({
   ts,
   ps,
@@ -372,6 +379,7 @@ export function ElectionProductCard({
   allowDeps,
   dependants,
   flexOnChange,
+  planChanges = true,
   onChange,
 }: {
   ts: ProductTierSet;
@@ -380,20 +388,37 @@ export function ElectionProductCard({
   allowDeps: boolean;
   dependants: DependantRef[];
   flexOnChange: boolean;
+  /** The period's plan-change switch. Taking up cover the member holds
+   *  nothing of is a plan change, so with it off that cover stays not
+   *  enrolled (the server refuses it). */
+  planChanges?: boolean;
   onChange: (next: ProductState) => void;
 }) {
   const isCompulsory = !ts.can_decline;
+  const notHeld = !!ts.eligible_only;
+  const canEnrol = !notHeld || planChanges;
   const selectedTier = ts.tiers.find((t) => t.key === ps.tierKey);
   const selectedFin = !ps.declined ? selectedTier?.financials ?? null : null;
   const dependantScope = dependantParticipationFor(ts, ps.tierKey);
-  // Compulsory dependant cover = automatic (no member choice, no flex);
-  // voluntary = opt-in checkboxes that draw flex.
+  // Compulsory dependant cover = automatic (every age-eligible dependant, shown
+  // even when dependant changes are off because it is still charged);
+  // voluntary = opt-in checkboxes. Both draw any dependant charge from the wallet.
   const depCompulsory = dependantScope === "compulsory";
+  const listed = depCompulsory ? compulsoryDependants(ts, dependants) : dependants;
+  const coveredIds = coveredDependantIds(ts, ps, dependants, allowDeps);
+  // The tier the member HOLDS (`is_current`), as the portal's PlanChoice reads
+  // it — a standing override can move them off the cohort baseline.
+  // Cover held as nothing has no current tier to mark.
+  const heldKey = notHeld
+    ? undefined
+    : (ts.tiers.find((t) => t.is_current) ?? ts.tiers.find((t) => t.is_baseline))?.key;
   return (
     <div
       className={cn(
-        "rounded-lg border bg-card p-3",
-        ps.declined ? "border-border opacity-60" : "border-border",
+        "rounded-lg border border-border bg-card p-3",
+        // Dimmed only for a decline: "not enrolled" is a starting point the
+        // broker acts on from this card, not a closed choice.
+        ps.declined && !notHeld && "opacity-60",
       )}
     >
       {/* Stacks below `sm`. As one justify-between row the right-hand group
@@ -415,24 +440,46 @@ export function ElectionProductCard({
               </Badge>
             )}
           </div>
+          {notHeld && ps.declined && (
+            <p className="mt-1 text-xs text-muted-foreground">
+              {canEnrol
+                ? "Not enrolled — choose a plan to enrol."
+                : "Not enrolled. This period doesn't allow plan changes, so it can't be taken up here."}
+            </p>
+          )}
         </div>
         <div className="flex items-center gap-2 sm:shrink-0">
-          {!isCompulsory && !disabled && (
+          {/* With plan changes off, declining held cover is a plan change the
+              server refuses, so the toggle stays only for a product already
+              declined. */}
+          {!isCompulsory && !disabled && canEnrol && (planChanges || ps.declined) && (
             <label className="flex shrink-0 cursor-pointer items-center gap-1.5 text-xs text-muted-foreground">
               <Checkbox
                 checked={ps.declined}
                 onCheckedChange={(c) => onChange({ ...ps, declined: !!c })}
               />
-              Decline
+              {notHeld ? "Not enrolled" : "Decline"}
             </label>
           )}
           <Select
             value={ps.declined ? "" : ps.tierKey}
             onValueChange={(v) => onChange({ ...ps, tierKey: v, declined: false })}
-            disabled={disabled || ps.declined || !ts.allow_plan_change}
+            disabled={
+              disabled || (ps.declined && !notHeld) || !canEnrol || !ts.allow_plan_change
+            }
           >
             <SelectTrigger className="w-full text-base sm:w-[240px] sm:text-sm">
-              <SelectValue placeholder={ps.declined ? "Declined" : "Keep current"} />
+              <SelectValue
+                placeholder={
+                  !ps.declined
+                    ? "Keep current"
+                    : !notHeld
+                      ? "Declined"
+                      : canEnrol
+                        ? "Choose a plan to enrol"
+                        : "Not enrolled"
+                }
+              />
             </SelectTrigger>
             <SelectContent>
               {ts.tiers.map((t) => (
@@ -440,9 +487,9 @@ export function ElectionProductCard({
                   <span className="flex items-center gap-2">
                     <span>
                       {t.label}
-                      {t.is_baseline ? " (current)" : ""}
+                      {t.key === heldKey ? " (current)" : ""}
                     </span>
-                    {!t.is_baseline && <DirectionTag direction={t.direction} />}
+                    {t.key !== heldKey && <DirectionTag direction={t.direction} />}
                     {t.price_tag != null && (
                       <span className="text-2xs text-muted-foreground">
                         · flex {fmtCurrency(t.price_tag)}
@@ -471,7 +518,7 @@ export function ElectionProductCard({
         </div>
       )}
       {selectedFin && !ps.declined && <PlanFinancialsRow fin={selectedFin} />}
-      {allowDeps &&
+      {(allowDeps || depCompulsory) &&
         dependants.length > 0 &&
         !ps.declined &&
         dependantScope !== null && (
@@ -483,13 +530,18 @@ export function ElectionProductCard({
               </span>
               <InfoHint>
                 {depCompulsory
-                  ? "Dependant cover is included automatically for this plan — no extra flex is drawn."
+                  ? "Every dependant within this plan's age limits is covered automatically. Any dependant charge is deducted from the employee's flex wallet."
                   : "Tick a family member to add them to this plan. Voluntary cover draws extra flex from the wallet."}
               </InfoHint>
             </div>
           )}
+          {!listed.length && (
+            <p className="text-xs text-muted-foreground">
+              No dependant is within this plan's age limits.
+            </p>
+          )}
           <div className="flex flex-wrap gap-3">
-            {dependants.map((d) => (
+            {listed.map((d) => (
               <label
                 key={d.id}
                 className="flex cursor-pointer items-center gap-1.5 text-xs text-foreground"
@@ -512,61 +564,60 @@ export function ElectionProductCard({
           {/* Freestanding dependant cover LEVELS (slip lists several, unlinked
               to employee plans) — one elected per role; each covered dependant
               then draws that level's slip rate on their own age band. */}
-          {!depCompulsory &&
-            (ts.dependant?.option_choices ?? [])
-              .filter((r) =>
-                ps.dependantIds.some(
-                  (id) =>
-                    classifyRel(dependants.find((d) => d.id === id)) === r.role,
-                ),
-              )
-              .map((r) => (
-                <div key={r.role} className="mt-2 flex flex-wrap items-center gap-2">
-                  <span className="text-xs capitalize text-muted-foreground">
-                    {r.role} cover level
-                  </span>
-                  <Select
-                    value={ps.depOptionIds[r.role] ?? ""}
-                    onValueChange={(v) =>
-                      onChange({
-                        ...ps,
-                        depOptionIds: { ...ps.depOptionIds, [r.role]: v },
-                      })
-                    }
-                    disabled={disabled}
-                  >
-                    <SelectTrigger className="w-full text-base sm:w-[220px] sm:text-sm">
-                      <SelectValue placeholder="Select level…" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {r.choices.map((c) => (
-                        <SelectItem key={c.category_id} value={c.category_id}>
-                          <span className="flex items-center gap-2">
-                            <span>
-                              {c.sum_insured != null
-                                ? `${c.label} — ${fmtCurrency(c.sum_insured)}`
-                                : c.label}
-                            </span>
-                            <span className="text-2xs text-muted-foreground">
-                              {c.amount != null
-                                ? `· flex ${fmtCurrency(c.amount)}`
-                                : "· by age"}
-                            </span>
+          {(ts.dependant?.option_choices ?? [])
+            .filter((r) =>
+              coveredIds.some(
+                (id) =>
+                  classifyRel(dependants.find((d) => d.id === id)) === r.role,
+              ),
+            )
+            .map((r) => (
+              <div key={r.role} className="mt-2 flex flex-wrap items-center gap-2">
+                <span className="text-xs capitalize text-muted-foreground">
+                  {r.role} cover level
+                </span>
+                <Select
+                  value={ps.depOptionIds[r.role] ?? ""}
+                  onValueChange={(v) =>
+                    onChange({
+                      ...ps,
+                      depOptionIds: { ...ps.depOptionIds, [r.role]: v },
+                    })
+                  }
+                  disabled={disabled || !allowDeps}
+                >
+                  <SelectTrigger className="w-full text-base sm:w-[220px] sm:text-sm">
+                    <SelectValue placeholder="Select level…" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {r.choices.map((c) => (
+                      <SelectItem key={c.category_id} value={c.category_id}>
+                        <span className="flex items-center gap-2">
+                          <span>
+                            {c.sum_insured != null
+                              ? `${c.label} — ${fmtCurrency(c.sum_insured)}`
+                              : c.label}
                           </span>
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  {!ps.depOptionIds[r.role] && (
-                    <span className="text-2xs text-warn">
-                      Unpriced until a level is selected
-                    </span>
-                  )}
-                </div>
-              ))}
-          {!depCompulsory && ts.dependant && ts.dependant.mode !== "none" && (() => {
+                          <span className="text-2xs text-muted-foreground">
+                            {c.amount != null
+                              ? `· flex ${fmtCurrency(c.amount)}`
+                              : "· by age"}
+                          </span>
+                        </span>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {!ps.depOptionIds[r.role] && (
+                  <span className="text-2xs text-warn">
+                    Unpriced until a level is selected
+                  </span>
+                )}
+              </div>
+            ))}
+          {ts.dependant && ts.dependant.mode !== "none" && (() => {
             const { total: cost, unresolved } = dependantPricing(
-              ts.dependant, ps.tierKey, ps.dependantIds, dependants, ps.depOptionIds,
+              ts.dependant, ps.tierKey, coveredIds, dependants, ps.depOptionIds,
             );
             return (
               <div className="mt-2 flex items-center gap-1.5 text-xs">

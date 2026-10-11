@@ -78,8 +78,9 @@ import { ImportRulesDialog } from "@/components/claims/review-rules/ImportRulesD
 import { InfoHint } from "@/components/ui/tooltip";
 import { cn } from "@/lib/cn";
 import { formatError } from "@/lib/errors";
-import { isBrokerAdminRole } from "@/lib/roles";
-import { fmtDate } from "@/lib/format";
+import { isReadOnlyAccess, useWriteAccess } from "@/lib/roles";
+import { fmtDate, parseServerDate } from "@/lib/format";
+import { singaporeTodayISO } from "@/lib/business-date";
 import { toast } from "sonner";
 
 const PAGE_SIZE = 10;
@@ -220,7 +221,7 @@ function QueueTab({
 }) {
   const policyYearId = useSession((s) => s.currentPolicyYearId);
   const { data: me } = useMe();
-  const readOnly = me?.role === "broker_viewer";
+  const readOnly = isReadOnlyAccess(me?.role, me?.platform_access);
   const navigate = useNavigate();
   const [caseType, setCaseType] = useState<CaseType | "">(initialCaseType);
   const [status, setStatus] = useState<string>("");
@@ -281,7 +282,14 @@ function QueueTab({
   const recordPayment = useRecordClaimPayment();
   const rerun = useRerunReview();
   const setCaseTypeMutation = useSetCaseType();
-  const { data, isLoading, isError, error, refetch } = useBrokerClaims(
+  const {
+    data,
+    dataUpdatedAt: listUpdatedAt,
+    isLoading,
+    isError,
+    error,
+    refetch,
+  } = useBrokerClaims(
     policyYearId ?? undefined,
     status,
     page * PAGE_SIZE,
@@ -300,16 +308,35 @@ function QueueTab({
   // (the remaining benefit limit for this claim's bucket).
   const detail = useBrokerClaimDetail(selectedId);
 
-  // Prefer the list row (already rendered, no wait), but FALL BACK to the
-  // detail fetch: a deep-linked case — or one that just left the filtered list
-  // because it was decided or reclassified — is not on the current page, and
-  // without the fallback the sheet would open over nothing.
+  // Prefer the detail fetch (it carries `remaining_limit`), and show the list
+  // row while it loads. A deep-linked case — or one that just left the filtered
+  // list because it was decided or reclassified — exists only as the detail.
+  const listRow = data?.items.find((c) => c.id === selectedId) ?? null;
   const selected = useMemo(() => {
     if (detail.data?.id === selectedId) return detail.data;
-    const fromList = data?.items.find((c) => c.id === selectedId) ?? null;
-    if (fromList) return fromList;
-    return null;
-  }, [data, selectedId, detail.data]);
+    return listRow;
+  }, [listRow, selectedId, detail.data]);
+
+  // The detail does not poll — every read of it writes a `claim.view` access
+  // audit row — but the list does. When the newer list row shows the claim
+  // moved (a colleague decided it, the member amended it), refetch the detail
+  // rather than leave the sheet offering actions the server will refuse.
+  const listStamp = listRow ? `${listRow.status}:${listRow.revision}` : null;
+  const detailStamp = detail.data?.id === selectedId
+    ? `${detail.data.status}:${detail.data.revision}`
+    : null;
+  const detailUpdatedAt = detail.dataUpdatedAt;
+  const refetchDetail = detail.refetch;
+  useEffect(() => {
+    if (
+      listStamp &&
+      detailStamp &&
+      listStamp !== detailStamp &&
+      listUpdatedAt > detailUpdatedAt
+    ) {
+      void refetchDetail({ cancelRefetch: false });
+    }
+  }, [listStamp, detailStamp, listUpdatedAt, detailUpdatedAt, refetchDetail]);
   const selectedDocuments = useMemo(() => {
     if (!selected) return [];
     if (
@@ -334,6 +361,15 @@ function QueueTab({
     setPage(0);
   }, [status, caseType, search, insurer, queue, kind, employeeId]);
 
+  // A decision, or the poll, can shrink the filtered total under the page on
+  // screen. Pagination hides itself at one page, so without this the queue
+  // sat on an empty page with no way back.
+  useEffect(() => {
+    if (!data) return;
+    const lastPage = Math.max(Math.ceil(data.total / PAGE_SIZE) - 1, 0);
+    if (page > lastPage) setPage(lastPage);
+  }, [data, page]);
+
   useEffect(() => {
     setNote("");
     setApprovedAmount("");
@@ -350,6 +386,17 @@ function QueueTab({
     setPaidAmount("");
     setPaymentWarning(null);
   }, [settling, selectedId]);
+
+  // A coded 409 the dialog cannot resolve means the claim moved while this
+  // sheet was open: the member amended it, or a colleague already decided,
+  // dispatched or settled it. Refetch what the sheet shows — retrying from the
+  // stale view would only fail the same way.
+  const refreshSelectedClaim = () => {
+    void qc.invalidateQueries({ queryKey: ["claims"] });
+    void qc.invalidateQueries({ queryKey: ["claim-detail"] });
+    void qc.invalidateQueries({ queryKey: ["claim-review"] });
+    void qc.invalidateQueries({ queryKey: ["claim-messages"] });
+  };
 
   const confirmSettlement = async () => {
     if (!selected || !settling) return;
@@ -389,6 +436,10 @@ function QueueTab({
       ) {
         setPaymentWarning(err.message);
         return;
+      }
+      if (err instanceof ConflictDetailError) {
+        setSettling(null);
+        refreshSelectedClaim();
       }
       toast.error(formatError(err));
     }
@@ -466,23 +517,15 @@ function QueueTab({
         setLimitWarning(err.message);
         return;
       }
-      if (
-        err instanceof ConflictDetailError &&
-        err.detail.code === "claim_amended"
-      ) {
-        // The member corrected the claim while this sheet was open. CLOSE the
-        // dialog and refetch rather than letting them confirm again — the whole
-        // point is that they have not yet seen what they would be deciding on.
-        //
-        // The LIST is what has to be invalidated, not just the detail: `selected`
-        // prefers the list row (see its memo), and that query has a 30s
-        // staleTime — so refetching only the detail left the sheet showing the
-        // pre-amendment figures and re-confirming sent the same stale
-        // `expectedRevision` straight into another 409. Which is the failure
-        // this branch exists to end, not to repeat.
+      if (err instanceof ConflictDetailError) {
+        // The claim moved while this sheet was open: the member corrected it
+        // (`claim_amended`) or a colleague already decided it
+        // (`invalid_transition`). CLOSE the dialog and refetch rather than
+        // letting them confirm again — they have not yet seen what they would
+        // be deciding on, and a retry from the stale sheet sends the same stale
+        // `expectedRevision` or transition straight into another 409.
         setDecision(null);
-        void qc.invalidateQueries({ queryKey: ["claims"] });
-        void qc.invalidateQueries({ queryKey: ["claim-detail"] });
+        refreshSelectedClaim();
         toast.error(err.message);
         return;
       }
@@ -700,7 +743,11 @@ function QueueTab({
                         {fmtDate(c.incurred_date)}
                       </TableCell>
                       <TableCell className="whitespace-nowrap tabular-nums text-muted-foreground">
-                        {fmtDate(c.submitted_at)}
+                        {/* An instant, so the Singapore business date — the day
+                            the SLA counters count from — not its UTC date. */}
+                        {c.submitted_at
+                          ? singaporeTodayISO(parseServerDate(c.submitted_at))
+                          : "—"}
                       </TableCell>
                       <TableCell>
                         <StatusBadge status={c.status} />
@@ -883,7 +930,10 @@ function QueueTab({
                     answer is a person, and burying their question under the
                     fraud evidence is how it goes unanswered for a week. */}
                 <DetailSection title="Messages">
-                  <ClaimMessages claimId={selected.id} />
+                  <ClaimMessages
+                    claimId={selected.id}
+                    memberVisible={selected.origin === "portal"}
+                  />
                 </DetailSection>
 
                 <DetailSection title="AI review">
@@ -1134,8 +1184,11 @@ function QueueTab({
             )}
             {decision === "needs_info" && (
               <p>
-                The claim reopens for the member to add documents and resubmit. Explain
-                what's missing in the note.
+                {selected?.origin === "portal"
+                  ? "The claim reopens for the member to add documents and resubmit. Explain what's missing in the note."
+                  : selected?.origin === "hr"
+                    ? "The claim returns to the HR team that filed it. They see this note in the HR portal, so explain what's missing."
+                    : "The claim reopens for more documents. The member can't see this claim, so the note stays on the record — tell whoever filed it what's missing directly."}
               </p>
             )}
             <label className="block space-y-1.5">
@@ -1143,7 +1196,11 @@ function QueueTab({
                 Note{
                   decision === "needs_info" ||
                   (decision === "reject" && selected?.status === "sent_to_insurer")
-                    ? " (required — shown to the member)"
+                    ? selected?.origin === "portal"
+                      ? " (required — shown to the member)"
+                      : selected?.origin === "hr" && decision === "needs_info"
+                        ? " (required — shown to HR)"
+                        : " (required — kept on the claim record)"
                     : " (optional)"
                 }
               </span>
@@ -1218,6 +1275,12 @@ function QueueTab({
                   <Input
                     type="date"
                     value={paidOn}
+                    // The server refuses a payment dated before dispatch.
+                    min={
+                      selected.sent_to_insurer_at
+                        ? singaporeTodayISO(parseServerDate(selected.sent_to_insurer_at))
+                        : undefined
+                    }
                     onChange={(e) => setPaidOn(e.target.value)}
                   />
                 </label>
@@ -1355,7 +1418,9 @@ const isClaimsTab = (v: string | undefined): v is ClaimsTab =>
 
 export function ClaimsQueuePage() {
   const navigate = useNavigate();
-  const { data: me } = useMe();
+  // Claim configuration is hidden from a viewer and under a read-only access
+  // grant alike: the API refuses both their changes.
+  const { canAdmin: canConfigure } = useWriteAccess();
   const [reviewRulesImportOpen, setReviewRulesImportOpen] = useState(false);
   const search = useSearch({ strict: false }) as {
     tab?: string;
@@ -1368,7 +1433,6 @@ export function ClaimsQueuePage() {
   };
   const legacyLogTab = search.tab === "log";
   const requestedTab: ClaimsTab = isClaimsTab(search.tab) ? search.tab : "queue";
-  const canConfigure = isBrokerAdminRole(me?.role);
   const tab: ClaimsTab =
     !canConfigure && ["ai-extraction", "settings"].includes(requestedTab)
       ? "queue"
@@ -1463,10 +1527,14 @@ export function ClaimsQueuePage() {
         <ClaimDocumentSettings />
         <IntakeQuality />
       </TabsContent>}
-      <ImportRulesDialog
-        open={reviewRulesImportOpen}
-        onOpenChange={setReviewRulesImportOpen}
-      />
+      {/* Mounted only where it can be opened: its config query needs claim
+          configuration rights, and a viewer got a 403 notification per visit. */}
+      {canConfigure && (
+        <ImportRulesDialog
+          open={reviewRulesImportOpen}
+          onOpenChange={setReviewRulesImportOpen}
+        />
+      )}
     </Tabs>
   );
 }

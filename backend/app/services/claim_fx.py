@@ -41,6 +41,7 @@ from sqlalchemy.orm import Session
 
 from app.models import Claim
 from app.schemas.claims import FxQuoteOut
+from app.services.claim_intake import ALLOWED_CURRENCIES
 from app.services.fx import POLICY_CURRENCY, FxQuote, quote
 
 logger = logging.getLogger(__name__)
@@ -184,6 +185,17 @@ def build_quote(db: Session, *, currency: str, amount: float, on: date) -> FxQuo
                 "rate": 1.0,
                 "as_of_date": on,
                 "note": None,
+            }
+        )
+
+    if code not in ALLOWED_CURRENCIES:
+        # Refused before any lookup. An unknown symbol is not an upstream
+        # outage, and asking the provider for one spent the retry budget and
+        # counted toward the process-wide breaker every tenant shares.
+        return base.model_copy(
+            update={
+                "as_of_date": on,
+                "note": f"{code} is not a supported claim currency.",
             }
         )
 

@@ -1,3 +1,4 @@
+import { usePortalTranslation } from "@/i18n/portal";
 import { cn } from "@/lib/cn";
 import { isPlatformOwnBrand, showsAttribution } from "@/lib/brand";
 import { useBrand, useBrandReady } from "./BrandProvider";
@@ -56,10 +57,12 @@ export function BrandLogo({
   );
 }
 
-/** The quiet "Powered by …" line, when the firm's brand shows it. */
+/** The quiet "Powered by …" line, when the firm's brand shows it. Translated on
+ *  the bilingual portals; the translator answers in English everywhere else. */
 export function PoweredBy({ className }: { className?: string }) {
+  const pt = usePortalTranslation();
   const brand = useBrand();
   const ready = useBrandReady();
   if (!ready || !showsAttribution(brand)) return null;
-  return <p className={cn("text-xs text-muted-foreground", className)}>Powered by {brand.platform_name}</p>;
+  return <p className={cn("text-xs text-muted-foreground", className)}>{pt("Powered by {0}", [brand.platform_name])}</p>;
 }

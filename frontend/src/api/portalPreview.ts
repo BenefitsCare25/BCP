@@ -4,10 +4,12 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/api/client";
 import type {
+  CoverageOptions,
   PortalAccess,
   PortalClaim,
   PortalClaimList,
   PortalEnrollmentData,
+  PortalMe,
 } from "@/api/portal";
 import type { ClaimMessage, ConversationList } from "@/api/portalMessages";
 import type { Enquiry } from "@/api/portalEnquiries";
@@ -43,6 +45,12 @@ export interface PortalPreviewContext {
    *  Clinics and Enrolment while the member's own shell has hidden all three,
    *  which is the divergence the parity rule exists to prevent. */
   access: PortalAccess | null;
+  /** The company's portal slug: the preview reads the same brand the member's
+   *  portal does, a company override included. */
+  company_slug?: string | null;
+  /** Mirrors PortalMe.company: the preview's Home names the employer as the
+   *  member's own Home does. */
+  company?: PortalMe["company"] | null;
 }
 
 function usePreviewQuery<T>(
@@ -76,6 +84,16 @@ export function usePreviewStatement(employeeId: string | null) {
 
 export function usePreviewUtilization(employeeId: string | null) {
   return usePreviewQuery<Utilization>(employeeId, "/utilization", "utilization");
+}
+
+/** Mirror of `useCoverageOptions` — Home reads the member's insurer ID from it
+ * for the stand-in card. */
+export function usePreviewCoverageOptions(employeeId: string | null) {
+  return usePreviewQuery<CoverageOptions>(
+    employeeId,
+    "/coverage-options",
+    "coverage-options",
+  );
 }
 
 export function usePreviewDependants(employeeId: string | null) {

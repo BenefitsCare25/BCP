@@ -2,8 +2,8 @@
    Scope: `.portal-clay`, set on PortalShell's root beside `.leaf`. `.leaf`
    re-points the shared primitives onto the portal token NAMES; this file sets
    what those names MEAN here. The broker's employee preview (`PortalFrame`)
-   renders the same components under `.leaf` alone, so it keeps the older
-   values until it opts into this class.
+   renders its other tabs under `.leaf` alone, so they keep the older values
+   until they opt into this class; its Home tab already has.
 
    The world, in one line: a warm-white ground carrying rounded SHEETS, each
    benefit owning one colour pair and one clay object, black pills for the
@@ -605,7 +605,8 @@ a.clay-sheet:hover .clay-sheet-go svg, button.clay-sheet:hover .clay-sheet-go sv
   .is-enrolment .enrolment-records { grid-template-columns: minmax(0, 1fr); }
 }
 .clay-quick { display: grid; gap: 10px; }
-.clay-quick a {
+.clay-quick a,
+.clay-quick button {
   display: flex;
   align-items: center;
   gap: 14px;
@@ -616,7 +617,8 @@ a.clay-sheet:hover .clay-sheet-go svg, button.clay-sheet:hover .clay-sheet-go sv
   text-decoration: none;
   transition: background-color 160ms ease;
 }
-.clay-quick a:hover { background: color-mix(in srgb, var(--tone-pill) 30%, var(--tone-wash)); }
+.clay-quick a:hover,
+.clay-quick button:hover { background: color-mix(in srgb, var(--tone-pill) 30%, var(--tone-wash)); }
 .clay-quick img { width: 52px; height: 52px; object-fit: contain; flex: none; }
 .clay-quick small { display: block; font-size: 13px; font-weight: 600; }
 .clay-quick strong { display: block; font-size: 17px; font-weight: 700; color: var(--color-record); }
@@ -633,6 +635,17 @@ a.clay-sheet:hover .clay-sheet-go svg, button.clay-sheet:hover .clay-sheet-go sv
 .clay-empty span { display: block; font-size: 14px; color: var(--color-label); }
 
 .clay-footer { padding: 12px 4px 0; font-size: 12px; color: var(--color-label); }
+
+/* ── Broker employee view (PortalFrame) ───────────────────────────────────
+   The preview draws this same Home inside a bounded frame: the frame, not the
+   viewport, is the page the sky bleeds across, and the frame's bar sits above
+   the scene instead of floating over it. Home's targets arrive there as
+   buttons (they switch the frame's tabs), so they take the anchors' alignment. */
+.portal-frame-home { container-type: inline-size; }
+.portal-frame-home .sky-stage { width: 100cqw; margin-left: calc(50% - 50cqw); }
+.portal-frame-home .sky-content { padding-top: 64px; }
+button.clay-need,
+.clay-quick > button { width: 100%; text-align: left; }
 
 /* ── Temporary card (no insurer artwork yet). ──────────────────────────── */
 .portal-hero-card-wrap { width: 100%; }

@@ -398,7 +398,9 @@ export function ProductSetupSummary({ policyYearId, template, draft, group, term
   return (
     <div className="space-y-5">
       <SourceMappingNotes answers={answers} />
-      {!draft && (
+      {/* A product re-added to this year starts with an empty draft; like no
+          draft at all, it has no plans until the form is first saved. */}
+      {!answers?.plans?.length && (
         <div className="rounded-lg border border-dashed border-border bg-muted/20 p-4 text-sm text-muted-foreground">
           This product has not been configured yet. Open edit mode to enter the
           setup details and confirm it.

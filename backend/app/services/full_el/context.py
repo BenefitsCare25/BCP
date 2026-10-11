@@ -15,6 +15,7 @@ from app.models import (
     Client,
     Dependant,
     Employee,
+    EmployeePlanOverride,
     PolicyYear,
     Product,
     ProductSetup,
@@ -24,6 +25,8 @@ from app.models.employee import EMPLOYEE_STATUS_ACTIVE
 from app.models.employee_listing import ElLayoutProfile, ListingAssignment
 from app.models.product_setup import ProductSetupStatus
 from app.models.product_term import DEFAULT_GST_RATE
+from app.services.coverage_resolver import load_overrides
+from app.services.dependant_coverage import category_covers_dependants
 from app.services.el_import.mapping import normalize_label
 from app.services.el_report_rules import (
     ReportRules,
@@ -35,6 +38,7 @@ from app.services.el_workbook import ElLayout
 from app.services.eligibility_mapping import category_signature
 from app.services.full_el.layout import default_layout, layout_from_json
 from app.services.underwriting import CaseMap, free_cover_limits, load_cases
+from app.services.voluntary_enrolment import employee_participation, enrolled_products
 
 _MULTIPLE = re.compile(r"(\d+(?:\.\d+)?)\s*x\b", re.IGNORECASE)
 
@@ -47,10 +51,12 @@ class CategoryInfo:
     plan_code: str | None
     rate_basis: str | None
     rate: float | None
+    dependant_rate: float | None  # per covered dependant, flat / per-member rates
     tiers: dict[str, float]
     salary_multiple: float | None
     flat_si: float | None
-    covers_dependants: bool
+    covers_dependants: bool  # dependants covered by default (compulsory)
+    voluntary: bool  # the employee takes the cover up by enrolling
 
 
 @dataclass
@@ -80,6 +86,9 @@ class ElContext:
     employees: list[Employee]
     dependants: dict[str, list[Dependant]]
     listed: dict[tuple[str, str], ListingAssignment]  # (member_key, product_id)
+    # Enrolment elections, declines and tier changes, as every listing applies them.
+    overrides: dict[tuple[str, str], EmployeePlanOverride]  # (employee_id, product_id)
+    enrolled: set[tuple[str, str]]  # (employee_id, product_id) taken up
     age_basis: str
     reference_date: date
     listing_source: str | None
@@ -177,7 +186,10 @@ def load_context(
                         _nel_amount(answers)),
             nel_age=(term.nel_age_limit if term and term.nel_age_limit else
                      _age(eligibility.get("age_limit_no_underwriting"))),
-            confirmed=bool(setup and setup.status == ProductSetupStatus.confirmed),
+            confirmed=bool(setup and (
+                setup.status == ProductSetupStatus.confirmed
+                or setup.materialized_product_id is not None
+            )),
         )
         gaps.extend(_rule_gaps(infos[code], source_maximum(answers)))
 
@@ -200,10 +212,13 @@ def load_context(
     }
     age_bases = {i.rules.age_basis for i in infos.values() if i.rules.age_basis}
     accepted_basis = any(i.rules.premium_si_basis == "Accepted SI" for i in infos.values())
+    employee_ids = [e.id for e in employees]
     return ElContext(
         year=year, client=client, layout=layout, block_products=block_products,
         products=infos, categories=cat_infos, employees=employees, dependants=dependants,
         listed=listed,
+        overrides=load_overrides(db, year.id, employee_ids),
+        enrolled=enrolled_products(db, year.id, employee_ids),
         age_basis="ALB" if age_bases == {"ALB"} else "ANB",
         reference_date=year.start_date,
         listing_source=profile.source_filename if profile else None,
@@ -265,7 +280,6 @@ def _category_infos(
             k: float(v.get("rate") or 0) for k, v in (pa.get("rate_tiers") or {}).items()
             if isinstance(v, dict) and v.get("rate")
         }
-        text = f"{c.display_name} {c.raw_description or ''}"
         out[c.id] = CategoryInfo(
             category=c,
             product=product,
@@ -273,13 +287,15 @@ def _category_infos(
             plan_code=plan,
             rate_basis=pa.get("rate_basis"),
             rate=positive_number(pa.get("premium_rate")),
+            dependant_rate=positive_number(pa.get("dependant_rate")),
             tiers=tiers,
             salary_multiple=float(multiple.group(1)) if multiple else None,
             flat_si=flat,
-            covers_dependants=bool(
-                set(tiers) & {"ES", "EC", "EF"}
-                or re.search(r"depend[ae]n[td]|spouse|child", text, re.I)
+            covers_dependants=category_covers_dependants(
+                bool(product.has_dependants), pa, c.participation_detail,
+                c.display_name, c.raw_description,
             ),
+            voluntary=employee_participation(c) == "voluntary",
         )
     return out
 

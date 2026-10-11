@@ -5,6 +5,7 @@ import {
   KeyRound,
   Loader2,
   Pencil,
+  RefreshCw,
   ShieldCheck,
   Trash2,
 } from "lucide-react";
@@ -27,6 +28,7 @@ import {
 } from "@/components/ui/card";
 import {
   DEFAULT_VERTEX_MODEL,
+  saveVertexKeyAfterProbe,
   VertexKeyDrawer,
   type VertexKeyDraft,
 } from "@/components/configuration/VertexKeyDrawer";
@@ -40,35 +42,39 @@ import { formatError } from "@/lib/errors";
  * (`/ai-config`, broker-admin), which is why the copy below names the order.
  */
 export function PlatformAIProviderCard() {
-  const { data, isLoading } = usePlatformAISettings();
+  const { data, isLoading, isError, error, refetch } = usePlatformAISettings();
   const save = useSetPlatformAICredentials();
   const remove = useDeletePlatformAICredentials();
   const test = useTestPlatformAICredentials();
 
   const [open, setOpen] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
 
   const creds = data?.credentials;
   const configured = creds?.configured ?? false;
+  const loadFailed = !data && isError;
 
   const onSave = async (draft: VertexKeyDraft) => {
-    try {
-      await save.mutateAsync({
-        location: draft.location.trim() || null,
-        model: draft.model.trim() || null,
-        capacity_mode: draft.capacityMode,
-        service_account_json: draft.serviceAccountJson,
-      });
-      const validation = await test.mutateAsync(undefined);
-      if (!validation.ok) {
-        toast.error(validation.error ?? "Saved, but validation failed");
-        return;
-      }
-      toast.success(configured ? "Platform AI key updated and validated" : "Platform AI key saved and validated");
-      setOpen(false);
-    } catch (err) {
-      toast.error(formatError(err));
-    }
+    const body = {
+      location: draft.location.trim() || null,
+      model: draft.model.trim() || null,
+      capacity_mode: draft.capacityMode,
+      service_account_json: draft.serviceAccountJson,
+    };
+    setSubmitting(true);
+    const saved = await saveVertexKeyAfterProbe(
+      {
+        probeDraft: () => test.mutateAsync(body),
+        save: () => save.mutateAsync(body),
+        probeStored: () => test.mutateAsync(undefined),
+      },
+      configured
+        ? "Platform AI key updated and validated"
+        : "Platform AI key saved and validated",
+    );
+    setSubmitting(false);
+    if (saved) setOpen(false);
   };
 
   const runTest = async (draft?: VertexKeyDraft) => {
@@ -110,7 +116,7 @@ export function PlatformAIProviderCard() {
         }
         initial={creds ?? null}
         storedKeyMasked={creds?.key_masked}
-        saving={save.isPending}
+        saving={submitting}
         testing={test.isPending}
         onSave={onSave}
         onTest={(draft) => void runTest(draft)}
@@ -131,14 +137,16 @@ export function PlatformAIProviderCard() {
                 one. System-admin only.
               </CardDescription>
             </div>
-            {configured ? (
-              <Badge variant="good" className="gap-1 shrink-0">
-                <ShieldCheck className="size-3" /> Configured
-              </Badge>
-            ) : (
-              <Badge variant="warn" className="gap-1 shrink-0">
-                <AlertTriangle className="size-3" /> Not configured
-              </Badge>
+            {!isLoading && (
+              <KeyStatusBadge
+                status={
+                  loadFailed
+                    ? "unknown"
+                    : configured
+                      ? creds?.validation_status ?? "unvalidated"
+                      : "none"
+                }
+              />
             )}
           </div>
         </CardHeader>
@@ -146,6 +154,20 @@ export function PlatformAIProviderCard() {
           {isLoading ? (
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
               <Loader2 className="size-4 animate-spin" /> Loading…
+            </div>
+          ) : loadFailed ? (
+            <div className="flex flex-col items-start gap-3 text-sm text-error">
+              <span>
+                Couldn&apos;t load the platform AI key. {formatError(error)}
+              </span>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => void refetch()}
+              >
+                <RefreshCw className="size-4" /> Retry
+              </Button>
             </div>
           ) : configured && creds ? (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -218,7 +240,7 @@ export function PlatformAIProviderCard() {
                 </Button>
               </>
             )}
-            <Button onClick={() => setOpen(true)}>
+            <Button onClick={() => setOpen(true)} disabled={!data}>
               {configured ? (
                 <>
                   <Pencil className="size-4" /> Update
@@ -258,6 +280,40 @@ export function PlatformAIProviderCard() {
         }}
       />
     </>
+  );
+}
+
+// Production uses a stored key only once a test of exactly its saved settings
+// has passed (`validation_status` "active"), so a saved key is not "on" yet.
+const KEY_STATUS: Record<
+  string,
+  { variant: "good" | "warn" | "error"; icon: JSX.Element; label: string }
+> = {
+  active: { variant: "good", icon: <ShieldCheck className="size-3" />, label: "Active" },
+  invalid: {
+    variant: "error",
+    icon: <AlertTriangle className="size-3" />,
+    label: "Validation failed",
+  },
+  unvalidated: {
+    variant: "warn",
+    icon: <AlertTriangle className="size-3" />,
+    label: "Not validated",
+  },
+  none: { variant: "warn", icon: <AlertTriangle className="size-3" />, label: "Not configured" },
+  unknown: {
+    variant: "warn",
+    icon: <AlertTriangle className="size-3" />,
+    label: "Status unavailable",
+  },
+};
+
+function KeyStatusBadge({ status }: { status: string }) {
+  const shown = KEY_STATUS[status] ?? KEY_STATUS.unvalidated;
+  return (
+    <Badge variant={shown.variant} className="gap-1 shrink-0">
+      {shown.icon} {shown.label}
+    </Badge>
   );
 }
 

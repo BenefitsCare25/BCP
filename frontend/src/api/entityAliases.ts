@@ -28,10 +28,12 @@ export interface EntityAliasInput {
 function useAliasInvalidator() {
   const qc = useQueryClient();
   // Aliases change which employees match, so the vocabulary (and its
-  // reconciliation flags) and any match results go stale with them.
+  // reconciliation flags), each category's resolved entity gate and any match
+  // results go stale with them.
   return () => {
     void qc.invalidateQueries({ queryKey: ["entity-aliases"] });
     void qc.invalidateQueries({ queryKey: ["entity-vocab"] });
+    void qc.invalidateQueries({ queryKey: ["categories"] });
     void qc.invalidateQueries({ queryKey: ["match-results"] });
   };
 }

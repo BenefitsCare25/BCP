@@ -3,6 +3,7 @@
  *  firm brand and company override forms. */
 import { useEffect, useState } from "react";
 import type { BrandFields } from "@/api/brand";
+import { DEFAULT_BRAND } from "@/api/public";
 import { HEX_COLOR } from "@/lib/brand";
 
 export type FieldKey = keyof BrandFields;
@@ -221,6 +222,21 @@ export function useBrandDraft(saved: Saved | null, firmFields: boolean) {
 /** Built-in values the public brand does not carry (backend
  *  `services/brand.py`), for the firm form's placeholders. */
 export const BUILT_IN_EXTRA = { email_sender_name: "Inspro Benefits Portal", card_prefix: "INS" } as const;
+
+/** For a company override: the firm's own saved names. */
+export type FirmNames = Pick<BrandFields, "product_name" | "short_name" | "email_sender_name">;
+
+/** What a blank short name and email sender name resolve to (backend
+ *  `resolve_brand`): the firm's own value (for a company), else the product
+ *  name in effect, cut to the short name's length, else the built-in. */
+export function nameFallbacks(draft: Draft, firmRow?: FirmNames): { short_name: string; email_sender_name: string } {
+  const product = draft.product_name.trim() || firmRow?.product_name || null;
+  const shortProduct = product ? [...product].slice(0, TEXT_FIELDS.short_name.max).join("").trimEnd() : null;
+  return {
+    short_name: firmRow?.short_name || shortProduct || DEFAULT_BRAND.short_name,
+    email_sender_name: firmRow?.email_sender_name || product || BUILT_IN_EXTRA.email_sender_name,
+  };
+}
 
 /** A server refusal that belongs to one field, shown there instead of below
  *  the form. */

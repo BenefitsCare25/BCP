@@ -1,12 +1,8 @@
 import type { ClaimMessage } from "@/api/portalMessages";
+import { spokenDate as date } from "./generatedCopy";
 import { portalMessage, type PortalTranslator } from "./portal";
 
 const day = "(\\d{2} [A-Z][a-z]{2} \\d{4})";
-const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-function date(value: string) {
-  const [d, m, y] = value.split(" ");
-  return new Date(Date.UTC(Number(y), months.indexOf(m), Number(d)));
-}
 
 /** Translate only the system's known snapshot paragraphs. Broker/member prose
  * and historical figures stay intact; never reconstruct a notice from today's claim. */

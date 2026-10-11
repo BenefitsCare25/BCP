@@ -320,6 +320,11 @@ def override_match(
     When `category_ids` is supplied it takes precedence and REPLACES the whole
     manual match set (one category per product). An empty list clears all.
     """
+    # The pin is the employee's company's, so a stale selection is refused
+    # rather than filing the audit row under another company.
+    policy_year_company(
+        assert_policy_year_for_user(employee.policy_year_id, user, db), user
+    )
     if payload.expected_updated_at is not None:
         db.refresh(employee, with_for_update=True)
         assert_not_stale(expected=payload.expected_updated_at, actual=employee.updated_at,

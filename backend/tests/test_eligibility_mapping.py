@@ -51,6 +51,7 @@ from app.services.eligibility_mapping import (
     validate_ai_matching_rule,
     validate_matching_rule,
 )
+from app.services.explicit_grade_clauses import explicit_grade_clauses
 from app.services.rule_evaluator import evaluate
 from scripts.seed_demo import seed
 
@@ -2252,6 +2253,39 @@ def test_grade_letter_families_expand_to_the_roster_codes() -> None:
     assert proposal.rule is not None
     for code, expected in (("J1", True), ("JA", True), ("C1", False), ("E2", False)):
         assert evaluate(proposal.rule, {"job_grade": code}) is expected
+
+
+@pytest.mark.parametrize(
+    ("text", "clauses"),
+    [
+        ("Grade 1A and 1B", ["1A and 1B"]),
+        ("Grade MGR and EXE", ["MGR and EXE"]),
+        ("Grade a and b", ["a and b"]),
+        ("Grade A, S Pass holders", ["A"]),
+        ("Grade A and S Pass", ["A"]),
+        ("Grade A1, S Pass", ["A1"]),
+        ("Grade M1, 3x salary", ["M1"]),
+        ("Grade 5-10", ["5-10"]),
+        ("Grade 5, 6 and 7", ["5, 6 and 7"]),
+        ("Grade 16+", ["16+"]),
+        ("Grade 16 & above", ["16 & above"]),
+        ("Grade 10 and below", ["10 and below"]),
+        ("Grade MGR & above", ["MGR & above"]),
+        ("Grade 40 & above (S Pass)", ["40 & above"]),
+    ],
+)
+def test_explicit_grade_clauses_keep_joined_codes_and_drop_pass_types(
+    text: str, clauses: list[str]
+) -> None:
+    assert explicit_grade_clauses(text) == clauses
+
+
+def test_joined_alphanumeric_grades_accept_the_brokers_code_list() -> None:
+    catalog = _catalog(job_grade=["1A", "1B", "2A"])
+    rule = {"in": ["job_grade", ["1A", "1B"]]}
+
+    assert propose_category_rule("Grade 1A and 1B", catalog).rule == rule
+    assert validate_ai_matching_rule("Grade 1A and 1B", rule, catalog).valid
 
 
 def test_slip_label_prefixing_one_roster_cohort_maps_to_it() -> None:

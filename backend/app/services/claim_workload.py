@@ -11,6 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import AuditLog, Claim, User
+from app.models.claim import CLAIM_STATUS_SENT_TO_INSURER
 
 EVENTS = {
     "claim.approve": "approved",
@@ -20,6 +21,18 @@ EVENTS = {
     "claim.sent_to_insurer": "sent_to_insurer",
     "claim.amended": "amended",
 }
+
+
+def _insurer_decline(event: AuditLog) -> bool:
+    """A `claim.reject` recording the INSURER's decline of a claim we had sent.
+
+    Still counted as an action, but never as a decision sample: its time since
+    submission is our approval plus the insurer's turnaround, not ours.
+    """
+    return (
+        event.action == "claim.reject"
+        and (event.before or {}).get("status") == CLAIM_STATUS_SENT_TO_INSURER
+    )
 
 
 def claim_workload(db: Session, client_id: str, start: date, end: date) -> dict[str, Any]:
@@ -67,7 +80,12 @@ def claim_workload(db: Session, client_id: str, start: date, end: date) -> dict[
         for action in actions:
             counts[EVENTS[action.action]] += 1
             claim = claims.get(action.entity_id or "")
-            if action.action in {"claim.approve", "claim.reject"} and claim and claim.submitted_at:
+            if (
+                action.action in {"claim.approve", "claim.reject"}
+                and not _insurer_decline(action)
+                and claim
+                and claim.submitted_at
+            ):
                 submitted = (
                     claim.submitted_at.replace(tzinfo=UTC)
                     if claim.submitted_at.tzinfo is None

@@ -48,8 +48,7 @@ export function VisitFields({ form }: { form: NewClaimForm }) {
                   {...p}
                   type="date"
                   className={leafControl}
-                  min={form.claimableFrom}
-                  max={form.maxIncurred}
+                  max={form.maxStayDate}
                   value={form.admissionDate}
                   onChange={(e) => form.setAdmissionDate(e.target.value)}
                 />
@@ -65,7 +64,7 @@ export function VisitFields({ form }: { form: NewClaimForm }) {
                   type="date"
                   className={leafControl}
                   min={form.admissionDate || undefined}
-                  max={form.maxDischarge}
+                  max={form.maxStayDate}
                   value={form.dischargeDate}
                   onChange={(e) => form.setDischargeDate(e.target.value)}
                 />

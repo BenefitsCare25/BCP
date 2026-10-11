@@ -665,8 +665,11 @@ def test_a_stale_leaving_date_does_not_re_terminate(client: TestClient) -> None:
     newer = (business_today() - timedelta(days=5)).isoformat()
     rows[0][5] = newer
     body = _preview(client, py, _listing(rows)).json()
-    assert body["counts"]["deletions"] == 1
-    assert body["deletions"][0]["effective"] == newer
+    employee_ops = [op for op in body["deletions"] if op["record_type"] == "employee"]
+    assert len(employee_ops) == 1
+    assert employee_ops[0]["effective"] == newer
+    # A-1's dependants end with them, on the same date.
+    assert {op["effective"] for op in body["deletions"]} == {newer}
 
 
 def test_insurer_member_ids_merge_instead_of_replacing(client: TestClient) -> None:

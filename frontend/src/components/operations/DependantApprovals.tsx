@@ -8,6 +8,7 @@ import { api } from "@/api/client";
 import { useSession } from "@/stores/session";
 import { formatError } from "@/lib/errors";
 import { fmtDate } from "@/lib/format";
+import { useWriteAccess } from "@/lib/roles";
 import type { Dependant, DependantList } from "@/types";
 import { AlertDialog } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
@@ -69,6 +70,9 @@ function useDecideDependant() {
 export function DependantApprovals({ policyYearId }: { policyYearId: string }) {
   const pending = usePendingDependants(policyYearId);
   const decide = useDecideDependant();
+  // A viewer, or a read-only access grant, sees the queue; the API refuses
+  // their decisions.
+  const { canEdit: canDecide } = useWriteAccess();
   const [confirm, setConfirm] = useState<{
     dependant: Dependant;
     action: "approve" | "reject";
@@ -126,7 +130,11 @@ export function DependantApprovals({ policyYearId }: { policyYearId: string }) {
           <PendingRow
             key={dep.id}
             dep={dep}
-            onDecide={(action) => setConfirm({ dependant: dep, action })}
+            onDecide={
+              canDecide
+                ? (action) => setConfirm({ dependant: dep, action })
+                : undefined
+            }
           />
         ))}
       </CardContent>
@@ -163,7 +171,8 @@ function PendingRow({
   onDecide,
 }: {
   dep: Dependant;
-  onDecide: (action: "approve" | "reject") => void;
+  /** Absent for a read-only viewer: no decision buttons are offered. */
+  onDecide?: (action: "approve" | "reject") => void;
 }) {
   const docs = useQuery({
     queryKey: ["dependants", "proof-docs", dep.id],
@@ -234,19 +243,21 @@ function PendingRow({
             )}
           </div>
         </div>
-        <div className="flex gap-2">
-          <Button size="sm" onClick={() => onDecide("approve")}>
-            <Check className="size-4" /> Approve
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            className="text-error hover:text-error"
-            onClick={() => onDecide("reject")}
-          >
-            <X className="size-4" /> Reject
-          </Button>
-        </div>
+        {onDecide && (
+          <div className="flex gap-2">
+            <Button size="sm" onClick={() => onDecide("approve")}>
+              <Check className="size-4" /> Approve
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="text-error hover:text-error"
+              onClick={() => onDecide("reject")}
+            >
+              <X className="size-4" /> Reject
+            </Button>
+          </div>
+        )}
       </div>
     </div>
   );

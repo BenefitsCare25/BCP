@@ -32,12 +32,15 @@ export function UnderwritingReportFields({
   onChange,
   premiumConfirmed,
   onConfirmPremium,
+  disabled = false,
 }: {
   caseId: string;
   value: UnderwritingReportDetails;
   onChange: (next: UnderwritingReportDetails) => void;
   premiumConfirmed: boolean;
   onConfirmPremium: (confirmed: boolean) => void;
+  /** Read-only roles see the recorded details but cannot change them. */
+  disabled?: boolean;
 }) {
   return (
     <details className="rounded-md border border-border p-3">
@@ -60,6 +63,7 @@ export function UnderwritingReportFields({
               step={type === "number" ? "0.01" : undefined}
               maxLength={key === "premium_currency" ? 3 : 200}
               value={value[key] ?? ""}
+              disabled={disabled}
               onChange={(event) => {
                 const raw = event.target.value;
                 const next = raw === "" ? null : type === "number" ? Number(raw)
@@ -73,7 +77,11 @@ export function UnderwritingReportFields({
       </div>
       {value.annual_premium_net != null && (
         <label className="mt-3 flex items-start gap-2 text-sm text-foreground">
-          <Checkbox checked={premiumConfirmed} onCheckedChange={(checked) => onConfirmPremium(checked === true)} />
+          <Checkbox
+            checked={premiumConfirmed}
+            disabled={disabled}
+            onCheckedChange={(checked) => onConfirmPremium(checked === true)}
+          />
           I checked this annual premium against the insurer’s terms for the current sum insured.
         </label>
       )}

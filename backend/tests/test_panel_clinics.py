@@ -708,7 +708,9 @@ def test_areas_facet_respects_type_filter(
 # ── Multi-company enablement + policy-year carry-over ───────────────────────
 
 
-def test_enable_listing_across_companies(broker_a: TestClient) -> None:
+def test_enable_listing_across_companies(
+    broker_a: TestClient, system_admin_request
+) -> None:
     """One dialog enables a library listing for several companies at once —
     each on its own target policy year — without switching the active client."""
     sg_id = _sg_listing_id(broker_a)
@@ -733,8 +735,17 @@ def test_enable_listing_across_companies(broker_a: TestClient) -> None:
     res = broker_a.get(f"/api/v1/policy-years/{PY_A}/panels")
     assert sg_id in res.json()["panel_listing_ids"]
 
-    # Disable for client B only — demo keeps its tag.
+    # Unticking a saved company is a firm-owner removal.
     res = broker_a.put(
+        f"/api/v1/panel-listings/{sg_id}/companies",
+        json={"client_ids": [DEMO_CLIENT_ID]},
+    )
+    assert res.status_code == 403
+
+    # Disable for client B only — demo keeps its tag.
+    res = system_admin_request(
+        broker_a,
+        "PUT",
         f"/api/v1/panel-listings/{sg_id}/companies",
         json={"client_ids": [DEMO_CLIENT_ID]},
     )
@@ -783,7 +794,7 @@ def test_enable_for_company_without_policy_year_422() -> None:
 
 
 def test_copy_year_takes_panel_tags_from_the_copied_year(
-    broker_a: TestClient,
+    broker_a: TestClient, system_admin_request
 ) -> None:
     """Copy-from-year must take tags from the year being COPIED, not from
     whichever year is most recent — otherwise the new year pairs the source's
@@ -801,10 +812,13 @@ def test_copy_year_takes_panel_tags_from_the_copied_year(
         "/api/v1/policy-years",
         json={"start_date": "2029-03-01", "end_date": "2030-02-28"},
     ).json()
-    broker_a.put(
+    cleared = system_admin_request(
+        broker_a,
+        "PUT",
         f"/api/v1/policy-years/{later['id']}/panels",
         json={"panel_listing_ids": []},
     )
+    assert cleared.status_code == 200, cleared.text
 
     copied = broker_a.post(
         f"/api/v1/policy-years/{PY_A}/copy",

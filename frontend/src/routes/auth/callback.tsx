@@ -1,6 +1,9 @@
 import { useEffect } from "react";
 import { useNavigate } from "@tanstack/react-router";
+import { needsTwoFactor } from "@/auth/brokerSession";
 import { initializeBrokerSignIn } from "@/auth/msal";
+import { takeReturnPath } from "@/auth/returnPath";
+import { useBrokerSession } from "@/stores/brokerSession";
 
 /**
  * `initializeBrokerSignIn()` runs at app boot (see main.tsx) so by the time this
@@ -12,7 +15,13 @@ export function AuthCallbackPage() {
 
   useEffect(() => {
     initializeBrokerSignIn()
-      .then(() => navigate({ to: "/", replace: true }))
+      .then(() => {
+        // The page the visitor was heading for waits behind two-factor setup.
+        const session = useBrokerSession.getState().session;
+        return session && needsTwoFactor(session)
+          ? navigate({ to: "/broker/security", replace: true })
+          : navigate({ href: takeReturnPath(), replace: true });
+      })
       .catch(() => {
         // A failed redirect handshake would otherwise strand the user on a
         // permanent "Signing you in…" — send them back to sign-in to retry.

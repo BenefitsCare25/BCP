@@ -15,6 +15,7 @@ from typing import Any
 
 import jwt
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
@@ -32,7 +33,12 @@ from app.core.identity_providers import firm_sign_in_methods
 from app.core.rate_limit import limiter
 from app.core.request_context import client_ip, user_agent
 from app.core.settings import get_settings
-from app.core.tenant_resolution import FirmContext, request_firm, require_staff_surface
+from app.core.tenant_resolution import (
+    FirmContext,
+    request_firm,
+    require_live_host_firm,
+    require_staff_surface,
+)
 from app.db.session import get_db
 from app.models import AuthCredential, AuthSession, User
 from app.models.platform import IDP_ENTRA, IDP_LOCAL
@@ -42,7 +48,7 @@ from app.services.brand import resolve_staff_brand
 router = APIRouter(
     prefix="/broker/auth",
     tags=["broker authentication"],
-    dependencies=[Depends(require_staff_surface)],
+    dependencies=[Depends(require_staff_surface), Depends(require_live_host_firm)],
 )
 
 # The platform's password policy for staff (the company defaults HR accounts
@@ -343,10 +349,12 @@ def accept_invite(
     require_same_origin(request)
     firm = request_firm(request)
     invitation, user = BA.pending_staff_invitation(
-        db, body.invite_token, firm, roles=BA.LOCAL_ROLES
+        db, body.invite_token, firm, roles=BA.BROKER_ROLES
     )
-    if user.external_id is not None or BA.credential(db, user.id) is not None:
+    if BA.credential(db, user.id) is not None:
         raise BA.invitation_invalid()
+    if invitation.role not in BA.LOCAL_ROLES or user.external_id is not None:
+        raise BA.invitation_requires_microsoft()
     if not firm_sign_in_methods(db, invitation.broker_firm_id).local:
         raise BA.sign_in_method_disabled(
             "Password sign-in is not enabled for this organisation."
@@ -374,9 +382,21 @@ def accept_invite(
 
 
 # ── Session lifecycle ─────────────────────────────────────────────────────────
-@router.post("/refresh")
+def _session_ended() -> JSONResponse:
+    """The refresh refusal for a session that can never refresh again, which
+    also drops its cookie. Returned, not raised: FastAPI discards headers set
+    on the injected `Response` when the handler raises, and a kept cookie is
+    replayed on every page load, each time filed as token reuse."""
+    refused = JSONResponse({"detail": BA.SESSION_ENDED}, status_code=401)
+    BA.clear_cookie(refused)
+    return refused
+
+
+@router.post("/refresh", response_model=None)
 @limiter.limit("30/minute")
-def refresh(request: Request, response: Response, db: Session = Depends(get_db)) -> dict[str, Any]:
+def refresh(
+    request: Request, response: Response, db: Session = Depends(get_db)
+) -> dict[str, Any] | JSONResponse:
     require_same_origin(request)
     token = request.cookies.get(BA.COOKIE, "")
     row = (
@@ -389,7 +409,7 @@ def refresh(request: Request, response: Response, db: Session = Depends(get_db))
         else None
     )
     if row is None or row.subject_type != BA.SUBJECT or row.client_id is not None:
-        raise HTTPException(401, BA.SESSION_ENDED)
+        return _session_ended()
     user = BA.active_user(db, row.subject_id, lock=True)
     # Checked before rotating, so another firm's cookie (or a session whose
     # sign-in method was switched off) is refused unspent.
@@ -398,8 +418,13 @@ def refresh(request: Request, response: Response, db: Session = Depends(get_db))
         policy.method_enabled
     ):
         raise HTTPException(401, BA.SESSION_ENDED)
+    if row.revoked_at is not None and row.rotated_at is None:
+        # Ended by idle timeout, sign-out or an administrator: never rotated,
+        # so presenting it again is not a replay.
+        return _session_ended()
     result = sessions.rotate_session(
-        db, token, absolute_hours=BA.ABSOLUTE_HOURS, idle_minutes=BA.IDLE_MINUTES
+        db, token, absolute_hours=BA.ABSOLUTE_HOURS, idle_minutes=BA.IDLE_MINUTES,
+        touch_activity=BA.touches_activity(request),
     )
     if result.reuse_detected:
         _event(db, request, user, events.EVENT_TOKEN_REUSE, events.OUTCOME_BLOCKED)
@@ -407,7 +432,7 @@ def refresh(request: Request, response: Response, db: Session = Depends(get_db))
         _event(db, request, user, events.EVENT_TOKEN_REFRESH, events.OUTCOME_SUCCESS)
     db.commit()  # Persist revocations even when rotation is rejected.
     if result.session is None:
-        raise HTTPException(401, BA.SESSION_ENDED)
+        return _session_ended()
     child = db.get(AuthSession, result.session.session_id)
     assert child is not None
     BA.set_cookie(response, result.session.token, result.session.expires_at)

@@ -34,17 +34,18 @@ import { useBrokerCardArtwork } from "@/api/panelCards";
 import type { ClinicSearchParams } from "@/api/panelListings";
 import { ClinicLocator } from "@/components/portal/ClinicLocator";
 import { CardLeaf } from "@/components/portal/leaf/CardLeaf";
-import { CoverageLeaf } from "@/components/portal/leaf/CoverageLeaf";
+import {
+  CoverageLeaf,
+  type CoverageSelection,
+} from "@/components/portal/leaf/CoverageLeaf";
 import { UsageLeaf } from "@/components/portal/leaf/UsageLeaf";
 import { DependantsLeaf } from "@/components/portal/leaf/DependantsLeaf";
 import type { DependantRef } from "@/components/enrollment/electionCore";
 import { ClaimList } from "@/components/portal/leaf/ClaimMount";
 import { ClaimDetailLeaf } from "@/components/portal/leaf/ClaimDetailLeaf";
 import { MessageThread } from "@/components/portal/leaf/MessageMount";
-import {
-  HomeMosaicView,
-  type HomeDest,
-} from "@/components/portal/HomeMosaic";
+import type { HomeDest } from "@/components/portal/home/homeNav";
+import { PortalFrameHome } from "./PortalFrameHome";
 import { Mount } from "@/components/portal/leaf/Mount";
 import {
   UnreadBadge,
@@ -75,6 +76,7 @@ import { LeafScopeContext } from "@/lib/leaf-scope";
 import { isNotFoundError } from "@/lib/errors";
 import { holds } from "@/components/portal/capabilities";
 import { BrandLogo } from "@/components/brand/BrandLogo";
+import { CompanyBrandScope } from "@/components/brand/BrandProvider";
 
 // Mirrors the live shell nav in components/portal/PortalShell — change both
 // together. Labels are the shell's short set, because the live bar is one row.
@@ -95,7 +97,7 @@ const TABS = [
 /** Messages is deliberately absent from TABS: on the live shell it is an ICON
  * in the account cluster, not a nav pill, so a labelled tab here would show a
  * broker a destination the member does not have. It is still a REACHABLE view —
- * the icon below opens it, and so does the home tile's "See all messages" —
+ * the icon below opens it, and so does Home's Messages "View all" —
  * which is exactly the shape of the member's own shell, where `/portal/messages`
  * is a real route with no entry in `NAV`. */
 type TabKey = (typeof TABS)[number]["key"] | "messages";
@@ -108,6 +110,8 @@ const COVERAGE_TABS = [
 ] as const;
 
 type CoverageTabKey = (typeof COVERAGE_TABS)[number]["key"];
+
+const NO_SELECTION: CoverageSelection = { routeKey: "", personId: null };
 
 /** Mirrors `PortalShell`'s ICON_BUTTON. Spelled out rather than imported for
  * the same reason the nav pills below are — this frame replicates the shell's
@@ -143,7 +147,17 @@ function NoCoverageCard() {
   );
 }
 
-function BenefitsTab({ employeeId }: { employeeId: string }) {
+/** The selection is the frame's, as `?p=` is the live page's: a Home benefit
+ * sheet lands on that benefit, not on the overview. */
+function BenefitsTab({
+  employeeId,
+  selection,
+  onSelectionChange,
+}: {
+  employeeId: string;
+  selection: CoverageSelection;
+  onSelectionChange: (next: CoverageSelection) => void;
+}) {
   const statement = usePreviewStatement(employeeId);
   // The member's own loading state, not the broker's grey blocks — the frame
   // shows what the member sees at every moment, including this one.
@@ -156,7 +170,13 @@ function BenefitsTab({ employeeId }: { employeeId: string }) {
     return <PortalErrorState onRetry={() => void statement.refetch()} />;
   }
   if (statement.isError || !statement.data) return <NoCoverageCard />;
-  return <CoverageLeaf data={statement.data} />;
+  return (
+    <CoverageLeaf
+      data={statement.data}
+      selection={selection}
+      onSelectionChange={onSelectionChange}
+    />
+  );
 }
 
 const CLAIM_DISABLED_TITLE =
@@ -374,6 +394,7 @@ function EnrollmentTab({ employeeId }: { employeeId: string }) {
           id: d.id,
           name: dependantName(d),
           relationship: dependantRelationship(d),
+          role: d.role ?? null,
         })),
     [dependants.data],
   );
@@ -404,66 +425,6 @@ function EnrollmentTab({ employeeId }: { employeeId: string }) {
         readOnly
       />
     </div>
-  );
-}
-
-/** Mirrors the member's home (routes/portal/home + HomeMosaic).
- *
- * The tiles navigate by switching THIS frame's tabs — `onGo` — because a real
- * `<Link>` here would walk the broker out of their own application and into the
- * member portal. Same component, same tiles, same rules about what may be
- * rendered; only the onward step differs. */
-function HomeTab({
-  employeeId,
-  enrollmentOpen,
-  capabilities,
-  onGo,
-  onOpenQuestion,
-  onOpenClaim,
-}: {
-  employeeId: string;
-  enrollmentOpen: boolean;
-  /** Threaded through so the preview's tiles close on the same served rule as
-   *  the member's — the tabs above hide, and the tiles are the other entry
-   *  point to the same destinations. */
-  capabilities?: string[];
-  onGo: (dest: HomeDest) => void;
-  onOpenClaim: (claimId: string) => void;
-  onOpenQuestion: (enquiryId: string) => void;
-}) {
-  const utilization = usePreviewUtilization(employeeId);
-  const claims = usePreviewClaims(employeeId);
-  const statement = usePreviewStatement(employeeId);
-  const dependants = usePreviewDependants(employeeId);
-  const messages = usePreviewConversations(employeeId);
-  return (
-    <HomeMosaicView
-      source={{
-        enrollmentOpen,
-        capabilities,
-        utilization,
-        claims,
-        statement,
-        dependants,
-        messages,
-        // **Every preview tab must pass a retry.** These queries carry
-        // `localErrorHandling` + `retry: false`, so a transient 500 neither
-        // retries itself nor reaches the notification bell — without this the
-        // Home tab rendered "We couldn't load this just now" with no way out of
-        // it but a full page reload. The member's own Home has always passed
-        // one; this tab was the only mirror that did not.
-        onRetry: () => {
-          void utilization.refetch();
-          void claims.refetch();
-          void statement.refetch();
-          void dependants.refetch();
-          void messages.refetch();
-        },
-      }}
-      onGo={onGo}
-      onOpenClaim={onOpenClaim}
-      onOpenQuestion={onOpenQuestion}
-    />
   );
 }
 
@@ -582,15 +543,20 @@ function MessagesTab({
 }
 
 /** Mirrors the "My coverage" sub-tab page (routes/portal/coverage). The sub-tab
- * is lifted so a home tile can land the broker on the right reading of it. */
+ * and the benefit selection are lifted so a Home target can land the broker on
+ * the right reading of it. */
 function CoverageTab({
   employeeId,
   tab,
   setTab,
+  selection,
+  onSelectionChange,
 }: {
   employeeId: string;
   tab: CoverageTabKey;
   setTab: (tab: CoverageTabKey) => void;
+  selection: CoverageSelection;
+  onSelectionChange: (next: CoverageSelection) => void;
 }) {
   return (
     <Tabs value={tab} onValueChange={(v) => setTab(v as CoverageTabKey)}>
@@ -603,7 +569,11 @@ function CoverageTab({
         ))}
       </LeafTabsList>
       <TabsContent value="benefits">
-        <BenefitsTab employeeId={employeeId} />
+        <BenefitsTab
+          employeeId={employeeId}
+          selection={selection}
+          onSelectionChange={onSelectionChange}
+        />
       </TabsContent>
       <TabsContent value="usage">
         <UtilizationTab employeeId={employeeId} />
@@ -627,9 +597,11 @@ export function PortalFrame({ employeeId }: { employeeId: string }) {
   }, [ctx]);
   const [tab, setTab] = useState<TabKey>("home");
   const [coverageTab, setCoverageTab] = useState<CoverageTabKey>("benefits");
+  const [coverageSelection, setCoverageSelection] =
+    useState<CoverageSelection>(NO_SELECTION);
   // The Claims tab's drill-in. The frame has tabs where the portal has routes,
   // so "which claim am I reading" has to be state — and it is the frame's, not
-  // the tab's, because the inbox and the home tile both open a claim too.
+  // the tab's, because the inbox and Home both open a claim too.
   const [claimId, setClaimId] = useState<string | null>(null);
   const [enquiryId, setEnquiryId] = useState<string | null>(null);
 
@@ -638,6 +610,7 @@ export function PortalFrame({ employeeId }: { employeeId: string }) {
   useEffect(() => {
     setTab("home");
     setCoverageTab("benefits");
+    setCoverageSelection(NO_SELECTION);
     setClaimId(null);
     setEnquiryId(null);
   }, [employeeId]);
@@ -661,21 +634,37 @@ export function PortalFrame({ employeeId }: { employeeId: string }) {
   /** Move to a tab the way the member's NAV moves: a claim being read is left
    *  behind. On the portal, tapping "Claims" always lands on the ledger — a
    *  frame that resumed the last claim instead would be showing a screen the
-   *  member cannot reach that way. */
+   *  member cannot reach that way. Likewise "Coverage" opens on the overview,
+   *  as the nav's own link carries no `?p=`. */
   const showTab = (key: TabKey) => {
     setClaimId(null);
     setEnquiryId(null);
+    setCoverageSelection(NO_SELECTION);
     setTab(key);
   };
 
-  /** A home tile's destination, mapped onto this frame's tabs. */
+  /** A Home target, mapped onto this frame's tabs. */
   const goFromHome = (dest: HomeDest) => {
-    if (dest === "usage" || dest === "benefits" || dest === "dependants") {
-      setCoverageTab(dest);
-      showTab("coverage");
-      return;
+    switch (dest.to) {
+      case "coverage":
+        showTab("coverage");
+        setCoverageTab(dest.tab);
+        setCoverageSelection({ routeKey: dest.product ?? "", personId: null });
+        return;
+      case "claim":
+        openClaim(dest.claimId);
+        return;
+      case "question":
+        openQuestion(dest.enquiryId);
+        return;
+      case "new-claim":
+        // The member's claim form sits behind Claims; the frame shows its
+        // "Make a claim" action there, disabled.
+        showTab("claims");
+        return;
+      default:
+        showTab(dest.to);
     }
-    showTab(dest);
   };
 
   /** A message row, a home row or a ledger row opening one claim. Always lands
@@ -740,6 +729,9 @@ export function PortalFrame({ employeeId }: { employeeId: string }) {
           re-points tokens for this subtree; the surrounding broker chrome above
           is unaffected. */}
       <LeafScopeContext.Provider value>
+      {/* The member sees their company's brand (logo, name), override
+          included, not the firm's own that the broker app shows. */}
+      <CompanyBrandScope company={ctx?.company_slug}>
       {/* `overflow-clip`, NOT `overflow-hidden`. Hidden makes this a scroll
           container, which becomes the containing block for any `position:
           sticky` inside it — and since this box never scrolls, sticky silently
@@ -768,8 +760,8 @@ export function PortalFrame({ employeeId }: { employeeId: string }) {
                 signal on a viewport that has no room for the enrolment tile.
                 A bare coloured dot in a nav rail is an unglossed term with
                 nowhere to put its gloss (DESIGN.md), and the deadline it stood
-                for is stated in words at the top of the enrolment page and on
-                the home tile. Adding it here made the preview show a broker
+                for is stated in words at the top of the enrolment page and in
+                Home's "Needs your attention" strip. Adding it here made the preview show a broker
                 something the member never sees — the one thing this frame
                 exists not to do. */}
             <nav className="flex items-center gap-0.5">
@@ -821,30 +813,46 @@ export function PortalFrame({ employeeId }: { employeeId: string }) {
         </header>
         {/* `leaf-ground` carries the colour blooms the glass frosts. Without it
             the tiles read as paler paint — the same trap documented in
-            leaf.css. */}
-        <main className="leaf-ground bg-ground px-4 py-6">
-          <div className="mx-auto max-w-4xl">
-            <div className="mb-4 flex items-center justify-between gap-4">
-              <h2 className="min-w-0 truncate text-2xl font-bold tracking-title text-record">
-                {memberLabel}
-              </h2>
-              {ctx?.policy_year && (
-                <BenefitYearControl
-                  start={ctx.policy_year.start_date}
-                  end={ctx.policy_year.end_date}
-                  className="hidden sm:inline-flex"
-                />
-              )}
-            </div>
+            leaf.css.
+            Home is the exception: the member's shell draws it in the Clay
+            world (`.leaf.portal-clay`, no blooms), so that tab gets the same
+            pair of classes here. `portal-frame-home` makes this frame, not the
+            viewport, the page its sky bleeds across (portal-clay.css). */}
+        <main
+          className={
+            tab === "home"
+              ? "leaf portal-clay portal-frame-home"
+              : "leaf-ground bg-ground px-4 py-6"
+          }
+        >
+          <div
+            className={cn(
+              "mx-auto",
+              tab === "home" ? "max-w-7xl px-4 pb-10 sm:px-6" : "max-w-4xl",
+            )}
+          >
+            {/* The member's Home has no name row either — its greeting is the
+                heading, and the year control sits with "Your benefits". */}
+            {tab !== "home" && (
+              <div className="mb-4 flex items-center justify-between gap-4">
+                <h2 className="min-w-0 truncate text-2xl font-bold tracking-title text-record">
+                  {memberLabel}
+                </h2>
+                {ctx?.policy_year && (
+                  <BenefitYearControl
+                    start={ctx.policy_year.start_date}
+                    end={ctx.policy_year.end_date}
+                    className="hidden sm:inline-flex"
+                  />
+                )}
+              </div>
+            )}
             <AccessNotice access={ctx?.access ?? undefined} />
             {tab === "home" && (
-              <HomeTab
+              <PortalFrameHome
                 employeeId={employeeId}
-                enrollmentOpen={Boolean(ctx?.enrollment_open)}
-                capabilities={ctx?.access?.capabilities}
+                ctx={ctx}
                 onGo={goFromHome}
-                onOpenClaim={openClaim}
-                onOpenQuestion={openQuestion}
               />
             )}
             {tab === "coverage" && (
@@ -852,6 +860,8 @@ export function PortalFrame({ employeeId }: { employeeId: string }) {
                 employeeId={employeeId}
                 tab={coverageTab}
                 setTab={setCoverageTab}
+                selection={coverageSelection}
+                onSelectionChange={setCoverageSelection}
               />
             )}
             {tab === "claims" &&
@@ -884,6 +894,7 @@ export function PortalFrame({ employeeId }: { employeeId: string }) {
           </div>
         </main>
       </div>
+      </CompanyBrandScope>
       </LeafScopeContext.Provider>
     </div>
   );

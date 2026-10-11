@@ -40,6 +40,22 @@ export function BrandProvider({ children }: { children: ReactNode }) {
   return <BrandContext.Provider value={value}>{children}</BrandContext.Provider>;
 }
 
+/** A subtree shown in a company's brand rather than the surface's own: the
+ *  broker's preview of a member's screens. Only what reads the context (logo,
+ *  product name, copyright owner) changes; the document's palette, favicon and
+ *  title stay the broker app's. No company leaves the surrounding brand. */
+export function CompanyBrandScope({ company, children }: { company: string | null | undefined; children: ReactNode }) {
+  const outer = useContext(BrandContext);
+  const site = usePublicSite(company ?? null);
+  const own = company && !site.isPlaceholderData ? site.data ?? null : null;
+  const ready = !company || own !== null || site.isError;
+  const value = useMemo(
+    () => (company ? { brand: own?.brand ?? outer.brand, ready, firmName: own?.firm?.name ?? outer.firmName } : outer),
+    [company, own, ready, outer],
+  );
+  return <BrandContext.Provider value={value}>{children}</BrandContext.Provider>;
+}
+
 export function useBrand(): PublicBrand {
   return useContext(BrandContext).brand;
 }

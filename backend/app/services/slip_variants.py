@@ -26,6 +26,7 @@ from dataclasses import dataclass, field, replace
 
 from app.services import product_registry
 from app.services.period_parser import parse_period_of_insurance
+from app.services.policy_numbers import source_numbers
 from app.services.slip_parsing.models import PlacementSlip, ProductSlip
 
 # Header fields that identify a policy, in the order used to label variants
@@ -52,8 +53,11 @@ def _norm(value: str | None) -> str:
 
 def _policy_key(value: str | None) -> str:
     """A policy number as compared across slips. Older drafts stored numeric
-    cells as floats ("50011771.0"); that is the same policy as "50011771"."""
-    return _norm(re.sub(r"^(\d+)\.0+$", r"\g<1>", str(value or "").strip()))
+    cells as floats ("50011771.0"); that is the same policy as "50011771".
+    A placeholder ("TBA", "Pending", "N/A") is no policy number at all."""
+    return _norm(" ".join(
+        re.sub(r"^(\d+)\.0+$", r"\g<1>", number) for number in source_numbers(value)
+    ))
 
 
 def _core(value: str | None) -> frozenset[str]:
@@ -109,11 +113,8 @@ class _Policy:
             other_period = parse_period_of_insurance(other.period)
             if period and other_period and period != other_period:
                 return False
-            if (
-                header.policy_no
-                and other.policy_no
-                and _policy_key(header.policy_no) != _policy_key(other.policy_no)
-            ):
+            policy, other_policy = _policy_key(header.policy_no), _policy_key(other.policy_no)
+            if policy and other_policy and policy != other_policy:
                 return False
         return (
             _same_party(self.insurer, _core(header.insurer))

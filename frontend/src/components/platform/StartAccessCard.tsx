@@ -106,9 +106,13 @@ export function StartAccessCard({ firms }: { firms: PlatformFirm[] }) {
                 >
                   <option value="">Choose a firm</option>
                   {eligible.map((f) => (
-                    <option key={f.id} value={f.id}>
+                    // A firm still waiting for its schema refuses access
+                    // (409 `firm_not_provisioned`); the firm list is polled
+                    // meanwhile, so the option opens by itself.
+                    <option key={f.id} value={f.id} disabled={!f.provisioned}>
                       {f.name}
                       {f.status === "suspended" ? " (suspended)" : ""}
+                      {f.provisioned ? "" : " (setting up)"}
                     </option>
                   ))}
                 </NativeSelect>

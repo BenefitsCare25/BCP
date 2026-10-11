@@ -268,17 +268,20 @@ def list_underwriting_cases(
     db: Session = Depends(get_db),
 ) -> UnderwritingQueueOut:
     assert_policy_year_for_user(policy_year_id, user, db)
-    read_only = user.role == ROLE_BROKER_VIEWER
+    viewer = user.role == ROLE_BROKER_VIEWER
     # Lazily adopt pre-review-model rows (same shape as the portal enrollment
     # GET materializing a missing Enrollment). Without it, cases written before
     # the insurer-grouped model stay invisible — and undecidable — until some
     # unrelated action happens to run a full sync. No-op once done. Only for a
-    # role that may write: a viewer's read must never write, and the next
-    # write-capable view (or the refresh) adopts the rows instead.
-    if not read_only and adopt_orphan_cases(db, policy_year_id):
+    # session that may write: a viewer's read, or a master admin's under a
+    # `read` access grant, must never write, and the next write-capable view
+    # (or the refresh) adopts the rows instead.
+    if not (viewer or user.platform_access == "read") and adopt_orphan_cases(
+        db, policy_year_id
+    ):
         db.commit()
-    # Read-only viewers get the masked identifier every report gives them.
-    return _queue(db, policy_year_id, masked=read_only)
+    # Viewers get the masked identifier every report gives them.
+    return _queue(db, policy_year_id, masked=viewer)
 
 
 @router.post(
@@ -410,21 +413,21 @@ def decide_case(
         case.guaranteed_si if case.guaranteed_si is not None else case.accepted_si
     )
     case.status = body.status
-    if body.accepted_si is not None:
-        case.accepted_si = min(body.accepted_si, case.eligible_si)
-    elif body.status in _APPROVED_STATUSES:
+    if body.status in _APPROVED_STATUSES:
         # An approval with no figure means the insurer took the request as
         # asked. Defaulting to the GUARANTEED amount instead would be the
         # dangerous read: the status is "decided", so the listing stops
         # reporting a pending excess, and the approved excess would silently
         # vanish from cover.
-        case.accepted_si = case.eligible_si
-    elif body.status in DECIDED_UW_STATUSES:
-        # Excess refused / case closed — the guaranteed amount stays in force.
-        case.accepted_si = min(guaranteed, case.eligible_si)
+        ceiling = case.eligible_si
     else:
-        # Undecided (pending / postponed) with no figure: guaranteed in force.
-        case.accepted_si = min(guaranteed, case.eligible_si)
+        # Excess refused, case closed, or still undecided (pending /
+        # postponed): nothing above the guaranteed amount is in force, so a
+        # figure left over from an earlier approval cannot stand.
+        ceiling = min(guaranteed, case.eligible_si)
+    case.accepted_si = (
+        min(body.accepted_si, ceiling) if body.accepted_si is not None else ceiling
+    )
     decision_changed = (
         normalize_uw_status(str(before["status"])) != case.status
         or before["accepted_si"] != case.accepted_si

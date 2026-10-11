@@ -44,6 +44,8 @@ export function ClaimDocumentViewer({
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: ["claims"] }),
       queryClient.invalidateQueries({ queryKey: ["claim-detail"] }),
+      // A changed document set supersedes the AI review.
+      queryClient.invalidateQueries({ queryKey: ["claim-review"] }),
     ]);
   };
   const [selectedId, setSelectedId] = useState(documents[0]?.id ?? null);
@@ -91,13 +93,18 @@ export function ClaimDocumentViewer({
     setSelectedId(documents[0]?.id ?? null);
   }, [documents, selectedId]);
 
+  // Keyed on the document's id, not its object: the sheet swaps the list row
+  // for the detail payload, handing over a new object for the same file, and
+  // each fetch downloads it again and writes another access-audit row.
+  const selectedDocId = selected?.id ?? null;
   useEffect(() => {
     let active = true;
     let objectUrl: string | null = null;
     setPreview(null);
     setError(null);
     setFullScreenOpen(false);
-    if (!selected) {
+    const doc = documents.find((document) => document.id === selectedDocId);
+    if (!doc) {
       setLoading(false);
       return () => {
         active = false;
@@ -105,11 +112,11 @@ export function ClaimDocumentViewer({
     }
 
     setLoading(true);
-    void getClaimDocumentBlob(claimId, selected)
+    void getClaimDocumentBlob(claimId, doc)
       .then((blob) => {
         if (!active) return;
         objectUrl = URL.createObjectURL(blob);
-        setPreview({ url: objectUrl, mime: previewType(selected, blob) });
+        setPreview({ url: objectUrl, mime: previewType(doc, blob) });
       })
       .catch((caught) => {
         if (active) setError(formatError(caught));
@@ -122,7 +129,8 @@ export function ClaimDocumentViewer({
       active = false;
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [claimId, retry, selected]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [claimId, retry, selectedDocId]);
 
   if (documents.length === 0) {
     return (

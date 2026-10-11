@@ -11,9 +11,12 @@ interface Props {
   plans: PlanDetail[];
   policyYearId: string;
   productId: string | null;
+  /** The setup form has unsaved edits. Adding a plan type writes the saved
+   *  setup draft, which would collide with them, so it waits for a save. */
+  saveFirst?: boolean;
 }
 
-export function PlanTypeSettings({ plans, policyYearId, productId }: Props) {
+export function PlanTypeSettings({ plans, policyYearId, productId, saveFirst = false }: Props) {
   const [adding, setAdding] = useState(false);
   const [selectedPlanId, setSelectedPlanId] = useState<string | null>(null);
   const selectedPlan = plans.find((plan) => plan.id === selectedPlanId);
@@ -48,7 +51,8 @@ export function PlanTypeSettings({ plans, policyYearId, productId }: Props) {
           size="sm"
           variant="outline"
           className="ml-auto"
-          disabled={!productId || adding}
+          disabled={!productId || adding || saveFirst}
+          aria-describedby={saveFirst ? "plan-type-save-first" : undefined}
           onClick={() => {
             setSelectedPlanId(null);
             setAdding(true);
@@ -57,6 +61,11 @@ export function PlanTypeSettings({ plans, policyYearId, productId }: Props) {
           <Plus className="size-3.5" /> Add plan type
         </Button>
       </div>
+      {saveFirst && productId && (
+        <p id="plan-type-save-first" className="mt-2 text-xs text-muted-foreground">
+          Save the draft before adding a plan type. Adding one updates the saved setup.
+        </p>
+      )}
       {!adding && !selectedPlan && plans.length === 0 && (
         <p className="mt-3 text-sm text-muted-foreground">
           No plan types yet. Add one before assigning employee categories.
@@ -67,6 +76,7 @@ export function PlanTypeSettings({ plans, policyYearId, productId }: Props) {
           plans={plans}
           policyYearId={policyYearId}
           productId={productId}
+          blocked={saveFirst}
           onClose={() => setAdding(false)}
         />
       )}
@@ -85,18 +95,20 @@ function NewPlanTypeRow({
   plans,
   policyYearId,
   productId,
+  blocked,
   onClose,
 }: {
   plans: PlanDetail[];
   policyYearId: string;
   productId: string;
+  blocked: boolean;
   onClose: () => void;
 }) {
   const createPlan = useCreatePlan();
   const [name, setName] = useState(nextPlanName(plans));
   const [reportLabel, setReportLabel] = useState("");
   const save = async () => {
-    if (!name.trim()) return;
+    if (!name.trim() || blocked) return;
     try {
       await createPlan.mutateAsync({
         product_id: productId,
@@ -130,7 +142,7 @@ function NewPlanTypeRow({
           size="icon-sm"
           variant="ghost"
           onClick={save}
-          disabled={createPlan.isPending || !name.trim()}
+          disabled={createPlan.isPending || !name.trim() || blocked}
         >
           <Check className="size-3.5" />
           <span className="sr-only">Save new plan type</span>

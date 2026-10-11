@@ -9,7 +9,7 @@ import logging
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from sqlalchemy import case, func, select
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.audit import write_audit
@@ -17,6 +17,7 @@ from app.core.auth import CurrentUser, get_current_user
 from app.core.deps import (
     assert_policy_year_editable,
     assert_policy_year_for_user,
+    is_firm_owner,
     load_category,
     policy_year_company,
     require_client_id,
@@ -57,11 +58,13 @@ from app.services.eligibility_mapping import (
     normalize_ai_matching_rule,
     validate_ai_matching_rule,
 )
+from app.services.eligibility_mapping.predicates import CARD_SOURCE_REF
 from app.services.matching_engine import (
     EntityAliases,
     category_gate_names,
     entity_alias_map,
 )
+from app.services.setup_removals import refuse_removals, removed_assignment_entries
 
 logger = logging.getLogger(__name__)
 
@@ -223,7 +226,7 @@ def create_category(
         product_id=payload.product_id,
         priority=base_priority + 1,
         display_name=name,
-        source_ref="category_card",
+        source_ref=CARD_SOURCE_REF,
         status=CategoryStatus.needs_review.value,
         modified_by=user.user_id,
         participation_model=payload.participation_model,
@@ -259,8 +262,16 @@ def patch_category(
     _assert_category_year_editable(db, c)
     before = _to_dict(c)
     updates = payload.model_dump(exclude_unset=True)
+    # The card sends the whole dict, so a dropped saved rate tier is a removal.
+    if "plan_assignments" in updates and not is_firm_owner(user):
+        refuse_removals(
+            removed_assignment_entries(c.plan_assignments, updates["plan_assignments"]),
+            "plan-assignment entries",
+        )
     for key, value in updates.items():
         setattr(c, key, value)
+    if "display_name" in updates and c.source_ref == CARD_SOURCE_REF and c.display_name:
+        c.raw_description = c.display_name[:2048]
     # Any human edit flips source to manual + sets human_modified
     c.source = SourceKind.manual.value
     c.human_modified = True
@@ -304,8 +315,13 @@ def confirm_category(
     _assert_category_year_editable(db, c)
     before = _to_dict(c)
     try:
+        # The broker is confirming exactly this rule, so a deliberate "covers
+        # all employees" is theirs to choose (bulk confirm never relaxes this).
         confirm_category_mapping(
-            db, category=c, client_id=policy_year_company(c.policy_year, user)
+            db,
+            category=c,
+            client_id=policy_year_company(c.policy_year, user),
+            broker_authored=True,
         )
     except ValueError as exc:
         raise HTTPException(
@@ -431,19 +447,22 @@ def bulk_delete_categories(
 
     # Unconfirmed guided-setup drafts — what the form renders. Capture the
     # confirmed product codes first so their plans survive the prune below.
+    # A materialized setup with pending draft edits is still live configuration.
+    live_setup = or_(
+        ProductSetup.status == ProductSetupStatus.confirmed,
+        ProductSetup.materialized_product_id.is_not(None),
+    )
     confirmed_codes = set(
         db.execute(
             select(ProductSetup.product_code).where(
-                ProductSetup.policy_year_id == policy_year_id,
-                ProductSetup.status == ProductSetupStatus.confirmed,
+                ProductSetup.policy_year_id == policy_year_id, live_setup
             )
         ).scalars()
     )
     draft_setups = list(
         db.execute(
             select(ProductSetup).where(
-                ProductSetup.policy_year_id == policy_year_id,
-                ProductSetup.status != ProductSetupStatus.confirmed,
+                ProductSetup.policy_year_id == policy_year_id, ~live_setup
             )
         )
         .scalars()

@@ -6,6 +6,7 @@ import { BrokerSignInOptions } from "@/components/auth/broker/BrokerSignInOption
 import { signInNoticeMessage } from "@/components/auth/broker/signInMessages";
 import { usePendingBrokerInvite } from "@/auth/brokerInvite";
 import { acceptBrokerSession, needsTwoFactor } from "@/auth/brokerSession";
+import { takeReturnPath } from "@/auth/returnPath";
 import { useSignInNotice } from "@/auth/signInNotice";
 import { useStaffSignIn } from "@/auth/staffSignIn";
 import type { BrokerSession } from "@/stores/brokerSession";
@@ -39,7 +40,8 @@ export function SignInPage() {
   const finish = (session: BrokerSession) => {
     acceptBrokerSession(session);
     if (inviteToken) dismissInvite();
-    void navigate({ to: needsTwoFactor(session) ? "/broker/security" : "/", replace: true });
+    if (needsTwoFactor(session)) void navigate({ to: "/broker/security", replace: true });
+    else void navigate({ href: takeReturnPath(), replace: true });
   };
 
   const title = inviteToken

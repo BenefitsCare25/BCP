@@ -90,20 +90,34 @@ const ADMIN_NOTE =
  * anchored-and-stripped dials 6562353490, which is not a number. */
 const PHONE_RUN = /\+?\(?\d[\d\s()+-]{4,}/;
 
+/** A spaced dash is the remark separator once a whole local number (eight
+ * digits) precedes it: `63652908 - 24 HRS` dials 63652908, not 6365290824.
+ * Before that it is part of the number (`07 - 331 2345`). */
+function numberRun(run: string): string {
+  for (const dash of run.matchAll(/\s+-\s+/g)) {
+    const head = run.slice(0, dash.index);
+    if (head.replace(/\D/g, "").length >= 8) return head;
+  }
+  return run;
+}
+
 export function splitPhone(raw: string | null | undefined): PhoneParts {
   const empty: PhoneParts = { display: "", dial: "", note: null };
   if (!raw) return empty;
   const text = raw.trim();
   const match = text.match(PHONE_RUN);
   if (!match || match.index === undefined) return empty;
+  const number = numberRun(match[0]);
   // `(65) …` is a country code, so it keeps its `+`; anything else is local.
-  const run = match[0].replace(/^\((\d+)\)/, "+$1");
+  const run = number.replace(/^\((\d+)\)/, "+$1");
   const digits = run.replace(/\D/g, "");
   if (digits.length < 6) return empty;
   const dial = (run.startsWith("+") ? "+" : "") + digits;
 
   const rest = text
-    .slice(match.index + match[0].length)
+    .slice(match.index + number.length)
+    // A numeric .xls cell stored as `62353490.0` has a float tail, not a note.
+    .replace(/^\.0+(?!\d)/, "")
     .replace(/^[\s\-–—:.,]+/, "")
     .trim();
   let note: string | null = null;

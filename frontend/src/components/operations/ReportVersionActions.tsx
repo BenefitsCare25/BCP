@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/sheet";
 import {
   type CreateReportVersionInput,
+  type ReportVersion,
   downloadMovement,
   downloadReportVersion,
   useCreateReportVersion,
@@ -28,8 +29,10 @@ import {
 import { parseServerDate } from "@/lib/attention";
 import { formatError } from "@/lib/errors";
 import { formatPolicyRange } from "@/lib/policy-year";
-import { usePolicyYears } from "@/api/hooks";
+import { isReadOnlyAccess } from "@/lib/roles";
+import { useMe, usePolicyYears } from "@/api/hooks";
 import { Label } from "@/components/ui/label";
+import { ReportDownloadButton } from "@/components/operations/ReportDownloadButton";
 
 /** Short relative time: "just now", "5m ago", "3h ago", "2d ago", else a date. */
 function relTime(iso: string | null): string {
@@ -45,11 +48,24 @@ function relTime(iso: string | null): string {
   return parseServerDate(iso).toLocaleDateString();
 }
 
+/** A broker viewer may read a retained copy only when it was filed masked: the
+ *  server applies the live reports' masking rule to retained bytes and to the
+ *  movement workbook built from them (`_assert_version_readable`). A version
+ *  without the flag is treated as unmasked, as the server treats it. */
+function readableBy(viewer: boolean, version: ReportVersion): boolean {
+  return !viewer || version.summary?.masked === true;
+}
+
 interface LatestProps {
   policyYearId: string;
   reportType: string;
   scopeKey: string | null;
   createInput: CreateReportVersionInput;
+  /** Read-only GET of the same document, with its fallback filename. Keeping
+   *  the copy is a POST, which a read-only session is refused, so that session
+   *  downloads the current document from here instead. */
+  livePath: string;
+  liveFilename: string;
   disabled?: boolean;
 }
 
@@ -59,16 +75,37 @@ export function ReportVersionActions({
   reportType,
   scopeKey,
   createInput,
+  livePath,
+  liveFilename,
   disabled,
 }: LatestProps) {
+  const { data: me } = useMe();
+  const readOnly = isReadOnlyAccess(me?.role, me?.platform_access);
   const status = useReportVersionStatus(
     policyYearId,
     reportType,
     scopeKey,
-    !disabled,
+    !disabled && !readOnly,
   );
   const create = useCreateReportVersion(policyYearId);
   const latest = status.data?.latest ?? null;
+
+  if (readOnly) {
+    return (
+      <div className="flex flex-col items-end gap-1">
+        <ReportDownloadButton
+          path={livePath}
+          filename={liveFilename}
+          label="Download"
+          size="sm"
+          disabled={disabled}
+        />
+        <span className="text-xs text-muted-foreground">
+          Downloads the current version
+        </span>
+      </div>
+    );
+  }
 
   const onDownload = () =>
     create.mutate(createInput, {
@@ -155,6 +192,11 @@ export function SubmissionRecord({
    *  keep. */
   filesOnDownload?: boolean;
 }) {
+  const { data: me } = useMe();
+  // A read-only session's download files nothing, and a viewer is refused the
+  // unmasked bytes every retained submission holds.
+  const readOnly = isReadOnlyAccess(me?.role, me?.platform_access);
+  const viewer = me?.role === "broker_viewer";
   const status = useReportVersionStatus(
     policyYearId,
     reportType,
@@ -166,6 +208,16 @@ export function SubmissionRecord({
 
   const latest = status.data?.latest ?? null;
   const isStale = status.data?.is_stale ?? false;
+  // `/status` reads the live series only. A year filed solely under the retired
+  // series it replaced would otherwise read "Not sent yet" with no way into the
+  // history that holds those submissions.
+  const legacyTypes = supersededTypes.join(",");
+  const legacy = useReportVersions(
+    !disabled && status.isSuccess && !latest && legacyTypes ? policyYearId : null,
+    legacyTypes,
+    scopeKey,
+  );
+  const legacyLatest = latest ? null : (legacy.data?.[0] ?? null);
   // Only asked for once the badge is already showing — see useMovementSummary.
   const movement = useMovementSummary(latest?.id ?? null, isStale && hasMovement);
   const moved = movement.data;
@@ -193,50 +245,63 @@ export function SubmissionRecord({
 
   if (disabled) return null;
 
+  const recorded = latest ?? legacyLatest;
+  const movementReadable = latest !== null && readableBy(viewer, latest);
+  // Prefixed "Roster" because the counts are membership diffs only, while
+  // staleness also fires on plan/category edits — an unqualified "2 updated"
+  // would assert more than it knows.
+  const movementBadge = (
+    <Badge variant="warn">
+      {movedLabel ? `Roster: ${movedLabel}` : "Roster changed"}
+      {movementReadable ? " ›" : ""}
+    </Badge>
+  );
+
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-border px-4 py-2 text-xs">
-      {latest ? (
+      {recorded ? (
         <span className="text-muted-foreground">
-          Last sent{" "}
+          Last sent{legacyLatest ? ` as ${legacyLatest.report_label}` : ""}{" "}
           <span className="font-medium text-foreground">
-            v{latest.version_no}
+            v{recorded.version_no}
           </span>{" "}
-          · {relTime(latest.created_at)}
-          {latest.generated_by ? ` by ${latest.generated_by}` : ""}
+          · {relTime(recorded.created_at)}
+          {recorded.generated_by ? ` by ${recorded.generated_by}` : ""}
         </span>
       ) : (
         <span className="text-muted-foreground">
-          Not sent yet —{" "}
-          {filesOnDownload
-            ? "downloading files a copy here."
-            : "an unmasked download files the copy an insurer receives."}
+          Not sent yet
+          {readOnly
+            ? "."
+            : filesOnDownload
+              ? " — downloading files a copy here."
+              : " — an unmasked download files the copy an insurer receives."}
         </span>
       )}
 
       {latest && isStale && (
         hasMovement ? (
-          <button
-            type="button"
-            onClick={onMovementSinceLive}
-            title={
-              "Roster membership changes since the file that went out. Plan and " +
-              "category edits also count as changed but are not totalled here. " +
-              "Click to download them."
-            }
-          >
-            {/* Prefixed "Roster" because the counts are membership diffs only,
-                while staleness also fires on plan/category edits — an
-                unqualified "2 updated" would assert more than it knows. */}
-            <Badge variant="warn">
-              {movedLabel ? `Roster: ${movedLabel}` : "Roster changed"} ›
-            </Badge>
-          </button>
+          movementReadable ? (
+            <button
+              type="button"
+              onClick={onMovementSinceLive}
+              title={
+                "Roster membership changes since the file that went out. Plan and " +
+                "category edits also count as changed but are not totalled here. " +
+                "Click to download them."
+              }
+            >
+              {movementBadge}
+            </button>
+          ) : (
+            movementBadge
+          )
         ) : (
           <Badge variant="warn">Changed since</Badge>
         )
       )}
 
-      {latest && (
+      {recorded && (
         <button
           ref={historyTriggerRef}
           type="button"
@@ -257,6 +322,7 @@ export function SubmissionRecord({
         scopeKey={scopeKey}
         scopeLabel={scopeLabel}
         hasMovement={hasMovement}
+        viewer={viewer}
         onReturnFocus={() => historyTriggerRef.current?.focus()}
       />
     </div>
@@ -272,6 +338,7 @@ function HistorySheet({
   scopeKey,
   scopeLabel,
   hasMovement,
+  viewer,
   onReturnFocus,
 }: {
   open: boolean;
@@ -282,6 +349,8 @@ function HistorySheet({
   scopeKey: string | null;
   scopeLabel?: string;
   hasMovement: boolean;
+  /** Broker viewers cannot download unmasked copies (see `readableBy`). */
+  viewer: boolean;
   onReturnFocus: () => void;
 }) {
   // One request for the live series plus the retired ones; the server merges
@@ -360,6 +429,12 @@ function HistorySheet({
             change stored-report retention. Use the Reports benefit-year selector
             to view another period.
           </p>
+          {viewer && (
+            <p className="mb-4 max-w-prose text-xs leading-relaxed text-muted-foreground">
+              Unmasked copies carry full NRIC/FIN numbers, so only roles with
+              write access can download them or their changes.
+            </p>
+          )}
           {versions.isLoading ? (
             <div
               role="status"
@@ -432,43 +507,45 @@ function HistorySheet({
                         {v.summary?.masked === false ? " · unmasked" : ""}
                       </div>
                     </div>
-                    <div className="flex shrink-0 flex-wrap gap-1 sm:justify-end">
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="sm"
-                        className={linkCls}
-                        onClick={() =>
-                          downloadReportVersion(v.id, v.file_name).catch((e) =>
-                            toast.error(formatError(e)),
-                          )
-                        }
-                      >
-                        <Download className="size-3" aria-hidden="true" />
-                        Download
-                      </Button>
-                      {hasMovement && diffable.has(v.id) && (
+                    {readableBy(viewer, v) && (
+                      <div className="flex shrink-0 flex-wrap gap-1 sm:justify-end">
                         <Button
                           type="button"
                           variant="ghost"
                           size="sm"
                           className={linkCls}
                           onClick={() =>
-                            downloadMovement(
-                              v.id,
-                              `${v.report_type}-v${v.version_no}-changes.xlsx`,
-                            ).catch((e) => toast.error(formatError(e)))
+                            downloadReportVersion(v.id, v.file_name).catch((e) =>
+                              toast.error(formatError(e)),
+                            )
                           }
-                          title={`Changes vs v${v.version_no - 1}`}
                         >
-                          <ArrowLeftRight
-                            className="size-3"
-                            aria-hidden="true"
-                          />
-                          Changes
+                          <Download className="size-3" aria-hidden="true" />
+                          Download
                         </Button>
-                      )}
-                    </div>
+                        {hasMovement && diffable.has(v.id) && (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            className={linkCls}
+                            onClick={() =>
+                              downloadMovement(
+                                v.id,
+                                `${v.report_type}-v${v.version_no}-changes.xlsx`,
+                              ).catch((e) => toast.error(formatError(e)))
+                            }
+                            title={`Changes vs v${v.version_no - 1}`}
+                          >
+                            <ArrowLeftRight
+                              className="size-3"
+                              aria-hidden="true"
+                            />
+                            Changes
+                          </Button>
+                        )}
+                      </div>
+                    )}
                   </li>
                 ))}
               </ol>

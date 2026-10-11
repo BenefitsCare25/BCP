@@ -276,6 +276,7 @@ export function LineTab({
               policyYearId={policyYearId}
               line={line}
               onCreated={handleCreated}
+              onRemove={setRemoveTarget}
             />}
           </div>
           {products.map((p) => {
@@ -362,6 +363,7 @@ export function LineTab({
             policyYearId={policyYearId}
             line={line}
             onCreated={handleCreated}
+            onRemove={setRemoveTarget}
           />}
         </div>
       )}
@@ -390,7 +392,7 @@ export function LineTab({
         open={removeTarget !== null}
         onOpenChange={(open) => !open && setRemoveTarget(null)}
         title={`Remove ${removeTarget?.display_name ?? "product"}?`}
-        description="This deletes the product's setup, plans, coverage period, and extracted categories for this policy year. You can add it again later. This cannot be undone."
+        description="This deletes the product's setup, plans, coverage period, and extracted categories for this policy year. A product with enrolment elections, plan overrides, underwriting cases, or claims this year cannot be removed. You can add it again later. This cannot be undone."
         confirmLabel="Remove product"
         confirmVariant="destructive"
         loading={removeProduct.isPending}

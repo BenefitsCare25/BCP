@@ -10,12 +10,14 @@ from sqlalchemy.orm import Session
 from app.models import Category, EligibilityMappingProfile, PolicyYear
 from app.models.category import CategoryStatus
 from app.services.eligibility_mapping.base import AttributeValueCatalog, RuleProposal
+from app.services.eligibility_mapping.predicates import is_placeholder_card_category
 from app.services.eligibility_mapping.proposal import propose_category_rule
 from app.services.eligibility_mapping.validation import (
     _source_allowed_values,
     validate_matching_rule,
 )
 from app.services.eligibility_mapping.vocabulary import category_signature
+from app.services.eligibility_scope import location_scope
 
 
 def _profile_proposal(profile: EligibilityMappingProfile) -> RuleProposal:
@@ -35,9 +37,17 @@ def _profile_proposal(profile: EligibilityMappingProfile) -> RuleProposal:
     )
 
 
+def _prior_rule_key(category: Category) -> tuple[str, str]:
+    """Prior-year reuse identity: a location-scoped rule only feeds the same scope."""
+    return (
+        category_signature(category.raw_description),
+        (location_scope(category) or "").casefold(),
+    )
+
+
 def _previous_confirmed_rules(
     db: Session, policy_year_id: str, client_id: str
-) -> dict[str, Category]:
+) -> dict[tuple[str, str], Category]:
     rows = list(
         db.execute(
             select(Category)
@@ -51,9 +61,10 @@ def _previous_confirmed_rules(
             .order_by(PolicyYear.year.desc(), Category.updated_at.desc())
         ).scalars()
     )
-    out: dict[str, Category] = {}
+    out: dict[tuple[str, str], Category] = {}
     for category in rows:
-        out.setdefault(category_signature(category.raw_description), category)
+        if not is_placeholder_card_category(category):
+            out.setdefault(_prior_rule_key(category), category)
     return out
 
 
@@ -101,13 +112,15 @@ def _candidate_for_category(
     category: Category,
     catalog: AttributeValueCatalog,
     profiles: dict[str, EligibilityMappingProfile],
-    previous: dict[str, Category],
+    previous: dict[tuple[str, str], Category],
 ) -> tuple[RuleProposal, bool]:
+    if is_placeholder_card_category(category):
+        return propose_category_rule(category.raw_description, catalog), False
     signature = category_signature(category.raw_description)
     if profile := profiles.get(signature):
         if profile.status == "confirmed" and profile.matching_rule:
             return _profile_proposal(profile), True
-    if prior := previous.get(signature):
+    if prior := previous.get(_prior_rule_key(category)):
         return (
             RuleProposal(
                 rule=prior.matching_rule,

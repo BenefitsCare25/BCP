@@ -5,6 +5,8 @@ same display name in two claim types is deliberately two different records.
 """
 from __future__ import annotations
 
+import re
+import unicodedata
 from dataclasses import dataclass
 from hashlib import sha1
 from typing import Any
@@ -14,7 +16,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import Claim, ClaimDocumentSetup
-from app.schemas.claims import ClaimDocKeyField, ClaimSetupDocument
+from app.schemas.claims import (
+    ClaimDocKeyField,
+    ClaimSetupDocument,
+    CoverageOptionsOut,
+)
 from app.services.claim_doc_types import (
     DocTypeDefinition,
     KeyField,
@@ -31,6 +37,7 @@ from app.services.claim_intake import (
     claim_scope_key,
     generic_scope_code,
     required_doc_slots,
+    sector_scope_codes,
 )
 from app.services.claims_review.field_maps import SLOT_DOC_FAMILIES
 from app.services.sg_hospitals import SECTOR_GOVT, SECTOR_PRIVATE
@@ -187,17 +194,21 @@ def _legacy_required_documents(
 
 def _legacy_document(value: str) -> ClaimSetupDocument:
     digest = sha1(value.casefold().encode("utf-8")).hexdigest()[:8]
-    stem = "_".join(
-        part for part in "".join(
-            character if character.isalnum() else " " for character in value.casefold()
-        ).split()
-    )[:16]
+    # ASCII only: `ClaimSetupDocument.key` is `^[a-z0-9_]+$`, and str.isalnum
+    # accepts accented and CJK letters; the digest keeps such names unique.
+    ascii_name = (
+        unicodedata.normalize("NFKD", value.casefold())
+        .encode("ascii", "ignore")
+        .decode("ascii")
+    )
+    stem = "_".join(re.findall(r"[a-z0-9]+", ascii_name))[:16]
     return ClaimSetupDocument(
         id=f"legacy:{digest}",
         key=f"legacy_{stem or 'document'}_{digest}"[:32],
-        display=value,
+        # Review rules accepted 200-character names; setup names cap at 128.
+        display=value[:128],
         instructions=f"Attach the {value.casefold()}.",
-        aliases=[value],
+        aliases=[value[:128]],
         key_fields=[],
     )
 
@@ -388,25 +399,56 @@ def definitions_for_claim(db: Session, claim: Claim) -> tuple[DocTypeDefinition,
     )
 
 
-def configured_definitions(
-    db: Session, client_id: str
-) -> tuple[DocTypeDefinition, ...]:
-    """Flatten saved private libraries for pre-selection intake recognition.
+def _coverage_scopes(
+    coverage: CoverageOptionsOut,
+) -> list[tuple[str, str, str, str | None]]:
+    """(kind, key, scope code, sub-type) for every claim choice the member holds,
+    with each GHS subclaim expanded to its Government and Private leaves."""
+    scopes: list[tuple[str, str, str, str | None]] = []
+    for option in coverage.insured:
+        for claim_type in option.claim_types:
+            code = claim_type.scope_code or SCOPE_STANDARD
+            scopes.extend(
+                ("insured", option.product_code, leaf, claim_type.sub_type)
+                for leaf in sector_scope_codes(code) or (code,)
+            )
+    if coverage.flex is not None:
+        scopes.extend(
+            ("flex", category.name, SCOPE_STANDARD, None)
+            for category in coverage.flex.categories
+        )
+    return scopes
 
-    If the company has not saved any new-style setup yet, retain the legacy
-    registry so the rollout is behaviour-preserving.
+
+def configured_definitions(
+    db: Session, client_id: str, coverage: CoverageOptionsOut
+) -> tuple[DocTypeDefinition, ...]:
+    """Pre-selection intake recognition over the member's own claim choices.
+
+    Each choice contributes its effective document set — the saved setup, or
+    the defaults an unsaved choice still serves — so a partial save never drops
+    recognition, and generic titles shared by several choices stay ambiguous
+    instead of routing to whichever saved row sorts first. If the company has
+    not saved any new-style setup yet, retain the legacy registry so the
+    rollout is behaviour-preserving.
     """
-    rows = setup_rows(db, client_id)
-    if not rows:
+    if not setup_rows(db, client_id):
         return resolve_doc_types(db, client_id)
     out: list[DocTypeDefinition] = []
-    for row in rows:
-        scope_key = claim_scope_key(row.claim_kind, row.claim_key, row.scope_code)
+    for kind, key, scope_code, sub_type in _coverage_scopes(coverage):
+        documents = resolve_setup(
+            db,
+            client_id,
+            claim_kind=kind,
+            claim_key=key,
+            scope_code=scope_code,
+            sub_type=sub_type,
+        ).documents
         out.extend(
             definitions_from_documents(
-                read_documents(row.documents),
-                scope_key=scope_key,
-                scope_code=row.scope_code,
+                documents,
+                scope_key=claim_scope_key(kind, key, scope_code),
+                scope_code=scope_code,
             )
         )
     return tuple(out)

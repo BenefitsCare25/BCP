@@ -246,6 +246,34 @@ def config_out(db: Session, window: EnrollmentWindow) -> FormConfigOut:
     )
 
 
+def drops_saved_items(
+    db: Session, window: EnrollmentWindow, settings: FormSettings
+) -> bool:
+    """Would saving ``settings`` remove a SAVED declaration, document or
+    taken-together rule? That is saved-data removal, reserved for firm owners.
+
+    Declarations and documents carry ids. Rules do not — editing a rule's pair
+    in place is allowed — so a rule is removed exactly when the saved count
+    falls. Generated defaults (nothing saved yet) are not saved data."""
+    row = find_config(db, window.id)
+    if row is None:
+        return False
+    saved = row.settings or {}
+
+    def saved_ids(key: str) -> set[str]:
+        return {
+            str(item["id"])
+            for item in saved.get(key) or []
+            if isinstance(item, dict) and item.get("id")
+        }
+
+    return bool(
+        saved_ids("clauses") - {c.id for c in settings.clauses}
+        or saved_ids("documents") - {d.id for d in settings.documents}
+        or len(settings.rules) < len(saved.get("rules") or [])
+    )
+
+
 def save_settings(
     db: Session, window: EnrollmentWindow, settings: FormSettings, user_id: str
 ) -> EnrollmentFormConfig:

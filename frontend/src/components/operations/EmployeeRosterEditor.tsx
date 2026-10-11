@@ -3,11 +3,12 @@ import { createPortal } from "react-dom";
 import { useBlocker } from "@tanstack/react-router";
 import { Check, Pencil, Save } from "lucide-react";
 import { toast } from "sonner";
-import { useMe, useUpdateEmployee } from "@/api/hooks";
+import { useUpdateEmployee } from "@/api/hooks";
 import { AlertDialog } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { formatError } from "@/lib/errors";
+import { useWriteAccess } from "@/lib/roles";
 import type { Employee, EmployeeRosterField } from "@/types";
 import { RosterFieldInput, rosterDraftValue, rosterFieldType, validRosterDate } from "./RosterFieldInput";
 
@@ -61,7 +62,7 @@ export function EmployeeRosterEditor({ employee, actionContainer, disabled = fal
   employee: Employee; actionContainer?: HTMLElement | null; disabled?: boolean;
   onEditingChange?: (editing: boolean) => void;
 }) {
-  const { data: me } = useMe();
+  const { canEdit } = useWriteAccess();
   const update = useUpdateEmployee();
   const [editing, setEditing] = useState(false);
   const [baseline, setBaseline] = useState(employee);
@@ -73,7 +74,6 @@ export function EmployeeRosterEditor({ employee, actionContainer, disabled = fal
   const [cancelPrompt, setCancelPrompt] = useState(false);
   const editButton = useRef<HTMLButtonElement>(null);
   const editorSection = useRef<HTMLElement>(null);
-  const canEdit = Boolean(me && me.role !== "broker_viewer");
   const current = editing ? baseline : employee;
   const fields = useMemo(() => {
     const byId = new Map(
@@ -186,6 +186,7 @@ export function EmployeeRosterEditor({ employee, actionContainer, disabled = fal
       setSaved(true);
       finishEditing();
       toast.success("Roster changes saved");
+      if (result.flex_errors?.length) toast.warning(result.flex_errors.join(" "));
       if (blockerRef.current.status === "blocked") blockerRef.current.proceed();
     } catch (caught) {
       setError(`${formatError(caught)} Your changes are still here and have not been saved.`);

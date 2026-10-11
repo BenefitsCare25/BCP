@@ -546,9 +546,14 @@ export interface Employee {
   match_method: string | null;
   match_confidence: number | null;
   matched_plans: MatchedPlan[];
+  /** Every category the match holds — including a product the member declined
+   *  in enrolment, which `matched_plans` leaves out. */
+  matched_category_ids?: string[];
   unmatched_product_codes?: string[];
   updated_at?: string | null;
   roster_fields?: EmployeeRosterField[];
+  /** Edit responses only: the automatic flex re-assignment failed. */
+  flex_errors?: string[];
 }
 
 export interface EmployeeList {
@@ -615,6 +620,9 @@ export interface Dependant {
   link_method: string | null;
   /** "active" | "pending_approval" | "rejected" — portal self-adds start pending. */
   status: string;
+  /** "spouse" | "child" | null — the server-classified pricing role. Served by
+   *  the member and preview dependant lists only. */
+  role?: string | null;
 }
 
 // ── Benefit statement (read-only employee coverage view) ────────────────────

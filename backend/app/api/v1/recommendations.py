@@ -23,12 +23,14 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.api.v1.schemas_api import _validate_value_mapping
 from app.core.audit import write_audit
 from app.core.auth import CurrentUser, get_current_user
 from app.core.deps import (
     assert_policy_year_editable,
     load_policy_year,
     policy_year_company,
+    require_firm_owner,
     tenant_or_global,
 )
 from app.core.rate_limit import limiter
@@ -592,6 +594,10 @@ def _create_products(
     return created, codes
 
 
+def _is_value_map(rule: object) -> bool:
+    return isinstance(rule, dict) and rule.get("op") == "value_map"
+
+
 def _upsert_attributes(
     db: Session, user: CurrentUser, client_id: str, items: list[ApplyAttributeItem]
 ) -> tuple[list[str], list[str]]:
@@ -622,8 +628,17 @@ def _upsert_attributes(
             row.is_pii = item.is_pii or row.is_pii
             if item.description is not None:
                 row.description = item.description
-            row.derived_from = item.derived_from
-            row.derivation_rule = item.derivation_rule
+            # A rule is sticky like PII: an item without one leaves the saved
+            # rule alone. Replacing a reviewed value map is the same firm-owner
+            # reset as on PATCH /schemas/employee-attributes.
+            if item.derivation_rule is not None:
+                if _is_value_map(row.derivation_rule):
+                    require_firm_owner(user)
+                row.derived_from = item.derived_from
+                row.derivation_rule = item.derivation_rule
+            # A kept value map must still target allowed values after an
+            # enum_values change.
+            _validate_value_mapping(row, db)
             write_audit(
                 db, user, action="update", entity_type="employee_attribute_schema",
                 entity_id=row.id, before=before,

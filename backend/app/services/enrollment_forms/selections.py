@@ -6,7 +6,9 @@ and print another.
 ``coverage_resolver``): an explicit ``covered_dependant_ids`` list is
 authoritative; ``None`` means "no change", so the member keeps what they hold
 (the window's baseline list), and with no baseline list compulsory family cover
-covers every eligible active dependant while voluntary cover covers nobody.
+covers every eligible active dependant while voluntary cover covers nobody. An
+election never stores a list for compulsory cover (it follows the roster), so
+there ``None`` is every eligible active dependant.
 Reading ``None`` as "nobody" printed kept family members as WITHDRAWN.
 """
 from __future__ import annotations
@@ -16,7 +18,7 @@ from typing import Any
 
 from fastapi import HTTPException, status
 
-from app.models.enrollment import EnrollmentElection
+from app.models.enrollment import ElectionAction, EnrollmentElection
 from app.schemas.enrollment import CohortTierOut, ProductTierSetOut
 from app.schemas.enrollment_forms import (
     FormDependantOut,
@@ -58,7 +60,7 @@ def _find_tier(ts: ProductTierSetOut, el: EnrollmentElection | None) -> CohortTi
         return next((t for t in ts.tiers if t.is_current), None) or next(
             (t for t in ts.tiers if t.is_baseline), None
         )
-    if el.elected_plan_code is None:
+    if el.action == ElectionAction.decline:
         return None
     if el.tier_category_id:
         for t in ts.tiers:
@@ -87,18 +89,25 @@ def resolve_selections(
     out: list[Selection] = []
     for ts in products:
         el = elections.get(ts.product_code)
-        declined = el is not None and el.elected_plan_code is None
-        tier = _find_tier(ts, el)
+        # A tier can lack a plan code, so only the action says "declined". With
+        # no election, voluntary cover the member holds nothing of stays not
+        # enrolled — the deck starts it there too.
+        declined = (
+            el.action == ElectionAction.decline if el is not None else ts.eligible_only
+        )
+        tier = None if declined else _find_tier(ts, el)
         mode = None if declined else tier_dependant_participation(ts, tier)
         held = (baseline.get(ts.product_code) or {}).get("covered_dependant_ids")
         sel = Selection(ts=ts, election=el, tier=tier, declined=declined, family_mode=mode)
         if not declined and mode is not None:
             if el is not None and el.covered_dependant_ids is not None:
                 sel.covered_ids = list(el.covered_dependant_ids)
+            elif mode == "compulsory" and (el is not None or held is None):
+                # An election stores no list for compulsory cover: it follows
+                # the roster, so confirming it covers every eligible dependant.
+                sel.covered_ids = _auto_covered(ts.product_code, ctx.dependants)
             elif held is not None:
                 sel.covered_ids = list(held)
-            elif mode == "compulsory":
-                sel.covered_ids = _auto_covered(ts.product_code, ctx.dependants)
         if held is not None:
             sel.withdrawn_ids = [i for i in held if i not in sel.covered_ids]
         out.append(sel)
@@ -258,9 +267,10 @@ def selection_rows(selections: list[Selection], ctx: MemberFormContextOut) -> li
         premium = (
             next((t for t in contrib.tiers if t.tier_key == key), None) if contrib and key else None
         )
-        held = next((t for t in sel.ts.tiers if t.is_current), None) or next(
-            (t for t in sel.ts.tiers if t.is_baseline), None
-        )
+        # Cover the member holds nothing of has no "now" premium to compare to.
+        held = None if sel.ts.eligible_only else next(
+            (t for t in sel.ts.tiers if t.is_current), None
+        ) or next((t for t in sel.ts.tiers if t.is_baseline), None)
         held_premium = (
             next((t for t in contrib.tiers if t.tier_key == held.key), None)
             if contrib and held else None
@@ -274,7 +284,8 @@ def selection_rows(selections: list[Selection], ctx: MemberFormContextOut) -> li
             "insurer": fact.insurer if fact else None,
             "compulsory": sel.code in compulsory,
             "action": sel.election.action if sel.election else "keep",
-            "previous_plan": current_tier_label(sel.ts),
+            "previous_plan": None if sel.ts.eligible_only else current_tier_label(sel.ts),
+            "eligible_only": sel.ts.eligible_only,
             "elected_plan": None if sel.declined else (sel.tier.label if sel.tier else None),
             "highlight": fact.highlight if fact else None,
             "sum_insured": fact.sum_insured if fact else None,

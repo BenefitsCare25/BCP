@@ -36,7 +36,7 @@ import {
 import { ScopeToggle } from "@/components/schema/ScopeToggle";
 import { ValueMappingEditor } from "@/components/schema/ValueMappingEditor";
 import { formatError } from "@/lib/errors";
-import { isBrokerAdminRole } from "@/lib/roles";
+import { isBrokerAdminRole, isReadOnlyAccess } from "@/lib/roles";
 import type { AttributeSchema } from "@/types";
 
 const TYPES = ["string", "integer", "decimal", "boolean", "date", "enum"];
@@ -92,6 +92,7 @@ export function SchemaAttributesPage({
   const { data: attrs = [], isLoading } = useEmployeeAttributes();
   const { data: me } = useMe();
   const isAdmin = isBrokerAdminRole(me?.role);
+  const readOnly = isReadOnlyAccess(me?.role, me?.platform_access);
   const create = useCreateAttribute();
   const update = useUpdateAttribute();
   const remove = useDeleteAttribute();
@@ -168,7 +169,8 @@ export function SchemaAttributesPage({
         });
         toast.success(`Added ${draft.display_name}`);
       }
-      onOpenChange(false);
+      // Radix does not report a programmatic close, so clear the edit state here.
+      onSheetOpenChange(false);
     } catch (err) {
       toast.error(formatError(err));
     }
@@ -377,10 +379,13 @@ export function SchemaAttributesPage({
           ) : (
             <AttributeSchemaEditor
               attributes={visible}
-              onEdit={beginEdit}
-              onDelete={setDeleting}
+              onEdit={readOnly ? undefined : beginEdit}
+              onDelete={readOnly ? undefined : setDeleting}
               // Firm-library defaults are shared across companies — admin-only.
               lockRow={(a) => scope === "firm" && a.client_id === null && !isAdmin}
+              // An inherited default is deleted firm-wide, so only the firm
+              // library offers it; this company can override it via Edit.
+              canDelete={(a) => scope === "firm" || a.client_id !== null}
             />
           )}
         </CardContent>
@@ -392,10 +397,12 @@ export function SchemaAttributesPage({
         title={`Delete attribute ${deleting?.display_name ?? ""}?`}
         description={
           <>
-            The attribute <code>{deleting?.attribute_id}</code> will be removed
-            from this client. Any employee data already uploaded retains the
-            raw value but the attribute disappears from the schema. This cannot
-            be undone.
+            The attribute <code>{deleting?.attribute_id}</code> will be removed{" "}
+            {deleting?.client_id === null
+              ? "from the firm library for every company. Eligibility rules that use it stop matching."
+              : "from this company."}{" "}
+            Any employee data already uploaded retains the raw value but the
+            attribute disappears from the schema. This cannot be undone.
           </>
         }
         confirmLabel="Delete attribute"

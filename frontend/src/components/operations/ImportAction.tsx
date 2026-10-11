@@ -18,6 +18,8 @@ interface Props {
   /** Overrides the upload glyph (ADC uses a diff icon, not a plain upload). */
   icon?: ReactNode;
   disabled?: boolean;
+  /** False for a read-only session: only the template download is offered. */
+  uploadable?: boolean;
 }
 
 /**
@@ -37,6 +39,7 @@ export function ImportAction({
   primary,
   icon,
   disabled,
+  uploadable = true,
 }: Props) {
   const fileInput = useRef<HTMLInputElement>(null);
 
@@ -49,32 +52,36 @@ export function ImportAction({
         variant="ghost"
         disabled={disabled}
       />
-      <input
-        ref={fileInput}
-        type="file"
-        accept={SPREADSHEET_ACCEPT}
-        aria-label={uploadLabel}
-        className="hidden"
-        onChange={(e) => {
-          const file = e.target.files?.[0];
-          // Clear before dispatching so re-picking the same file after a fix
-          // still fires a change event.
-          e.target.value = "";
-          if (file) onPick(file);
-        }}
-      />
-      <Button
-        variant={primary ? "default" : "outline"}
-        onClick={() => fileInput.current?.click()}
-        disabled={pending || disabled}
-      >
-        {pending ? (
-          <Loader2 className="size-4 animate-spin" />
-        ) : (
-          (icon ?? <Upload className="size-4" />)
-        )}
-        {uploadLabel}
-      </Button>
+      {uploadable && (
+        <>
+          <input
+            ref={fileInput}
+            type="file"
+            accept={SPREADSHEET_ACCEPT}
+            aria-label={uploadLabel}
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              // Clear before dispatching so re-picking the same file after a
+              // fix still fires a change event.
+              e.target.value = "";
+              if (file) onPick(file);
+            }}
+          />
+          <Button
+            variant={primary ? "default" : "outline"}
+            onClick={() => fileInput.current?.click()}
+            disabled={pending || disabled}
+          >
+            {pending ? (
+              <Loader2 className="size-4 animate-spin" />
+            ) : (
+              (icon ?? <Upload className="size-4" />)
+            )}
+            {uploadLabel}
+          </Button>
+        </>
+      )}
     </div>
   );
 }

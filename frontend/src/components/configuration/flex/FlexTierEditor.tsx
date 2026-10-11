@@ -53,6 +53,8 @@ interface Props {
   tier: FlexTier;
   index: number;
   currency: string;
+  /** Scheme-wide flat cap: sizes this tier when it sets no cap or rows itself. */
+  schemeCap?: number | null;
   /** Reconciled headcount for this tier (family-status split + eligible count),
    *  shown inline on the Eligibility line. Absent for a not-yet-saved tier. */
   headcount?: FlexTierHeadcount;
@@ -75,6 +77,7 @@ export function FlexTierEditor({
   tier,
   index,
   currency,
+  schemeCap,
   headcount,
   designations,
   grades,
@@ -119,8 +122,8 @@ export function FlexTierEditor({
   const limits = tier.limits ?? [];
   const cats = tier.benefit_categories ?? [];
 
-  const review = flexTierReview(tier, headcount);
-  const shapeBadge = SHAPE_BADGE[flexTierWalletShape(tier)];
+  const review = flexTierReview(tier, headcount, schemeCap);
+  const shapeBadge = SHAPE_BADGE[flexTierWalletShape(tier, schemeCap)];
 
   const setLimit = (i: number, partial: Partial<FlexLimit>) => {
     patch({ limits: limits.map((l, j) => (j === i ? { ...l, ...partial } : l)) });
@@ -337,7 +340,11 @@ export function FlexTierEditor({
           </Button>
         </div>
         {limits.length === 0 ? (
-          typeof tier.system_cap === "number" ? null : (
+          typeof tier.system_cap === "number" ? null : typeof schemeCap === "number" ? (
+            <p className="text-xs text-muted-foreground">
+              Uses the scheme-wide flat cap ({formatWallet(schemeCap, tier.currency || currency || null)}).
+            </p>
+          ) : (
             <p className="text-xs text-muted-foreground">
               Set a flat cap above, or add per-family rows.
             </p>

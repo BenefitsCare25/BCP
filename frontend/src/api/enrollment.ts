@@ -142,6 +142,12 @@ export interface WindowClosePreview {
   saved_submittable: number;
   saved_blocked: CloseMemberNote[];
   saved_blocked_count: number;
+  /** Confirmed, then reopened and never sent again: close keeps their
+   *  confirmed coverage and leave unless their saved choices are submitted
+   *  (they are counted in `saved_submittable`). Not in `saved_not_sent` or
+   *  `not_started`. */
+  reopened_unsent: CloseMemberNote[];
+  reopened_unsent_count: number;
 }
 
 export type EnrollmentStatus =
@@ -383,9 +389,16 @@ export interface ProductTierSet {
   baseline_plan_code: string | null;
   allow_plan_change: boolean;
   can_decline: boolean;
+  /** Voluntary cover the member holds nothing of: it starts as not enrolled,
+   *  no tier is current, and electing any tier enrols them. Absent on an
+   *  older payload. */
+  eligible_only?: boolean;
   tiers: CohortTier[];
   /** Dependant pricing for this product (null when not configured). */
   dependant: DependantPricing | null;
+  /** The member's dependants inside this product's age window — who compulsory
+   *  dependant cover covers and prices at save. Absent on an older payload. */
+  eligible_dependant_ids?: string[];
 }
 
 export interface EnrollmentOptions {
@@ -470,6 +483,9 @@ export interface FlexPricingProduct {
   slip_family: Record<string, Partial<Record<FamilyRole, number>>>;
   /** Slip-derived per-dependant rate, keyed by tier key → rate. */
   slip_per_pax: Record<string, number>;
+  /** GST gross-up on every flex tag this product draws (1 = none). Price-book
+   *  amounts are GST-exclusive; members are charged them × this. */
+  gst_multiplier?: number;
 }
 
 /** Saved dependant config for a product, stored in the pricing bag. Family/per-pax
@@ -549,6 +565,8 @@ export interface EnrollmentDetail {
         covered_dependant_ids: string[] | null;
         dependant_option_ids?: Record<string, string> | null;
         compulsory: boolean;
+        /** Voluntary cover held as nothing at window-open (declined, no plan). */
+        eligible_only?: boolean;
       }
     >;
   } | null;
@@ -558,6 +576,9 @@ export interface EnrollmentDetail {
   leave: LeaveElectionOut | null;
   /** Product codes whose category has participation_model='compulsory' for this member. */
   compulsory_product_codes: string[];
+  /** The employee signed this enrolment in the portal; returning or reopening
+   *  it needs member self-service. Absent on an older payload. */
+  portal_signed?: boolean;
 }
 
 export interface ElectionIn {
@@ -598,7 +619,10 @@ export function useReadinessEmployees(windowId: string, code: string, q: string,
   const cid = useClientId();
   return useQuery({
     queryKey: ["enrollment-readiness-employees", cid, windowId, code, q, page],
-    queryFn: () => api.get<{ total: number; items: ReadinessEmployee[] }>(
+    // Polled while portal access is incomplete: `api.poll` keeps the refetch
+    // passive so an open page cannot hold the session past its idle limit.
+    queryFn: (context) => api.poll<{ total: number; items: ReadinessEmployee[] }>(
+      context,
       `/enrollment-windows/${windowId}/readiness/${code}/employees?q=${encodeURIComponent(q)}&offset=${page * 50}&limit=50`,
     ),
     refetchInterval: code === "portal_access_incomplete" ? 10000 : false,
@@ -851,8 +875,8 @@ export function useWindowReadiness(windowId: string | undefined) {
   const cid = useClientId();
   return useQuery({
     queryKey: ["enrollment-readiness", windowId, cid],
-    queryFn: () =>
-      api.get<EnrollmentReadiness>(`/enrollment-windows/${windowId}/readiness`),
+    queryFn: (context) =>
+      api.poll<EnrollmentReadiness>(context, `/enrollment-windows/${windowId}/readiness`),
     enabled: !!windowId,
     refetchInterval: (query) => query.state.data?.issues.some((i) => i.code === "portal_access_incomplete") ? 10000 : false,
   });
@@ -892,8 +916,7 @@ export function useConfirmSubmitted() {
       ),
     onSuccess: () => {
       invalidateEnrollment(qc);
-      qc.invalidateQueries({ queryKey: ["plan-overrides"] });
-      qc.invalidateQueries({ queryKey: ["underwriting"] });
+      invalidateProjection(qc);
     },
   });
 }
@@ -908,14 +931,13 @@ export function useCloseWindow() {
     // The close dialog reports blocked submissions itself.
     meta: { localErrorHandling: true },
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["enrollment-progress"] });
       qc.invalidateQueries({ queryKey: ["enrollment-windows"] });
-      qc.invalidateQueries({ queryKey: ["enrollments"] });
-      qc.invalidateQueries({ queryKey: ["benefit-statement"] });
-      qc.invalidateQueries({ queryKey: ["coverage-summary"] });
-      // Close projects elections into overrides → history + override views change.
-      qc.invalidateQueries({ queryKey: ["coverage-history"] });
-      qc.invalidateQueries({ queryKey: ["plan-overrides"] });
+      // Close finalises every enrolment (statuses, forms register, events) and
+      // projects the elections into overrides — which moves each tier's
+      // "current" flag and what is held, so the options are stale too.
+      invalidateEnrollment(qc);
+      invalidateProjection(qc);
+      qc.invalidateQueries({ queryKey: ["enrollment-options"] });
     },
   });
 }
@@ -988,7 +1010,10 @@ export function useSaveEnrollmentPricingConfig(
       qc.invalidateQueries({ queryKey: ["enrollment-readiness"] });
       qc.invalidateQueries({ queryKey: ["enrollment-readiness-employees"] });
       qc.invalidateQueries({ queryKey: ["enrollment-options"] });
+      // New tags move the statement's lines AND the utilization's `available`;
+      // `FlexPanel` draws one ledger from both, so they refetch together.
       qc.invalidateQueries({ queryKey: ["benefit-statement"] });
+      qc.invalidateQueries({ queryKey: ["employee-utilization"] });
     },
   });
 }
@@ -1047,6 +1072,15 @@ function invalidateEnrollment(qc: ReturnType<typeof useQueryClient>) {
   qc.invalidateQueries({ queryKey: ["coverage-history"] });
 }
 
+/** What confirming or closing changes beyond the enrolment: elections are
+ * projected into overrides, underwriting cases re-sync against the new sums
+ * insured, and the member's flex ledger moves. */
+function invalidateProjection(qc: ReturnType<typeof useQueryClient>) {
+  qc.invalidateQueries({ queryKey: ["plan-overrides"] });
+  qc.invalidateQueries({ queryKey: ["underwriting"] });
+  qc.invalidateQueries({ queryKey: ["employee-utilization"] });
+}
+
 export function useSetElections() {
   const qc = useQueryClient();
   return useMutation({
@@ -1094,7 +1128,12 @@ export function useConfirmEnrollment() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => api.post<EnrollmentDetail>(`/enrollments/${id}/confirm`, {}),
-    onSuccess: () => invalidateEnrollment(qc),
+    onSuccess: () => {
+      invalidateEnrollment(qc);
+      invalidateProjection(qc);
+      // Projection moves the held tier (`is_current`) and what is held at all.
+      qc.invalidateQueries({ queryKey: ["enrollment-options"] });
+    },
   });
 }
 

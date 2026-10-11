@@ -14,7 +14,7 @@ import { HrAdminSettings } from "@/components/settings/HrAdminSettings";
 import { WicaSettings } from "@/components/wica/WicaSettings";
 import { SchemaEntityAliasesPage } from "@/routes/schema/entity-aliases";
 import { EmailSettings } from "@/features/email-settings";
-import { isBrokerAdminRole } from "@/lib/roles";
+import { isBrokerAdminRole, isReadOnlyAccess } from "@/lib/roles";
 
 // Standing, company-scoped configuration: entity-matching aliases (moved out
 // of the firm-wide Schema page, where they were the only company-scoped tab)
@@ -40,6 +40,7 @@ export function CompanySettingsPage() {
   const search = useSearch({ strict: false }) as { tab?: string };
   const { data: me } = useMe();
   const canAdmin = isBrokerAdminRole(me?.role);
+  const readOnly = isReadOnlyAccess(me?.role, me?.platform_access);
   const requested: SettingsTab = isTab(search.tab) ? search.tab : "aliases";
   // The Authentication tab is admin-only (firm-admin `/hr-admin` endpoints);
   // fall back to aliases if a viewer deep-links it.
@@ -65,11 +66,13 @@ export function CompanySettingsPage() {
         </PageTabsBar>
 
         <TabsContent value="aliases">
-          <div className="mb-3 flex justify-end">
-            <Button onClick={() => setAliasAddOpen(true)}>
-              <Plus className="size-4" /> Add alias
-            </Button>
-          </div>
+          {!readOnly && (
+            <div className="mb-3 flex justify-end">
+              <Button onClick={() => setAliasAddOpen(true)}>
+                <Plus className="size-4" /> Add alias
+              </Button>
+            </div>
+          )}
           <SchemaEntityAliasesPage
             open={aliasAddOpen}
             onOpenChange={setAliasAddOpen}

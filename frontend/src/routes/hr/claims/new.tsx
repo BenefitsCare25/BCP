@@ -1,5 +1,5 @@
 import { usePortalTranslation, type PortalTranslator } from "@/i18n/portal";
-import { Link, useNavigate } from "@tanstack/react-router";
+import { Link, useNavigate, useParams } from "@tanstack/react-router";
 import { AlertTriangle, ArrowLeft, Check, Loader2, Search, UserRound } from "lucide-react";
 import {
   type FormEvent,
@@ -10,11 +10,14 @@ import {
   useState,
 } from "react";
 import {
+  useAmendHrClaim,
   useCreateHrClaim,
+  useHrClaim,
   useHrCoverageOptions,
   useHrEmployees,
   useHrFxQuote,
   useUploadHrReferral,
+  type HrClaim,
   type HrReferral,
   type HrEmployee,
 } from "@/api/hrClaims";
@@ -85,6 +88,24 @@ function choicesFrom(options: CoverageOptions, pt: PortalTranslator): ClaimChoic
   return [...insured, ...flex];
 }
 
+/** The option a saved draft was filed under: product plus sub-type and label,
+ *  then the label alone (a sub-type the server has since normalised), then the
+ *  sub-type alone (a renamed label). */
+function draftChoice(choices: ClaimChoice[], claim: HrClaim): ClaimChoice | null {
+  const draft = claim.draft;
+  if (!draft) return null;
+  if (claim.claim_kind === "flex") {
+    return choices.find((item) => item.kind === "flex" && item.flexCategory === draft.flex_category_name) ?? null;
+  }
+  const insured = choices.filter((item) => item.kind === "insured" && item.productCode === draft.product_code);
+  return (
+    insured.find((item) => item.subType === draft.sub_type && item.claimType === claim.claim_type) ??
+    insured.find((item) => item.claimType === claim.claim_type) ??
+    insured.find((item) => item.subType === draft.sub_type) ??
+    null
+  );
+}
+
 function Field({
   label,
   required,
@@ -110,26 +131,90 @@ function Field({
 }
 
 export function HrNewClaimPage() {
+  return <HrClaimForm />;
+}
+
+/** The new-claim form opened on a draft HR already saved. Only a draft can be
+ *  edited here; once sent, the claim is the assessor's to correct. */
+export function HrEditClaimPage() {
   const pt = usePortalTranslation();
-  useDocumentTitle("New employee claim");
+  const { claimId } = useParams({ strict: false }) as { claimId: string };
+  const claim = useHrClaim(claimId);
+  useDocumentTitle("Edit employee claim");
+
+  if (claim.isLoading) {
+    return (
+      <div className="mx-auto max-w-3xl space-y-4" aria-label={pt("Loading claim")}>
+        <Skeleton className="h-10 w-48" />
+        <Skeleton className="h-56 rounded-xl" />
+      </div>
+    );
+  }
+  if (claim.isError || !claim.data || !claim.data.can_edit || !claim.data.draft) {
+    return (
+      <div className="mx-auto max-w-3xl space-y-4">
+        <Button asChild variant="ghost" className="-ml-3 h-11 sm:h-9">
+          <Link to="/hr/claims/$claimId" params={{ claimId }}>
+            <ArrowLeft className="size-4" aria-hidden />
+            {pt("Back to claim")}
+          </Link>
+        </Button>
+        <Card className="p-5" role="alert">
+          <p className="font-medium">
+            {claim.isError || !claim.data
+              ? pt("This claim could not be loaded")
+              : pt("Only a draft can be edited")}
+          </p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            {claim.isError
+              ? pt(formatError(claim.error))
+              : pt("This claim has been sent, so its details are now corrected by the claims team.")}
+          </p>
+        </Card>
+      </div>
+    );
+  }
+  return <HrClaimForm key={claim.data.id} editing={claim.data} />;
+}
+
+function HrClaimForm({ editing }: { editing?: HrClaim }) {
+  const pt = usePortalTranslation();
+  useDocumentTitle(editing ? null : "New employee claim");
   const navigate = useNavigate();
+  const draft = editing?.draft ?? null;
+  // The revision the form opened on, not the live query's: a focus refetch
+  // after another HR user's edit must still make this save conflict.
+  const [openedRevision] = useState(() => draft?.revision ?? 0);
   const [employeeSearch, setEmployeeSearch] = useState("");
-  const [employee, setEmployee] = useState<HrEmployee | null>(null);
+  const [employee, setEmployee] = useState<HrEmployee | null>(
+    editing
+      ? {
+          id: editing.employee_id,
+          name: editing.employee_name,
+          staff_id: draft?.staff_id ?? "",
+          period: "",
+        }
+      : null,
+  );
   const [choiceId, setChoiceId] = useState("");
-  const [visitType, setVisitType] = useState("");
-  const [incurredDate, setIncurredDate] = useState("");
-  const [admissionDate, setAdmissionDate] = useState("");
-  const [dischargeDate, setDischargeDate] = useState("");
-  const [provider, setProvider] = useState("");
-  const [invoice, setInvoice] = useState("");
-  const [doctor, setDoctor] = useState("");
-  const [diagnosis, setDiagnosis] = useState("");
-  const [amount, setAmount] = useState("");
-  const [currency, setCurrency] = useState("");
-  const [remarks, setRemarks] = useState("");
+  const [visitType, setVisitType] = useState(draft?.visit_type ?? "");
+  const [incurredDate, setIncurredDate] = useState(editing?.incurred_date ?? "");
+  const [admissionDate, setAdmissionDate] = useState(draft?.admission_date ?? "");
+  const [dischargeDate, setDischargeDate] = useState(draft?.discharge_date ?? "");
+  const [provider, setProvider] = useState(editing?.provider_name ?? "");
+  const [invoice, setInvoice] = useState(editing?.invoice_number ?? "");
+  const [doctor, setDoctor] = useState(draft?.doctor_name ?? "");
+  const [diagnosis, setDiagnosis] = useState(draft?.diagnosis ?? "");
+  const [amount, setAmount] = useState(editing ? String(editing.amount_claimed) : "");
+  const [currency, setCurrency] = useState(editing?.currency ?? "");
+  const [remarks, setRemarks] = useState(draft?.remarks ?? "");
   const [referralFile, setReferralFile] = useState<File | null>(null);
+  // The letter the draft already carries. Kept unless HR picks a replacement
+  // or moves the claim to another type.
+  const [keptReferral, setKeptReferral] = useState(draft?.referral ?? null);
   const [referralIssuedOn, setReferralIssuedOn] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const choiceSeeded = useRef(false);
   const uploadedReferral = useRef<{
     employeeId: string;
     file: File;
@@ -175,12 +260,22 @@ export function HrNewClaimPage() {
     !fxMatchesInput &&
     !fxQuote.isError;
   const createClaim = useCreateHrClaim();
+  const amendClaim = useAmendHrClaim();
   const uploadReferral = useUploadHrReferral();
-  const busy = createClaim.isPending || uploadReferral.isPending || fxWaiting;
+  const busy =
+    createClaim.isPending || amendClaim.isPending || uploadReferral.isPending || fxWaiting;
 
   useEffect(() => {
     if (options.data && !currency) setCurrency(options.data.policy_currency);
   }, [options.data, currency]);
+
+  // Open an edit on the option the draft was filed under, once the options load.
+  useEffect(() => {
+    if (!editing || choiceSeeded.current || choices.length === 0) return;
+    choiceSeeded.current = true;
+    const filed = draftChoice(choices, editing);
+    if (filed) setChoiceId(filed.id);
+  }, [editing, choices]);
 
   const chooseEmployee = (next: HrEmployee) => {
     setEmployee(next);
@@ -193,7 +288,7 @@ export function HrNewClaimPage() {
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!employee || !choice) return;
-    if (choice.requiresReferral && visitType && !referralFile) {
+    if (choice.requiresReferral && visitType && !referralFile && !keptReferral) {
       setError("Attach the referral letter for this specialist visit.");
       return;
     }
@@ -227,8 +322,7 @@ export function HrNewClaimPage() {
           };
         }
       }
-      const claim = await createClaim.mutateAsync({
-        employee_id: employee.id,
+      const fields = {
         claim_kind: choice.kind,
         product_code: choice.productCode,
         flex_category_name: choice.flexCategory,
@@ -245,15 +339,27 @@ export function HrNewClaimPage() {
         remarks: remarks.trim() || null,
         amount_claimed: amountValue,
         currency: effectiveCurrency,
-        referral_document_id: referral?.id ?? null,
-        related_claim_id: null,
+        referral_document_id:
+          referral?.id ?? (choice.requiresReferral ? keptReferral?.id ?? null : null),
         fx_acknowledged:
           fxForeign && fxMatchesInput && Boolean(fxQuote.data.available),
         fx_quoted_amount:
           fxForeign && fxMatchesInput && fxQuote.data.available
             ? fxQuote.data.converted
             : null,
-      });
+      };
+      // An edit leaves the prior-visit link alone: the server re-resolves it
+      // against the corrected claim and clears it if the type no longer takes one.
+      const claim = editing && draft
+        ? await amendClaim.mutateAsync({
+            claimId: editing.id,
+            patch: { ...fields, expected_revision: openedRevision },
+          })
+        : await createClaim.mutateAsync({
+            ...fields,
+            employee_id: employee.id,
+            related_claim_id: null,
+          });
       await navigate({
         to: "/hr/claims/$claimId",
         params: { claimId: claim.id },
@@ -267,11 +373,20 @@ export function HrNewClaimPage() {
     <div className="hr-new-claim grid items-start gap-3 lg:grid-cols-[18rem_minmax(0,1fr)]">
       <div className="lg:col-span-2">
         <Button asChild variant="ghost" className="-ml-3 h-11 sm:h-9">
-          <Link to="/hr/claims">
-            <ArrowLeft className="size-4" aria-hidden />
-            {pt("All claims")} </Link>
+          {editing ? (
+            <Link to="/hr/claims/$claimId" params={{ claimId: editing.id }}>
+              <ArrowLeft className="size-4" aria-hidden />
+              {pt("Back to claim")}
+            </Link>
+          ) : (
+            <Link to="/hr/claims">
+              <ArrowLeft className="size-4" aria-hidden />
+              {pt("All claims")} </Link>
+          )}
         </Button>
-        <h1 className="mt-2 text-2xl font-semibold tracking-tight">{pt("New employee claim")}</h1>
+        <h1 className="mt-2 text-2xl font-semibold tracking-tight">
+          {editing ? pt("Edit claim details") : pt("New employee claim")}
+        </h1>
       </div>
 
       <Card className={cn("p-5", !employee && "lg:col-span-2")}>
@@ -284,16 +399,22 @@ export function HrNewClaimPage() {
             <div className="min-w-0 flex-1">
               <p className="break-words font-medium">{employee.name ?? pt("Employee")}</p>
               <p className="text-sm text-muted-foreground">
-                {employee.staff_id} · {employee.period.split(" - ").map(formatClaimDate).join(" – ")}
+                {employee.staff_id}
+                {employee.period &&
+                  ` · ${employee.period.split(" - ").map(formatClaimDate).join(" – ")}`}
               </p>
             </div>
-            <Button
-              type="button"
-              variant="outline"
-              className="col-span-2 h-11 justify-self-end sm:h-9"
-              onClick={() => setEmployee(null)}
-            >
-              {pt("Change")} </Button>
+            {/* A saved draft stays with its employee: discard it and start a new
+                claim to file for someone else. */}
+            {!editing && (
+              <Button
+                type="button"
+                variant="outline"
+                className="col-span-2 h-11 justify-self-end sm:h-9"
+                onClick={() => setEmployee(null)}
+              >
+                {pt("Change")} </Button>
+            )}
           </div>
         ) : (
           <div className="mt-4 space-y-3">
@@ -381,6 +502,7 @@ export function HrNewClaimPage() {
                     setChoiceId(event.target.value);
                     setVisitType("");
                     setReferralFile(null);
+                    setKeptReferral(null);
                     uploadedReferral.current = null;
                   }}
                 >
@@ -492,14 +614,19 @@ export function HrNewClaimPage() {
                       </Field>
                       <Field
                         label={pt("Referral letter")}
-                        required={Boolean(visitType)}
+                        required={Boolean(visitType) && !keptReferral}
                         hint={pt("PDF, JPG or PNG · 15 MB maximum")}
                       >
+                        {keptReferral && !referralFile && (
+                          <span className="block break-all text-sm font-normal text-muted-foreground">
+                            {pt("On file: {0}. Choose a file only to replace it.", [keptReferral.file_name])}
+                          </span>
+                        )}
                         <Input
                           type="file"
                           className="h-11 py-2"
                           accept=".pdf,.png,.jpg,.jpeg,application/pdf,image/png,image/jpeg"
-                          required={Boolean(visitType)}
+                          required={Boolean(visitType) && !keptReferral}
                           onChange={(event) => {
                             const file = event.target.files?.[0] ?? null;
                             if (file && file.size > CLAIM_DOCUMENT_MAX_BYTES) {
@@ -548,11 +675,15 @@ export function HrNewClaimPage() {
 
                   <div className="flex flex-col-reverse gap-3 border-t border-border pt-5 sm:flex-row sm:justify-end">
                     <Button asChild variant="outline" className="h-11 sm:h-9">
-                      <Link to="/hr/claims">{pt("Cancel")}</Link>
+                      {editing ? (
+                        <Link to="/hr/claims/$claimId" params={{ claimId: editing.id }}>{pt("Cancel")}</Link>
+                      ) : (
+                        <Link to="/hr/claims">{pt("Cancel")}</Link>
+                      )}
                     </Button>
                     <Button type="submit" className="h-11 sm:h-9" disabled={busy}>
                       {busy && <Loader2 className="size-4 animate-spin" aria-hidden />}
-                      {pt("Save and add evidence")} </Button>
+                      {editing ? pt("Save changes") : pt("Save and add evidence")} </Button>
                   </div>
                 </>
               )}

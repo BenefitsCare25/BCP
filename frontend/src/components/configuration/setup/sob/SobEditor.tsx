@@ -15,8 +15,7 @@ import {
   unassignedColumns,
 } from "@/lib/sob";
 import { rowIssues, rowVisibility, type RowVisibility } from "@/lib/sobAttention";
-import { isFirmOwnerRole } from "@/lib/roles";
-import { useMe } from "@/api/hooks";
+import { useWriteAccess } from "@/lib/roles";
 import { ColumnManager } from "./ColumnManager";
 import { SobRow } from "./SobRow";
 import { SobRowDetail } from "./SobRowDetail";
@@ -61,8 +60,7 @@ export function SobEditor({
   const usesAxis = columnAxis.length > 0;
 
   const unassigned = useMemo(() => unassignedColumns(sob), [sob]);
-  const { data: me } = useMe();
-  const canRemove = isFirmOwnerRole(me?.role);
+  const { canRemove } = useWriteAccess();
   const issues = useMemo(
     () => rowIssues(sob.items, sob.columns, canRemove),
     [sob.items, sob.columns, canRemove],

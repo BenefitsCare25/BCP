@@ -10,7 +10,7 @@ import {
   ZapOff,
 } from "lucide-react";
 import { toast } from "sonner";
-import { useAIStatus, useAISpend, useMe, useSetAIBudget } from "@/api/hooks";
+import { useAIStatus, useAISpend, useSetAIBudget } from "@/api/hooks";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -22,7 +22,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { formatError } from "@/lib/errors";
-import { isBrokerAdminRole } from "@/lib/roles";
+import { useWriteAccess } from "@/lib/roles";
 
 type BreakerState = "closed" | "half_open" | "open";
 
@@ -43,14 +43,13 @@ function pct(used: number, total: number): number {
 export function AIUsageTile() {
   const { data: status } = useAIStatus();
   const { data: spend } = useAISpend();
-  const { data: me } = useMe();
   const setBudget = useSetAIBudget();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
   // The per-tenant budget PUT is tenant-admin only; system_admin edits the
-  // selected company here and manages fleet-wide caps on the platform card.
-  const canEditBudget =
-    isBrokerAdminRole(me?.role);
+  // selected company here (not under a read-only access grant) and manages
+  // fleet-wide caps on the platform card.
+  const { canAdmin: canEditBudget } = useWriteAccess();
 
   if (!status) return null;
   if (!status.configured) {
@@ -80,15 +79,22 @@ export function AIUsageTile() {
     );
 
   const used = spend?.month_to_date_tokens ?? status.month_to_date_tokens ?? 0;
+  // The budget the gateway enforces: the company's own limit, else the
+  // platform's default per-company budget. 0 = no cap at all.
   const budget =
+    spend?.effective_monthly_token_budget ??
+    status.effective_monthly_token_budget ??
+    0;
+  const budgetSource = spend?.budget_source ?? status.budget_source ?? "none";
+  const ownLimit =
     spend?.monthly_token_budget ?? status.monthly_token_budget ?? 0;
   const unlimited = budget === 0;
   const percent = pct(used, budget);
   const breaker = BREAKER_DISPLAY[status.breaker_state as BreakerState];
 
   const openEditor = () => {
-    // 0 (unlimited) shows as an empty box so the user just types a number.
-    setDraft(budget === 0 ? "" : String(budget));
+    // No company limit shows as an empty box so the user just types a number.
+    setDraft(ownLimit === 0 ? "" : String(ownLimit));
     setEditing(true);
   };
 
@@ -96,15 +102,19 @@ export function AIUsageTile() {
     const trimmed = draft.trim();
     const value = trimmed === "" ? 0 : Number(trimmed);
     if (!Number.isInteger(value) || value < 0) {
-      toast.error("Enter a whole number of tokens (or leave blank for unlimited).");
+      toast.error(
+        "Enter a whole number of tokens (or leave blank to use the platform default).",
+      );
       return;
     }
     try {
-      await setBudget.mutateAsync(value);
+      const saved = await setBudget.mutateAsync(value);
       toast.success(
-        value === 0
-          ? "Budget set to unlimited (tracking only)"
-          : `Monthly limit set to ${value.toLocaleString()} tokens`,
+        value > 0
+          ? `Monthly limit set to ${value.toLocaleString()} tokens`
+          : saved.budget_source === "platform_default"
+            ? `Company limit cleared. The platform default of ${saved.effective_monthly_token_budget.toLocaleString()} tokens a month applies.`
+            : "Company limit cleared. Usage is tracked with no monthly limit.",
       );
       setEditing(false);
     } catch (err) {
@@ -121,7 +131,9 @@ export function AIUsageTile() {
             <CardDescription>
               {unlimited
                 ? "Tokens tracked; no monthly limit set. Cache hits don't count."
-                : "Tokens spent against budget. Cache hits don't count."}
+                : budgetSource === "platform_default"
+                  ? "Tokens spent against the platform's default per-company budget. Cache hits don't count."
+                  : "Tokens spent against this company's budget. Cache hits don't count."}
             </CardDescription>
           </div>
           <div className="flex items-center gap-1.5 flex-wrap justify-end">
@@ -148,7 +160,10 @@ export function AIUsageTile() {
                     <InfinityIcon className="size-3.5" /> unlimited
                   </span>
                 ) : (
-                  <>/ {budget.toLocaleString()} tokens</>
+                  <>
+                    / {budget.toLocaleString()} tokens
+                    {budgetSource === "platform_default" && " · platform default"}
+                  </>
                 )}
               </span>
             </div>
@@ -179,7 +194,7 @@ export function AIUsageTile() {
                 className="shrink-0"
               >
                 <Pencil className="size-3.5" />
-                {unlimited ? "Set limit" : "Edit limit"}
+                {ownLimit === 0 ? "Set limit" : "Edit limit"}
               </Button>
             )}
           </div>
@@ -196,7 +211,7 @@ export function AIUsageTile() {
                 inputMode="numeric"
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
-                placeholder="Leave blank for unlimited"
+                placeholder="Leave blank for the platform default"
                 className="max-w-56"
                 autoFocus
               />
@@ -220,9 +235,10 @@ export function AIUsageTile() {
               </Button>
             </div>
             <p className="text-xs text-muted-foreground">
-              Blank or <code>0</code> = unlimited (tracking only). When set, AI
-              calls are blocked once the month's non-cached tokens reach the
-              limit.
+              Blank or <code>0</code> = no company limit: the platform&apos;s
+              default per-company budget applies, or no limit if none is set.
+              While a limit is in force, AI calls are blocked once the
+              month&apos;s non-cached tokens reach it.
             </p>
           </div>
         )}

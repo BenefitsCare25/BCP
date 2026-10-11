@@ -182,7 +182,8 @@ function PortalMainShell() {
   const wideEnoughForRail = useHeadRailWidth();
   const [rail, setRail] = useState<HTMLDivElement | null>(null);
 
-  // Company turned 2FA on but this member hasn't finished enrolling.
+  // Company turned 2FA on but this member hasn't finished enrolling. Worded by
+  // `mfa_required`: optional 2FA must not read as a company requirement.
   const mustEnrollMfa =
     !!security?.mfa_available &&
     security.mfa_status !== "confirmed" &&
@@ -439,7 +440,9 @@ function PortalMainShell() {
                   <span className="block text-row font-semibold text-record">
                     {pt("Set up two-step sign-in")} </span>
                   <span className="block text-row text-label">
-                    {pt("Your company asks everyone to add a second step when signing in. It takes about a minute.")} </span>
+                    {security?.mfa_required
+                      ? pt("Your company asks everyone to add a second step when signing in. It takes about a minute.")
+                      : pt("Your company offers a second step when signing in. It's optional and takes about a minute.")} </span>
                 </span>
               </Link>
             )}

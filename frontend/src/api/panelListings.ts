@@ -224,13 +224,23 @@ export function useSetListingCompanies() {
 }
 
 export function useSetPolicyYearPanels() {
+  const queryClient = useQueryClient();
+  const cid = useSession((s) => s.activeClientId);
   const invalidate = usePanelInvalidator();
   return useMutation({
     mutationFn: (input: { policyYearId: string; panelListingIds: string[] }) =>
       api.put<PolicyYearPanels>(`/policy-years/${input.policyYearId}/panels`, {
         panel_listing_ids: input.panelListingIds,
       }),
-    onSuccess: invalidate,
+    onSuccess: (saved) => {
+      // The PUT replaces the whole set, so the next toggle must build on what
+      // was just saved rather than on a refetch still in flight.
+      queryClient.setQueryData(
+        ["policy-year-panels", saved.policy_year_id, cid],
+        saved,
+      );
+      invalidate();
+    },
   });
 }
 

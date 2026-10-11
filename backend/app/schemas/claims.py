@@ -410,6 +410,10 @@ class ClaimOut(_Base):
     dependant_name: str | None = None
     submitted_at: datetime | None = None
     decided_at: datetime | None = None
+    # When the insurer declined a claim we had approved and sent them. Served
+    # so a timeline dates "Not approved" on the decline, not on our approval
+    # (`decided_at` stays our decision — see `Claim.insurer_outcome_on`).
+    insurer_outcome_on: date | None = None
     decision_notes: str | None = None
     created_at: datetime
     documents: list[StoredDocumentOut] = Field(default_factory=list)
@@ -729,6 +733,9 @@ class ConversationSubjectOut(BaseModel):
     currency: str | None = None
     # A claim's own status, or a question's `open | answered | closed`.
     status: str | None = None
+    # Whether the member sees this claim's thread (portal-filed claims only);
+    # HR- and broker-filed claims carry system notes but take no replies.
+    member_visible: bool | None = None
     # ── question ─────────────────────────────────────────────────────────────
     # The member's own headline, which is a question's title.
     subject: str | None = None

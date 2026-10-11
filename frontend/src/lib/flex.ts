@@ -106,6 +106,13 @@ export function validateFlexScheme(body: FlexSchemeBody): string[] {
     errors.push("GST rate must be a percentage between 0 and 100.");
   }
 
+  // A scheme-wide flat cap (often what AI extraction finds) sizes every tier
+  // that sets neither its own cap nor family-status rows.
+  const schemeCap = meta.system_cap;
+  if (typeof schemeCap === "number" && schemeCap < 0) {
+    errors.push("Scheme-wide flat cap must be ≥ 0.");
+  }
+
   tiers.forEach((tier, i) => {
     const label = tier.name?.trim() || `Tier ${i + 1}`;
 
@@ -136,12 +143,13 @@ export function validateFlexScheme(body: FlexSchemeBody): string[] {
       errors.push(`${label}: job-grade min is greater than max.`);
     }
 
-    const hasTierCap = typeof tier.system_cap === "number";
+    const hasCap =
+      typeof tier.system_cap === "number" || typeof schemeCap === "number";
     if (typeof tier.system_cap === "number" && tier.system_cap < 0) {
       errors.push(`${label}: flat annual cap must be ≥ 0.`);
     }
     const limits = tier.limits ?? [];
-    if (limits.length === 0 && !hasTierCap) {
+    if (limits.length === 0 && !hasCap) {
       errors.push(
         `${label}: needs at least one family-status limit row, or a flat annual cap.`,
       );
@@ -178,6 +186,7 @@ export function validateFlexScheme(body: FlexSchemeBody): string[] {
       }
     });
   });
+  errors.push(...tierNameErrors(tiers));
 
   // Scheme-level dependant age limits (age next-birthday per role). Mirror of the
   // backend meta.dependant_age_limits check; the UI edits max only, min may exist
@@ -202,6 +211,37 @@ export function validateFlexScheme(body: FlexSchemeBody): string[] {
   return errors;
 }
 
+/** Lower-cased tier names used by more than one tier. The name is the tier's
+ *  persisted identity (mirror of the backend `_tier_name_errors`): members of an
+ *  unnamed tier lose their flex, and same-named tiers swap benefits. */
+export function duplicateTierNames(tiers: FlexTier[]): Set<string> {
+  const seen = new Set<string>();
+  const dupes = new Set<string>();
+  for (const tier of tiers) {
+    const key = (tier.name ?? "").trim().toLowerCase();
+    if (!key) continue;
+    if (seen.has(key)) dupes.add(key);
+    seen.add(key);
+  }
+  return dupes;
+}
+
+function tierNameErrors(tiers: FlexTier[]): string[] {
+  const errors: string[] = [];
+  const reported = new Set<string>();
+  const dupes = duplicateTierNames(tiers);
+  tiers.forEach((tier, i) => {
+    const name = (tier.name ?? "").trim();
+    const key = name.toLowerCase();
+    if (!name) errors.push(`Tier ${i + 1}: needs a name.`);
+    else if (dupes.has(key) && !reported.has(key)) {
+      reported.add(key);
+      errors.push(`Tier name '${name}' is used more than once; each tier needs its own name.`);
+    }
+  });
+  return errors;
+}
+
 // ── Tier wallet shape + review status (single source of truth for the UI) ─────
 
 /** How a tier's wallet is defined:
@@ -211,8 +251,12 @@ export function validateFlexScheme(body: FlexSchemeBody): string[] {
  *  - "none"   — neither set: this tier assigns NO wallet (needs fixing). */
 export type FlexWalletShape = "family" | "flat" | "mixed" | "none";
 
-export function flexTierWalletShape(tier: FlexTier): FlexWalletShape {
-  const hasCap = typeof tier.system_cap === "number";
+export function flexTierWalletShape(
+  tier: FlexTier,
+  schemeCap?: number | null,
+): FlexWalletShape {
+  const hasCap =
+    typeof tier.system_cap === "number" || typeof schemeCap === "number";
   const hasLimits = (tier.limits ?? []).length > 0;
   if (hasCap && hasLimits) return "mixed";
   if (hasLimits) return "family";
@@ -245,8 +289,9 @@ function tokenCovered(tok: string, desigs: string[]): boolean {
 export function flexTierReview(
   tier: FlexTier,
   headcount?: FlexTierHeadcount,
+  schemeCap?: number | null,
 ): FlexTierReview {
-  const shape = flexTierWalletShape(tier);
+  const shape = flexTierWalletShape(tier, schemeCap);
   const reasons: string[] = [];
   if (shape === "none") reasons.push("No wallet amount set");
 

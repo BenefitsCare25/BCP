@@ -89,7 +89,7 @@ export function FlexMount({
       aside={
         <span className="flex items-baseline justify-end gap-1.5">
           <span className="leaf-label">
-            {WALLET_LABEL}
+            {pt(WALLET_LABEL)}
           </span>
           <Money
             value={flex.wallet_amount}
@@ -120,7 +120,7 @@ export function FlexMount({
 
       {(family || flex.tier_name) && (
         <dl>
-          {family && <MountRow term="Covers">{family}</MountRow>}
+          {family && <MountRow term="Covers">{pt(family)}</MountRow>}
           {flex.tier_name && (
             <MountRow term="Flex dollar band">{pt(flex.tier_name)}</MountRow>
           )}

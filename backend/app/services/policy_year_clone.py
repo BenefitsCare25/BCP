@@ -12,7 +12,9 @@ Panel-clinic tags are already carried over when the year is created.
 References that live INSIDE JSON payloads are remapped through an old→new
 category-id map so they keep pointing at the cloned rows:
 
-- ``flex_pricing`` price-tag keys are ``"<tier_category_id>::<plan_code>"``.
+- ``flex_pricing`` tier maps (price tags, per-tier voluntary rates and the
+  dependant participation / modes / family_tags / per_pax rows) are keyed by
+  ``"<tier_category_id>::<plan_code>"``.
 
 Absolute dates tied to the source year are dropped rather than carried:
 
@@ -78,23 +80,39 @@ def _clone_product_terms(db: Session, source_id: str, target_id: str, client_id:
     return len(copied)
 
 
-def _remap_price_tags(pricing: dict[str, Any], id_map: dict[str, str]) -> dict[str, Any]:
-    """Rewrite the category id in each ``<tier_category_id>::<plan_code>`` key."""
+# Every pricing-bag map keyed by ``<tier_category_id>::<plan_code>``, as
+# (container path inside a product block, map name). The resolver looks these up
+# by exact key, so a map left on the source year's ids silently stops applying.
+_TIER_KEYED_MAPS: tuple[tuple[tuple[str, ...], str], ...] = (
+    ((), "price_tags"),
+    ((), "voluntary_rates_by_tier"),
+    (("dependant",), "participation"),
+    (("dependant",), "modes"),
+    (("dependant",), "family_tags"),
+    (("dependant",), "per_pax"),
+)
+
+
+def _remap_keys(by_key: dict[str, Any], id_map: dict[str, str]) -> dict[str, Any]:
+    remapped: dict[str, Any] = {}
+    for key, val in by_key.items():
+        cat_id, sep, rest = str(key).partition("::")
+        remapped[f"{id_map.get(cat_id, cat_id)}{sep}{rest}" if sep else key] = val
+    return remapped
+
+
+def _remap_tier_keys(pricing: dict[str, Any], id_map: dict[str, str]) -> dict[str, Any]:
+    """Rewrite the category id in every tier-keyed map of each product block."""
     products = pricing.get("products")
     if not isinstance(products, dict):
         return pricing
     for pdata in products.values():
-        if not isinstance(pdata, dict):
-            continue
-        tags = pdata.get("price_tags")
-        if not isinstance(tags, dict):
-            continue
-        remapped: dict[str, Any] = {}
-        for key, val in tags.items():
-            cat_id, sep, rest = str(key).partition("::")
-            new_key = f"{id_map.get(cat_id, cat_id)}{sep}{rest}" if sep else key
-            remapped[new_key] = val
-        pdata["price_tags"] = remapped
+        for path, name in _TIER_KEYED_MAPS:
+            container: Any = pdata
+            for step in path:
+                container = container.get(step) if isinstance(container, dict) else None
+            if isinstance(container, dict) and isinstance(container.get(name), dict):
+                container[name] = _remap_keys(container[name], id_map)
     return pricing
 
 
@@ -224,7 +242,7 @@ def clone_policy_year_config(
         )
         counts["flex_scheme"] = 1
 
-    # 6. Flex pricing matrix — remap category ids inside the price-tag keys.
+    # 6. Flex pricing matrix — remap category ids inside every tier key.
     pricing = db.execute(
         select(FlexPricing).where(FlexPricing.policy_year_id == source_id)
     ).scalar_one_or_none()
@@ -234,7 +252,7 @@ def clone_policy_year_config(
                 id=new_uuid(),
                 policy_year_id=target_id,
                 client_id=client_id,
-                pricing=_remap_price_tags(copy.deepcopy(pricing.pricing) or {}, id_map),
+                pricing=_remap_tier_keys(copy.deepcopy(pricing.pricing) or {}, id_map),
             )
         )
         counts["flex_pricing"] = 1

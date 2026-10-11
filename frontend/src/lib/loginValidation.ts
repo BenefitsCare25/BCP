@@ -16,9 +16,19 @@ export function validateCredentials(identifier: string, password: string, compan
   return errors;
 }
 
+const THROTTLED = "Too many attempts. Wait a minute, then try again.";
+
+/** A refusal from a 2FA-code or set-password step, as a sentence to show. The
+ *  rate limiter answers 429 with its own JSON body (no `detail`), which would
+ *  otherwise reach the page verbatim. */
+export function authStepError(error: unknown): string {
+  return errorStatus(error) === 429 ? THROTTLED : formatError(error);
+}
+
 export function loginError(error: unknown): string {
   const status = errorStatus(error);
-  if (errorCode(error) === "invite_expired" || status === 423 || status === 429 || status === 403 || status === 404) return formatError(error);
+  if (status === 429) return THROTTLED;
+  if (errorCode(error) === "invite_expired" || status === 423 || status === 403 || status === 404) return formatError(error);
   if (status === 401 || status === 400) return "Those details weren't recognised. Check and try again.";
   if (status === 422) return "Check the entered details and try again.";
   return "We couldn't reach the portal just now. Your details weren't checked. Try again in a moment.";

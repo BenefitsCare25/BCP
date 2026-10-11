@@ -17,6 +17,7 @@ import {
   useFormConfig,
   useSaveFormConfig,
 } from "@/api/enrollmentForms";
+import { FirmOwnerOnly } from "@/components/auth/FirmOwnerOnly";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -41,6 +42,18 @@ function pct(value: string): number | null {
   if (!value.trim()) return null;
   const n = Number(value);
   return Number.isFinite(n) ? Math.min(100, Math.max(0, n)) : null;
+}
+
+/** A row's Remove control. A row added since the last save may be dropped by
+ * anyone who can edit; a SAVED row is saved data, so only a firm owner may
+ * remove it (the API refuses that save otherwise). */
+function RemoveRow({ saved, label, onRemove }: { saved: boolean; label: string; onRemove: () => void }) {
+  const button = (
+    <Button variant="ghost" size="sm" aria-label={label} onClick={onRemove}>
+      <Trash2 className="size-4" />
+    </Button>
+  );
+  return saved ? <FirmOwnerOnly>{button}</FirmOwnerOnly> : button;
 }
 
 function Section({ title, hint, children }: { title: string; hint: string; children: React.ReactNode }) {
@@ -80,6 +93,12 @@ function FormSetupEditor({ config, readOnly }: { config: FormConfig; readOnly: b
     setDirty(true);
   };
   const products = config.products;
+  // Generated defaults are not saved data until the first save.
+  const saved = config.is_default ? null : config.settings;
+  const savedClauseIds = new Set(saved?.clauses.map((c) => c.id));
+  const savedDocumentIds = new Set(saved?.documents.map((d) => d.id));
+  // Rules have no id and are only ever appended, so the saved ones lead.
+  const savedRuleCount = saved?.rules.length ?? 0;
   const spouseMax = config.age_limits.spouse?.max;
   const childMax = config.age_limits.child?.max;
 
@@ -268,9 +287,11 @@ function FormSetupEditor({ config, readOnly }: { config: FormConfig; readOnly: b
               >
                 {products.map((p) => <option key={p.product_code} value={p.product_code}>{p.product_code}</option>)}
               </NativeSelect>
-              <Button variant="ghost" size="sm" aria-label="Remove rule" onClick={() => update({ rules: s.rules.filter((_, j) => j !== i) })}>
-                <Trash2 className="size-4" />
-              </Button>
+              <RemoveRow
+                saved={i < savedRuleCount}
+                label="Remove rule"
+                onRemove={() => update({ rules: s.rules.filter((_, j) => j !== i) })}
+              />
             </div>
           ))}
           {products.length > 1 && (
@@ -308,9 +329,11 @@ function FormSetupEditor({ config, readOnly }: { config: FormConfig; readOnly: b
                   onChange={(e) => update({ documents: s.documents.map((d, j) => (j === i ? { ...d, url: e.target.value || null } : d)) })}
                 />
               )}
-              <Button variant="ghost" size="sm" aria-label="Remove document" onClick={() => update({ documents: s.documents.filter((_, j) => j !== i) })}>
-                <Trash2 className="size-4" />
-              </Button>
+              <RemoveRow
+                saved={savedDocumentIds.has(doc.id)}
+                label="Remove document"
+                onRemove={() => update({ documents: s.documents.filter((_, j) => j !== i) })}
+              />
             </div>
           ))}
           <div className="flex flex-wrap gap-2">
@@ -346,9 +369,11 @@ function FormSetupEditor({ config, readOnly }: { config: FormConfig; readOnly: b
                   <option value="all">Always</option>
                   <option value="dependants">With family</option>
                 </NativeSelect>
-                <Button variant="ghost" size="sm" aria-label="Remove declaration" onClick={() => update({ clauses: s.clauses.filter((_, j) => j !== i) })}>
-                  <Trash2 className="size-4" />
-                </Button>
+                <RemoveRow
+                  saved={savedClauseIds.has(clause.id)}
+                  label="Remove declaration"
+                  onRemove={() => update({ clauses: s.clauses.filter((_, j) => j !== i) })}
+                />
               </div>
             </div>
           ))}

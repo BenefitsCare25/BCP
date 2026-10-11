@@ -5,20 +5,31 @@ import {
   CheckCircle2,
   FileText,
   Loader2,
+  MessageSquareWarning,
+  Pencil,
   Send,
   Upload,
   UserRound,
 } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import {
+  useConfirmHrConversion,
   useHrClaim,
   useSubmitHrClaim,
   useUploadHrClaimDocument,
 } from "@/api/hrClaims";
+import type { FxQuote } from "@/api/portal";
+import {
+  DiscardHrDraftButton,
+  HrClaimDocumentLine,
+  fxConfirmationQuote,
+} from "@/components/hr/HrClaimDraftControls";
+import { ConversionNotice } from "@/components/portal/claims/ConversionNotice";
 import {
   ClaimStatus,
   formatClaimDate,
   formatClaimMoney,
+  formatClaimTimestamp,
 } from "@/components/hr/claimPresentation";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -44,8 +55,11 @@ export function HrClaimDetailPage() {
   const claim = useHrClaim(claimId);
   const upload = useUploadHrClaimDocument();
   const submit = useSubmitHrClaim();
+  const confirmConversion = useConfirmHrConversion();
   const [uploadingSlot, setUploadingSlot] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // The converted figure submit refused to send without HR confirming it.
+  const [fxQuote, setFxQuote] = useState<FxQuote | null>(null);
   useDocumentTitle(claim.data?.claim_ref ?? "Employee claim");
 
   if (claim.isLoading) {
@@ -100,11 +114,23 @@ export function HrClaimDetailPage() {
   const sendClaim = async () => {
     setError(null);
     try {
+      // Pressing the button with the figure on screen IS the confirmation; the
+      // server records it only if its own figure still matches.
+      if (fxQuote?.converted != null) {
+        await confirmConversion.mutateAsync({
+          claimId: data.id,
+          convertedAmount: fxQuote.converted,
+        });
+      }
       await submit.mutateAsync(data.id);
+      setFxQuote(null);
     } catch (caught) {
-      setError(formatError(caught));
+      const quote = fxConfirmationQuote(caught);
+      setFxQuote(quote);
+      if (!quote) setError(formatError(caught));
     }
   };
+  const sending = submit.isPending || confirmConversion.isPending;
 
   return (
     <div className="hr-claim-detail grid items-start gap-3 md:grid-cols-2">
@@ -123,11 +149,37 @@ export function HrClaimDetailPage() {
               {data.employee_name ?? pt("Employee")} · {pt(data.claim_type)}
             </p>
           </div>
-          <div className="self-start">
+          <div className="flex flex-wrap items-center gap-2 self-start">
+            {data.can_edit && (
+              <Button asChild variant="outline" className="h-11 shrink-0 sm:h-9">
+                <Link to="/hr/claims/$claimId/edit" params={{ claimId: data.id }}>
+                  <Pencil className="size-4" aria-hidden />
+                  {pt("Edit details")}
+                </Link>
+              </Button>
+            )}
+            {data.can_discard && <DiscardHrDraftButton claimId={data.id} />}
             <ClaimStatus status={data.status} />
           </div>
         </div>
       </div>
+
+      {data.decision_notes && (
+        <Card className="p-5 md:col-span-2" role="status">
+          <div className="flex items-start gap-3">
+            <MessageSquareWarning className="mt-0.5 size-5 shrink-0 text-warn" aria-hidden />
+            <div className="min-w-0">
+              <h2 className="text-base font-semibold">{pt("What the broker needs")}</h2>
+              <p className="mt-1 whitespace-pre-line break-words text-sm text-foreground">
+                {data.decision_notes}
+              </p>
+              <p className="mt-2 text-sm text-muted-foreground">
+                {pt("Add what they asked for below, then submit the claim again.")}
+              </p>
+            </div>
+          </div>
+        </Card>
+      )}
 
       <Card className="p-5">
         <dl className="grid grid-cols-2 gap-x-4 gap-y-3">
@@ -138,7 +190,7 @@ export function HrClaimDetailPage() {
           <Fact label={pt("Provider")}>{data.provider_name ?? "—"}</Fact>
           <Fact label={pt("Invoice or receipt")}>{data.invoice_number ?? "—"}</Fact>
           <Fact label={pt("Submitted")}>
-            {data.submitted_at ? formatClaimDate(data.submitted_at) : pt("Not submitted")}
+            {data.submitted_at ? formatClaimTimestamp(data.submitted_at) : pt("Not submitted")}
           </Fact>
         </dl>
         <div className="mt-3 flex items-start gap-3 border-t border-border pt-3">
@@ -215,9 +267,13 @@ export function HrClaimDetailPage() {
                     )}
                   </div>
                   {documents.map((document) => (
-                    <p key={document.id} className="mt-2 break-all text-sm text-muted-foreground">
-                      {document.file_name}
-                    </p>
+                    <HrClaimDocumentLine
+                      key={document.id}
+                      claimId={data.id}
+                      document={document}
+                      removable={document.can_remove}
+                      onError={setError}
+                    />
                   ))}
                 </div>
               );
@@ -228,7 +284,13 @@ export function HrClaimDetailPage() {
           <div className="mt-3 space-y-2 border-t border-border pt-3">
             <h3 className="text-sm font-semibold">{pt("Additional evidence")}</h3>
             {additionalDocuments.map((document) => (
-              <p key={document.id} className="break-all text-sm text-label">{document.file_name}</p>
+              <HrClaimDocumentLine
+                key={document.id}
+                claimId={data.id}
+                document={document}
+                removable={document.can_remove}
+                onError={setError}
+              />
             ))}
           </div>
         )}
@@ -237,6 +299,20 @@ export function HrClaimDetailPage() {
           <p className="mt-4 rounded-lg bg-error-soft p-3 text-sm text-error" role="alert">
             {pt(error)}
           </p>
+        )}
+
+        {fxQuote && data.can_submit && (
+          <div className="mt-4 space-y-2">
+            <p className="text-sm text-muted-foreground">
+              {pt("Confirm the converted amount before sending this claim.")}
+            </p>
+            <ConversionNotice
+              quote={fxQuote}
+              loading={false}
+              currency={fxQuote.currency}
+              policyCurrency={fxQuote.policy_currency}
+            />
+          </div>
         )}
 
         {data.can_submit && (
@@ -248,15 +324,15 @@ export function HrClaimDetailPage() {
             </p>
             <Button
               className="h-11 shrink-0 sm:h-9"
-              disabled={!submitReady || submit.isPending || uploadingSlot !== null}
+              disabled={!submitReady || sending || uploadingSlot !== null}
               onClick={() => void sendClaim()}
             >
-              {submit.isPending ? (
+              {sending ? (
                 <Loader2 className="size-4 animate-spin" aria-hidden />
               ) : (
                 <Send className="size-4" aria-hidden />
               )}
-              {pt("Submit claim")} </Button>
+              {fxQuote ? pt("Confirm and submit") : pt("Submit claim")} </Button>
           </div>
         )}
       </Card>

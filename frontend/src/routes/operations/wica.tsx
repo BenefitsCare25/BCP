@@ -10,15 +10,16 @@ import { Input } from "@/components/ui/input";
 import { Choice, Failure, Field, Loading, dateLabel, today } from "@/components/wica/shared";
 import { DocumentEditor } from "@/components/wica/DocumentEditor";
 import { PackRow } from "@/components/wica/PackRow";
-import { isBrokerStaffRole } from "@/lib/roles";
+import { isBrokerStaffRole, useWriteAccess } from "@/lib/roles";
 import "@/components/wica/wica.css";
 
 export function WicaPage() {
   const clientId = useSession(s => s.activeClientId);
   const { data: me, isPending } = useMe();
+  const { canEdit } = useWriteAccess();
   if (isPending) return <Loading />;
   if (!me || !isBrokerStaffRole(me.role)) return <p role="alert">Broker access required.</p>;
-  return clientId ? <WicaCompany key={clientId} clientId={clientId} editable={me.role !== "broker_viewer"} /> : <p className="text-sm text-muted-foreground">Select a company.</p>;
+  return clientId ? <WicaCompany key={clientId} clientId={clientId} editable={canEdit} /> : <p className="text-sm text-muted-foreground">Select a company.</p>;
 }
 
 function WicaCompany({ clientId, editable }: { clientId: string; editable: boolean }) {
@@ -108,6 +109,9 @@ function IncidentWorkspace({ clientId, row, editable, enabled, back }: { clientI
   const run = (task: () => Promise<WicaIncident>) => mutation.mutate(task);
   const busy = mutation.isPending;
   const eligible = row.documents.filter(d => d.status === "pending_insurer" || d.status === "supporting");
+  // Pending claims only: the server adds each one's related documents, and a
+  // supporting file linked only to a settled claim must not be re-sent.
+  const pending = eligible.filter(d => d.status === "pending_insurer");
   const prepare = (ids: string[]) => run(async () => {
     const data = await client.post<WicaIncident>(`${path}/packs`, { id: crypto.randomUUID(), revision: row.revision, document_ids: ids });
     setPacksOpen(true); setSelected([]); return data;
@@ -131,7 +135,7 @@ function IncidentWorkspace({ clientId, row, editable, enabled, back }: { clientI
           return current;
         } finally { setProgress(""); } });
       }} /><Button disabled={busy} onClick={() => fileInput.current?.click()}><Upload className="size-4" />Upload documents</Button></>}
-      {editable && <><Button variant="outline" disabled={busy || !selected.some(id => row.documents.some(d => d.id === id && d.status === "pending_insurer"))} onClick={() => prepare(selected)}>Prepare selected{selected.length ? ` (${selected.length})` : ""}</Button><Button variant="ghost" disabled={busy || !eligible.some(d => d.claim_id)} onClick={() => prepare(eligible.map(d => d.id))}>Prepare all pending</Button></>}
+      {editable && <><Button variant="outline" disabled={busy || !selected.some(id => row.documents.some(d => d.id === id && d.status === "pending_insurer"))} onClick={() => prepare(selected)}>Prepare selected{selected.length ? ` (${selected.length})` : ""}</Button><Button variant="ghost" disabled={busy || !pending.length} onClick={() => prepare(pending.map(d => d.id))}>Prepare all pending</Button></>}
       <span className="text-xs text-muted-foreground sm:ml-auto">PDF, PNG, JPG · 15 MB per file</span>
     </div>
     {progress && <p role="status" className="text-sm text-muted-foreground">{progress}</p>}

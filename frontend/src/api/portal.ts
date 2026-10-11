@@ -451,6 +451,9 @@ export interface PortalClaim {
   paid_on?: string | null;
   submitted_at: string | null;
   decided_at: string | null;
+  /** When the insurer declined a claim we had approved and sent them.
+   *  `decided_at` stays our approval, so a decline is dated from this. */
+  insurer_outcome_on?: string | null;
   decision_notes: string | null;
   created_at: string;
   documents: PortalClaimDocument[];
@@ -827,6 +830,26 @@ export function usePortalClaims() {
         next_cursor: null,
         items,
       } satisfies PortalClaimList;
+    },
+    meta: { localErrorHandling: true },
+    retry: false,
+  });
+}
+
+/** Every claim in the selected period with one of `statuses`, whatever page of
+ * the ledger it would fall on. */
+export function usePortalClaimsByStatus(statuses: readonly string[]) {
+  return useQuery({
+    queryKey: ["portal", "claims", "status", ...statuses],
+    queryFn: async () => {
+      const lists = await Promise.all(
+        statuses.map((status) =>
+          portalApi.get<PortalClaimList>(
+            `/portal/claims?status=${encodeURIComponent(status)}&limit=${CLAIMS_PAGE}`,
+          ),
+        ),
+      );
+      return lists.flatMap((list) => list.items);
     },
     meta: { localErrorHandling: true },
     retry: false,

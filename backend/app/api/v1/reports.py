@@ -37,6 +37,7 @@ from app.core.auth import (
 )
 from app.core.clock import today as business_today
 from app.core.deps import assert_policy_year_for_user
+from app.core.downloads import attachment_header
 from app.core.rate_limit import limiter
 from app.core.storage import assert_key_in_scope, company_firm_id, get_storage
 from app.db.session import get_db
@@ -185,7 +186,7 @@ def _bytes_response(
     why downloading did not clear it. Same-origin (the SPA ships inside this
     image), so no CORS exposure header is needed.
     """
-    headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
+    headers = {"Content-Disposition": attachment_header(filename)}
     if retained:
         if retained.get("retention_error"):
             headers["X-Inspro-Report-Filed"] = "error"
@@ -222,7 +223,8 @@ def _retain_download(
       ``prune_series`` DELETES the oldest — through a GET.
       ``deps.require_write_access`` only blocks non-read methods, so without
       this the role documented as "read-only across the entire API surface"
-      mutated and destroyed the submission archive. The masking rule already
+      — and a master admin under a ``read`` access grant — mutated and
+      destroyed the submission archive. The masking rule already
       403s a viewer's unmasked pull, so this is belt-and-braces — but the
       invariant is "a read-only role never writes", and it should not depend on
       a masking rule that could be relaxed later.
@@ -246,7 +248,11 @@ def _retain_download(
     report_type = retained_type_for(download_key)
     if report_type is None:
         return {}, []
-    if params.get("masked", True) or user.role == ROLE_BROKER_VIEWER:
+    if (
+        params.get("masked", True)
+        or user.role == ROLE_BROKER_VIEWER
+        or user.platform_access == "read"
+    ):
         return {}, []
     try:
         rv, created, _superseded = create_version(

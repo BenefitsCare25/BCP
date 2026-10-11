@@ -26,6 +26,7 @@ import { hiddenFromMembers } from "@/lib/sobValues";
 import { HiddenTag, LimitChip } from "./LimitChip";
 import { LimitGrid } from "./LimitGrid";
 import { LimitSettingForm } from "./LimitSettingForm";
+import { useSavedEntries } from "../savedEntries";
 
 interface Props {
   sob: SobSchedule;
@@ -111,6 +112,7 @@ export function ClaimLimitsPanel({ sob, claimScopes, setSob }: Props) {
   const [selection, setSelection] = useState<Selection | null>(null);
   const [extraRows, setExtraRows] = useState<string[]>([]);
   const [addRow, setAddRow] = useState("");
+  const saved = useSavedEntries();
   const columns = sob.columns;
   const columnIds = columns.map((c) => c.id);
 
@@ -139,6 +141,12 @@ export function ClaimLimitsPanel({ sob, claimScopes, setSob }: Props) {
     const code = columns.find((c) => c.id === columnId)?.plan_codes[0];
     return code ? sob.plan_claim_limits?.[code] ?? null : null;
   };
+  // Removing a setting the stored draft holds is a firm-owner action.
+  const overallSaved = (columnId: string) =>
+    !saved ||
+    (columns.find((c) => c.id === columnId)?.plan_codes ?? []).some((code) =>
+      saved.planClaimLimits.has(code),
+    );
 
   const tally = { live: 0, shown: 0, review: 0 };
   const count = (tone: LimitTone) => {
@@ -385,6 +393,7 @@ export function ClaimLimitsPanel({ sob, claimScopes, setSob }: Props) {
                   close();
                 }}
                 onRemove={overallFor(selection.columnId) ? () => { removeOverall(selection.columnId); close(); } : undefined}
+                saved={overallSaved(selection.columnId)}
                 onCancel={close}
               />
             ) : selectedItem ? (
@@ -403,6 +412,7 @@ export function ClaimLimitsPanel({ sob, claimScopes, setSob }: Props) {
                   removeItem(selectedItem.uid, selection.columnId);
                   close();
                 }}
+                saved={!saved || saved.claimLimits.has(`${selectedItem.uid}-${selection.columnId}`)}
                 onCancel={close}
               />
             ) : null}
@@ -457,6 +467,7 @@ function ItemForm({
   setting,
   onSave,
   onRemove,
+  saved,
   onCancel,
 }: {
   title: string;
@@ -467,6 +478,7 @@ function ItemForm({
   setting: ClaimLimitSetting | null;
   onSave: (next: ClaimLimitSetting, applyToSame: boolean) => void;
   onRemove: () => void;
+  saved: boolean;
   onCancel: () => void;
 }) {
   const source = claimLimitSourceForColumn(item, columnId);
@@ -490,6 +502,7 @@ function ItemForm({
       sameWordingCount={sameWordingCount}
       onSave={onSave}
       onRemove={setting ? onRemove : undefined}
+      saved={saved}
       onCancel={onCancel}
     />
   );

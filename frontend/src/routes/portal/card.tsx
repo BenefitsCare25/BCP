@@ -17,6 +17,7 @@ import { CardLeaf } from "@/components/portal/leaf/CardLeaf";
 import { LeafSkeleton } from "@/components/portal/leaf/LeafSkeleton";
 import { Mount } from "@/components/portal/leaf/Mount";
 import { PortalErrorState } from "@/components/portal/PortalErrorState";
+import { capabilityRefusal } from "@/components/portal/capabilities";
 import { isNotFoundError } from "@/lib/errors";
 import { useDocumentTitle } from "@/lib/useDocumentTitle";
 
@@ -26,6 +27,16 @@ export function PortalCardPage() {
   const { data, isLoading, isError, error, refetch } = usePortalCards();
 
   if (isLoading) return <LeafSkeleton label={pt("Loading your cards")} mounts={1} />;
+
+  // A leaver's card is refused, not broken: say why rather than offer a retry.
+  const refused = capabilityRefusal(error);
+  if (refused) {
+    return (
+      <Mount>
+        <p className="text-row text-label">{pt(refused)}</p>
+      </Mount>
+    );
+  }
 
   // Anything but a 404 is a fetch that failed, and must not read as "your
   // company issued no card".

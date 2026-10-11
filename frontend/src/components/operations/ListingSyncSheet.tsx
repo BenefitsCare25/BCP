@@ -217,7 +217,7 @@ export function ListingSyncSheet({
           {preview && preview.deletions.length > 0 && (
             <Section
               title="Terminations"
-              note="Stated in the file — these rows carry a leaving date that has passed."
+              note="Stated in the file — these rows carry a leaving date that has passed. A leaver's dependants end with them."
             >
               {preview.deletions.map((op, i) => (
                 <OpRow key={`d${i}`} op={op}>

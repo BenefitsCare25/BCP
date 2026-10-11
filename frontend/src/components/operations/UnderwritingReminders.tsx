@@ -3,11 +3,10 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 
 import { api } from "@/api/client";
-import { useMe } from "@/api/hooks";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useSession } from "@/stores/session";
-import { isBrokerAdminRole } from "@/lib/roles";
+import { useWriteAccess } from "@/lib/roles";
 
 type ReminderItem = {
   id: string;
@@ -147,15 +146,14 @@ export function UnderwritingReminders({
   open: boolean;
 }) {
   const clientId = useSession((state) => state.activeClientId);
-  const { data: me } = useMe();
-  const editable = isBrokerAdminRole(me?.role);
+  const { canAdmin: editable } = useWriteAccess();
   const headers = { "X-Inspro-Client": clientId ?? "" };
   const path = `/underwriting/reviews/${reviewId}/reminders`;
   const queryKey = ["underwriting-reminders", clientId, reviewId];
   const queryClient = useQueryClient();
   const history = useQuery({
     queryKey,
-    queryFn: () => api.get<ReminderHistory>(path, { headers }),
+    queryFn: (context) => api.poll<ReminderHistory>(context, path, headers),
     enabled: Boolean(clientId),
     refetchInterval: 15_000,
   });

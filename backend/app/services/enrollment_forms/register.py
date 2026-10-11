@@ -274,7 +274,11 @@ _FAMILY_HEADER = [
 def _selections_text(snapshot: dict[str, Any]) -> str:
     parts: list[str] = []
     for sel in snapshot.get("selections", []):
-        plan = "Declined" if sel.get("declined") else sel.get("elected_plan") or "-"
+        plan = (
+            ("Not enrolled" if sel.get("eligible_only") else "Declined")
+            if sel.get("declined")
+            else sel.get("elected_plan") or "-"
+        )
         line = f"{sel.get('product_code')}: {plan}"
         if sel.get("covered"):
             line += f" (+ {', '.join(sel['covered'])})"

@@ -582,6 +582,13 @@ class Claim(Base, TimestampMixin):
     # When the insurer's turnaround expires. A DATE, not a timestamp: it is a
     # business deadline negotiated in days, and the SLA counters compare dates.
     insurer_deadline_on: Mapped[date | None] = mapped_column(Date, nullable=True)
+    # When the insurer DECLINED a claim we had sent them (sent_to_insurer →
+    # rejected). Kept apart from `decided_at`, which stays OUR decision: writing
+    # the insurer's answer over it made `servicer_days`, the register's
+    # "Decided On" and the workload report count the insurer's turnaround as
+    # ours. `_insurer_clock_stop` reads this, falling back to `decided_at` for
+    # declines recorded before the column existed.
+    insurer_outcome_on: Mapped[date | None] = mapped_column(Date, nullable=True)
     # The insurer's OWN payment date, transcribed from their advice — not the
     # moment a broker keyed it in, which is why this is a date and not a
     # server-set timestamp.

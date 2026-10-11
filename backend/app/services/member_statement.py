@@ -15,15 +15,18 @@ passes through.
 """
 from __future__ import annotations
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import Employee
+from app.models import Dependant, Employee
 from app.models.category import CategoryStatus
-from app.schemas.api import BenefitStatementOut, CoverageLine
+from app.schemas.api import BenefitStatementOut, CoverageLine, DependantOut
 from app.schemas.claims import UtilizationOut
 from app.services.benefit_statement import build_benefit_statement
+from app.services.flex_membership import classify_relationship
 from app.services.member_schedule import member_schedule
 from app.services.plan_hydration import member_cover_view
+from app.services.roster_attributes import REL_KEYS, first_value
 
 
 def build_member_statement(db: Session, employee: Employee) -> BenefitStatementOut:
@@ -45,6 +48,30 @@ def build_member_statement(db: Session, employee: Employee) -> BenefitStatementO
         for line in statement.coverage
     ]
     return statement.model_copy(update={"coverage": coverage})
+
+
+def member_dependants(db: Session, employee: Employee) -> list[DependantOut]:
+    """The member's dependants on their policy year (portal and preview alike),
+    each carrying the server-classified pricing ``role`` the election deck keys
+    family pricing and cover-level choices on."""
+    rows = db.execute(
+        select(Dependant)
+        .where(
+            Dependant.employee_id == employee.id,
+            Dependant.policy_year_id == employee.policy_year_id,
+        )
+        .order_by(Dependant.id)
+    ).scalars().all()
+    return [
+        DependantOut.model_validate(row).model_copy(
+            update={
+                "role": classify_relationship(
+                    first_value(row.attribute_values or {}, REL_KEYS)
+                )
+            }
+        )
+        for row in rows
+    ]
 
 
 def member_visible_code(code: str | None) -> bool:
@@ -73,6 +100,8 @@ def _member_line(line: CoverageLine) -> CoverageLine:
                 "benefit_schedule": None,
                 "annual_policy_limit": None,
                 "cover_description": None,
+                # The sum insured / basis is extraction output too.
+                "financials": None,
             }
         )
     return line.model_copy(

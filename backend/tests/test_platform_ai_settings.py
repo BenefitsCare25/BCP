@@ -32,6 +32,7 @@ from app.db.session import SessionLocal, engine  # noqa: E402
 from app.main import app  # noqa: E402
 from app.models import ClientAIConfig, PlatformAISetting  # noqa: E402
 from app.models.platform_ai_settings import SINGLETON_ID  # noqa: E402
+from app.services.vertex_probe import VertexProbeResult  # noqa: E402
 from scripts.seed_demo import seed  # noqa: E402
 
 
@@ -179,7 +180,7 @@ def test_only_stored_platform_probe_activates_saved_configuration() -> None:
 
     with patch(
         "app.api.v1.platform_ai_settings.probe_vertex",
-        return_value=(None, 5, "gemini-draft"),
+        return_value=VertexProbeResult(None, 5, "gemini-draft"),
     ):
         draft = client.post(
             "/api/v1/platform-ai-settings/credentials/test",
@@ -193,7 +194,7 @@ def test_only_stored_platform_probe_activates_saved_configuration() -> None:
 
     with patch(
         "app.api.v1.platform_ai_settings.probe_vertex",
-        return_value=(None, 5, "gemini-2.5-flash"),
+        return_value=VertexProbeResult(None, 5, "gemini-2.5-flash"),
     ):
         stored = client.post("/api/v1/platform-ai-settings/credentials/test")
     assert stored.status_code == 200

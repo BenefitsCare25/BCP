@@ -20,7 +20,7 @@ export interface EnrollmentEvent {
 export function useEnrollmentEvents(id: string) {
   return useQuery({
     queryKey: ["enrollment-events", id],
-    queryFn: () => api.get<EnrollmentEvent[]>(`/enrollments/${id}/events`),
+    queryFn: (context) => api.poll<EnrollmentEvent[]>(context, `/enrollments/${id}/events`),
     refetchInterval: 15000,
   });
 }

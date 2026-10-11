@@ -190,7 +190,7 @@ def api(monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[TestClient, dict[str,
     monkeypatch.setattr(
         hr_claims,
         "_out",
-        lambda _db, claim: {
+        lambda _db, claim, _user: {
             "id": claim.id,
             "employee_id": claim.employee_id,
             "created_by_user_id": claim.created_by_user_id,

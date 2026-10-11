@@ -48,7 +48,7 @@ export function PendingClaimsNotice({ form }: { form: NewClaimForm }) {
     })),
     {
       key: "current",
-      invoice: form.invoiceNumber.trim() || "Current invoice",
+      invoice: form.invoiceNumber.trim() || pt("Current invoice"),
       date: form.incurredDate || null,
       amount: positiveAmount(form.amount),
       currency: form.effectiveCurrency.toUpperCase(),
@@ -99,7 +99,7 @@ export function PendingClaimsNotice({ form }: { form: NewClaimForm }) {
             <span className="min-w-0 flex-1">
               <span className="block truncate font-medium text-record">{row.invoice}</span>
               <span className="block text-label">
-                {row.date ? formatDay(row.date) : pt("Date not read")} · {stateLabel(row.state)}
+                {row.date ? formatDay(row.date) : pt("Date not read")} · {pt(stateLabel(row.state))}
               </span>
             </span>
             <Money

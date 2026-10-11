@@ -48,6 +48,7 @@ export function PortalBenefitsPage({
       selection={selection}
       onSelectionChange={onSelectionChange}
       company={company}
+      capabilities={profile?.access.capabilities}
     />
   );
 }

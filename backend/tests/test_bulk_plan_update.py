@@ -690,12 +690,15 @@ def _undo(system_admin_request, client: TestClient, batch_id: str):
     return system_admin_request(client, "POST", f"/api/v1/bulk-plan-updates/{batch_id}/undo")
 
 
-def test_revert_to_default_deletes_the_override(client: TestClient) -> None:
+def test_revert_to_default_deletes_the_override(
+    system_admin_request, client: TestClient
+) -> None:
     """Reverting is its own action, not "set the plan the cohort happens to use".
 
     A broker undoing a mis-applied batch does not know the default's code, and
     writing it explicitly would leave the member pinned off future cohort
-    changes — so the override has to be REMOVED and reported as a revert."""
+    changes — so the override has to be REMOVED and reported as a revert.
+    Deleting overrides is a firm-owner reset, so a broker_admin is refused."""
     with SessionLocal() as s:
         s.add(EmployeePlanOverride(
             employee_id=EMP1, policy_year_id=PY_ID, client_id=CLIENT_ID,
@@ -703,10 +706,14 @@ def test_revert_to_default_deletes_the_override(client: TestClient) -> None:
             source="manual_admin",
         ))
         s.commit()
-    res = _apply(
-        client,
-        changes=[{"product_code": "MED", "action": "revert_to_default"}],
-        query={"employee_ids": [EMP1, EMP2]},
+    revert = {
+        "changes": [{"product_code": "MED", "action": "revert_to_default"}],
+        "query": {"employee_ids": [EMP1, EMP2]},
+    }
+    assert _apply(client, **revert).status_code == 403
+    res = system_admin_request(
+        client, "POST", f"/api/v1/policy-years/{PY_ID}/bulk-plan-updates/apply",
+        json=revert,
     )
     assert res.status_code == 200, res.text
     body = res.json()

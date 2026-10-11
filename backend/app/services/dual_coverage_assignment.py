@@ -37,6 +37,7 @@ from app.core.auth import CurrentUser
 from app.models import Dependant, Employee, EmployeePlanOverride, PolicyYear
 from app.schemas.enrollment import PlanOverrideUpsert
 from app.services.dual_coverage import coverage_by_employee, dependants_by_employee
+from app.services.enrollment_products import resolve_product_by_code
 from app.services.flex_membership import resolve_roster
 from app.services.plan_hydration import hydrate_plans
 
@@ -48,6 +49,7 @@ def set_dependant_cover(
     *,
     dependant: Dependant,
     covered: bool,
+    acknowledge_open_enrollment: bool = False,
 ) -> list[str]:
     """Include or exclude ``dependant`` across its own employee's plans.
 
@@ -101,7 +103,7 @@ def set_dependant_cover(
     # restore has to recognise, read through the same helper the resolver uses.
     sweep = {d.id for d in dependants_by_employee(roster).get(employee.id, [])}
 
-    changed: list[str] = []
+    moves: list[tuple[str, set[str]]] = []
     for mp in plans:
         current = effective.get(mp.product_code)
         if current is None:
@@ -112,8 +114,17 @@ def set_dependant_cover(
         if covered and mp.product_code not in covering:
             continue
         wanted = set(current) | {dependant.id} if covered else set(current) - {dependant.id}
-        if wanted == set(current):
-            continue
+        if wanted != set(current):
+            moves.append((mp.product_code, wanted))
+
+    # Every product is checked before any is written: each write below commits
+    # on its own, so an open-period refusal on the second product used to leave
+    # the first one moved and the click impossible to finish.
+    if not acknowledge_open_enrollment:
+        _assert_no_open_period_conflict(db, py, employee, [code for code, _ in moves])
+
+    changed: list[str] = []
+    for product_code, wanted in moves:
         # Restoring the whole cohort set leaves nothing for this override to
         # say. `coverage_by_employee` short-circuits on ANY explicit list, so
         # re-stating the set left the sweep permanently off: a drop followed by
@@ -122,7 +133,7 @@ def set_dependant_cover(
         # had touched. So a restore to the default RETRACTS the override
         # instead — entirely where it carries nothing else, or down to just its
         # covered list where it also holds an elected plan worth keeping.
-        row = stored.get(mp.product_code)
+        row = stored.get(product_code)
         back_to_default = covered and wanted == sweep
         drop_row = back_to_default and not _has_other_opinion(row)
 
@@ -138,7 +149,7 @@ def set_dependant_cover(
             entity_id=dependant.id,
             after={
                 "covered": covered,
-                "product": mp.product_code,
+                "product": product_code,
                 "employee_staff_id": employee.staff_id,
             },
             employee_id=employee.id,
@@ -146,7 +157,8 @@ def set_dependant_cover(
         if drop_row:
             delete_plan_override(
                 employee_id=employee.id,
-                product_code=mp.product_code,
+                product_code=product_code,
+                acknowledge_open_enrollment=acknowledge_open_enrollment,
                 emp=employee,
                 user=user,
                 db=db,
@@ -154,9 +166,9 @@ def set_dependant_cover(
         else:
             set_plan_override(
                 employee_id=employee.id,
-                product_code=mp.product_code,
+                product_code=product_code,
                 body=PlanOverrideUpsert(
-                    plan_code=pinned.get(mp.product_code),
+                    plan_code=pinned.get(product_code),
                     declined=False,
                     # None CLEARS the stored list (`override_writer` keeps a
                     # value only at its `_KEEP` sentinel). The schema refuses an
@@ -169,16 +181,30 @@ def set_dependant_cover(
                     # for, not just who is covered.
                     covered_dependant_ids=(
                         None
-                        if back_to_default and pinned.get(mp.product_code)
+                        if back_to_default and pinned.get(product_code)
                         else sorted(wanted)
                     ),
+                    acknowledge_open_enrollment=acknowledge_open_enrollment,
                 ),
                 emp=employee,
                 user=user,
                 db=db,
             )
-        changed.append(mp.product_code)
+        changed.append(product_code)
     return changed
+
+
+def _assert_no_open_period_conflict(
+    db: Session, py: PolicyYear, employee: Employee, product_codes: list[str]
+) -> None:
+    """Raise the coverage pane's structured 409 (``open_enrollment_election``)
+    for the first product an open enrolment period would overwrite."""
+    from app.api.v1.plan_overrides import _assert_no_pending_election
+
+    for code in product_codes:
+        product = resolve_product_by_code(db, py, code)
+        if product is not None:
+            _assert_no_pending_election(db, employee, product.id, product.code, False)
 
 
 def _has_other_opinion(row: EmployeePlanOverride | None) -> bool:

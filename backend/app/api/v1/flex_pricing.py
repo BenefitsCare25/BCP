@@ -9,7 +9,8 @@ electable tier and per-product age band. One matrix per policy year, upsert-by-y
   (so the UI can render the grid: tiers as rows, age bands as columns)
 - PUT /policy-years/{id}/flex-pricing   — upsert the matrix
 
-Tenant scoping rides on ``load_policy_year``.
+Tenant scoping rides on ``load_policy_year``; writes refuse a stale company
+selection (``policy_year_company``), as the flex-scheme writes do.
 """
 from __future__ import annotations
 
@@ -24,7 +25,12 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from app.core.audit import write_audit
 from app.core.auth import CurrentUser, get_current_user
-from app.core.deps import assert_policy_year_editable, load_policy_year
+from app.core.deps import (
+    assert_policy_year_editable,
+    is_firm_owner,
+    load_policy_year,
+    policy_year_company,
+)
 from app.db.session import get_db
 from app.models import Category, EnrollmentWindow, FlexPricing, PolicyYear, Product
 from app.models.enrollment_window import WindowStatus
@@ -38,6 +44,7 @@ from app.services.flex_pricing_resolver import (
     dependant_pricing_breakdown,
     effective_dependant_participation,
     family_slip_index_from,
+    gst_multiplier_for,
     stamp_pricing,
     validate_pricing_shape,
 )
@@ -119,6 +126,9 @@ class FlexPricingProductOut(BaseModel):
     slip_family: dict[str, dict[str, float]] = {}
     # Slip-derived per-dependant rate, keyed by tier_key → rate (per_pax prefill).
     slip_per_pax: dict[str, float] = {}
+    # GST gross-up applied to every flex tag this product draws (1.0 = none).
+    # Price-book amounts are GST-exclusive; members are charged them x this.
+    gst_multiplier: float = 1.0
 
 
 class FlexPricingOut(BaseModel):
@@ -340,6 +350,7 @@ def _available_products(
                 dependant_suggested_mode=suggested,
                 slip_family=slip_family,
                 slip_per_pax=slip_per_pax,
+                gst_multiplier=gst_multiplier_for(pricing, ts.product_id),
                 tiers=[
                     FlexPricingTierOut(
                         key=tier_key(t.tier_category_id, t.plan_code),
@@ -417,10 +428,30 @@ def get_flex_pricing(
     )
 
 
+def _participation(pricing: dict[str, Any] | None, product_id: str) -> dict[str, Any]:
+    products = (pricing or {}).get("products")
+    block = products.get(product_id) if isinstance(products, dict) else None
+    dependant = block.get("dependant") if isinstance(block, dict) else None
+    value = dependant.get("participation") if isinstance(dependant, dict) else None
+    return value if isinstance(value, dict) else {}
+
+
+def _removes_dependant_cover(before: dict[str, Any], after: dict[str, Any]) -> bool:
+    """Whether a save newly sets a tier's dependant participation to ``none`` —
+    the editor's "Remove dependant cover", a firm-owner action (AGENTS.md)."""
+    products = after.get("products")
+    return isinstance(products, dict) and any(
+        value == "none" and _participation(before, pid).get(key) != "none"
+        for pid in products
+        for key, value in _participation(after, pid).items()
+    )
+
+
 def _upsert_pricing_row(
     db: Session,
     py: PolicyYear,
     pricing: dict[str, Any],
+    user: CurrentUser,
 ) -> tuple[FlexPricing, str]:
     errors = validate_pricing_shape(pricing)
     if errors:
@@ -443,6 +474,13 @@ def _upsert_pricing_row(
                 "Dependant eligibility and participation cannot change while an "
                 "enrolment period is open. Price tags and rates can still be corrected.",
             )
+    if not is_firm_owner(user) and _removes_dependant_cover(
+        (row.pricing if row else {}) or {}, pricing
+    ):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Removing dependant cover requires a firm administrator.",
+        )
     action = "update_flex_pricing"
     if row is None:
         row = FlexPricing(policy_year_id=py.id, client_id=py.client_id)
@@ -481,7 +519,8 @@ def upsert_flex_pricing(
     db: Session = Depends(get_db),
 ) -> FlexPricingOut:
     assert_policy_year_editable(py)
-    row, action = _upsert_pricing_row(db, py, body.pricing)
+    policy_year_company(py, user)
+    row, action = _upsert_pricing_row(db, py, body.pricing, user)
     write_audit(
         db, user, action=action, entity_type="flex_pricing",
         entity_id=row.id, after={"products": list(body.pricing.get("products", {}))},
@@ -492,7 +531,7 @@ def upsert_flex_pricing(
     return FlexPricingOut(
         policy_year_id=py.id,
         pricing=pricing,
-        products=_available_products(db, py.id, pricing),
+        products=_available_products(db, py.id, stamp_pricing(db, py.id, pricing)),
     )
 
 
@@ -509,6 +548,7 @@ def upsert_enrollment_pricing_config(
 ) -> FlexPricingOut:
     """Save the year's recommendations/overrides (and any drafts) as one transaction."""
     assert_policy_year_editable(py)
+    policy_year_company(py, user)
     windows = db.execute(
         select(EnrollmentWindow).where(
             EnrollmentWindow.policy_year_id == py.id,
@@ -518,7 +558,7 @@ def upsert_enrollment_pricing_config(
     # Price tags belong to the benefit YEAR, so they are editable with or
     # without a period drafted (requiring one made brokers create a period just
     # to reach the price book). Drafts that exist pick up the legacy source.
-    row, _action = _upsert_pricing_row(db, py, body.pricing)
+    row, _action = _upsert_pricing_row(db, py, body.pricing, user)
     for window in windows:
         window.flex_price_source = (
             dict(body.flex_price_source) if body.flex_price_source is not None else None
@@ -540,5 +580,5 @@ def upsert_enrollment_pricing_config(
     return FlexPricingOut(
         policy_year_id=py.id,
         pricing=pricing,
-        products=_available_products(db, py.id, pricing),
+        products=_available_products(db, py.id, stamp_pricing(db, py.id, pricing)),
     )
