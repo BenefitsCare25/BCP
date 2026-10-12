@@ -19,6 +19,7 @@ import {
   setRestorationSuppressed,
 } from "./brokerSession";
 import { entraConfig, type EntraClientConfig } from "./staffSignIn";
+import { isPublicLinkPath } from "@/lib/publicLinks";
 
 /** MSAL is configured at runtime from the firm's directory (`/public/site`),
  *  falling back to the build's `VITE_ENTRA_*` values; see `staffSignIn.ts`.
@@ -49,7 +50,7 @@ const prepared = new WeakMap<PublicClientApplication, Promise<AuthenticationResu
 
 function onOtherSurface(): boolean {
   const path = window.location.pathname;
-  return path.startsWith("/portal/") || path.startsWith("/hr/");
+  return path.startsWith("/portal/") || path.startsWith("/hr/") || isPublicLinkPath(path);
 }
 
 function removeLegacyBrokerTokens(clientId: string): void {

@@ -15,6 +15,7 @@ import { captureTenantSlugFromUrl } from "./lib/tenant";
 import { primeBrand } from "./lib/brand";
 import { installMediaInteractionGuards } from "./lib/mediaInteractions";
 import "./styles.css";
+import { isPublicLinkPath } from "@/lib/publicLinks";
 
 installMediaInteractionGuards();
 
@@ -47,7 +48,7 @@ const EXPLAINED_REFUSALS = new Set(["invitation_invalid", "sign_in_method_disabl
  *  what to render. The employee and HR portals have their own sign-in. */
 async function startBrokerSignIn() {
   const path = window.location.pathname;
-  if (path.startsWith("/portal/") || path.startsWith("/hr/")) return;
+  if (path.startsWith("/portal/") || path.startsWith("/hr/") || isPublicLinkPath(path)) return;
   // Before MSAL reads the address: the invitation token leaves the URL first.
   captureBrokerInviteFromUrl();
   await loadStaffSignIn();

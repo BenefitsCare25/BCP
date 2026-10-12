@@ -14,7 +14,7 @@ try {
 } catch { /* The current tab still remembers the choice when storage is blocked. */ }
 
 export function isPortalSurface(path = typeof window === "undefined" ? "" : window.location.pathname): boolean {
-  return /^\/(?:portal|hr)(?:\/|$)/.test(path);
+  return /^\/(?:portal|hr|enrol|hr-download)(?:\/|$)/.test(path);
 }
 
 export function getPortalLocale(): PortalLocale {

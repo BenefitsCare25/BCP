@@ -118,7 +118,11 @@ def _header(s: dict[str, Any]) -> str:
         f"<p>Policy period: {_day(form['policy_start'])} to {_day(form['policy_end'])}"
         f" &nbsp;|&nbsp; Enrolment closes: {_stamp(form['closes_at'])}</p>"
         f"<p class='muted small'>Reference {_e(form['reference_no'])} &nbsp;|&nbsp; "
-        f"Version {_e(form['version'])} &nbsp;|&nbsp; Submitted {_stamp(form['submitted_at'])}</p>"
+        # A QR form is frozen before a broker files it, so the register's
+        # version for that employee is not known when this is printed.
+        + ("" if s.get("source") == "qr" else f"Version {_e(form['version'])} &nbsp;|&nbsp; ")
+        + f"Submitted {_stamp(form['submitted_at'])}</p>"
+        + (f"<p class='small'><b>{_e(s['provenance'])}</b></p>" if s.get("provenance") else "")
     )
 
 
@@ -139,7 +143,23 @@ def _section_a(s: dict[str, Any]) -> str:
         ("Date of hire", _day(p.get("date_of_hire"))),
         ("Contact number", _with_flag(p.get("contact_no"), p.get("contact_updated"))),
         ("Email", _with_flag(p.get("email"), p.get("email_updated"))),
+        *((("Marital status", p.get("marital_status")),) if p.get("marital_status") else ()),
+        *_life_event(s),
     ]) + "</table>"
+
+
+_LIFE_EVENTS = {
+    "new_hire": "New joiner", "marriage": "Marriage", "birth": "Birth of a child",
+    "other": "Other life event",
+}
+
+
+def _life_event(s: dict[str, Any]) -> tuple[tuple[str, object], ...]:
+    event = s.get("life_event") or {}
+    if not event:
+        return ()
+    label = _LIFE_EVENTS.get(str(event.get("kind")), str(event.get("kind")))
+    return (("Life event", f"{label} on {_day(event.get('date'))}"),)
 
 
 def _cover(sel: dict[str, Any]) -> str:
@@ -181,6 +201,8 @@ def _selection_table(s: dict[str, Any]) -> str:
         benefit = _e(sel.get("product_name") or sel.get("product_code"))
         if sel.get("insurer"):
             benefit += f"<br/><span class='muted small'>{_e(sel['insurer'])}</span>"
+        if sel.get("category"):
+            benefit += f"<br/><span class='muted small'>Category: {_e(sel['category'])}</span>"
         out.append(
             f"<tr><td>{benefit}</td>"
             f"<td>{_keep(before)}</td><td>{_keep(choice)}</td>"
@@ -225,12 +247,16 @@ def _premium_table(s: dict[str, Any]) -> str:
     ]
     if not rows:
         return ""
+    # A QR form is filled in without the employee's current plan, so there is
+    # no "change" to show; the requested plan's figures stand alone.
+    qr = s.get("source") == "qr"
     out = [
         "<p class='sub'>Annual premium for your plans</p>"
         "<table><tr><th>Benefit and plan</th><th class='right'>Employee only</th>"
         "<th class='right'>Employee and spouse</th><th class='right'>Employee and child(ren)</th>"
-        "<th class='right'>Family</th><th class='right'>Change vs current plan</th>"
-        "<th>Your share</th></tr>"
+        "<th class='right'>Family</th>"
+        + ("" if qr else "<th class='right'>Change vs current plan</th>")
+        + "<th>Your share</th></tr>"
     ]
     for sel in rows:
         prem = sel["premium"]
@@ -249,7 +275,7 @@ def _premium_table(s: dict[str, Any]) -> str:
         out.append(
             f"<tr><td>{_e(name)}</td>"
             + "".join(f"<td class='right'>{c}</td>" for c in cells)
-            + f"<td class='right'>{change_cell}</td>"
+            + ("" if qr else f"<td class='right'>{change_cell}</td>")
             + f"<td>{_e(_share_text(sel))}</td></tr>"
         )
     out.append("</table>")
@@ -315,7 +341,9 @@ def _section_c(s: dict[str, Any]) -> str:
     )
     for d in deps:
         covered = escape(", ".join(d.get("covered_on") or [])) or "-"
-        if d.get("status") == "pending":
+        if d.get("action_label"):
+            covered += f"<br/><span class='muted'>Requested: {_e(d['action_label'])}</span>"
+        elif d.get("status") == "pending":
             covered += "<br/><span class='muted'>New - pending verification</span>"
         out.append(
             f"<tr><td>{_e(d.get('relationship'))}</td><td>{_e(d.get('name'))}</td>"
@@ -349,7 +377,8 @@ def _section_e(s: dict[str, Any]) -> str:
     signature_rows = _rows([
         ("Signed by (typed name)", sig.get("name")),
         ("Signed at", _stamp(sig.get("signed_at"))),
-        ("Method", "Typed name and declaration confirmed in the employee portal"),
+        ("Method", sig.get("method")
+         or "Typed name and declaration confirmed in the employee portal"),
         ("Form reference", s["form"].get("reference_no")),
     ])
     out.append(f"<h2>Electronic signature</h2><table>{signature_rows}</table>")

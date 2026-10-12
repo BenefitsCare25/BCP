@@ -954,28 +954,28 @@ def test_confirm_submitted_confirms_valid_and_reports_the_rest(
 
 def test_option_premiums_are_one_members_not_the_groups() -> None:
     from app.schemas.api import PlanFinancials
-    from app.services.enrollment_elections import _per_member_financials
+    from app.services.enrollment_elections import per_member_financials
 
     flat = PlanFinancials(
         num_employees=None, basis=None, sum_insured=None, premium_rate=378.0,
         annual_premium=186_732.0, rate_basis="flat", rate_tiers=None,
     )
-    assert _per_member_financials(flat).annual_premium == 378.0
+    assert per_member_financials(flat).annual_premium == 378.0
     tiered = PlanFinancials(
         num_employees=252, basis=None, sum_insured=None, premium_rate=None,
         annual_premium=262_332.0, rate_basis="tiered",
         rate_tiers={"EO": {"rate": 1041.0, "premium": 0.0}},
     )
-    out = _per_member_financials(tiered)
+    out = per_member_financials(tiered)
     assert out.annual_premium == 1041.0 and out.num_employees is None
     # A tier the rate table can't price shows no premium, never the group's.
     unpriced = tiered.model_copy(update={"rate_tiers": None})
-    assert _per_member_financials(unpriced).annual_premium is None
+    assert per_member_financials(unpriced).annual_premium is None
     life = PlanFinancials(
         num_employees=None, basis="50000", sum_insured=50_000.0, premium_rate=3.06,
         annual_premium=153.0, rate_basis="per_1000_si", rate_tiers=None,
     )
-    assert _per_member_financials(life).annual_premium == 153.0
+    assert per_member_financials(life).annual_premium == 153.0
 
 
 def test_extending_an_overdue_deadline_reopens_the_period(client: TestClient) -> None:

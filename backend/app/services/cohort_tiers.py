@@ -844,6 +844,27 @@ def tier_index_for_product(
     return ProductTierIndex(sets=sets, categories={c.id: c for c in cats}, max_sum_insured=cap)
 
 
+def cohort_tier_sets(
+    db: Session, policy_year_id: str, product_id: str, product_code: str
+) -> list[tuple[Category, ProductTierSet]]:
+    """One tier set per employee cohort of a product, keyed by the cohort's
+    baseline category — the company-wide view a blank (no-login) form offers,
+    where the visitor picks their own cohort. Dependant-scope categories are
+    never a cohort."""
+    index = tier_index_for_product(db, policy_year_id, product_id, product_code)
+    cats = sorted(
+        (c for c in index.categories.values() if not _is_dependant_scope(c)),
+        key=lambda c: (c.priority, c.id),
+    )
+    out: list[tuple[Category, ProductTierSet]] = []
+    for members in _group_by_cohort(cats).values():
+        baseline = _pick_baseline(members)
+        ts = index.sets.get(baseline.id)
+        if ts is not None:
+            out.append((baseline, ts))
+    return out
+
+
 def _group_by_cohort(
     cats: list[Category],
 ) -> dict[tuple[str, frozenset[str]], list[Category]]:

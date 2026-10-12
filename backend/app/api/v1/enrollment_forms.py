@@ -199,7 +199,7 @@ def _filter(
 _STATUS_Q = Query(
     default=None, alias="status", pattern="^(submitted|acknowledged|superseded|returned|cancelled)$"
 )
-_SOURCE_Q = Query(default=None, pattern="^(portal|paper)$")
+_SOURCE_Q = Query(default=None, pattern="^(portal|paper|qr)$")
 _TEXT_Q = Query(default=None, max_length=100)
 
 
@@ -266,6 +266,7 @@ def export_forms_xlsx(
             "masked": masked,
             "forms": workbook.forms,
             "family_members": workbook.family_members,
+            "qr_submissions": workbook.qr_submissions,
         },
         request=request,
         client_id=year.client_id,

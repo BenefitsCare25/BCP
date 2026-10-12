@@ -33,6 +33,7 @@ from app.schemas.enrollment_forms import FormRegisterItem, FormRegisterOut
 from app.services.claims import assert_document_scope
 from app.services.enrollment_forms.submission import count_changes
 from app.services.insurer_reports import autosize, bold_header, naive
+from app.services.qr_enrolment.workbook import append_qr_sheets
 from app.services.roster_attributes import EMPLOYEE_ID_KEYS, first_value, mask_nric
 from app.services.xlsx_safe import append_safe
 
@@ -161,7 +162,7 @@ def submission_pdf(
     doc = db.get(StoredDocument, sub.document_id)
     if doc is None or not _valid_doc(sub, doc):
         return None
-    content = _read_blob(
+    content = read_scoped_blob(
         doc.storage_path,
         broker_firm_id=company_firm_id(db, sub.client_id),
         client_id=sub.client_id,
@@ -178,11 +179,11 @@ def _export_rows(db: Session, f: RegisterFilter) -> list[Any]:
     )
 
 
-_SAFE_NAME = re.compile(r"[^A-Za-z0-9 ._-]+")
+SAFE_NAME = re.compile(r"[^A-Za-z0-9 ._-]+")
 
 
-_FETCH_WORKERS = 8
-_FETCH_BATCH = 32
+FETCH_WORKERS = 8
+FETCH_BATCH = 32
 _SPOOL_IN_MEMORY = 32 * 1024 * 1024
 
 
@@ -196,7 +197,7 @@ def _valid_doc(sub: EnrollmentFormSubmission, doc: StoredDocument | None) -> boo
     )
 
 
-def _read_blob(path: str, *, broker_firm_id: str, client_id: str) -> bytes | None:
+def read_scoped_blob(path: str, *, broker_firm_id: str, client_id: str) -> bytes | None:
     """A form's bytes, or None when they are gone or the key is filed outside
     the form's own firm and company (never another tenant's bytes)."""
     try:
@@ -224,22 +225,22 @@ def build_zip(db: Session, f: RegisterFilter) -> tuple[IO[bytes], int]:
         if doc is None or not _valid_doc(sub, doc):
             continue
         suffix = (doc.file_name.rsplit(".", 1)[-1] if "." in doc.file_name else "pdf").lower()
-        label = _SAFE_NAME.sub("", f"{emp.staff_id} {emp.employee_name or ''}").strip()
+        label = SAFE_NAME.sub("", f"{emp.staff_id} {emp.employee_name or ''}").strip()
         items.append((f"{sub.reference_no} {label} v{sub.version}.{suffix}", doc))
 
     # Every listed form is the filter's company's (`_conditions`, `_valid_doc`);
     # its firm is resolved here because the session cannot cross threads.
     read = partial(
-        _read_blob, broker_firm_id=company_firm_id(db, f.client_id), client_id=f.client_id
+        read_scoped_blob, broker_firm_id=company_firm_id(db, f.client_id), client_id=f.client_id
     )
     spool: IO[bytes] = tempfile.SpooledTemporaryFile(max_size=_SPOOL_IN_MEMORY)
     written = 0
     with (
-        ThreadPoolExecutor(max_workers=_FETCH_WORKERS) as pool,
+        ThreadPoolExecutor(max_workers=FETCH_WORKERS) as pool,
         zipfile.ZipFile(spool, "w", zipfile.ZIP_STORED) as archive,
     ):
-        for start in range(0, len(items), _FETCH_BATCH):
-            batch = items[start:start + _FETCH_BATCH]
+        for start in range(0, len(items), FETCH_BATCH):
+            batch = items[start:start + FETCH_BATCH]
             contents = pool.map(read, [doc.storage_path for _, doc in batch])
             for (name, _doc), content in zip(batch, contents, strict=True):
                 if content is not None:
@@ -258,6 +259,8 @@ def zip_response(spool: IO[bytes], filename: str) -> StreamingResponse:
         background=BackgroundTask(spool.close),
     )
 
+
+_SOURCE_LABEL = {"portal": "Portal", "paper": "Paper", "qr": "QR form"}
 
 _SUMMARY_HEADER = [
     "Reference", "Version", "Source", "Status", "Benefit period", "Staff ID", "Employee",
@@ -291,9 +294,12 @@ class RegisterWorkbook:
     content: bytes
     forms: int
     family_members: int
+    qr_submissions: int = 0
 
 
-def build_workbook(db: Session, f: RegisterFilter, *, masked: bool = True) -> RegisterWorkbook:
+def build_workbook(
+    db: Session, f: RegisterFilter, *, masked: bool = True, include_rejected_qr: bool = True
+) -> RegisterWorkbook:
     wb = Workbook()
     summary = wb.active
     assert summary is not None
@@ -309,7 +315,8 @@ def build_workbook(db: Session, f: RegisterFilter, *, masked: bool = True) -> Re
         id_no = p.get("id_no") or first_value(emp.attribute_values or {}, EMPLOYEE_ID_KEYS) or ""
         forms += 1
         append_safe(summary, [
-            sub.reference_no, sub.version, sub.source.title(), sub.status.title(),
+            sub.reference_no, sub.version, _SOURCE_LABEL.get(sub.source, sub.source.title()),
+            sub.status.title(),
             window_name or "", emp.staff_id, emp.employee_name or "",
             mask_nric(id_no) if masked else id_no,
             naive(sub.signed_at or sub.created_at), sub.signature_name or "",
@@ -337,6 +344,15 @@ def build_workbook(db: Session, f: RegisterFilter, *, masked: bool = True) -> Re
     for ws in (summary, family):
         bold_header(ws)
         autosize(ws)
+    qr = 0
+    # Form statuses do not apply to QR submissions, so a status filter leaves
+    # them out rather than mixing two vocabularies.
+    if f.source in (None, "qr") and not f.status:
+        qr = append_qr_sheets(
+            wb, db, client_id=f.client_id, policy_year_id=f.policy_year_id,
+            window_id=f.window_id, query=f.query, masked=masked,
+            include_rejected=include_rejected_qr,
+        )
     out = io.BytesIO()
     wb.save(out)
-    return RegisterWorkbook(out.getvalue(), forms, family_members)
+    return RegisterWorkbook(out.getvalue(), forms, family_members, qr)

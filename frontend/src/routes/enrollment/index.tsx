@@ -23,11 +23,13 @@ import { EnrollmentElectionsPage } from "./elections";
 import { EnrollmentBulkPage } from "./bulk";
 import { EnrollmentRulesPage } from "./rules";
 import { EnrollmentFormsPage } from "./forms";
+import { EnrollmentQrPage } from "./qr";
 
 const TABS = [
   { key: "overview", label: "Overview" },
   { key: "members", label: "Members" },
   { key: "forms", label: "Enrolment forms" },
+  { key: "qr", label: "QR forms" },
   { key: "rules", label: "Pricing & rules" },
   { key: "bulk", label: "Coverage changes" },
 ] as const;
@@ -88,6 +90,9 @@ export function EnrollmentPage() {
         </TabsContent>
         <TabsContent value="forms">
           <EnrollmentFormsPage readOnly={readOnly} />
+        </TabsContent>
+        <TabsContent value="qr">
+          <EnrollmentQrPage readOnly={readOnly} />
         </TabsContent>
         <TabsContent value="rules">
           <EnrollmentRulesPage

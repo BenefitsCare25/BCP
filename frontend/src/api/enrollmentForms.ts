@@ -145,7 +145,7 @@ export interface FormRuleView {
   requires_product_name: string | null;
 }
 
-export type FormSource = "portal" | "paper";
+export type FormSource = "portal" | "paper" | "qr";
 export type FormStatus = "submitted" | "acknowledged" | "superseded" | "returned" | "cancelled";
 
 export interface FormSubmissionSummary {

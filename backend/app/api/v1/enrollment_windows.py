@@ -398,7 +398,9 @@ def close_enrollment_window(
             status.HTTP_409_CONFLICT, "Only an open enrolment period can be closed."
         )
     summary = close_window(
-        db, window, user, submit_saved=bool(body and body.submit_saved)
+        db, window, user,
+        submit_saved=bool(body and body.submit_saved),
+        close_with_pending_qr=bool(body and body.close_with_pending_qr),
     )
     # Window close projected every enrollment into overrides — elected upgrades
     # can cross a product's Non-Evidence Limit, so re-sync underwriting once

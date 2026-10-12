@@ -119,6 +119,14 @@ const PortalSignInPage = lazyRouteComponent(
   () => import("@/routes/portal/sign-in"),
   "PortalSignInPage",
 );
+const PublicEnrolPage = lazyRouteComponent(
+  () => import("@/routes/public/enrol"),
+  "PublicEnrolPage",
+);
+const HrDownloadPage = lazyRouteComponent(
+  () => import("@/routes/public/hr-download"),
+  "HrDownloadPage",
+);
 const PortalSetPasswordPage = lazyRouteComponent(
   () => import("@/routes/portal/set-password"),
   "PortalSetPasswordPage",
@@ -308,6 +316,20 @@ const portalSignInRoute = createRoute({
     }
   },
   component: PortalSignInPage,
+});
+
+/** No-login link pages (shared employee form, HR download): their capability
+ *  rides in the URL fragment, so they need no session and no guard. */
+const publicEnrolRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/enrol",
+  component: PublicEnrolPage,
+});
+
+const hrDownloadRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/hr-download",
+  component: HrDownloadPage,
 });
 
 const portalSetPasswordRoute = createRoute({
@@ -1022,6 +1044,8 @@ const platformAIReleaseRoute = createRoute({
 
 const routeTree = rootRoute.addChildren([
   authCallbackRoute,
+  publicEnrolRoute,
+  hrDownloadRoute,
   brokerSecurityRoute,
   signInRoute,
   hrSignInRoute,

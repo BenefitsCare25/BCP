@@ -33,6 +33,8 @@ from app.db.base import JSON, Base, TimestampMixin, new_uuid
 
 FORM_SOURCE_PORTAL = "portal"
 FORM_SOURCE_PAPER = "paper"
+# Filed by a broker from a no-login QR submission (``PublicIntake``).
+FORM_SOURCE_QR = "qr"
 
 FORM_STATUS_SUBMITTED = "submitted"
 FORM_STATUS_ACKNOWLEDGED = "acknowledged"

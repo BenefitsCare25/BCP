@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from app.schemas.enrollment import EnrollmentElectionIn, LeaveElectionIn
 
 ClauseScope = Literal["all", "dependants"]
-FormSource = Literal["portal", "paper"]
+FormSource = Literal["portal", "paper", "qr"]
 FormStatus = Literal["submitted", "acknowledged", "superseded", "returned", "cancelled"]
 
 _ID_PATTERN = r"^[a-z0-9_-]{1,40}$"

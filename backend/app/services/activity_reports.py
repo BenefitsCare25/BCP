@@ -359,7 +359,7 @@ def build_company_activity_workbook(
             ws,
             [
                 _stamp(row.created_at),
-                "Member" if actor_type == "member" else "Platform user",
+                {"member": "Member", "public": "Public link"}.get(actor_type, "Platform user"),
                 actor.name if actor else "",
                 _label({}, row.action),
                 _label({}, row.entity_type),

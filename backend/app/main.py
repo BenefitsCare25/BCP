@@ -90,6 +90,9 @@ from app.api.v1 import (
     product_setups,
     product_terms,
     public,
+    public_enrolment,
+    public_hr_download,
+    qr_enrolment,
     recommendations,
     report_versions,
     reports,
@@ -288,6 +291,7 @@ def create_app() -> FastAPI:
         plan_overrides.router,
         enrollment_windows.router,
         enrollment_forms.router,
+        qr_enrolment.router,
         enrollments.router,
         leave_policies.router,
         bulk_plan_updates.router,
@@ -369,6 +373,10 @@ def create_app() -> FastAPI:
     # Unauthenticated site information (the host's firm and its staff sign-in
     # methods), needed before anyone can sign in.
     app.include_router(public.router, prefix=api_prefix)
+    # No-login QR enrolment: the shared employee form and the HR download link.
+    # Each resolves the host's firm and checks its own link token.
+    app.include_router(public_enrolment.router, prefix=api_prefix)
+    app.include_router(public_hr_download.router, prefix=api_prefix)
     # HR credential-login surface — public auth, its own tenant + lockout guards
     # (mirrors portal_auth: registered OUTSIDE the broker require_write_access gate).
     app.include_router(hr_auth.router, prefix=api_prefix)

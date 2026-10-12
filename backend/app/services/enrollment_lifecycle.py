@@ -37,6 +37,7 @@ from app.models.employee_plan_override import OverrideSource
 from app.models.enrollment import ElectionAction, EnrollmentStatus
 from app.models.enrollment_window import DefaultBehavior, WindowStatus
 from app.models.leave_election import LeaveAction, LeaveElectionStatus
+from app.models.qr_enrolment import INTAKE_PENDING, PublicIntake
 from app.services.coverage_resolver import (
     employee_category_defaults,
     employee_compulsory_product_ids,
@@ -637,6 +638,7 @@ def close_window(
     user: CurrentUser,
     *,
     submit_saved: bool = False,
+    close_with_pending_qr: bool = False,
 ) -> dict[str, int]:
     """Finalize all enrollments per default_behavior and close the window.
 
@@ -654,6 +656,18 @@ def close_window(
         select(Enrollment).where(Enrollment.window_id == window.id).with_for_update()
     ).scalars().all()
     invalid = _invalid_submissions(db, window, enrollments)
+    pending_qr = pending_qr_intakes(db, window.id)
+    if pending_qr and not close_with_pending_qr:
+        # Someone who submitted the no-login QR form but is not yet matched to
+        # the roster would otherwise get the period's default at close.
+        raise HTTPException(status.HTTP_409_CONFLICT, {
+            "code": "pending_qr_intakes",
+            "message": (
+                f"{pending_qr} QR form submission(s) are still waiting to be matched to "
+                "employees. Link or reject them first, or confirm closing anyway."
+            ),
+            "count": pending_qr,
+        })
     returned = [enr for enr in enrollments if enr.status == EnrollmentStatus.returned]
     if returned:
         raise HTTPException(status.HTTP_409_CONFLICT,
@@ -703,9 +717,19 @@ def close_window(
     db.flush()
     write_audit(
         db, user, action="close_enrollment_window", entity_type="enrollment_window",
-        entity_id=window.id, after={**summary, "submit_saved": submit_saved},
+        entity_id=window.id,
+        after={**summary, "submit_saved": submit_saved, "pending_qr_intakes": pending_qr},
     )
     return summary
+
+
+def pending_qr_intakes(db: Session, window_id: str) -> int:
+    """QR form submissions of this period still awaiting a broker's match."""
+    return int(db.execute(
+        select(func.count(PublicIntake.id)).where(
+            PublicIntake.window_id == window_id, PublicIntake.status == INTAKE_PENDING
+        )
+    ).scalar_one() or 0)
 
 
 _PREVIEW_LIST_LIMIT = 50
@@ -778,6 +802,7 @@ def close_preview(db: Session, window: EnrollmentWindow) -> dict[str, Any]:
         "saved_blocked_count": len(saved_blocked),
         "reopened_unsent": reopened[:_PREVIEW_LIST_LIMIT],
         "reopened_unsent_count": len(reopened),
+        "pending_qr_intakes": pending_qr_intakes(db, window.id),
     }
 
 

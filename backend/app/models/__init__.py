@@ -65,6 +65,12 @@ from app.models.policy_year import PolicyYear
 from app.models.product import PlanAttributeSchema, Product
 from app.models.product_setup import ProductSetup
 from app.models.product_term import ProductTerm
+from app.models.qr_enrolment import (
+    HrDownloadBatch,
+    HrDownloadGrant,
+    PublicFormEntry,
+    PublicIntake,
+)
 from app.models.report_version import ReportVersion
 from app.models.roster_mapping_profile import RosterMappingProfile
 from app.models.schema_def import EmployeeAttributeSchema
@@ -122,6 +128,8 @@ __all__ = [
     "FlexPricing",
     "FlexScheme",
     "FxRate",
+    "HrDownloadBatch",
+    "HrDownloadGrant",
     "IdentityProvider",
     "Insurer",
     "Invitation",
@@ -147,6 +155,8 @@ __all__ = [
     "Product",
     "ProductSetup",
     "ProductTerm",
+    "PublicFormEntry",
+    "PublicIntake",
     "ReportVersion",
     "RosterMappingProfile",
     "SlipTemplateProfile",

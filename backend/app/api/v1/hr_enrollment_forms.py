@@ -146,13 +146,16 @@ def export_xlsx(
     user: CurrentUser = Depends(delegated_hr),
     db: Session = Depends(get_db),
 ) -> Response:
-    workbook = build_workbook(db, _filter(user, window_id, status_, q), masked=True)
+    workbook = build_workbook(
+        db, _filter(user, window_id, status_, q), masked=True, include_rejected_qr=False
+    )
     write_audit(
         db, user, "enrollment_form.export_xlsx", "client", user.client_id or "",
         after={
             "masked": True,
             "forms": workbook.forms,
             "family_members": workbook.family_members,
+            "qr_submissions": workbook.qr_submissions,
         },
         request=request,
     )

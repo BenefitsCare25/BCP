@@ -301,7 +301,7 @@ def test_hr_summary_export_is_masked_and_audited_with_counts(
             AuditLog.client_id == FORMS_CLIENT,
             AuditLog.action == "enrollment_form.export_xlsx",
         ).one()
-    assert row.after == {"masked": True, "forms": 1, "family_members": 1}
+    assert row.after == {"masked": True, "forms": 1, "family_members": 1, "qr_submissions": 0}
     assert row.ip_address == "testclient"
 
 

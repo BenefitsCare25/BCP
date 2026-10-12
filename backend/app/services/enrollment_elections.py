@@ -417,7 +417,7 @@ def enrollment_detail(db: Session, enr: Enrollment) -> EnrollmentOut:
     )
 
 
-def _per_member_financials(fin: PlanFinancials) -> PlanFinancials:
+def per_member_financials(fin: PlanFinancials) -> PlanFinancials:
     """One member's figures for a flat or tiered tier.
 
     Flat and tiered slips carry the GROUP's annual premium, so the election card
@@ -550,7 +550,7 @@ def build_enrollment_options(
                     # premium.
                     financials=(
                         apply_gst_to_financials(
-                            _per_member_financials(t.financials),
+                            per_member_financials(t.financials),
                             product_premium_multiplier(pricing, ts.product_id),
                         )
                         if t.financials is not None

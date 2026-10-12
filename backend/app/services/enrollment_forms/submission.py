@@ -42,6 +42,7 @@ from app.models.enrollment import ElectionAction, EnrollmentElection
 from app.models.enrollment_form import (
     FORM_SOURCE_PAPER,
     FORM_SOURCE_PORTAL,
+    FORM_SOURCE_QR,
     FORM_STATUS_SUBMITTED,
     FORM_STATUS_SUPERSEDED,
     EnrollmentFormSubmission,
@@ -242,7 +243,7 @@ def count_changes(snapshot: dict[str, Any]) -> int:
     changes = sum(
         1 for s in snapshot.get("selections", [])
         if (
-            s.get("action") not in (None, "keep")
+            s.get("action") not in (None, "keep", "no_change")
             and not (s.get("eligible_only") and s.get("declined"))
         )
         or s.get("withdrawn")
@@ -560,6 +561,72 @@ async def record_paper_form(
         uploaded_by_user_id=user_id,
     )
     sub.document_id = doc.id
+    _supersede_previous(db, sub)
+    db.flush()
+    return sub
+
+
+def record_qr_form(
+    db: Session,
+    *,
+    employee: Employee,
+    window: EnrollmentWindow | None,
+    reference_no: str,
+    snapshot: dict[str, Any],
+    sha256: str,
+    pdf: bytes,
+    signed_at: datetime,
+    signer_ip: str | None,
+    signer_user_agent: str | None,
+    user_id: str,
+    note: str | None,
+) -> EnrollmentFormSubmission:
+    """File a QR submission into the register once a broker has matched it to
+    ``employee``. The signed snapshot, its fingerprint and its PDF bytes are
+    carried over unchanged under the QR reference; like a paper form, it
+    applies no elections. Flushes, does not commit."""
+    client = db.get(Client, employee.client_id)
+    assert client is not None
+    enrollment_id = None
+    if window is not None:
+        enrollment_id = db.execute(
+            select(Enrollment.id).where(
+                Enrollment.window_id == window.id, Enrollment.employee_id == employee.id
+            )
+        ).scalar_one_or_none()
+    _lock_employee(db, employee.id)
+    signature = snapshot.get("signature") or {}
+    sub = EnrollmentFormSubmission(
+        client_id=employee.client_id,
+        policy_year_id=employee.policy_year_id,
+        window_id=window.id if window else None,
+        enrollment_id=enrollment_id,
+        employee_id=employee.id,
+        reference_no=reference_no,
+        version=_next_version(db, employee.id, window.id if window else None),
+        source=FORM_SOURCE_QR,
+        status=FORM_STATUS_SUBMITTED,
+        snapshot=snapshot,
+        signature_name=signature.get("name"),
+        signed_at=signed_at,
+        signer_ip=signer_ip,
+        signer_user_agent=signer_user_agent,
+        content_sha256=sha256,
+        submitted_by_user_id=user_id,
+        broker_note=note,
+    )
+    try:
+        with db.begin_nested():
+            db.add(sub)
+            db.flush()
+    except IntegrityError:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "This form has already been filed."
+        ) from None
+    store_pdf(
+        db, client=client, sub=sub, content=pdf,
+        file_name=pdf_file_name(reference_no, employee),
+    )
     _supersede_previous(db, sub)
     db.flush()
     return sub

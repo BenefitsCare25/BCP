@@ -184,10 +184,11 @@ export function FormRegisterView({
             aria-label={pt("Source")}
             className="h-11 sm:h-9"
             value={filters.source ?? ""}
-            onChange={(e) => set({ source: e.target.value as "" | "portal" | "paper" })}
+            onChange={(e) => set({ source: e.target.value as "" | "portal" | "paper" | "qr" })}
           >
-            <option value="">{pt("Online and paper")}</option>
+            <option value="">{pt("All sources")}</option>
             <option value="portal">{pt("Online only")}</option>
+            <option value="qr">{pt("QR form only")}</option>
             <option value="paper">{pt("Paper only")}</option>
           </NativeSelect>
         )}
@@ -219,6 +220,7 @@ export function FormRegisterView({
                   </span>
                   <FormStatusBadge item={item} />
                   {item.source === "paper" && <Badge variant="outline">{pt("Paper")}</Badge>}
+                  {item.source === "qr" && <Badge variant="outline">{pt("QR form")}</Badge>}
                 </div>
                 <p className="mt-1 text-sm text-muted-foreground">
                   {item.reference_no}
@@ -226,7 +228,7 @@ export function FormRegisterView({
                   {item.id_masked || "—"}
                 </p>
                 <p className="mt-0.5 text-xs text-muted-foreground">
-                  {item.source === "paper" ? pt("Filed") : pt("Signed")} {getPortalLocale() === "zh-SG" && item.submitted_at
+                  {item.source === "paper" ? pt("Filed") : item.source === "qr" ? pt("Submitted by QR") : pt("Signed")} {getPortalLocale() === "zh-SG" && item.submitted_at
                     ? new Date(item.submitted_at).toLocaleString("zh-SG") : fmtDateTime(item.submitted_at)}
                   {item.window_name ? ` · ${item.window_name}` : ""}
                   {item.source === "portal"

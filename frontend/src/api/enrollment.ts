@@ -148,6 +148,9 @@ export interface WindowClosePreview {
    *  `not_started`. */
   reopened_unsent: CloseMemberNote[];
   reopened_unsent_count: number;
+  /** QR form submissions still waiting to be matched to the roster; closing
+   *  needs an explicit "close anyway" while any remain. */
+  pending_qr_intakes?: number;
 }
 
 export type EnrollmentStatus =
@@ -924,9 +927,12 @@ export function useConfirmSubmitted() {
 export function useCloseWindow() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, submitSaved }: { id: string; submitSaved: boolean }) =>
+    mutationFn: ({ id, submitSaved, closeWithPendingQr = false }: {
+      id: string; submitSaved: boolean; closeWithPendingQr?: boolean;
+    }) =>
       api.post<WindowCloseSummary>(`/enrollment-windows/${id}/close`, {
         submit_saved: submitSaved,
+        close_with_pending_qr: closeWithPendingQr,
       }),
     // The close dialog reports blocked submissions itself.
     meta: { localErrorHandling: true },

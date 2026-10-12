@@ -548,6 +548,9 @@ class WindowCloseIn(BaseModel):
 
     # Submit every saved-but-unsent enrollment that passes the submit checks.
     submit_saved: bool = False
+    # Close although QR form submissions still await matching; they stay
+    # pending and are filed afterwards.
+    close_with_pending_qr: bool = False
 
 
 class CloseMemberNote(BaseModel):
@@ -594,6 +597,9 @@ class WindowClosePreview(BaseModel):
     saved_submittable: int
     saved_blocked: list[CloseMemberNote]
     saved_blocked_count: int
+    # QR form submissions still awaiting a broker's match; closing needs an
+    # explicit confirmation while any remain.
+    pending_qr_intakes: int = 0
     # Confirmed, then reopened and never sent again. Close keeps their
     # confirmed coverage and leave trade (only the unsent edits are dropped)
     # unless their saved choices are submitted on their behalf — which

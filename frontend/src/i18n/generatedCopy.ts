@@ -37,6 +37,7 @@ export function generatedPortalCopy(source: string): PortalMessage | null {
     [/^(\d+(?:\.\d+)?) visits?$/, "{0} visits"],
     [/^(\d+(?:\.\d+)?) days?$/, "{0} days"],
     [/^Request failed \(HTTP (\d{3})\)$/, "Request failed (HTTP {0})"],
+    [/^You are automatically covered for (.+)\. No enrolment is needed for these\.$/, "You are automatically covered for {0}. No enrolment is needed for these.", { 1: "list" }],
     [/^Spouse: your legal spouse, up to age (\d+) next birthday, not divorced or legally separated from you\.$/, "Spouse: your legal spouse, up to age {0} next birthday, not divorced or legally separated from you."],
     [/^Child: your child from 15 days old \(not in hospital confinement\) up to age (\d+) next birthday\.$/, "Child: your child from 15 days old (not in hospital confinement) up to age {0} next birthday."],
     [/^Over the age limit for (spouse|children) \((\d+) next birthday\)\.$/, "Over the age limit for {0} ({1} next birthday).", { 0: "copy" }],

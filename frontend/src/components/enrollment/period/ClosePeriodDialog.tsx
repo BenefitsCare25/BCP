@@ -43,17 +43,20 @@ export function ClosePeriodDialog({
   const preview = useClosePreview(window?.id);
   const close = useCloseWindow();
   const [submitSaved, setSubmitSaved] = useState(false);
+  const [closeWithQr, setCloseWithQr] = useState(false);
   const p = preview.data;
-  const blocked = (p?.invalid_submitted_count ?? 0) > 0;
+  const pendingQr = p?.pending_qr_intakes ?? 0;
+  const blocked = (p?.invalid_submitted_count ?? 0) > 0 || (pendingQr > 0 && !closeWithQr);
 
   function confirm() {
     if (!window) return;
     close.mutate(
-      { id: window.id, submitSaved },
+      { id: window.id, submitSaved, closeWithPendingQr: closeWithQr },
       {
         onSuccess: (s) => {
           toast.success(closedMessage(window.name, s));
           setSubmitSaved(false);
+          setCloseWithQr(false);
           onOpenChange(false);
         },
         onError: (e) => {
@@ -61,6 +64,11 @@ export function ClosePeriodDialog({
             // Something changed since the preview loaded — show the new truth.
             void preview.refetch();
             toast.error("Some submissions no longer pass their checks. Review them below.");
+            return;
+          }
+          if (e instanceof ConflictDetailError && e.detail.code === "pending_qr_intakes") {
+            void preview.refetch();
+            toast.error("New QR form submissions arrived. Review them below.");
             return;
           }
           toast.error(formatError(e));
@@ -73,7 +81,7 @@ export function ClosePeriodDialog({
     <AlertDialog
       open={window !== null}
       onOpenChange={(open) => {
-        if (!open) setSubmitSaved(false);
+        if (!open) { setSubmitSaved(false); setCloseWithQr(false); }
         onOpenChange(open);
       }}
       tone="info"
@@ -91,6 +99,8 @@ export function ClosePeriodDialog({
             windowId={window?.id}
             submitSaved={submitSaved}
             onSubmitSaved={setSubmitSaved}
+            closeWithQr={closeWithQr}
+            onCloseWithQr={setCloseWithQr}
           />
         ) : (
           <span className="flex items-center gap-2">
@@ -108,13 +118,18 @@ function ClosePreviewBody({
   windowId,
   submitSaved,
   onSubmitSaved,
+  closeWithQr,
+  onCloseWithQr,
 }: {
   p: WindowClosePreview;
   windowId: string | undefined;
   submitSaved: boolean;
   onSubmitSaved: (v: boolean) => void;
+  closeWithQr: boolean;
+  onCloseWithQr: (v: boolean) => void;
 }) {
   const fallback = DEFAULT_BEHAVIOR_TEXT[p.default_behavior];
+  const pendingQr = p.pending_qr_intakes ?? 0;
   const blocked = p.invalid_submitted_count > 0;
   const reopened = p.reopened_unsent_count;
   return (
@@ -174,6 +189,26 @@ function ClosePreviewBody({
           notes={p.reopened_unsent}
           extra={reopened - p.reopened_unsent.length}
         />
+      )}
+
+      {pendingQr > 0 && (
+        <div className="space-y-2 rounded-md bg-warn-soft/40 p-3">
+          <p className="font-medium text-warn">
+            {pendingQr} QR form {pendingQr === 1 ? "submission is" : "submissions are"} still waiting to be
+            matched to employees.
+          </p>
+          <p className="text-foreground">
+            Closing now applies the period&apos;s default to those employees. Link or reject them on the{" "}
+            <Link to="/client-relations/enrollment" search={{ tab: "qr" }} className="font-medium underline underline-offset-2">
+              QR forms
+            </Link>{" "}
+            tab first, or confirm below.
+          </p>
+          <label className="flex items-start gap-2 text-foreground">
+            <Checkbox checked={closeWithQr} onCheckedChange={(v) => onCloseWithQr(v === true)} className="mt-0.5" />
+            <span>Close anyway; I will file those forms afterwards</span>
+          </label>
+        </div>
       )}
 
       {(p.saved_not_sent > 0 || p.saved_submittable > 0) && !blocked && (
