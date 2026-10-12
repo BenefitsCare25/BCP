@@ -27,6 +27,9 @@ export function PortalLoginScene({
       <div className="portal-login__stage">
         <LoginScenery />
         <section className="portal-login__content">
+          <svg className="portal-login__curve" viewBox="0 0 100 1000" preserveAspectRatio="none" aria-hidden="true">
+            <path d="M 25 0 C 105 175 -30 350 12 540 C 40 715 110 830 20 1000 L 100 1000 L 100 0 Z" />
+          </svg>
           <div className="portal-login__language"><PortalLanguageControl /></div>
           <div className="portal-login__form">
             <header className="portal-login__brand">

@@ -64,6 +64,56 @@ The repository currently defines:
 
 The largest remaining resilience gaps are PostgreSQL HA being disabled, a single App Service Plan instance, in-place releases without deployment slots, and no independently administered immutable PostgreSQL backup vault or rehearsed clean-room restore.
 
+## Broker login media hosting and future CDN
+
+Owner decision, 12 October 2026: prepare the five time-of-day broker login loops
+for the existing Azure App Service at
+`https://inspro-portal.azurewebsites.net`. Defer CDN provisioning and public
+custom-domain DNS onboarding as future enhancements. Keep `deployFrontDoor`,
+`frontDoorRequireEdge` and `frontDoorOriginLock` at their existing false defaults.
+The existing private DNS used by production dependencies remains part of the
+current hosting setup.
+
+The application serves the selected versioned MP4 and matching WebP from
+`/broker/login/` on the same origin. The 12 October employee/HR update reuses these
+same files and shared player for both portal sign-ins, including the curved
+desktop layout; no extra media generation or hosting service is needed.
+Each silent H.264 clip is exactly five seconds,
+1080 square and approximately 0.76–1.17 MB. The current `v3` files replace an
+earlier edit whose final half-second visibly pulled the scene backward. The
+corrected join blends two advancing source sections without a geometric rewind.
+Fresh versioned URLs avoid reusing the rejected clip from an immutable cache.
+Singapore time selects sunrise,
+morning, afternoon, sunset or night; weather and visitor location are not queried.
+Only the current clip loads. Versioned public media receives one-year immutable
+browser-cache headers; login HTML and authenticated API responses retain their
+existing cache policies. Reduced motion or data saving uses the still image,
+playback failure preserves it, and hidden/offscreen playback pauses.
+
+This approach adds no CDN subscription or public DNS service. Ordinary App
+Service bandwidth and existing hosting charges still apply. Capacity depends on
+traffic and the current single B2 instance; CDN deferral is not evidence of a
+high-concurrency load test. Monitor App Service response time, HTTP failures,
+CPU and network traffic after release, and revisit edge delivery if uncached
+media traffic affects sign-in or application responsiveness.
+
+Release status: implemented and verified locally, not deployed. The frontend
+build, five time-selection unit tests, 26 cache/brand checks and 38 desktop/mobile
+broker sign-in checks passed. Reviewed source/build media hashes match. Release
+through the normal deployment workflow, then verify the exact release revision,
+readiness, all five public media files and cache/range headers, Singapore-time
+selection, sign-in and still-image fallbacks on the live host. Do not enable edge
+requirements or change the public hostname as part of this media release.
+
+Future enhancement: evaluate Azure Front Door Standard for public media delivery
+against Premium when its managed WAF and private-origin capabilities are needed.
+The prepared template currently selects Premium, so enabling it is a separate
+infrastructure decision. The [Azure price list](https://azure.microsoft.com/en-us/pricing/details/frontdoor/)
+checked on 12 October 2026 lists USD 35/month for Standard and USD 330/month for
+Premium, plus usage. Confirm the chosen tier, current rates, traffic estimate and
+domain/certificate routing before provisioning. Keep authenticated traffic and
+host-branded HTML outside shared caches.
+
 ## Production deployment operations
 
 This section is the canonical deployment runbook. Do not recreate the retired

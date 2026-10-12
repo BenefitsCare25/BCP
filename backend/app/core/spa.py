@@ -42,6 +42,9 @@ logger = logging.getLogger(__name__)
 # that no longer exist.
 _IMMUTABLE_MAX_AGE = 31536000
 _NO_CACHE = {"Cache-Control": "no-cache, must-revalidate"}
+_BROKER_LOGIN_MEDIA = re.compile(
+    r"broker/login/marina-bay-(?:sunrise|morning|afternoon|sunset|night)-v[1-9]\d*\.(?:mp4|webp)"
+)
 
 # Today's manifest (frontend/public/site.webmanifest), for the default brand.
 DEFAULT_MANIFEST_NAME = "Inspro Insurance Brokers"
@@ -253,6 +256,6 @@ def mount_spa(app: FastAPI, api_prefix: str) -> bool:
 
 
 def _cache_headers(path: str) -> dict[str, str]:
-    if path.startswith("assets/"):
+    if path.startswith("assets/") or _BROKER_LOGIN_MEDIA.fullmatch(path):
         return {"Cache-Control": f"public, max-age={_IMMUTABLE_MAX_AGE}, immutable"}
     return {"Cache-Control": "public, max-age=3600"}
