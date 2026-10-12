@@ -2,6 +2,49 @@
 
 Approved user requirements, saved 2 October 2026. Scope: employee/member and HR portal UI/UX only. Broker, administration and marketing surfaces are outside this theme.
 
+## Shared time-based login scenery, 12 October 2026
+
+The user requested the corrected broker animation and curve on both employee and
+HR sign-in pages. This supersedes the historical clean split, rounded panel
+corner and travel-couple media directions below. Use the same five Marina Bay
+`v3` clips and matching posters, selected by Singapore time. Each clip is silent,
+five seconds and 1080 square; no weather variants or additional generation.
+
+`LoginScenery.tsx` shares playback between all three sign-ins while retaining
+their CSS prefixes. Employee/HR controls, Figtree typography, custom branding,
+language switching, tenant-aware role/company links and authentication flows
+remain scoped to the portal. Wide screens use the broker's white SVG curve;
+compact desktop shifts the photo crop to keep both heads visible. Phone/tablet
+layouts stack the scenery and hide the vertical curve. Reduced motion and data
+saving use stills; hidden/offscreen playback pauses and failures retain the still.
+
+Employee was reviewed before HR. All 28 employee and 68 HR/broker desktop/mobile
+browser checks passed, including all five time variants, credential/MFA,
+English/Chinese and fallback regressions. Final build and scoped design detector
+passed. Each role passed twelve viewport checks (320–1920px) and three natural
+localhost wraps; inspected desktop, compact and phone captures show the approved
+curve, clear faces and no overflow. The compact crop was confirmed after one
+correction. Evidence is in `tmp/broker-time-loops-20261012/employee-login-review.json`,
+`hr-login-review.json` and adjacent role screenshots.
+
+Production follow-up: the user explicitly authorized pushing for deployment.
+Release `4853cab4134a806f61bf4537fa3aa1e98b2c90cc` deployed successfully in
+[run 38203608851](https://github.com/BenefitsCare25/BCP/actions/runs/38203608851).
+Full CI passed 3,256 backend tests (131 skips) and 373 browser tests (one skip).
+Live broker/employee/HR desktop and phone pages passed three natural wraps each,
+all ten media hashes, five Singapore-time variants, immutable/range headers,
+still fallbacks and employee/HR language input preservation. Captures were
+inspected; API/worker match the release and PostgreSQL/Redis are healthy.
+Seven monitoring rounds passed 21/21 health checks; the bounded error query
+reported zero server errors. Evidence: `tmp/broker-time-loops-20261012/live/`.
+
+No additional Higgsfield
+credits, public DNS/CDN provisioning or shared database changes were made.
+Authentication checks use intercepted responses/disposable automated stores;
+local review never submitted credentials. Real-account and physical Safari
+acceptance remain open. Authenticated portals and password setup keep their
+existing visual rules. The page review register below records the completed roles.
+
 ## Sign-in preview exception, 3 October 2026
 
 ### Platform media interaction follow-up, 4 October 2026
@@ -182,6 +225,8 @@ Each completed row must cover font/cards, density, headings/copy, colour, hover/
 
 | Page/flow | Status | Evidence / remaining work |
 | --- | --- | --- |
+| Employee sign-in: shared Marina Bay loops and curve (12 October 2026) | Deployed; real-account/Safari acceptance open | Figtree/red portal controls, company context, language and credential flows retained. All five corrected clips, curve, still fallbacks and 28 focused desktop/mobile cases passed. Twelve viewport checks and three natural localhost wraps passed; desktop/compact/phone screenshots were inspected, including the confirmed compact face crop. Password visibility, keyboard focus and hidden/offscreen pause/resume checked without submitting credentials. Evidence: `tmp/broker-time-loops-20261012/employee-login-review.json`. Real-account/physical Safari acceptance remains open; no DB changes or generation spend. |
+| HR sign-in: shared Marina Bay loops and curve (12 October 2026) | Deployed; real-account/Safari acceptance open | Completed after employee review. Same corrected media and curve, retained HR labels, company/role links, Figtree/red controls and language/authentication behavior. HR/broker matrix passed 68 desktop/mobile cases; HR localhost passed twelve viewport checks and three natural wraps. Reviewed desktop/compact/phone captures and focus, reveal and hidden/offscreen playback. Evidence: `tmp/broker-time-loops-20261012/hr-login-review.json`. Real-account/physical Safari acceptance remains open; no DB changes or generation spend. |
 | Employee enrolment lifecycle and notifications (6 October 2026) | Deployed; live SMTP and physical Safari acceptance pending | Retained Figtree, white portal cards, blue controls and existing enrolment deck. Added durable notices, required review reasons, historical form standing, passive polling that preserves idle expiry, current paper receipt acknowledgement, cached mailbox ownership, explicit Save choices and partial-form/closure guards. Scoped screenshots, accessibility and overflow checks passed. Released as `95085647effed08bd4235d3d2d52d3904066a12e` in [run 37408661534](https://github.com/BenefitsCare25/BCP/actions/runs/37408661534): 2,619 backend tests and 269 desktop/mobile browser tests passed; PostgreSQL migration checks and the private production migration passed. Portal/worker reported the release SHA, database/Redis readiness passed, and the sign-in entry document returned HTTP 200 at approximately 11:37 SGT. No real mailbox smoke test or production employee submission was performed. See [workflow review](ENROLMENT_WORKFLOW_REVIEW_2026-10-06.md). |
 | Plan display labels (5 October 2026) | Local checks passed | Employee coverage and enrolment choices prefer the plan's nonblank insurer report label, then its display name. Plan/election codes stay unchanged; options sharing one code retain their distinct option labels. New form context/plan facts use the same labels for employee forms and subsequent HR downloads; existing filed snapshots stay unchanged. HR claim options include the label and show the full selected name below the dropdown so mobile truncation does not hide it. Desktop/phone coverage fallback, HR selection, responsive and accessibility checks passed; screenshots are in `frontend/test-results/`. Backend checks cover effective overrides, empty labels, year isolation, stable election keys and form facts. No real coverage, identity, credentials or stored forms were edited. |
 | Employee/HR sign-in: Seedance integration | Local clean-split preview; not deployed | Latest direction: straight split, only a 64px desktop/32px stacked upper-left panel corner; plane/trails and fade removed. Full-height white panel and logo directly above heading. Red controls, selectively colour-graded opaque 1440x1440 video and matching poster. Build and 41 browser groups pass across both roles/12 widths, auth mocks, repeated video playback, fallbacks and clean-split geometry. 21 sampled colour checks and full video decode pass. Evidence: `tmp/portal-login-review/integrated/` and `skin-tone/`. Source motion and accessibility/real-account/physical Safari gaps remain above. No DB changes, deployment or extra credits. |

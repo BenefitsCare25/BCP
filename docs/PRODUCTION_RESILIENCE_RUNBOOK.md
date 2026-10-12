@@ -97,13 +97,27 @@ high-concurrency load test. Monitor App Service response time, HTTP failures,
 CPU and network traffic after release, and revisit edge delivery if uncached
 media traffic affects sign-in or application responsiveness.
 
-Release status: implemented and verified locally, not deployed. The frontend
-build, five time-selection unit tests, 26 cache/brand checks and 38 desktop/mobile
-broker sign-in checks passed. Reviewed source/build media hashes match. Release
-through the normal deployment workflow, then verify the exact release revision,
-readiness, all five public media files and cache/range headers, Singapore-time
-selection, sign-in and still-image fallbacks on the live host. Do not enable edge
-requirements or change the public hostname as part of this media release.
+Release status: deployed on 12 October 2026 as
+`4853cab4134a806f61bf4537fa3aa1e98b2c90cc` in successful
+[deployment run 38203608851](https://github.com/BenefitsCare25/BCP/actions/runs/38203608851).
+Full CI passed 3,256 backend tests (131 skips) and 373 browser tests (one skip),
+strict typing, build, lint and production dependency audits. Bicep apply and
+private migrations were skipped; only the application image was released.
+
+Live API/worker version headers and Azure container configuration match the
+release. PostgreSQL/Redis readiness is healthy. All ten MP4/WebP hashes and the
+five range responses match the reviewed files, with immutable media and no-cache
+HTML policies. All three sign-ins passed desktop/phone review with three natural
+wraps each, still fallbacks and preserved employee/HR language input. The live
+compiled selector passed all five periods in a Los Angeles browser. Screenshots
+were inspected. Seven monitoring rounds at 04:50:49–04:53:51 UTC passed 21/21
+health/readiness checks. A later bounded log query reported zero server errors
+across 252 portal and 13 worker requests in its one-hour query window; ingestion
+can lag. One initial phone wrap observation timed out; the complete rerun passed
+all six pages with boundary gaps of about 100–117 ms. No persistent failure was
+observed. Real credentials and physical-device Safari were not exercised.
+Evidence: `tmp/broker-time-loops-20261012/live/verification.json` and adjacent
+captures. CDN and public DNS remain deferred.
 
 Future enhancement: evaluate Azure Front Door Standard for public media delivery
 against Premium when its managed WAF and private-origin capabilities are needed.
