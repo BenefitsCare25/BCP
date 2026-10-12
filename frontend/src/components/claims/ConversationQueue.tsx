@@ -59,6 +59,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import {
+  CONVERSATION_SEARCH_MAX_LENGTH,
   useBrokerConversations,
   useBrokerEnquiry,
   useBrokerEnquiryMessages,
@@ -482,7 +483,7 @@ export function ConversationQueue() {
     any: allConversationsQuery.data?.total,
   };
   const activeFilterCount = Number(Boolean(filters.category)) + Number(Boolean(filters.status));
-  const hasCriteria = Boolean(debouncedSearch || activeFilterCount);
+  const hasCriteria = Boolean(debouncedSearch.trim() || activeFilterCount);
   // The pane shows the picked thread, or the top of the queue — which for
   // "Needs reply" is the person who has waited longest, i.e. the one the tab
   // was opened to answer.
@@ -550,6 +551,7 @@ export function ConversationQueue() {
             <Input
               type="search"
               value={search}
+              maxLength={CONVERSATION_SEARCH_MAX_LENGTH}
               onChange={(event) => {
                 setSearch(event.target.value);
                 setPage(0);

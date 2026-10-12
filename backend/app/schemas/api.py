@@ -1097,6 +1097,8 @@ class UploadResult(BaseModel):
 class AutoMatchResult(BaseModel):
     matched: int
     unmatched: int
+    #: The automatic flex wallet re-assignment after linking failed.
+    flex_errors: list[str] = Field(default_factory=list)
 
 
 # ── Match results / audit ────────────────────────────────────────────────────

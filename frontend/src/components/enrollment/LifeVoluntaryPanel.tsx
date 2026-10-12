@@ -1,4 +1,3 @@
-import { FirmOwnerOnly } from "@/components/auth/FirmOwnerOnly";
 import { useState } from "react";
 import {
   AlertTriangle,
@@ -28,6 +27,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { InfoHint } from "@/components/ui/tooltip";
+import { RemoveGuard } from "@/components/configuration/setup/savedEntries";
 import { fmtMoney } from "@/lib/format";
 import { priceRowForTier } from "@/lib/flexTiers";
 
@@ -202,6 +202,9 @@ export function LifeVoluntaryPanel({
   const recommended = selectedTier?.voluntary_rates ?? product.voluntary_rates ?? [];
   const bands = editor.voluntaryRatesFor(product, scopeKey);
   const ratesEdited = editor.voluntaryRatesEdited(product, scopeKey);
+  // Saved bands and a saved override are firm-owner removals; bands added in
+  // this edit, or an override not saved yet, can be taken out by anyone.
+  const saved = editor.savedVoluntaryRates(product, scopeKey);
   const rateIssues = voluntaryRateIssues(bands);
   const recommendationsDiffer = new Set(
     voluntaryTiers.map((tier) => JSON.stringify(tier.voluntary_rates ?? [])),
@@ -288,14 +291,16 @@ export function LifeVoluntaryPanel({
         {editable && (
           <div className="flex items-center gap-1.5">
             {ratesEdited && (
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => editor.setVoluntaryRates(pid, null, scopeKey)}
-              >
-                <RotateCcw className="size-3.5" aria-hidden="true" />
-                Reset schedule
-              </Button>
+              <RemoveGuard saved={saved.override}>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => editor.setVoluntaryRates(pid, null, scopeKey)}
+                >
+                  <RotateCcw className="size-3.5" aria-hidden="true" />
+                  Reset schedule
+                </Button>
+              </RemoveGuard>
             )}
             <Button variant="outline" size="sm" onClick={addBand}>
               <Plus className="size-3.5" aria-hidden="true" /> Age band
@@ -486,14 +491,16 @@ export function LifeVoluntaryPanel({
                     </td>
                     {editable && (
                       <td className="px-2 py-2">
-                        <FirmOwnerOnly><Button
-                          variant="ghost"
-                          size="icon-sm"
-                          onClick={() => removeBand(index)}
-                          aria-label={`Remove ${band.label} age band`}
-                        >
-                          <Trash2 className="size-3.5" aria-hidden="true" />
-                        </Button></FirmOwnerOnly>
+                        <RemoveGuard saved={saved.override && index < saved.bands.length}>
+                          <Button
+                            variant="ghost"
+                            size="icon-sm"
+                            onClick={() => removeBand(index)}
+                            aria-label={`Remove ${band.label} age band`}
+                          >
+                            <Trash2 className="size-3.5" aria-hidden="true" />
+                          </Button>
+                        </RemoveGuard>
                       </td>
                     )}
                   </tr>

@@ -395,6 +395,51 @@ def test_no_change_is_not_reported_as_applied(client: TestClient) -> None:
     assert body["counts"]["would_apply"] == 0
 
 
+def test_set_plan_to_default_keeps_voluntary_take_up_but_enrols_nobody(
+    client: TestClient,
+) -> None:
+    """On voluntary cover the override IS the take-up. Moving a holder back to
+    the default keeps it, as the projection's marker (no plan or tier pinned);
+    a member only eligible has no override and must not be enrolled."""
+    with SessionLocal() as s:
+        cat = s.get(Category, CAT_DEN)
+        cat.participation_model = "voluntary"
+        cat.participation_detail = {"employee": "voluntary"}
+        s.add(EmployeePlanOverride(
+            employee_id=EMP2, policy_year_id=PY_ID, client_id=CLIENT_ID,
+            product_id=OTHER_PROD_ID, product_code="DEN", plan_code="PLUS",
+            source="manual",
+        ))
+        s.commit()
+    body = {"product_code": "DEN", "action": "set_plan", "target_plan_code": "BASIC",
+            "selector": {"employee_ids": [EMP1, EMP2]}}
+    try:
+        preview = client.post(
+            f"/api/v1/policy-years/{PY_ID}/bulk-plan-updates/preview", json=body
+        ).json()
+        assert preview["counts"]["no_change"] == 1  # EMP1: eligible only
+        assert preview["counts"]["would_apply"] == 1  # EMP2: PLUS -> BASIC
+        res = client.post(f"/api/v1/policy-years/{PY_ID}/bulk-plan-updates/apply", json=body)
+        assert res.status_code == 200, res.text
+        with SessionLocal() as s:
+            overrides = load_overrides(s, PY_ID, [EMP1, EMP2])
+            assert (EMP1, OTHER_PROD_ID) not in overrides
+            marker = overrides[(EMP2, OTHER_PROD_ID)]
+            assert not marker.declined
+            assert marker.plan_code is None
+            assert marker.tier_category_id is None
+        again = client.post(
+            f"/api/v1/policy-years/{PY_ID}/bulk-plan-updates/preview", json=body
+        ).json()
+        assert again["counts"]["no_change"] == 2
+    finally:
+        with SessionLocal() as s:
+            cat = s.get(Category, CAT_DEN)
+            cat.participation_model = None
+            cat.participation_detail = None
+            s.commit()
+
+
 def test_preview_states_the_price_tag_apply_will_write(client: TestClient) -> None:
     """The dry run used to compute no tag at all, so it structurally could not
     show what the real run would write."""

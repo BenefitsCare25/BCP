@@ -173,13 +173,18 @@ def employees(
     user: CurrentUser = Depends(require_claim_access),
     db: Session = Depends(get_db),
 ) -> list[dict[str, str]]:
+    # Trimmed before matching: a pasted "E1234 " must still find E1234, and
+    # "a " (which clears min_length untrimmed) is too short to search on.
+    term = q.strip()
+    if len(term) < 2:
+        return []
     rows = db.scalars(
         select(Employee)
         .where(
             Employee.client_id == require_client_id(user),
             or_(
-                Employee.employee_name.icontains(q, autoescape=True),
-                Employee.staff_id.icontains(q, autoescape=True),
+                Employee.employee_name.icontains(term, autoescape=True),
+                Employee.staff_id.icontains(term, autoescape=True),
             ),
         )
         .order_by(Employee.created_at.desc())
@@ -201,12 +206,13 @@ def incidents(
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
     where = [WicaIncident.client_id == require_client_id(user)]
-    if q:
+    term = q.strip()
+    if term:
         where.append(
             or_(
-                WicaIncident.employee_name.icontains(q, autoescape=True),
-                WicaIncident.staff_id.icontains(q, autoescape=True),
-                WicaIncident.report_number.icontains(q, autoescape=True),
+                WicaIncident.employee_name.icontains(term, autoescape=True),
+                WicaIncident.staff_id.icontains(term, autoescape=True),
+                WicaIncident.report_number.icontains(term, autoescape=True),
             )
         )
     if period_id:

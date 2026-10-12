@@ -599,6 +599,67 @@ def test_sync_adds_not_null_columns_without_server_default_as_nullable(pg_engine
         ).scalar() == 0
 
 
+def test_reprovisioning_keeps_the_firms_own_library(pg_engine) -> None:
+    """A new firm starts with the global library; afterwards the firm owns it.
+
+    Regression: every release re-copied `public`'s global catalog by id, so an
+    entry a firm admin deleted came back, and one they re-created under a new id
+    appeared twice.
+    """
+    from app.db.tenancy import provision_firm_schema, schema_for_firm, sync_firm_schema
+    from app.models import EmployeeAttributeSchema, Product
+
+    firm = "55555555-5555-5555-5555-555555555555"
+    schema = schema_for_firm(firm)
+    Session = sessionmaker(bind=pg_engine, expire_on_commit=False)
+    with Session() as s:
+        product = Product(client_id=None, code="PGLIB", display_name="Library product")
+        attribute = EmployeeAttributeSchema(
+            client_id=None, attribute_id="pg_lib_attr", display_name="Library", data_type="string"
+        )
+        s.add_all([product, attribute])
+        s.commit()
+    try:
+        provision_firm_schema(pg_engine, firm)
+        with pg_engine.begin() as c:
+            assert c.execute(
+                text(f'SELECT id FROM "{schema}".products WHERE code = \'PGLIB\'')
+            ).scalars().all() == [product.id]
+            c.execute(text(f'DELETE FROM "{schema}".products WHERE id = :id'), {"id": product.id})
+            c.execute(
+                text(f'DELETE FROM "{schema}".employee_attribute_schemas WHERE id = :id'),
+                {"id": attribute.id},
+            )
+            c.execute(
+                text(
+                    f'INSERT INTO "{schema}".products (id, code, display_name, '
+                    "participation_model, has_dependants, is_outpatient) "
+                    "VALUES ('pg-lib-recreated', 'PGLIB', 'Firm product', 'standard', false, false)"
+                )
+            )
+
+        provision_firm_schema(pg_engine, firm)
+        sync_firm_schema(pg_engine, firm)
+
+        with pg_engine.connect() as c:
+            assert c.execute(
+                text(f'SELECT id FROM "{schema}".products WHERE code = \'PGLIB\'')
+            ).scalars().all() == ["pg-lib-recreated"]
+            assert c.execute(
+                text(
+                    f'SELECT count(*) FROM "{schema}".employee_attribute_schemas '
+                    "WHERE attribute_id = 'pg_lib_attr'"
+                )
+            ).scalar() == 0
+    finally:
+        with pg_engine.begin() as c:
+            c.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
+            c.execute(text("DELETE FROM products WHERE id = :id"), {"id": product.id})
+            c.execute(
+                text("DELETE FROM employee_attribute_schemas WHERE id = :id"), {"id": attribute.id}
+            )
+
+
 def test_host_firm_picks_the_alias_and_routes_its_schema(pg_engine) -> None:
     """Two brokers may each have an "acme": the host's firm decides which one a
     portal request is for, and that firm's schema is what the request reads.

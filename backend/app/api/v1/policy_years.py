@@ -191,6 +191,7 @@ def update_policy_year(
     Only fields present in the request body are written, so a grace-period-only
     edit can't wipe the coverage dates and a dates-only edit can't reset grace.
     """
+    policy_year_company(py, user)
     fields = payload.model_fields_set
     new_start = payload.start_date if "start_date" in fields else py.start_date
     new_end = payload.end_date if "end_date" in fields else py.end_date
@@ -246,6 +247,7 @@ def delete_policy_year(
     db: Session = Depends(get_db),
 ) -> Response:
     """Delete a configuration-only draft; retain every operational year."""
+    policy_year_company(py, user)
     current = active_policy_year(db, py.client_id)
     if py.status == PolicyYearStatus.active or (current is not None and current.id == py.id):
         raise HTTPException(
@@ -329,6 +331,7 @@ def set_current_policy_year(
     readiness-gated; configuration remains editable afterwards and every
     mutation is audited.
     """
+    policy_year_company(py, user)
     metrics, blockers, warnings = readiness(db, py.id)
     if blockers:
         raise HTTPException(
@@ -391,6 +394,7 @@ def archive_policy_year(
     db: Session = Depends(get_db),
 ) -> PolicyYearOut:
     """Retain a non-live year and its operational history."""
+    policy_year_company(py, user)
     if py.status == PolicyYearStatus.active:
         raise HTTPException(
             status.HTTP_409_CONFLICT,

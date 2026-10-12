@@ -9,7 +9,8 @@ signed flex impact is snapshotted onto each ``LeaveElection``.
 - GET /policy-years/{id}/leave-policy   — read (404 if unset)
 - PUT /policy-years/{id}/leave-policy    — upsert
 
-Tenant scoping rides on `load_policy_year`.
+Tenant scoping rides on `load_policy_year`; the write refuses a stale company
+selection (`policy_year_company`), as the other year-scoped writes do.
 """
 from __future__ import annotations
 
@@ -19,7 +20,7 @@ from sqlalchemy.orm import Session
 
 from app.core.audit import write_audit
 from app.core.auth import CurrentUser, get_current_user
-from app.core.deps import load_policy_year
+from app.core.deps import load_policy_year, policy_year_company
 from app.db.session import get_db
 from app.models import Employee, LeavePolicy, PolicyYear
 from app.schemas.enrollment import LeavePolicyOut, LeavePolicyUpsert, LeaveRateOptions
@@ -78,6 +79,7 @@ def upsert_leave_policy(
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> LeavePolicy:
+    policy_year_company(py, user)
     errs = validate_leave_rates_shape(
         body.leave_rates,
         min_buy_days=body.min_buy_days,

@@ -230,9 +230,52 @@ def _firm_metadata(schema: str) -> MetaData:
     return staging
 
 
+# The firm library: global (client_id NULL) catalog rows each firm schema starts
+# with, copied from the canonical `public` rows. Order matters: products before
+# plan_attribute_schemas (FK).
+_GLOBAL_CATALOG = ("products", "employee_attribute_schemas", "plan_attribute_schemas")
+
+
+def _global_catalog_filter(table_name: str, schema: str) -> str:
+    if table_name == "plan_attribute_schemas":
+        # Only for global products the firm holds, so the FK always resolves.
+        return (
+            "product_id IN (SELECT p.id FROM public.products p "
+            f'JOIN "{schema}".products f ON f.id = p.id WHERE p.client_id IS NULL)'
+        )
+    return "client_id IS NULL"
+
+
+def _copy_global_catalog(conn: Connection, schema: str, created: set[str]) -> None:
+    """Seed the firm library into catalog tables created by this run only.
+
+    Once a firm has its copy, the firm owns it: firm admins edit and delete
+    entries (a hard delete), and may re-create one under a new id. Copying again
+    on later runs — provisioning runs for every firm on each release — put
+    deleted entries back and, matching on id, duplicated re-created ones. A
+    table created in this run has never held firm rows, so nothing it receives
+    can be one the firm removed. Catalog additions reach existing firms through
+    their own migration or ``scripts/seed_firm_library.py`` (natural key).
+    """
+    for tname in _GLOBAL_CATALOG:
+        if tname not in created:
+            continue
+        cols = shared_columns(conn, schema, tname)
+        conn.execute(
+            text(
+                f'INSERT INTO "{schema}".{tname} ({cols}) '
+                f"SELECT {cols} FROM public.{tname} "
+                f"WHERE {_global_catalog_filter(tname, schema)} "
+                "ON CONFLICT (id) DO NOTHING"
+            )
+        )
+
+
 def provision_firm_schema(bind: Engine | Connection, firm_id: str) -> str | None:
     """Create a firm's schema and its operational tables. Idempotent.
 
+    A catalog table created here starts with the global firm library; an
+    existing one is left as the firm keeps it (see ``_copy_global_catalog``).
     No-op on SQLite. Returns the schema name on Postgres, else None.
     """
     if not is_postgres(bind):
@@ -241,6 +284,8 @@ def provision_firm_schema(bind: Engine | Connection, firm_id: str) -> str | None
 
     def _run(conn: Connection) -> None:
         conn.execute(text(f'CREATE SCHEMA IF NOT EXISTS "{schema}"'))
+        insp = sa_inspect(conn)
+        new_catalog = {t for t in _GLOBAL_CATALOG if not insp.has_table(t, schema=schema)}
         # Control tables are copied in at their public schema so tenant FK
         # targets (e.g. clients) resolve; they already exist, so checkfirst
         # skips re-creating them.
@@ -256,26 +301,7 @@ def provision_firm_schema(bind: Engine | Connection, firm_id: str) -> str | None
         )
         _ensure_audit_append_only(conn, schema)
         ensure_policy_year_exclusion(conn, schema)
-        # Each firm schema needs its own copy of the global (client_id NULL)
-        # product + attribute catalog, sourced from the canonical public copy.
-        # Order matters: products before plan_attribute_schemas (FK).
-        global_copies = [
-            ("products", "client_id IS NULL"),
-            ("employee_attribute_schemas", "client_id IS NULL"),
-            (
-                "plan_attribute_schemas",
-                "product_id IN (SELECT id FROM public.products WHERE client_id IS NULL)",
-            ),
-        ]
-        for tname, cond in global_copies:
-            cols = shared_columns(conn, schema, tname)
-            conn.execute(
-                text(
-                    f'INSERT INTO "{schema}".{tname} ({cols}) '
-                    f"SELECT {cols} FROM public.{tname} WHERE {cond} "
-                    f"ON CONFLICT (id) DO NOTHING"
-                )
-            )
+        _copy_global_catalog(conn, schema, new_catalog)
         # Least-privilege runtime role (D13): no-op until the role exists.
         grant_firm_schema(conn, schema)
 

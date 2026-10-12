@@ -260,7 +260,8 @@ function CompaniesSheet({
 }) {
   const { data: companies, isLoading } = useListingCompanies(listing.id);
   // Unticking a saved company is a removal: firm owners only (API enforces).
-  const { canRemove } = useWriteAccess();
+  // A read-only session sees the selection but cannot change it.
+  const { canEdit, canRemove } = useWriteAccess();
   const save = useSetListingCompanies();
   // null until first interaction — the server state renders untouched.
   const [selected, setSelected] = useState<Set<string> | null>(null);
@@ -317,13 +318,14 @@ function CompaniesSheet({
                     key={company.client_id}
                     className={
                       "flex items-center justify-between gap-3 rounded-md border border-border px-3 py-2 " +
-                      (noYear ? "opacity-60" : "cursor-pointer hover:bg-muted/60")
+                      (noYear ? "opacity-60" : canEdit ? "cursor-pointer hover:bg-muted/60" : "")
                     }
                   >
                     <span className="flex items-center gap-2.5">
                       <Checkbox
                         checked={effective.has(company.client_id)}
                         disabled={
+                          !canEdit ||
                           noYear ||
                           save.isPending ||
                           (company.enabled && !canRemove)
@@ -351,15 +353,15 @@ function CompaniesSheet({
         </SheetBody>
         <SheetFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>
-            Cancel
+            {canEdit ? "Cancel" : "Close"}
           </Button>
-          <Button
+          {canEdit && <Button
             onClick={() => void submit()}
             disabled={isLoading || save.isPending || selected === null}
           >
             {save.isPending && <Loader2 className="size-4 animate-spin" />}
             Save
-          </Button>
+          </Button>}
         </SheetFooter>
       </SheetContent>
     </Sheet>
@@ -370,6 +372,7 @@ function ListingRow({
   listing,
   tagged,
   tagPending,
+  canEdit,
   canUntag,
   onToggleTag,
   onCompanies,
@@ -379,6 +382,8 @@ function ListingRow({
   listing: PanelListing;
   tagged: boolean;
   tagPending: boolean;
+  /** False for a read-only session (broker_viewer or a `read` access grant). */
+  canEdit: boolean;
   canUntag: boolean;
   onToggleTag: (next: boolean) => void;
   onCompanies: () => void;
@@ -451,7 +456,10 @@ function ListingRow({
         <Switch
           checked={tagged}
           disabled={
-            tagPending || listing.clinic_count === 0 || (tagged && !canUntag)
+            !canEdit ||
+            tagPending ||
+            listing.clinic_count === 0 ||
+            (tagged && !canUntag)
           }
           onCheckedChange={onToggleTag}
           aria-label={`Enable ${listing.display_label} for the selected company's policy year`}
@@ -459,35 +467,43 @@ function ListingRow({
       </TableCell>
       <TableCell>
         <div className="flex items-center justify-end gap-1">
-          <input
-            ref={fileRef}
-            type="file"
-            accept=".xlsx,.xlsm,.xls"
-            className="hidden"
-            onChange={(e) => void handleFile(e.target.files?.[0])}
-          />
           <Button
             variant="ghost"
             size="sm"
             disabled={listing.clinic_count === 0}
             onClick={onCompanies}
-            title="Enable for companies — tick every company that uses this network"
+            title={
+              canEdit
+                ? "Enable for companies — tick every company that uses this network"
+                : "Companies this network is enabled for"
+            }
           >
             <Building2 className="size-4" />
           </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            disabled={upload.isPending}
-            onClick={() => fileRef.current?.click()}
-            title="Upload clinic list (replaces the current list for ALL companies)"
-          >
-            {upload.isPending ? (
-              <Loader2 className="size-4 animate-spin" />
-            ) : (
-              <Upload className="size-4" />
-            )}
-          </Button>
+          {canEdit && (
+            <>
+              <input
+                ref={fileRef}
+                type="file"
+                accept=".xlsx,.xlsm,.xls"
+                className="hidden"
+                onChange={(e) => void handleFile(e.target.files?.[0])}
+              />
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={upload.isPending}
+                onClick={() => fileRef.current?.click()}
+                title="Upload clinic list (replaces the current list for ALL companies)"
+              >
+                {upload.isPending ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : (
+                  <Upload className="size-4" />
+                )}
+              </Button>
+            </>
+          )}
           <Button
             variant="ghost"
             size="sm"
@@ -501,9 +517,11 @@ function ListingRow({
               <Download className="size-4" />
             )}
           </Button>
-          <Button variant="ghost" size="sm" onClick={onEdit} title="Edit listing">
-            <Pencil className="size-4" />
-          </Button>
+          {canEdit && (
+            <Button variant="ghost" size="sm" onClick={onEdit} title="Edit listing">
+              <Pencil className="size-4" />
+            </Button>
+          )}
           <FirmOwnerOnly><Button
             variant="ghost"
             size="sm"
@@ -523,6 +541,7 @@ function LibraryTable({
   yearLabel,
   taggedIds,
   tagPending,
+  canEdit,
   canUntag,
   onToggleTag,
   onCompanies,
@@ -533,6 +552,7 @@ function LibraryTable({
   yearLabel: string;
   taggedIds: Set<string>;
   tagPending: boolean;
+  canEdit: boolean;
   canUntag: boolean;
   onToggleTag: (listing: PanelListing, next: boolean) => void;
   onCompanies: (listing: PanelListing) => void;
@@ -562,6 +582,7 @@ function LibraryTable({
             listing={listing}
             tagged={taggedIds.has(listing.id)}
             tagPending={tagPending}
+            canEdit={canEdit}
             canUntag={canUntag}
             onToggleTag={(next) => onToggleTag(listing, next)}
             onCompanies={() => onCompanies(listing)}
@@ -588,7 +609,7 @@ export function PanelClinicsPage() {
   const yearPanels = yearPanelsQuery.data;
   const setPanels = useSetPolicyYearPanels();
   const remove = useDeletePanelListing();
-  const { canRemove: canUntag } = useWriteAccess();
+  const { canEdit, canRemove: canUntag } = useWriteAccess();
   // A toggle PUTs the year's whole set, so it may only build on a set that
   // loaded and is not being refetched.
   const tagPending =
@@ -664,19 +685,21 @@ export function PanelClinicsPage() {
 
       <TabsContent value="locations" className="space-y-4">
       <Card>
-        <CardHeader className="flex-row items-start justify-end space-y-0">
-          <Button
-            size="sm"
-            onClick={() => {
-              setEditing(null);
-              setFormOpen(true);
-            }}
-          >
-            <Plus className="size-4" />
-            <span className="ml-1">New listing</span>
-          </Button>
-        </CardHeader>
-        <CardContent>
+        {canEdit && (
+          <CardHeader className="flex-row items-start justify-end space-y-0">
+            <Button
+              size="sm"
+              onClick={() => {
+                setEditing(null);
+                setFormOpen(true);
+              }}
+            >
+              <Plus className="size-4" />
+              <span className="ml-1">New listing</span>
+            </Button>
+          </CardHeader>
+        )}
+        <CardContent className={canEdit ? undefined : "pt-5"}>
           {isLoading ? (
             <div className="flex items-center gap-2 py-8 text-sm text-muted-foreground">
               <Loader2 className="size-4 animate-spin" /> Loading panel
@@ -707,6 +730,7 @@ export function PanelClinicsPage() {
                 yearLabel={currentYear ? String(currentYear.year) : ""}
                 taggedIds={taggedIds}
                 tagPending={tagPending}
+                canEdit={canEdit}
                 canUntag={canUntag}
                 onToggleTag={toggleTag}
                 onCompanies={setCompaniesFor}
@@ -721,7 +745,7 @@ export function PanelClinicsPage() {
         </CardContent>
       </Card>
 
-      {formOpen && (
+      {formOpen && canEdit && (
         <ListingFormSheet
           key={editing?.id ?? "new"}
           editing={editing}

@@ -15,10 +15,20 @@ from app.db.session import get_db
 from app.models import Claim, Employee, PolicyYear
 from app.models.policy_year import PolicyYearStatus
 from app.services.member_access import (
+    CODE_ACCESS_ENDED,
+    CODE_COVERAGE_ENDED,
     Capability,
     access_for_account,
+    access_of,
     locate_employee,
     refusal,
+)
+
+# The selected year's row has ended while the member's CURRENT access has not:
+# a rehire opening a claim from the stint they left. About that record only.
+_EARLIER_ROW_ENDED = (
+    "Your access to that benefit year's record has ended. Contact your HR team "
+    "if you still need something from it."
 )
 
 
@@ -83,6 +93,24 @@ def claim_policy_year(db: Session, member: CurrentMember) -> PolicyYear | None:
     return db.get(PolicyYear, selected) if selected else active_policy_year(db, member.client_id)
 
 
+def _assert_selected_row(
+    db: Session, employee: Employee, capability: Capability, year: PolicyYear | None,
+) -> None:
+    """403 unless the selected year's own row still holds `capability`.
+
+    Runs only after the account's current verdict allowed the request, so a
+    refusal here is about that one earlier row, never the session: the terminal
+    `access_ended`, on which the portal client signs the member out, is sent as
+    `coverage_ended`.
+    """
+    denied = refusal(access_of(db, employee, year), capability)
+    if denied is None:
+        return
+    if denied["code"] == CODE_ACCESS_ENDED:
+        denied = {**denied, "code": CODE_COVERAGE_ENDED, "message": _EARLIER_ROW_ENDED}
+    raise HTTPException(403, denied)
+
+
 def resolve_claims_employee(
     db: Session, member: CurrentMember, *, requires: Capability | None = Capability.RECORD,
     year: Any = None,
@@ -96,4 +124,7 @@ def resolve_claims_employee(
         denied = refusal(access, requires)
         if denied is not None:
             raise HTTPException(403, denied)
+        employee = resolve_member_employee(db, member, requires=None, year=selected)
+        _assert_selected_row(db, employee, requires, selected)
+        return employee
     return resolve_member_employee(db, member, requires=requires, year=selected)

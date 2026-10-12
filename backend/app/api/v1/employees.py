@@ -61,7 +61,7 @@ from app.schemas.api import (
 from app.schemas.claims import UtilizationOut
 from app.services.benefit_statement import build_benefit_statement
 from app.services.coverage_gaps import build_coverage_gaps
-from app.services.coverage_resolver import find_orphan_overrides, load_overrides
+from app.services.coverage_resolver import classify_orphan_overrides, load_overrides
 from app.services.coverage_summary import build_coverage_items
 from app.services.derivation_engine import derive
 from app.services.eligibility_mapping import auto_map_policy_year
@@ -390,10 +390,15 @@ def _enrollment_risk(
             Claim.policy_year_id == policy_year_id,
         )
     ).scalar_one()
-    # Live coverage overrides only — orphans are inert (see docstring).
+    # Live coverage overrides only. An override whose product left the member's
+    # cohort is inert; one whose tier was deleted still applies, so it counts.
     all_overrides = load_overrides(db, policy_year_id, [e.id for e in employees])
-    orphan_ids = {o.id for o in find_orphan_overrides(db, policy_year_id, employees)}
-    overrides_at_risk = sum(1 for o in all_overrides.values() if o.id not in orphan_ids)
+    inert_ids = {
+        o.id
+        for o, reason in classify_orphan_overrides(db, policy_year_id, employees)
+        if reason == "product_left_cohort"
+    }
+    overrides_at_risk = sum(1 for o in all_overrides.values() if o.id not in inert_ids)
     return {
         "enrollments_at_risk": enrollments_at_risk,
         "open_period_members_at_risk": open_period_members,

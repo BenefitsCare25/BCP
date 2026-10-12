@@ -178,6 +178,38 @@ def test_only_system_admin_can_remove_saved_policy_assignments(context):
     assert term(db).policy_number_mappings == []
 
 
+def test_only_firm_owners_remove_saved_plans_and_schedule_rows(context):
+    client, db, user = context
+    two_plans = payload(plans=[
+        {"code": "1", "label": "Plan 1", "selected": True},
+        {"code": "2", "label": "Plan 2", "selected": True},
+    ])
+    assert client.post(f"{PATH}/confirm", json=two_plans).status_code == 200
+    one_plan = {**payload(), "expected_updated_at": client.get(PATH).json()["updated_at"]}
+    # Deselecting a saved plan deletes it on confirm.
+    assert client.put(PATH, json=one_plan).status_code == 403
+    assert client.post(f"{PATH}/confirm", json=one_plan).status_code == 403
+    plan = db.execute(select(Plan).where(Plan.code == "2")).scalar_one()
+
+    rows = [{"number": str(n), "name": f"Benefit {n}", "limits": []} for n in (1, 2)]
+    assert client.patch(
+        f"/api/v1/plans/{plan.id}", json={"benefit_schedule": {"items": rows}}
+    ).status_code == 200
+    renamed = [{**rows[0], "name": "Renamed benefit"}, rows[1]]
+    assert client.patch(
+        f"/api/v1/plans/{plan.id}",
+        json={"benefit_schedule": {"items": renamed}, "acknowledge": True},
+    ).status_code == 200
+    dropped = {"benefit_schedule": {"items": renamed[:1]}, "acknowledge": True}
+    assert client.patch(f"/api/v1/plans/{plan.id}", json=dropped).status_code == 403
+
+    app.dependency_overrides[get_current_user] = lambda: replace(user, role="firm_admin")
+    assert client.patch(f"/api/v1/plans/{plan.id}", json=dropped).status_code == 200
+    one_plan["expected_updated_at"] = client.get(PATH).json()["updated_at"]
+    assert client.post(f"{PATH}/confirm", json=one_plan).status_code == 200
+    assert [p.code for p in db.execute(select(Plan)).scalars()] == ["1"]
+
+
 def test_operational_mapping_update_rejects_legacy_overwrite(context):
     client, db, _ = context
     endpoint = "/api/v1/policy-years/year/product-terms/product"

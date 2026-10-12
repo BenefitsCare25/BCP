@@ -623,6 +623,8 @@ export interface Dependant {
   /** "spouse" | "child" | null — the server-classified pricing role. Served by
    *  the member and preview dependant lists only. */
   role?: string | null;
+  /** Edit/approval responses only: the automatic flex re-assignment failed. */
+  flex_errors?: string[];
 }
 
 // ── Benefit statement (read-only employee coverage view) ────────────────────
@@ -800,6 +802,8 @@ export interface DependantList {
 export interface AutoMatchResult {
   matched: number;
   unmatched: number;
+  /** The automatic flex wallet re-assignment after linking failed. */
+  flex_errors?: string[];
 }
 
 export type MatchMethod =

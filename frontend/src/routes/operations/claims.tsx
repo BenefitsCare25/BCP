@@ -3,8 +3,13 @@ import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { Copy, FileText, Plus, RefreshCw, Tag, X } from "lucide-react";
 import {
+  APPROVAL_GUARD_CODES,
+  CLAIM_SEARCH_MAX_LENGTH,
   RECEIVED_VIA_LABELS,
+  apiSearchTerm,
+  approvalWarningText,
   claimFilterParams,
+  paymentWarningText,
   useClaimInsurers,
   useBrokerClaimDetail,
   useBrokerClaims,
@@ -434,7 +439,7 @@ function QueueTab({
         err instanceof ConflictDetailError &&
         err.detail.code === "payment_exceeds_approval"
       ) {
-        setPaymentWarning(err.message);
+        setPaymentWarning(paymentWarningText(err.detail, selected.policy_currency));
         return;
       }
       if (err instanceof ConflictDetailError) {
@@ -511,10 +516,10 @@ function QueueTab({
     } catch (err) {
       if (
         err instanceof ConflictDetailError &&
-        ["limit_exceeded", "claim_amount_exceeded", "visit_limit_reached"].includes(err.detail.code)
+        APPROVAL_GUARD_CODES.includes(err.detail.code)
       ) {
         // Keep the dialog open; confirming again acknowledges the overrun.
-        setLimitWarning(err.message);
+        setLimitWarning(approvalWarningText(err.detail));
         return;
       }
       if (err instanceof ConflictDetailError) {
@@ -542,6 +547,7 @@ function QueueTab({
               aria-label={caseType === "log" ? "Search LOG cases" : "Search claims"}
               className="h-9 min-w-64 flex-1 sm:max-w-md"
               value={searchText}
+              maxLength={CLAIM_SEARCH_MAX_LENGTH}
               onChange={(event) => setSearchText(event.target.value)}
               placeholder="Search ref, member, dependant, invoice"
             />
@@ -560,7 +566,8 @@ function QueueTab({
                 if (status) params.set("status", status);
                 if (caseType) params.set("case_type", caseType);
                 if (employeeId) params.set("employee_id", employeeId);
-                if (search.trim()) params.set("search", search.trim());
+                const term = apiSearchTerm(search, CLAIM_SEARCH_MAX_LENGTH);
+                if (term) params.set("search", term);
                 triggerDownload(await api.download(`/claims/register?${params}`), "claims-register.xlsx");
               } catch (error) { toast.error(formatError(error)); }
               finally { setExporting(false); }

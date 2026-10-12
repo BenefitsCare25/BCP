@@ -7,6 +7,7 @@ reconciliation vocabulary once such an alias exists.
 """
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date
 
 import pytest
@@ -111,6 +112,18 @@ def test_edit_replaces_the_entity_list(client: TestClient) -> None:
         "/api/v1/entity-aliases",
         json={"alias": STM, "canonicals": [STM_AMK, STM_TPY]},
     ).json()
+    # Dropping a saved entity is a firm-owner removal, like deleting the alias.
+    refused = client.patch(
+        f"/api/v1/entity-aliases/{created['id']}",
+        json={"canonicals": [STM_AMK]},
+    )
+    assert refused.status_code == 403
+    added = client.patch(
+        f"/api/v1/entity-aliases/{created['id']}",
+        json={"canonicals": [STM_TPY, STM_AMK, "STMicroelectronics Pte Ltd Ang Mo Kio"]},
+    )
+    assert added.status_code == 200
+    app.dependency_overrides[get_current_user] = lambda: replace(_user(), role="firm_admin")
     res = client.patch(
         f"/api/v1/entity-aliases/{created['id']}",
         json={"canonicals": [STM_AMK]},

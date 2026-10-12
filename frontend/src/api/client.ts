@@ -4,6 +4,7 @@ import {
   clearLocalSession,
 } from "@/auth/msal";
 import { PASSIVE_ACTIVITY } from "@/auth/brokerSession";
+import { signInReturningHere } from "@/auth/returnPath";
 import { brokerAuthEnabled } from "@/auth/staffSignIn";
 import type { QueryClient, QueryKey } from "@tanstack/react-query";
 import { ApiError, errorFromText, parseErrorText, uploadRefusal } from "@/lib/errors";
@@ -178,8 +179,7 @@ async function handleUnauthorized(): Promise<never> {
   if (authEnabled) {
     await clearLocalSession();
     // Back to this page once signed in again (`auth/returnPath`).
-    const here = `${window.location.pathname}${window.location.search}`;
-    window.location.assign(`${SIGN_IN_PATH}?from=${encodeURIComponent(here)}`);
+    window.location.assign(signInReturningHere(SIGN_IN_PATH));
   }
   throw new UnauthorizedError(
     authEnabled

@@ -10,6 +10,7 @@ import { FirmOwnerOnly } from "@/components/auth/FirmOwnerOnly";
 import { useRef, useState } from "react";
 import {
   CreditCard,
+  Eye,
   Image as ImageIcon,
   LayoutTemplate,
   Loader2,
@@ -59,6 +60,7 @@ import {
 } from "@/components/ui/table";
 import { InfoHint } from "@/components/ui/tooltip";
 import { formatError } from "@/lib/errors";
+import { useWriteAccess } from "@/lib/roles";
 
 const EMPTY_FORM: PanelCardInput = {
   insurer: "",
@@ -216,12 +218,15 @@ function ArtworkButton({
 function LibrarySection({
   cards,
   isLoading,
+  canEdit,
   onEdit,
   onLayout,
   onDelete,
 }: {
   cards: PanelCard[];
   isLoading: boolean;
+  /** False for a read-only session: the layout opens for viewing only. */
+  canEdit: boolean;
   onEdit: (card: PanelCard) => void;
   onLayout: (card: PanelCard) => void;
   onDelete: (card: PanelCard) => void;
@@ -288,25 +293,31 @@ function LibrarySection({
             </TableCell>
             <TableCell>
               <div className="flex items-center justify-end gap-1">
-                <ArtworkButton card={card} face="front" />
-                <ArtworkButton card={card} face="back" />
+                {canEdit && <ArtworkButton card={card} face="front" />}
+                {canEdit && <ArtworkButton card={card} face="back" />}
                 <Button
                   variant="ghost"
                   size="sm"
                   disabled={!card.has_front}
                   onClick={() => onLayout(card)}
-                  title="Position the printed fields on the artwork"
+                  title={
+                    canEdit
+                      ? "Position the printed fields on the artwork"
+                      : "View the printed-field layout"
+                  }
                 >
                   <LayoutTemplate className="size-4" />
                 </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => onEdit(card)}
-                  title="Edit card"
-                >
-                  <Pencil className="size-4" />
-                </Button>
+                {canEdit && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => onEdit(card)}
+                    title="Edit card"
+                  >
+                    <Pencil className="size-4" />
+                  </Button>
+                )}
                 <FirmOwnerOnly><Button
                   variant="ghost"
                   size="sm"
@@ -335,6 +346,9 @@ export function PanelCardsPanel({
   const { data: assignments = [] } = usePolicyYearCards(policyYearId);
   const removeCard = useDeletePanelCard();
   const removeAssignment = useDeletePolicyYearCard();
+  // broker_viewer and `read`-grant sessions see the cards but cannot change
+  // them (require_write_access refuses every write).
+  const { canEdit } = useWriteAccess();
 
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<PanelCard | null>(null);
@@ -390,21 +404,24 @@ export function PanelCardsPanel({
               benefit year.
             </InfoHint>
           </span>
-          <Button
-            size="sm"
-            onClick={() => {
-              setEditing(null);
-              setFormOpen(true);
-            }}
-          >
-            <Plus className="size-4" />
-            <span className="ml-1">New card</span>
-          </Button>
+          {canEdit && (
+            <Button
+              size="sm"
+              onClick={() => {
+                setEditing(null);
+                setFormOpen(true);
+              }}
+            >
+              <Plus className="size-4" />
+              <span className="ml-1">New card</span>
+            </Button>
+          )}
         </CardHeader>
         <CardContent>
           <LibrarySection
             cards={cards}
             isLoading={isLoading}
+            canEdit={canEdit}
             onEdit={(card) => {
               setEditing(card);
               setFormOpen(true);
@@ -425,17 +442,19 @@ export function PanelCardsPanel({
               benefit year is created.
             </InfoHint>
           </span>
-          <Button
-            size="sm"
-            disabled={!policyYearId}
-            onClick={() => {
-              setEditingAssignment(null);
-              setAssignOpen(true);
-            }}
-          >
-            <Plus className="size-4" />
-            <span className="ml-1">Assign card</span>
-          </Button>
+          {canEdit && (
+            <Button
+              size="sm"
+              disabled={!policyYearId}
+              onClick={() => {
+                setEditingAssignment(null);
+                setAssignOpen(true);
+              }}
+            >
+              <Plus className="size-4" />
+              <span className="ml-1">Assign card</span>
+            </Button>
+          )}
         </CardHeader>
         <CardContent>
           {assignments.length === 0 ? (
@@ -481,9 +500,13 @@ export function PanelCardsPanel({
                             setEditingAssignment(assignment);
                             setAssignOpen(true);
                           }}
-                          title="Edit assignment"
+                          title={canEdit ? "Edit assignment" : "View assignment"}
                         >
-                          <Pencil className="size-4" />
+                          {canEdit ? (
+                            <Pencil className="size-4" />
+                          ) : (
+                            <Eye className="size-4" />
+                          )}
                         </Button>
                         <FirmOwnerOnly><Button
                           variant="ghost"
@@ -504,7 +527,7 @@ export function PanelCardsPanel({
         </CardContent>
       </Card>
 
-      {formOpen && (
+      {formOpen && canEdit && (
         <CardFormSheet
           key={editing?.id ?? "new"}
           editing={editing}
@@ -518,6 +541,7 @@ export function PanelCardsPanel({
           policyYearId={policyYearId}
           cards={cards}
           editing={editingAssignment}
+          readOnly={!canEdit}
           onOpenChange={setAssignOpen}
         />
       )}
@@ -532,6 +556,7 @@ export function PanelCardsPanel({
               <PlacementEditor
                 key={layoutCard.id}
                 card={layoutCard}
+                readOnly={!canEdit}
                 onClose={() => setLayoutFor(null)}
               />
             </SheetBody>

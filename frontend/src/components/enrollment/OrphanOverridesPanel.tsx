@@ -1,14 +1,16 @@
 import { FirmOwnerOnly } from "@/components/auth/FirmOwnerOnly";
-/** Orphaned plan overrides — overrides stranded by a re-match (the elected
- * product is no longer in the employee's cohort). They're inert (the coverage
- * resolver skips them) but surfaced here so brokers can reconcile instead of
+/** Orphaned plan overrides — overrides stranded by category churn, of two kinds
+ * (`orphan_reason`): the elected product left the employee's cohort after a
+ * re-match (inert — the coverage resolver skips it), or the elected tier was
+ * deleted by a slip re-parse (still applied — removing it returns the member
+ * to their cohort default plan). Surfaced so brokers can reconcile instead of
  * leaving silent ghosts. Rendered on Enrollment → Coverage changes; hidden
  * when there are none. */
 import { useState } from "react";
 import { Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import {
-  type PlanOverride,
+  type OrphanOverride,
   useDeletePlanOverride,
   useOrphanOverrides,
 } from "@/api/enrollment";
@@ -23,7 +25,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { formatError } from "@/lib/errors";
+import { ConflictDetailError, formatError } from "@/lib/errors";
 
 /** Best-effort employee label; orphans are rare so a per-row lookup is fine
  * (useEmployee is cached by query key). */
@@ -44,6 +46,36 @@ function EmployeeLabel({ employeeId }: { employeeId: string }) {
   );
 }
 
+const isLive = (o: OrphanOverride) => o.orphan_reason === "tier_missing";
+
+function RemoveDescription({ target }: { target: OrphanOverride }) {
+  if (!isLive(target)) {
+    return (
+      <>
+        Removes the <strong>{target.product_code}</strong> override for this
+        employee. The override is already inactive (the product left their
+        cohort), so effective coverage does not change.
+      </>
+    );
+  }
+  return (
+    <>
+      The <strong>{target.product_code}</strong> override is still applied
+      {target.declined ? (
+        " (the employee declined this product)"
+      ) : target.plan_code ? (
+        <> (the employee is on <strong>{target.plan_code}</strong>)</>
+      ) : null}
+      , but the tier they elected was removed by a slip re-parse. Removing the
+      override returns them to their cohort default plan, which can change their
+      cover, price and underwriting. To keep their choice, re-elect it on the
+      Enrollment page instead.
+    </>
+  );
+}
+
+type Confirm = { target: OrphanOverride; openPeriodReason: string | null };
+
 export function OrphanOverridesPanel({
   policyYearId,
 }: {
@@ -51,9 +83,35 @@ export function OrphanOverridesPanel({
 }) {
   const { data: orphans = [] } = useOrphanOverrides(policyYearId);
   const remove = useDeletePlanOverride();
-  const [confirmTarget, setConfirmTarget] = useState<PlanOverride | null>(null);
+  const [confirm, setConfirm] = useState<Confirm | null>(null);
 
   if (orphans.length === 0) return null;
+  const liveCount = orphans.filter(isLive).length;
+
+  const onConfirm = async () => {
+    if (!confirm) return;
+    const { target, openPeriodReason } = confirm;
+    try {
+      await remove.mutateAsync({
+        employeeId: target.employee_id,
+        productCode: target.product_code,
+        acknowledgeOpenEnrollment: openPeriodReason !== null,
+      });
+      toast.success("Override removed");
+      setConfirm(null);
+    } catch (err) {
+      if (
+        openPeriodReason === null &&
+        err instanceof ConflictDetailError &&
+        err.detail.code === "open_enrollment_election"
+      ) {
+        const reason = typeof err.detail.message === "string" ? err.detail.message : "";
+        setConfirm({ target, openPeriodReason: reason });
+        return;
+      }
+      toast.error(formatError(err));
+    }
+  };
 
   return (
     <Card>
@@ -62,9 +120,12 @@ export function OrphanOverridesPanel({
           Orphaned plan overrides ({orphans.length})
         </CardTitle>
         <CardDescription>
-          These employees have a plan override for a product that's no longer
-          in their cohort after re-matching. The overrides are inactive; remove
-          them to keep coverage records clean.
+          These employees have a plan override left behind by a re-match or a
+          slip re-parse. Overrides marked Inactive are for a product no longer in
+          their cohort and no longer apply; remove them to keep coverage records
+          clean.
+          {liveCount > 0 &&
+            " Overrides marked Still applied keep the member on their elected plan although the tier they elected was removed. Removing one changes their cover."}
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -77,6 +138,11 @@ export function OrphanOverridesPanel({
               <div className="flex min-w-0 flex-wrap items-center gap-2">
                 <EmployeeLabel employeeId={o.employee_id} />
                 <Badge variant="outline">{o.product_code}</Badge>
+                {isLive(o) ? (
+                  <Badge variant="warn">Still applied · tier removed</Badge>
+                ) : (
+                  <Badge>Inactive</Badge>
+                )}
                 <span className="text-xs text-muted-foreground">
                   {o.declined ? "Declined" : (o.plan_code ?? "—")} · source:{" "}
                   {o.source.replace(/_/g, " ")}
@@ -87,7 +153,7 @@ export function OrphanOverridesPanel({
                 variant="outline"
                 className="text-error hover:text-error"
                 disabled={remove.isPending}
-                onClick={() => setConfirmTarget(o)}
+                onClick={() => setConfirm({ target: o, openPeriodReason: null })}
               >
                 <Trash2 className="size-3.5" /> Remove override
               </Button></FirmOwnerOnly>
@@ -97,34 +163,32 @@ export function OrphanOverridesPanel({
       </CardContent>
 
       <FirmOwnerOnly><AlertDialog
-        open={!!confirmTarget}
-        onOpenChange={(o) => !o && setConfirmTarget(null)}
-        title="Remove this orphaned override?"
-        description={
-          confirmTarget ? (
-            <>
-              Removes the <strong>{confirmTarget.product_code}</strong> override
-              for this employee. The override is already inactive (the product
-              left their cohort), so effective coverage does not change.
-            </>
-          ) : null
+        open={!!confirm}
+        onOpenChange={(o) => !o && setConfirm(null)}
+        title={
+          confirm?.openPeriodReason != null
+            ? "The open enrolment period will replace this"
+            : confirm && isLive(confirm.target)
+              ? "Remove an override that is still applied?"
+              : "Remove this orphaned override?"
         }
-        confirmLabel="Remove override"
+        description={
+          !confirm ? null : confirm.openPeriodReason != null ? (
+            `${confirm.openPeriodReason} Remove the override anyway, or change their selection on the Enrollment page instead.`
+          ) : (
+            <RemoveDescription target={confirm.target} />
+          )
+        }
+        confirmLabel={
+          confirm?.openPeriodReason != null
+            ? "Remove anyway"
+            : confirm && isLive(confirm.target)
+              ? "Remove and revert to default"
+              : "Remove override"
+        }
         confirmVariant="destructive"
         loading={remove.isPending}
-        onConfirm={async () => {
-          if (!confirmTarget) return;
-          try {
-            await remove.mutateAsync({
-              employeeId: confirmTarget.employee_id,
-              productCode: confirmTarget.product_code,
-            });
-            toast.success("Override removed");
-            setConfirmTarget(null);
-          } catch (err) {
-            toast.error(formatError(err));
-          }
-        }}
+        onConfirm={onConfirm}
       /></FirmOwnerOnly>
     </Card>
   );

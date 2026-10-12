@@ -946,6 +946,13 @@ class PlanOverrideOut(_Base):
     modified_by: str | None
 
 
+class OrphanOverrideOut(PlanOverrideOut):
+    """An orphaned override and why: ``product_left_cohort`` is inert, while
+    ``tier_missing`` still applies — removing it changes the member's cover."""
+
+    orphan_reason: Literal["product_left_cohort", "tier_missing"]
+
+
 # ── Coverage history + revert (track / reset flexibility) ────────────────────
 
 
@@ -986,6 +993,13 @@ class CoverageChangeOut(BaseModel):
     outcome: str  # "reverted" | "reset_to_default" | "unchanged" | "skipped"
     from_plan: str | None = None
     to_plan: str | None = None
+    #: The member ends this change declined. A null ``to_plan`` alone does NOT
+    #: mean declined: a cohort default with no plan code, the leave row and
+    #: an un-enrolled voluntary product all carry one too.
+    declined: bool = False
+    #: The member ends this change not enrolled: voluntary cover they were only
+    #: eligible for at baseline (null ``to_plan``, not a decline).
+    not_enrolled: bool = False
     detail: str | None = None
 
 

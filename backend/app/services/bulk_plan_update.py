@@ -90,6 +90,7 @@ from app.services.override_writer import (
     restore_snapshot,
     upsert_override,
 )
+from app.services.voluntary_enrolment import voluntary_products_by_employee
 
 # A balance below half a cent is overdrawn — the same float-noise tolerance the
 # enrollment wallet guard uses, so the two surfaces agree on the boundary.
@@ -181,6 +182,9 @@ class _FlexContext:
     # row of a company that does not run flex was reported "unpriced", which is
     # not a gap — the product simply has no price tag.
     configured: bool
+    # Per member, the products they are only eligible for (voluntary cover).
+    # Their take-up IS the override, so a move back to the default plan keeps it.
+    voluntary: dict[str, set[str]] = field(default_factory=dict)
     _age_limits: dict[str, dict[str, dict[str, int]] | None] = field(default_factory=dict)
 
     def age_limits(self, product_id: str) -> dict[str, dict[str, int]] | None:
@@ -258,6 +262,7 @@ def _flex_context(
             db, set(baseline_cat.values())
         ),
         configured=bool(pricing is not None or slip_idx or family_slip_idx),
+        voluntary=voluntary_products_by_employee(db, employees),
     )
 
 
@@ -399,6 +404,9 @@ class _Plan:
     # here rather than derived from the row: "no figure" and "no such figure"
     # look identical on the row, and only the first is worth reporting.
     financials_unresolved: bool = False
+    # Write voluntary take-up as the projection's marker (no plan or tier
+    # pinned) — the change lands on the cohort default.
+    marker: bool = False
 
 
 def evaluate(
@@ -637,7 +645,7 @@ def _evaluate_change(
         # would pin the member off future category changes and re-price flex for
         # a no-op. Mirrors the enrollment-projection sparse rule. A revert is
         # sparse by definition: removing the override IS the change.
-        sparse = revert or is_sparse_default(
+        default_equal = not revert and is_sparse_default(
             declined=declined_after,
             plan_code=to_plan,
             tier_category_id=target_tier_id,
@@ -646,6 +654,19 @@ def _evaluate_change(
             base_tier=base_cat,
             dependant_option_ids=dep_options,
         )
+        # Voluntary cover is the exception: its take-up is recorded only by the
+        # override. A member who already holds a row on it (a decline being
+        # reversed too) keeps one when moved back to the default, written as
+        # the enrolment projection's marker — no plan or tier pinned — so the
+        # take-up survives and the member still follows cohort changes. A
+        # member only eligible has no row and stays sparse: a set_plan back to
+        # the default enrols nobody.
+        keep_marker = (
+            default_equal
+            and ov is not None
+            and product.id in flex.voluntary.get(emp.id, set())
+        )
+        sparse = revert or (default_equal and not keep_marker)
 
         tag = _price_tag(
             flex, product.id, emp,
@@ -665,8 +686,8 @@ def _evaluate_change(
             ov,
             sparse,
             declined_after,
-            to_plan,
-            target_tier_id,
+            None if keep_marker else to_plan,
+            None if keep_marker else target_tier_id,
             covered_for_price,
             dep_options,
             tag,
@@ -778,6 +799,7 @@ def _evaluate_change(
                 dep_ids=dep_ids, dep_options=dep_options,
                 clear_dependants=clear_dependants, tag=tag,
                 sparse=sparse, row=row, financials_unresolved=unresolved,
+                marker=keep_marker,
             )
         )
 
@@ -1189,11 +1211,11 @@ def _write_override(
         product_id=planned.product.id,
         product_code=planned.product.code,
         declined=planned.change.action == "decline",
-        plan_code=planned.change.target_plan_code,
+        plan_code=None if planned.marker else planned.change.target_plan_code,
         # A bare plan code is stored with its exact sibling category when that
         # mapping is unambiguous in this member's cohort. Later recomputation
         # therefore uses the same category::plan pricing key as this write.
-        tier_category_id=planned.tier_category_id,
+        tier_category_id=None if planned.marker else planned.tier_category_id,
         dependant_option_ids=planned.dep_options,
         flex_price_tag=planned.tag,
         source=OverrideSource.bulk_update,

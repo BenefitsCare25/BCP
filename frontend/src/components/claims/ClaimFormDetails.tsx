@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Pencil } from "lucide-react";
 import {
+  paymentWarningText,
   useAmendClaim,
   useRefreshClaimConversion,
   useUpdateClaimAssessment,
@@ -365,7 +366,9 @@ export function ClaimFormDetails({
             error instanceof ConflictDetailError &&
             error.detail.code === "payment_exceeds_approval"
           ) {
-            setOverpaymentWarning(error.message);
+            setOverpaymentWarning(
+              paymentWarningText(error.detail, viewClaim.policy_currency),
+            );
           } else {
             toast.error(
               claimFactsSaved

@@ -51,7 +51,13 @@ import {
   useSetMemberPassword,
   type MemberAccount,
 } from "@/api/memberAccounts";
-import { formatError, isFirmOriginUnavailable, sendErrorMessage } from "@/lib/errors";
+import {
+  ConflictDetailError,
+  errorCode,
+  formatError,
+  isFirmOriginUnavailable,
+  sendErrorMessage,
+} from "@/lib/errors";
 import { fmtDay, parseServerDate } from "@/lib/format";
 import { useWriteAccess } from "@/lib/roles";
 import { setPasswordLinkPath } from "@/lib/setPasswordToken";
@@ -71,6 +77,15 @@ import {
   SheetTitle,
   SheetTrigger,
 } from "@/components/ui/sheet";
+
+/** Invite refusals a different address fixes (coded by
+ *  `POST /employees/{id}/member-account`): those open the email field. */
+const EMAIL_FIXABLE_CODES = new Set(["invalid_email", "shared_email", "email_in_use"]);
+
+function emailFixable(err: unknown): boolean {
+  const code = err instanceof ConflictDetailError ? err.detail.code : errorCode(err);
+  return code !== undefined && EMAIL_FIXABLE_CODES.has(code);
+}
 
 /** The account's one state, as a broker reads it.
  *
@@ -471,9 +486,8 @@ function AccountPanel({
       setNeedsEmail(false);
       setEmailOverride("");
     } catch (err) {
-      const message = sendErrorMessage(err);
-      if (message.toLowerCase().includes("no email") || message.toLowerCase().includes("shared")) setNeedsEmail(true);
-      toast.error(message);
+      if (emailFixable(err)) setNeedsEmail(true);
+      toast.error(sendErrorMessage(err));
     }
   };
 

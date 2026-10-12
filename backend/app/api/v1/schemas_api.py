@@ -238,7 +238,9 @@ def create_employee_attribute(
             )
         )
         .scalars()
-        .one_or_none()
+        # `first`, not `one_or_none`: a library copied twice by older releases
+        # holds duplicates, and any match means the attribute already exists.
+        .first()
     )
     if existing:
         where = "the firm library" if client_id is None else "this company"
@@ -435,7 +437,7 @@ def create_product(
             else Product.client_id == client_id,
             func.upper(Product.code) == code,
         )
-    ).scalar_one_or_none()
+    ).scalars().first()  # duplicates from older library copies still mean "exists"
     if existing is not None:
         where = "the firm library" if client_id is None else "this company"
         raise HTTPException(

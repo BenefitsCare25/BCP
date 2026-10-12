@@ -12,6 +12,7 @@ import { handOverSetPasswordChallenge } from "@/lib/setPasswordToken";
 import { useSessionEndNotice } from "@/lib/surfaceSession";
 import { useHrSession } from "@/stores/hrSession";
 import { hrPath } from "@/lib/tenant";
+import { takeHrReturnPath } from "@/auth/returnPath";
 import { MFA_CODE_MAX_LENGTH, canSubmitMfaCode, normalizeMfaCode } from "@/lib/mfa";
 import { PortalLoginScene } from "@/components/auth/PortalLoginScene";
 import { LoginPasswordField } from "@/components/auth/LoginPasswordField";
@@ -45,7 +46,16 @@ export function HrSignInPage() {
   const [fieldErrors, setFieldErrors] = useState<LoginFieldErrors>({});
   const submitting = useRef(false);
 
-  const finish = () => void navigate({ to: useHrSession.getState().mfaEnrollmentRequired ? "/hr/security" : "/hr/dashboard" });
+  const finish = () => {
+    if (useHrSession.getState().mfaEnrollmentRequired) {
+      void navigate({ to: "/hr/security" });
+      return;
+    }
+    // The page they were on when the session ended, or the link they opened.
+    const back = takeHrReturnPath();
+    if (back) void navigate({ href: back });
+    else void navigate({ to: "/hr/dashboard" });
+  };
 
   const submitCredentials = (e: React.FormEvent) => {
     e.preventDefault();

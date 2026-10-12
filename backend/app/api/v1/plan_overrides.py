@@ -47,6 +47,7 @@ from app.schemas.enrollment import (
     CoverageHistoryOut,
     CoverageRevertRequest,
     CoverageRevertResult,
+    OrphanOverrideOut,
     PlanOverrideOut,
     PlanOverrideUpsert,
 )
@@ -56,8 +57,8 @@ from app.services.cohort_tiers import tier_index_for_product, tier_key
 from app.services.coverage_history import coverage_history
 from app.services.coverage_resolver import (
     batch_category_defaults,
+    classify_orphan_overrides,
     employee_compulsory_product_ids,
-    find_orphan_overrides,
 )
 from app.services.coverage_revert import (
     latest_enrollment_with_baseline,
@@ -314,22 +315,30 @@ def _assert_may_drop_dependants(
 
 @router.get(
     "/policy-years/{policy_year_id}/plan-overrides/orphans",
-    response_model=list[PlanOverrideOut],
+    response_model=list[OrphanOverrideOut],
 )
 def list_orphan_overrides(
     policy_year_id: str,
     py: PolicyYear = Depends(load_policy_year),
     db: Session = Depends(get_db),
-) -> list[EmployeePlanOverride]:
-    """Overrides stranded by a re-match — the elected product is no longer in the
-    employee's cohort. They are inert (the resolver skips them) but surfaced here
-    so ops can reconcile rather than leave silent ghosts."""
+) -> list[OrphanOverrideOut]:
+    """Overrides stranded by category churn, each with its ``orphan_reason``.
+
+    ``product_left_cohort`` rows are inert (the resolver skips them);
+    ``tier_missing`` rows still apply, so removing one returns the member to
+    their cohort default plan. Surfaced so ops can reconcile rather than leave
+    silent ghosts."""
     employees = list(
         db.execute(
             select(Employee).where(Employee.policy_year_id == py.id)
         ).scalars().all()
     )
-    return find_orphan_overrides(db, py.id, employees)
+    return [
+        OrphanOverrideOut(
+            **PlanOverrideOut.model_validate(ov).model_dump(), orphan_reason=reason
+        )
+        for ov, reason in classify_orphan_overrides(db, py.id, employees)
+    ]
 
 
 @router.get(

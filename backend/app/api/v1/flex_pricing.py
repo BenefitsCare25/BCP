@@ -447,6 +447,54 @@ def _removes_dependant_cover(before: dict[str, Any], after: dict[str, Any]) -> b
     )
 
 
+def _band_count(value: Any) -> int:
+    return len(value) if isinstance(value, list) else 0
+
+
+def _removes_rate_bands(before: dict[str, Any], after: dict[str, Any]) -> bool:
+    """Whether a save shortens or drops a saved voluntary age-band schedule
+    (shared or per tier) — removing an age band is a firm-owner action, as on
+    the category-level voluntary rate table (voluntary_rates.py)."""
+    old_products, new_products = before.get("products"), after.get("products")
+    if not isinstance(old_products, dict):
+        return False
+    kept_products = new_products if isinstance(new_products, dict) else {}
+    for pid, block in old_products.items():
+        if not isinstance(block, dict):
+            continue
+        kept = kept_products.get(pid)
+        kept = kept if isinstance(kept, dict) else {}
+        if _band_count(block.get("voluntary_rates")) > _band_count(kept.get("voluntary_rates")):
+            return True
+        old_tiers, new_tiers = (
+            block.get("voluntary_rates_by_tier"), kept.get("voluntary_rates_by_tier")
+        )
+        new_tiers = new_tiers if isinstance(new_tiers, dict) else {}
+        if isinstance(old_tiers, dict) and any(
+            _band_count(rates) > _band_count(new_tiers.get(key))
+            for key, rates in old_tiers.items()
+        ):
+            return True
+    return False
+
+
+def _refuse_saved_removals(
+    before: dict[str, Any], after: dict[str, Any], user: CurrentUser
+) -> None:
+    if is_firm_owner(user):
+        return
+    if _removes_dependant_cover(before, after):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Removing dependant cover requires a firm administrator.",
+        )
+    if _removes_rate_bands(before, after):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Only firm administrators may remove a saved age band.",
+        )
+
+
 def _upsert_pricing_row(
     db: Session,
     py: PolicyYear,
@@ -474,13 +522,7 @@ def _upsert_pricing_row(
                 "Dependant eligibility and participation cannot change while an "
                 "enrolment period is open. Price tags and rates can still be corrected.",
             )
-    if not is_firm_owner(user) and _removes_dependant_cover(
-        (row.pricing if row else {}) or {}, pricing
-    ):
-        raise HTTPException(
-            status.HTTP_403_FORBIDDEN,
-            "Removing dependant cover requires a firm administrator.",
-        )
+    _refuse_saved_removals((row.pricing if row else {}) or {}, pricing, user)
     action = "update_flex_pricing"
     if row is None:
         row = FlexPricing(policy_year_id=py.id, client_id=py.client_id)

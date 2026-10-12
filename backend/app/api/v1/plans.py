@@ -15,6 +15,7 @@ from app.core.auth import CurrentUser, get_current_user
 from app.core.deps import (
     assert_policy_year_editable,
     assert_policy_year_for_user,
+    is_firm_owner,
     load_plan,
     policy_year_company,
     require_broker_admin,
@@ -31,6 +32,7 @@ from app.services.benefit_key_guard import (
     orphaned_benefit_keys,
 )
 from app.services.plan_hydration import build_financials
+from app.services.setup_removals import refuse_removals, removed_schedule_entries
 
 router = APIRouter(prefix="/plans", tags=["plans"])
 
@@ -391,11 +393,20 @@ def update_plan(
     updates = body.model_dump(exclude_unset=True)
     acknowledge = bool(updates.pop("acknowledge", False))
     py = db.get(PolicyYear, plan.policy_year_id)
+    if py is not None:
+        policy_year_company(py, user)
     # report_label is OPERATIONAL metadata (insurer report display text) — it
     # doesn't alter coverage, so a label-only patch stays editable after
     # activation. Anything touching real plan config keeps the lock.
     if py is not None and not set(updates) <= {"report_label"}:
         assert_policy_year_editable(py)
+    # Dropping a saved benefit row, sub-benefit or limit is a firm-owner action,
+    # as in the product setup that materializes this schedule.
+    if body.benefit_schedule is not None and not is_firm_owner(user):
+        refuse_removals(
+            removed_schedule_entries(plan.benefit_schedule, body.benefit_schedule.stored()),
+            "benefit schedule entries",
+        )
     # Renaming/removing a benefit line strands claims that reference it by name
     # (see services/benefit_key_guard). Confirmable, not a hard block.
     if body.benefit_schedule is not None and not acknowledge:

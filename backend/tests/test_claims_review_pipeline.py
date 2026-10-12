@@ -1323,7 +1323,9 @@ def test_doc_type_config_lazy_seed_and_crud(broker: TestClient, system_admin_req
     }
 
 
-def test_document_scope_assignments_duplicate_atomically(broker: TestClient):
+def test_document_scope_assignments_duplicate_atomically(
+    broker: TestClient, system_admin_request
+):
     rows = _reset_doc_types(broker)
     target = "insured:ghs:ghs_emergency_outpatient_govt"
     assignments = [
@@ -1334,7 +1336,32 @@ def test_document_scope_assignments_duplicate_atomically(broker: TestClient):
         }
         for row in rows
     ]
-    response = broker.post(
+    # Dropping a saved mapping is a firm-owner removal; adding one is an edit.
+    refused = broker.post(
+        "/api/v1/claim-doc-types/scope-assignments",
+        json={"assignments": assignments},
+    )
+    assert refused.status_code == 403
+    discharge = next(row for row in rows if row["key"] == "discharge_summary")
+    added = broker.post(
+        "/api/v1/claim-doc-types/scope-assignments",
+        json={"assignments": [{
+            "id": discharge["id"],
+            "expected_updated_at": discharge["updated_at"],
+            "claim_scope_keys": [*discharge["claim_scope_keys"], target],
+        }]},
+    )
+    assert added.status_code == 200
+    versions = {row["id"]: row["updated_at"] for row in added.json()}
+    assignments = [
+        {**assignment, "expected_updated_at": versions.get(
+            assignment["id"], assignment["expected_updated_at"]
+        )}
+        for assignment in assignments
+    ]
+    response = system_admin_request(
+        broker,
+        "POST",
         "/api/v1/claim-doc-types/scope-assignments",
         json={"assignments": assignments},
     )
@@ -1358,7 +1385,9 @@ def test_document_scope_assignments_duplicate_atomically(broker: TestClient):
         }
         for index, assignment in enumerate(assignments)
     ]
-    stale = broker.post(
+    stale = system_admin_request(
+        broker,
+        "POST",
         "/api/v1/claim-doc-types/scope-assignments",
         json={"assignments": stale_assignments},
     )

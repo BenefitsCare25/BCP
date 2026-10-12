@@ -58,11 +58,14 @@ export function CardAssignmentSheet({
   policyYearId,
   cards,
   editing,
+  readOnly = false,
   onOpenChange,
 }: {
   policyYearId: string;
   cards: PanelCard[];
   editing: PolicyYearCard | null;
+  /** A read-only session (broker_viewer or a `read` grant) views the assignment. */
+  readOnly?: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
   const { data: options } = useCardOptions();
@@ -132,7 +135,11 @@ export function CardAssignmentSheet({
       <SheetContent>
         <SheetHeader>
           <SheetTitle>
-            {editing ? "Edit card assignment" : "Assign a card"}
+            {readOnly
+              ? "Card assignment"
+              : editing
+                ? "Edit card assignment"
+                : "Assign a card"}
           </SheetTitle>
         </SheetHeader>
         <SheetBody className="space-y-4">
@@ -140,6 +147,7 @@ export function CardAssignmentSheet({
             <Label>Card</Label>
             <Select
               value={form.panel_card_id}
+              disabled={readOnly}
               onValueChange={(v) => setForm({ ...form, panel_card_id: v })}
             >
               <SelectTrigger>
@@ -170,6 +178,7 @@ export function CardAssignmentSheet({
             </Label>
             <Select
               value={form.product_id}
+              disabled={readOnly}
               onValueChange={(v) => setForm({ ...form, product_id: v })}
             >
               <SelectTrigger>
@@ -203,6 +212,7 @@ export function CardAssignmentSheet({
               </Label>
               <Select
                 value={form.employee_member_id_source}
+                disabled={readOnly}
                 onValueChange={(v) =>
                   setForm({ ...form, employee_member_id_source: v })
                 }
@@ -223,6 +233,7 @@ export function CardAssignmentSheet({
               <Label>Dependant member ID</Label>
               <Select
                 value={form.dependant_member_id_source}
+                disabled={readOnly}
                 onValueChange={(v) =>
                   setForm({ ...form, dependant_member_id_source: v })
                 }
@@ -254,10 +265,14 @@ export function CardAssignmentSheet({
               {(options?.services ?? []).map((service) => (
                 <label
                   key={service.key}
-                  className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm text-foreground hover:bg-muted/60"
+                  className={
+                    "flex items-center gap-2 rounded-md px-2 py-1.5 text-sm text-foreground " +
+                    (readOnly ? "" : "cursor-pointer hover:bg-muted/60")
+                  }
                 >
                   <Checkbox
                     checked={form.services[service.key] === true}
+                    disabled={readOnly}
                     onCheckedChange={(v) =>
                       setForm({
                         ...form,
@@ -283,6 +298,7 @@ export function CardAssignmentSheet({
                 </Label>
                 <Input
                   value={form.remarks[remark.key] ?? ""}
+                  readOnly={readOnly}
                   placeholder={`Shown on the card for ${remark.label}`}
                   onChange={(e) =>
                     setForm({
@@ -300,6 +316,7 @@ export function CardAssignmentSheet({
             <Input
               id="card-special"
               value={form.special_conditions ?? ""}
+              readOnly={readOnly}
               placeholder="e.g. Co-pay $5 per visit"
               onChange={(e) =>
                 setForm({ ...form, special_conditions: e.target.value })
@@ -310,6 +327,7 @@ export function CardAssignmentSheet({
           <label className="flex items-start gap-2 text-sm text-foreground">
             <Checkbox
               checked={form.show_future_cards}
+              disabled={readOnly}
               onCheckedChange={(v) =>
                 setForm({ ...form, show_future_cards: v === true })
               }
@@ -325,12 +343,14 @@ export function CardAssignmentSheet({
         </SheetBody>
         <SheetFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>
-            Cancel
+            {readOnly ? "Close" : "Cancel"}
           </Button>
-          <Button onClick={() => void submit()} disabled={!valid || pending}>
-            {pending && <Loader2 className="size-4 animate-spin" />}
-            {editing ? "Save changes" : "Assign card"}
-          </Button>
+          {!readOnly && (
+            <Button onClick={() => void submit()} disabled={!valid || pending}>
+              {pending && <Loader2 className="size-4 animate-spin" />}
+              {editing ? "Save changes" : "Assign card"}
+            </Button>
+          )}
         </SheetFooter>
       </SheetContent>
     </Sheet>

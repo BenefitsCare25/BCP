@@ -933,11 +933,9 @@ export function useCloseWindow() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["enrollment-windows"] });
       // Close finalises every enrolment (statuses, forms register, events) and
-      // projects the elections into overrides — which moves each tier's
-      // "current" flag and what is held, so the options are stale too.
+      // projects the elections into overrides.
       invalidateEnrollment(qc);
       invalidateProjection(qc);
-      qc.invalidateQueries({ queryKey: ["enrollment-options"] });
     },
   });
 }
@@ -1070,15 +1068,20 @@ function invalidateEnrollment(qc: ReturnType<typeof useQueryClient>) {
   qc.invalidateQueries({ queryKey: ["benefit-statement"] });
   qc.invalidateQueries({ queryKey: ["coverage-summary"] });
   qc.invalidateQueries({ queryKey: ["coverage-history"] });
+  // Member Coverage's "Employee view" mirrors the statement and the enrolment
+  // from its own cache.
+  qc.invalidateQueries({ queryKey: ["portal-preview"] });
 }
 
 /** What confirming or closing changes beyond the enrolment: elections are
  * projected into overrides, underwriting cases re-sync against the new sums
- * insured, and the member's flex ledger moves. */
+ * insured, and the member's flex ledger moves. Projection also moves the held
+ * tier (`is_current`) and what is held at all, so the options are stale too. */
 function invalidateProjection(qc: ReturnType<typeof useQueryClient>) {
   qc.invalidateQueries({ queryKey: ["plan-overrides"] });
   qc.invalidateQueries({ queryKey: ["underwriting"] });
   qc.invalidateQueries({ queryKey: ["employee-utilization"] });
+  qc.invalidateQueries({ queryKey: ["enrollment-options"] });
 }
 
 export function useSetElections() {
@@ -1131,8 +1134,6 @@ export function useConfirmEnrollment() {
     onSuccess: () => {
       invalidateEnrollment(qc);
       invalidateProjection(qc);
-      // Projection moves the held tier (`is_current`) and what is held at all.
-      qc.invalidateQueries({ queryKey: ["enrollment-options"] });
     },
   });
 }
@@ -1172,6 +1173,12 @@ export interface CoverageChange {
   outcome: "reverted" | "reset_to_default" | "unchanged" | "skipped";
   from_plan: string | null;
   to_plan: string | null;
+  /** The member ends this change declined. A null `to_plan` alone is not a
+   *  decline (a plan-code-less cohort default, the leave row). */
+  declined?: boolean;
+  /** The member ends this change not enrolled (voluntary cover they were only
+   *  eligible for at baseline). */
+  not_enrolled?: boolean;
   detail: string | null;
 }
 
@@ -1205,32 +1212,9 @@ export function useRevertCoverage(employeeId: string | undefined) {
   return useMutation({
     mutationFn: (body: CoverageRevertRequest) =>
       api.post<CoverageRevertResult>(`/employees/${employeeId}/coverage/revert`, body),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["coverage-history"] });
-      qc.invalidateQueries({ queryKey: ["plan-overrides"] });
-      qc.invalidateQueries({ queryKey: ["benefit-statement"] });
-      qc.invalidateQueries({ queryKey: ["coverage-summary"] });
-      // The statement and the utilization MUST refetch together. `FlexPanel`
-      // draws one ledger from both — the allowance and price tags come from the
-      // statement, the approved/pending claims and `available` from the
-      // utilization — so refreshing only the statement leaves the printed terms
-      // reconciling against a total from before the revert. The coverage
-      // table's Claims column reads the same stale response. This didn't bite
-      // while the revert controls lived on the roster sheet, which showed no
-      // utilization; they now render beside both.
-      qc.invalidateQueries({ queryKey: ["employee-utilization"] });
-      // The revert controls live inside the elections panel; refresh the enrollment
-      // + its options so the tier markers and price tags there aren't left stale.
-      qc.invalidateQueries({ queryKey: ["enrollment"] });
-      qc.invalidateQueries({ queryKey: ["enrollment-options"] });
-      // A revert moves the member's eligible sum insured, and the server now
-      // re-derives their NEL cases in the same transaction — so the underwriting
-      // queue on screen is stale the moment this returns.
-      qc.invalidateQueries({ queryKey: ["underwriting"] });
-      // A revert now RECORDS a batch (that is what makes it undoable), so the
-      // Coverage changes tab's "Past changes" list has a new row.
-      qc.invalidateQueries({ queryKey: ["bulk-updates"] });
-    },
+    // A revert RECORDS a batch (that is what makes it undoable), and moves the
+    // same state an undo does.
+    onSuccess: () => invalidateCoverage(qc),
   });
 }
 
@@ -1287,14 +1271,24 @@ export interface PlanOverride {
   modified_by: string | null;
 }
 
-/** Overrides stranded by a re-match — the product is no longer in the
- *  employee's cohort. Inert (the resolver skips them), surfaced for cleanup. */
+/** Why an override is orphaned (mirrors backend OrphanOverrideOut):
+ *  `product_left_cohort` — the product is no longer in the employee's cohort;
+ *  inert, the resolver skips it. `tier_missing` — the elected tier was deleted
+ *  by a slip re-parse; the override STILL APPLIES, so removing it returns the
+ *  member to their cohort default plan. */
+export type OrphanReason = "product_left_cohort" | "tier_missing";
+
+export interface OrphanOverride extends PlanOverride {
+  orphan_reason: OrphanReason;
+}
+
+/** Overrides stranded by category churn, surfaced for reconciliation. */
 export function useOrphanOverrides(policyYearId: string | undefined) {
   const cid = useClientId();
   return useQuery({
     queryKey: ["plan-overrides", "orphans", policyYearId, cid],
     queryFn: () =>
-      api.get<PlanOverride[]>(
+      api.get<OrphanOverride[]>(
         `/policy-years/${policyYearId}/plan-overrides/orphans`,
       ),
     enabled: !!policyYearId,
@@ -1319,16 +1313,12 @@ export function useDeletePlanOverride() {
           acknowledgeOpenEnrollment ? "?acknowledge_open_enrollment=true" : ""
         }`,
       ),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["plan-overrides"] });
-      qc.invalidateQueries({ queryKey: ["benefit-statement"] });
-      qc.invalidateQueries({ queryKey: ["coverage-summary"] });
-      qc.invalidateQueries({ queryKey: ["coverage-history"] });
-      // Dropping an override moves eligible SI, and the server re-derives the
-      // member's NEL cases in the same transaction — same staleness the revert
-      // path documents.
-      qc.invalidateQueries({ queryKey: ["underwriting"] });
-    },
+    // The caller turns a 409 `open_enrollment_election` into an acknowledge
+    // step, so it owns every error message for this action.
+    meta: { localErrorHandling: true },
+    // Dropping an override moves effective coverage (statement, flex ledger,
+    // eligible SI and so NEL cases) exactly as a revert does.
+    onSuccess: () => invalidateCoverage(qc),
   });
 }
 
@@ -1362,18 +1352,7 @@ export function useSetPlanOverride() {
         },
       ),
     meta: { localErrorHandling: true },
-    onSuccess: () => {
-      for (const key of [
-        "plan-overrides",
-        "benefit-statement",
-        "coverage-summary",
-        "coverage-history",
-        "employee-utilization",
-        "underwriting",
-      ]) {
-        qc.invalidateQueries({ queryKey: [key] });
-      }
-    },
+    onSuccess: () => invalidateCoverage(qc),
   });
 }
 
@@ -1399,26 +1378,35 @@ export function usePreviewBulk(policyYearId: string | undefined) {
   });
 }
 
-/** Everything a coverage change rewrites. Shared by apply and undo — an undo
- *  moves exactly the same state back, so it has to refresh the same screens. */
+/** Everything a change to effective coverage rewrites. Shared by bulk apply and
+ *  undo, revert, and single overrides: each rewrites overrides directly (an
+ *  undo moves exactly the same state back), so each refreshes the same screens. */
 function invalidateCoverage(qc: ReturnType<typeof useQueryClient>) {
   qc.invalidateQueries({ queryKey: ["benefit-statement"] });
   qc.invalidateQueries({ queryKey: ["coverage-summary"] });
-  // Bulk updates rewrite overrides directly — refresh everything that
-  // renders an employee's effective coverage.
+  // The revert controls live inside the elections panel: its tier markers and
+  // price tags read the enrolment and its options.
   qc.invalidateQueries({ queryKey: ["enrollment"] });
   qc.invalidateQueries({ queryKey: ["enrollment-options"] });
   qc.invalidateQueries({ queryKey: ["coverage-history"] });
   qc.invalidateQueries({ queryKey: ["plan-overrides"] });
+  // Apply, undo and revert each change the "Past changes" list.
   qc.invalidateQueries({ queryKey: ["bulk-updates"] });
-  // The picker's plan headcounts are effective coverage, which just moved.
-  qc.invalidateQueries({ queryKey: ["member-facets"] });
+  // The picker's plan headcounts (member facets), the live selection count and
+  // the Member Listing rows are all effective coverage, and all are keyed under
+  // "employees" (api/memberQuery.ts).
+  qc.invalidateQueries({ queryKey: ["employees"] });
+  // Eligible sum insured moves, and the server re-derives NEL cases in the same
+  // transaction.
   qc.invalidateQueries({ queryKey: ["underwriting"] });
   // `FlexPanel` draws ONE ledger from two queries — allowance + price tags from
   // the statement, approved/pending + `available` from the utilization — so
   // refreshing only the statement leaves the printed terms reconciling against
   // a total from before the change.
   qc.invalidateQueries({ queryKey: ["employee-utilization"] });
+  // Member Coverage's "Employee view" mirrors the statement, utilization and
+  // enrolment from its own cache.
+  qc.invalidateQueries({ queryKey: ["portal-preview"] });
 }
 
 export function useApplyBulk(policyYearId: string | undefined) {

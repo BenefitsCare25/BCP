@@ -5,7 +5,7 @@ from datetime import date
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.audit import PLATFORM_ENTITY_TYPES, mask_personal_data
@@ -52,11 +52,20 @@ def list_audit_log(
     # Intake baselines contain medical readings for server-side comparison.
     # They are internal records, never generic company activity payloads.
     filters = [AuditLog.action != "claim.intake_suggested"]
-    # System admins see everything; everyone else is scoped to their client,
-    # and platform records never belong to a company's feed.
+    # The feed is the selected company's: platform records never belong to a
+    # company's feed, and only system admins read them beside it. A system
+    # admin with no company selected reads the whole firm's trail.
+    platform_types = sorted(PLATFORM_ENTITY_TYPES)
     if user.role != ROLE_SYSTEM_ADMIN:
         filters.append(AuditLog.client_id == require_client_id(user))
-        filters.append(AuditLog.entity_type.not_in(sorted(PLATFORM_ENTITY_TYPES)))
+        filters.append(AuditLog.entity_type.not_in(platform_types))
+    elif user.client_id:
+        filters.append(
+            or_(
+                AuditLog.client_id == user.client_id,
+                AuditLog.entity_type.in_(platform_types),
+            )
+        )
     if entity_type:
         filters.append(AuditLog.entity_type == entity_type)
     if entity_id:

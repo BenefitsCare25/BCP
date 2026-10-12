@@ -186,8 +186,13 @@ export function LogCaseForm({
       }));
   }, [rosterItems, memberQuery]);
 
+  // Only cover the member HOLDS. The statement also lists voluntary cover they
+  // are merely eligible for, and the server refuses a LOG case against that
+  // (`assert_coverage_claimable`) — offering it, let alone defaulting to it,
+  // only sets up a 422. Publication is deliberately NOT filtered: LOG cases are
+  // exempt from that gate.
   const coverage = useMemo(
-    () => statement.data?.coverage ?? [],
+    () => (statement.data?.coverage ?? []).filter((c) => c.enrolment !== "eligible"),
     [statement.data],
   );
 
@@ -250,8 +255,15 @@ export function LogCaseForm({
   // `isFetching` is false throughout the debounce window (the query key still
   // holds the previous amount), so it cannot carry this on its own. A failed
   // request is excluded: that is a state with its own retry, not a wait.
+  // The rate is looked up for the incurred date, so until one is entered the
+  // quote never runs — ask for the date rather than "converting" forever.
+  const fxNeedsDate = !inPolicyCurrency && amountValid && !incurredDate;
   const fxAwaiting =
-    !inPolicyCurrency && amountValid && !fxQuoteForInput && !fxQuote.isError;
+    !inPolicyCurrency &&
+    amountValid &&
+    !fxNeedsDate &&
+    !fxQuoteForInput &&
+    !fxQuote.isError;
   // Deliberately NOT gated on the conversion. This form exists to get an emailed
   // request recorded, and a currency API is never allowed to stand between an
   // assessor and that. The limit line below says "checking" instead, so a
@@ -388,7 +400,7 @@ export function LogCaseForm({
               <Field
                 label="Coverage"
                 htmlFor="log-product"
-                hint="Every product the member holds — including those they can't file themselves, which is what an assessor most often logs."
+                hint="Every product the member holds — including those they can't file themselves, which is what an assessor most often logs. Voluntary cover they haven't enrolled in isn't listed."
               >
                 <NativeSelect
                   id="log-product"
@@ -399,7 +411,7 @@ export function LogCaseForm({
                 >
                   {coverage.length === 0 && (
                     <option value="">
-                      {statement.isLoading ? "Loading…" : "No coverage on record"}
+                      {statement.isLoading ? "Loading…" : "No enrolled coverage on record"}
                     </option>
                   )}
                   {coverage.map((c) => (
@@ -481,7 +493,9 @@ export function LogCaseForm({
                       ? " — this exceeds it"
                       : fxAwaiting
                         ? " — checking whether this exceeds it…"
-                        : ""}
+                        : fxNeedsDate
+                          ? " — enter the incurred date to check this against it"
+                          : ""}
                   </p>
                 )}
                 {/* What the case will actually be recorded as. Shown for the
@@ -508,11 +522,18 @@ export function LogCaseForm({
                     </p>
                   ) : (
                     <p className="text-xs tabular-nums text-muted-foreground">
-                      {fxAwaiting
-                        ? `Converting to ${POLICY_CURRENCY}…`
-                        : (fxQuoteForInput?.note ??
-                          `No exchange rate for ${currency} — you will be asked ` +
-                            `for the ${POLICY_CURRENCY} value when you approve this.`)}
+                      {/* The server's note is used only for a quote it
+                          priced: its no-rate note is the MEMBER's wording
+                          ("your claim can still be sent"), so the assessor
+                          is told what happens on their side instead. */}
+                      {fxNeedsDate
+                        ? `Enter the incurred date to convert this to ${POLICY_CURRENCY}.`
+                        : fxAwaiting
+                          ? `Converting to ${POLICY_CURRENCY}…`
+                          : fxQuoteForInput?.available
+                            ? fxQuoteForInput.note
+                            : `No exchange rate for ${currency} — you will be asked ` +
+                              `for the ${POLICY_CURRENCY} value when you approve this.`}
                     </p>
                   ))}
               </Field>

@@ -1461,6 +1461,11 @@ def test_broker_sees_referral_and_claimant(anon: TestClient, broker: TestClient)
     assert detail.status_code == 200, detail.text
     body = detail.json()
     assert body["referral_document"]["id"] == letter["id"]
+    # The viewer lists the letter beside the claim's own documents, so it
+    # carries the shared-letter rule, not the member "contact your claims
+    # team" default.
+    assert body["referral_document"]["removal_allowed"] is False
+    assert "shared referral letter" in body["referral_document"]["removal_reason"]
 
     # The referral letter itself is downloadable through the broker route.
     dl = broker.get(

@@ -149,6 +149,29 @@ def test_portal_claim_period_selection_is_member_bound_and_draft_years_hidden(sc
         app.dependency_overrides.pop(get_db, None)
 
 
+def test_earlier_years_ended_row_refuses_without_ending_a_current_session(scope):
+    """A rehire's long-ended earlier row is refused as that record, not the session."""
+    old = scope.get(Employee, "old")
+    old.status = "terminated"
+    old.terminated_effective = date(2025, 3, 31)
+    scope.get(Claim, "historic").status = "paid"
+    scope.commit()
+    member = CurrentMember(member_account_id="member", client_id="company", broker_firm_id=None,
+                           email="member@example.test", staff_id="staff")
+    app.dependency_overrides[get_current_member] = lambda: member
+    app.dependency_overrides[get_db] = lambda: scope
+    try:
+        with TestClient(app) as client:
+            for headers in ({}, {"X-Inspro-Claims-Year-ID": "old"}):
+                refused = client.get("/api/v1/portal/claims/historic", headers=headers)
+                assert refused.status_code == 403, refused.text
+                assert refused.json()["detail"]["code"] == "coverage_ended"
+            assert client.get("/api/v1/portal/claims").status_code == 200
+    finally:
+        app.dependency_overrides.pop(get_current_member, None)
+        app.dependency_overrides.pop(get_db, None)
+
+
 def test_product_switch_is_a_period_amendment():
     assert "product_code" in claims.PERIOD_FIELDS
 

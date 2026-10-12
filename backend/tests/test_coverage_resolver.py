@@ -278,6 +278,26 @@ def test_orphans_endpoint(client: TestClient) -> None:
     res = client.get(f"/api/v1/policy-years/{PY_ID}/plan-overrides/orphans")
     assert res.status_code == 200, res.text
     assert [o["product_code"] for o in res.json()] == ["ENRDEN"]
+    # The product left the cohort: inert, so removal cannot change cover.
+    assert [o["orphan_reason"] for o in res.json()] == ["product_left_cohort"]
+
+
+def test_orphans_endpoint_flags_live_tier_missing_override(client: TestClient) -> None:
+    """An override whose elected tier was deleted still applies, and the
+    endpoint says so — removing it would change the member's cover."""
+    with SessionLocal() as s:
+        s.add(EmployeePlanOverride(
+            employee_id=EMP_ID, policy_year_id=PY_ID, client_id=CLIENT_ID,
+            product_id=PROD_ID, product_code="ENRTST", plan_code="GOLD",
+            tier_category_id="00000000-0000-0000-0000-00000000dead",
+            source=OverrideSource.bulk_update,
+        ))
+        s.commit()
+    res = client.get(f"/api/v1/policy-years/{PY_ID}/plan-overrides/orphans")
+    assert res.status_code == 200, res.text
+    assert [(o["product_code"], o["orphan_reason"]) for o in res.json()] == [
+        ("ENRTST", "tier_missing")
+    ]
 
 
 def test_snapshot_includes_overrides(client: TestClient) -> None:

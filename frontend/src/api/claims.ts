@@ -6,7 +6,11 @@ import {
   type QueryClient,
 } from "@tanstack/react-query";
 import { api } from "@/api/client";
-import { isNotFoundError, isStaleConfigurationError } from "@/lib/errors";
+import {
+  isNotFoundError,
+  isStaleConfigurationError,
+  type ConflictDetail,
+} from "@/lib/errors";
 import { useSession } from "@/stores/session";
 import type { ConversationSubject } from "@/api/portalMessages";
 import type { Utilization } from "@/types";
@@ -344,6 +348,18 @@ export function claimFilterParams(filters: BrokerClaimFilters): URLSearchParams 
   return params;
 }
 
+/** Longest `search` `GET /claims` and `/claims/register` accept. */
+export const CLAIM_SEARCH_MAX_LENGTH = 100;
+/** Longest `q` `GET /conversations` accepts. */
+export const CONVERSATION_SEARCH_MAX_LENGTH = 120;
+
+/** A search box's text as the API takes it: trimmed and clipped to the
+ *  parameter's `max_length`, so a pasted paragraph narrows the list instead of
+ *  422ing the whole queue. */
+export function apiSearchTerm(raw: string, maxLength: number): string {
+  return raw.trim().slice(0, maxLength).trim();
+}
+
 export function useBrokerClaims(
   policyYearId: string | undefined,
   status: string,
@@ -359,11 +375,12 @@ export function useBrokerClaims(
   filters: BrokerClaimFilters = {},
 ) {
   const cid = useSession((s) => s.activeClientId);
+  const term = apiSearchTerm(search, CLAIM_SEARCH_MAX_LENGTH);
   return useQuery({
     // caseType and employeeId are part of the key: without them, switching a
     // filter would serve the previous selection's page from cache.
     queryKey: [
-      "claims", cid, policyYearId, status, caseType, employeeId, search, offset, limit, filters,
+      "claims", cid, policyYearId, status, caseType, employeeId, term, offset, limit, filters,
     ],
     queryFn: (context) => {
       const params = new URLSearchParams({
@@ -374,7 +391,7 @@ export function useBrokerClaims(
       if (status) params.set("status", status);
       if (caseType) params.set("case_type", caseType);
       if (employeeId) params.set("employee_id", employeeId);
-      if (search.trim()) params.set("search", search.trim());
+      if (term) params.set("search", term);
       claimFilterParams(filters).forEach((value, key) => params.set(key, value));
       return api.poll<BrokerClaimList>(context, `/claims?${params.toString()}`);
     },
@@ -411,6 +428,7 @@ export function useBrokerConversations(
   filters: ConversationFilters = {},
 ) {
   const cid = useSession((s) => s.activeClientId);
+  const term = apiSearchTerm(search, CONVERSATION_SEARCH_MAX_LENGTH);
   return useQuery({
     queryKey: [
       "claims",
@@ -421,7 +439,7 @@ export function useBrokerConversations(
       awaiting,
       offset,
       limit,
-      search,
+      term,
     ],
     queryFn: (context) => {
       const params = new URLSearchParams({
@@ -430,7 +448,7 @@ export function useBrokerConversations(
         offset: String(offset),
         limit: String(limit),
       });
-      if (search.trim()) params.set("q", search.trim());
+      if (term) params.set("q", term);
       if (filters.category) params.set("category", filters.category);
       if (filters.allYears) params.set("all_years", "true");
       if (filters.incurredFrom) params.set("incurred_from", filters.incurredFrom);
@@ -572,6 +590,15 @@ export interface LogCaseInput {
   files?: File[];
 }
 
+/** A claim moved. The broker's lists and open record refetch, and so does
+ *  Member Coverage's "Employee view", which mirrors the member's own claims and
+ *  usage from a separate cache. */
+function invalidateClaimRecord(qc: QueryClient): void {
+  void qc.invalidateQueries({ queryKey: ["claims"] });
+  void qc.invalidateQueries({ queryKey: ["claim-detail"] });
+  void qc.invalidateQueries({ queryKey: ["portal-preview"] });
+}
+
 export function useCreateLogCase() {
   const qc = useQueryClient();
   return useMutation({
@@ -599,7 +626,9 @@ export function useCreateLogCase() {
       return { claim, failedUploads: failed };
     },
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["claims"] });
+      // A LOG case is hidden from the member's claim list but counts in their
+      // usage, which the Employee view shows.
+      invalidateClaimRecord(qc);
       void qc.invalidateQueries({ queryKey: ["employee-utilization"] });
     },
     meta: { localErrorHandling: true },
@@ -614,10 +643,7 @@ export function useSetCaseType() {
         case_type: input.caseType,
         reason: input.reason,
       }),
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["claims"] });
-      void qc.invalidateQueries({ queryKey: ["claim-detail"] });
-    },
+    onSuccess: () => invalidateClaimRecord(qc),
     meta: { localErrorHandling: true },
   });
 }
@@ -712,6 +738,54 @@ export interface ClaimDecisionInput {
   expectedRevision?: number;
 }
 
+/** The approval guards one `acknowledge` waives (`claims._approval_warnings`). */
+export const APPROVAL_GUARD_CODES: readonly string[] = [
+  "limit_exceeded",
+  "claim_amount_exceeded",
+  "visit_limit_reached",
+];
+
+const APPROVAL_GUARD_FALLBACK: Record<string, string> = {
+  limit_exceeded: "This approval exceeds the remaining limit for this coverage.",
+  claim_amount_exceeded: "This approval exceeds the claim value.",
+  visit_limit_reached:
+    "This member has used every visit allowed on this benefit for the policy year.",
+};
+
+function moneyText(currency: string, value: number): string {
+  return `${currency} ${value.toLocaleString(undefined, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
+}
+
+/** Broker wording for an approval-guard 409. The API `message` ends with an
+ *  instruction for API clients ("Resend with acknowledge=true…"), so the dialog
+ *  names each tripped guard from `warnings` and asks for the confirmation in
+ *  its own words. */
+export function approvalWarningText(detail: ConflictDetail): string {
+  const warnings = Array.isArray(detail.warnings) ? (detail.warnings as unknown[]) : [];
+  const lines = warnings.flatMap((warning) => {
+    const message = (warning as { message?: unknown } | null)?.message;
+    return typeof message === "string" && message ? [message] : [];
+  });
+  if (lines.length) return lines.join(" ");
+  return APPROVAL_GUARD_FALLBACK[detail.code] ?? "This approval trips a benefit limit.";
+}
+
+/** Broker wording for 409 `payment_exceeds_approval` — the API `message` tells
+ *  API clients to resend with `acknowledge_overpayment=true`. */
+export function paymentWarningText(detail: ConflictDetail, currency: string): string {
+  const { approved, payment } = detail;
+  if (typeof approved !== "number" || typeof payment !== "number") {
+    return "The insurer payment exceeds the approved amount.";
+  }
+  return (
+    `The insurer payment of ${moneyText(currency, payment)} exceeds the ` +
+    `approved amount of ${moneyText(currency, approved)}.`
+  );
+}
+
 function commandInit(): RequestInit {
   return { headers: { "Idempotency-Key": crypto.randomUUID() } };
 }
@@ -729,10 +803,9 @@ export function useDecideClaim() {
         expected_revision: input.expectedRevision ?? null,
       }, commandInit()),
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["claims"] });
+      invalidateClaimRecord(qc);
       // Approval changes the employee's usage-vs-limits view.
       void qc.invalidateQueries({ queryKey: ["employee-utilization"] });
-      void qc.invalidateQueries({ queryKey: ["claim-detail"] });
       // The decision posts its notice to the member's thread.
       void qc.invalidateQueries({ queryKey: ["claim-messages"] });
     },
@@ -752,8 +825,7 @@ export function useRefreshClaimConversion() {
     mutationFn: (claimId: string) =>
       api.post<BrokerClaim>(`/claims/${claimId}/fx-refresh`, {}, commandInit()),
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["claims"] });
-      void qc.invalidateQueries({ queryKey: ["claim-detail"] });
+      invalidateClaimRecord(qc);
       // The claim moves from `pending_unconverted` into the pending SUM.
       void qc.invalidateQueries({ queryKey: ["employee-utilization"] });
     },
@@ -802,10 +874,7 @@ export function useSendToInsurer() {
         deadline_on: input.deadlineOn ?? null,
         note: input.note ?? null,
       }, commandInit()),
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["claims"] });
-      void qc.invalidateQueries({ queryKey: ["claim-detail"] });
-    },
+    onSuccess: () => invalidateClaimRecord(qc),
     meta: { localErrorHandling: true },
   });
 }
@@ -828,8 +897,7 @@ export function useRecordClaimPayment() {
         acknowledge_overpayment: input.acknowledgeOverpayment ?? false,
       }, commandInit()),
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["claims"] });
-      void qc.invalidateQueries({ queryKey: ["claim-detail"] });
+      invalidateClaimRecord(qc);
       // Settlement keeps the money spent, but the member's usage view reads
       // through the same buckets — refetch so a paid claim is not left showing
       // as pending beside its own limit.
@@ -871,10 +939,7 @@ export function useUpdateClaimAssessment() {
         input.patch,
         commandInit(),
       ),
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["claims"] });
-      void qc.invalidateQueries({ queryKey: ["claim-detail"] });
-    },
+    onSuccess: () => invalidateClaimRecord(qc),
     meta: { localErrorHandling: true },
   });
 }
@@ -916,8 +981,7 @@ export function useAmendClaim() {
         expected_revision: input.expectedRevision ?? null,
       }),
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["claims"] });
-      void qc.invalidateQueries({ queryKey: ["claim-detail"] });
+      invalidateClaimRecord(qc);
       // The claimed figure feeds the utilization buckets.
       void qc.invalidateQueries({ queryKey: ["employee-utilization"] });
       // An amendment supersedes the AI review (and usually queues a new one).

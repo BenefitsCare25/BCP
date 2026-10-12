@@ -5,8 +5,9 @@ The setup form wraps every Remove of a saved benefit row, sub-benefit, limit
 co-payment field in a firm-owner guard. Save and confirm carry whole answer sections, so the API
 enforces the same rule by diffing the incoming sections against the stored
 answers (AGENTS.md broker portal permissions). The category cards' rate tiers
-travel through PATCH /categories as a whole ``plan_assignments`` dict and are
-diffed the same way.
+travel through PATCH /categories as a whole ``plan_assignments`` dict, a plan's
+materialized schedule through PATCH /plans, and plans a confirm deselects are
+deleted, so those are diffed the same way.
 
 The form also rewrites some of these entries on its own, so the diff ignores
 exactly those changes rather than treating them as removals:
@@ -157,6 +158,59 @@ def removed_setup_entries(old: dict[str, Any], new: dict[str, Any]) -> list[str]
         _count(new["endorsements"]) < _count(old.get("endorsements"))
     ):
         removed.append("an endorsement")
+    if "plans" in new:
+        removed.extend(removed_plan_codes(old.get("plans"), new["plans"]))
+    return removed
+
+
+def _selected_codes(plans: Any) -> list[str]:
+    codes = (
+        str(plan.get("code") or "").strip()
+        for plan in (plans if isinstance(plans, list) else [])
+        if isinstance(plan, dict) and plan.get("selected")
+    )
+    return [code for code in codes if code]
+
+
+def removed_plan_codes(old_plans: Any, new_plans: Any) -> list[str]:
+    """Saved plans an incoming ``plans`` section deselects or drops; confirm
+    deletes the plan (and its schedule) for each."""
+    kept = set(_selected_codes(new_plans))
+    return [f"plan {code!r}" for code in _selected_codes(old_plans) if code not in kept]
+
+
+def _schedule_items(schedule: Any) -> tuple[int, dict[str, dict[str, Any]]]:
+    """A plan schedule's row count and rows keyed by number (stable across a
+    rename), else by name."""
+    rows = _mapping(schedule).get("items")
+    rows = rows if isinstance(rows, list) else []
+    keyed: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        key = " ".join(str(row.get("number") or row.get("name") or "").split()).casefold()
+        if key:
+            keyed.setdefault(key, row)
+    return len(rows), keyed
+
+
+def removed_schedule_entries(old: Any, new: Any) -> list[str]:
+    """Saved benefit rows, sub-benefits and limits a plan's incoming
+    ``benefit_schedule`` drops."""
+    old_total, old_rows = _schedule_items(old)
+    new_total, new_rows = _schedule_items(new)
+    removed: list[str] = []
+    for key, item in old_rows.items():
+        name = str(item.get("name") or "").strip() or "unnamed row"
+        kept = new_rows.get(key)
+        if kept is None:
+            removed.append(f"benefit {name!r}")
+        elif _count(kept.get("sub_items")) < _count(item.get("sub_items")):
+            removed.append(f"a sub-benefit of {name!r}")
+        elif _limit_total(kept) < _limit_total(item):
+            removed.append(f"a limit of {name!r}")
+    if not removed and new_total < old_total:
+        removed.append("a benefit row")
     return removed
 
 

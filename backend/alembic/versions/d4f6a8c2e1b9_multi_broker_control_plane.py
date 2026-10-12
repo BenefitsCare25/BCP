@@ -232,9 +232,21 @@ def upgrade() -> None:
         )
 
 
+def _refuse_retained_record_loss(bind: sa.engine.Connection) -> None:
+    """Dropping these tables would erase the append-only platform audit trail
+    (offboardings included), customer domains and access grants."""
+    for table in ("platform_audit_log", "platform_access_grants", "tenant_domains"):
+        if bind.scalar(sa.text(f"SELECT 1 FROM {table} LIMIT 1")) is not None:
+            raise RuntimeError(
+                f"{table} holds retained platform records; roll the application "
+                "back and keep these tables instead of downgrading past d4f6a8c2e1b9."
+            )
+
+
 def downgrade() -> None:
     bind = op.get_bind()
     dialect = bind.dialect.name
+    _refuse_retained_record_loss(bind)
 
     if dialect == "postgresql":
         op.execute(

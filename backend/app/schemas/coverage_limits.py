@@ -16,16 +16,25 @@ LimitKindStr = Literal[
 ]
 
 
+# The setup's limit answers are free text ("Up to age 18, or 25 if in full-time
+# study"); the saved check reads the first number from any length, so the
+# preview accepts generous wording too (the form clamps to the same caps).
+LIMIT_TEXT_MAX = 1000
+EXEMPT_LIST_MAX = 4000
+
+
 class LimitOverrides(BaseModel):
     """Unsaved setup values to preview a product's limits with. Strings, as the
     setup form holds them ("75", "75 ANB", "1600000")."""
 
-    employee_age_limit: str | None = Field(default=None, max_length=40)
-    last_entry_age: str | None = Field(default=None, max_length=40)
-    spouse_age_limit: str | None = Field(default=None, max_length=40)
-    child_age_limit: str | None = Field(default=None, max_length=40)
-    max_sum_insured: str | None = Field(default=None, max_length=40)
-    employees_above_last_entry_age: str | None = Field(default=None, max_length=4000)
+    employee_age_limit: str | None = Field(default=None, max_length=LIMIT_TEXT_MAX)
+    last_entry_age: str | None = Field(default=None, max_length=LIMIT_TEXT_MAX)
+    spouse_age_limit: str | None = Field(default=None, max_length=LIMIT_TEXT_MAX)
+    child_age_limit: str | None = Field(default=None, max_length=LIMIT_TEXT_MAX)
+    max_sum_insured: str | None = Field(default=None, max_length=LIMIT_TEXT_MAX)
+    employees_above_last_entry_age: str | None = Field(
+        default=None, max_length=EXEMPT_LIST_MAX
+    )
 
 
 class CoverageLimitAlert(BaseModel):

@@ -346,6 +346,7 @@ def revert_to_baseline(
                 changes.append(CoverageChangeOut(
                     product_code=code, outcome="reverted",
                     from_plan=from_plan, to_plan=None if eligible_only else default_plan,
+                    not_enrolled=eligible_only,
                     detail="Not enrolled at baseline." if eligible_only else None,
                 ))
             else:
@@ -353,6 +354,7 @@ def revert_to_baseline(
                     product_code=code, outcome="unchanged",
                     from_plan=None if eligible_only else from_plan,
                     to_plan=None if eligible_only else default_plan,
+                    not_enrolled=eligible_only,
                     detail=(
                         "Not enrolled at baseline."
                         if eligible_only
@@ -446,6 +448,8 @@ def revert_to_baseline(
             outcome="reverted",
             from_plan=from_plan,
             to_plan=None if declined else (plan_code or default_plan),
+            declined=declined and not eligible_only,
+            not_enrolled=eligible_only,
             detail=(
                 "Not enrolled at baseline."
                 if eligible_only

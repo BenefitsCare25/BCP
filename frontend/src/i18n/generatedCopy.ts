@@ -18,8 +18,10 @@ function captured(value: string, kind: Capture | undefined): unknown {
   if (kind === "copy") return { portalSource: value, values: [] };
   if (kind === "date") return spokenDate(value);
   if (kind === "list") {
-    const items = value.split(", ");
-    return { portalSource: items.map((_, index) => `{${index}}`).join(", "), values: items.map(item => captured(item, "copy")) };
+    // The separator is copy too: Chinese enumerates with "、", not ", ".
+    const items = value.split(", ").map(item => captured(item, "copy"));
+    const separator = { portalSource: ", ", values: [] };
+    return { portalSource: items.map((_, index) => `{${index}}`).join(`{${items.length}}`), values: [...items, separator] };
   }
   return value;
 }
@@ -56,6 +58,10 @@ export function generatedPortalCopy(source: string): PortalMessage | null {
     [/^Missing required documents: (.+)\.$/, "Missing required documents: {0}.", { 0: "list" }],
     [/^([A-Z]{3}) ([\d,.]+) converts to ([A-Z]{3}) ([\d,.]+)\. Confirm the converted amount before sending this claim\.$/, "{0} {1} converts to {2} {3}. Confirm the converted amount before sending this claim."],
     [/^A (.+) claim has already been sent — there is nothing more to send\.$/, "A {0} claim has already been sent — there is nothing more to send."],
+    // The member's own edit on the claim thread (claims.amendment_summary). No
+    // field label contains " and ", so the greedy capture splits at the last one.
+    [/^You changed (.+) and (.+)\.$/, "You changed {0} and {1}.", { 0: "list", 1: "copy" }],
+    [/^You changed (.+)\.$/, "You changed {0}.", { 0: "copy" }],
     [/^You have (\d+) questions waiting on us\. We'll answer those first — add anything else to one of them and we'll pick it up there\.$/, "You have {0} questions waiting on us. We'll answer those first — add anything else to one of them and we'll pick it up there."],
     [/^Unknown topic '(.+)'\.$/, "Unknown topic '{0}'."],
     [/^Unsupported file type: (.+)\. Allowed: (\[.*\])$/, "Unsupported file type: {0}. Allowed: {1}"],

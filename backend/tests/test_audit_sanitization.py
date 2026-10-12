@@ -269,7 +269,23 @@ def test_company_feed_excludes_platform_records(
 def test_system_admin_feed_includes_platform_records(
     feed: tuple[TestClient, dict[str, CurrentUser]],
 ) -> None:
+    """A system admin's feed is still the SELECTED company's: another company's
+    rows stay out, platform records stay in."""
     client, active = feed
     active["user"] = _user("system_admin")
+    entries = _items(client)
+    assert sorted(entry["entity_type"] for entry in entries) == [
+        "broker_firm", "employee", "invitation", "user",
+    ]
+    assert {entry["entity_id"] for entry in entries if entry["entity_type"] == "employee"} == {
+        "e-1"
+    }
+
+
+def test_system_admin_without_company_reads_whole_trail(
+    feed: tuple[TestClient, dict[str, CurrentUser]],
+) -> None:
+    client, active = feed
+    active["user"] = _user("system_admin", client_id=None)
     entity_types = sorted(entry["entity_type"] for entry in _items(client))
     assert entity_types == ["broker_firm", "employee", "employee", "invitation", "user"]

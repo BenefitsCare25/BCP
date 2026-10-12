@@ -15,7 +15,12 @@ from sqlalchemy.orm import Session
 
 from app.core.audit import write_audit
 from app.core.auth import CurrentUser, get_current_user
-from app.core.deps import require_claim_configuration, require_client_id, require_firm_owner
+from app.core.deps import (
+    is_firm_owner,
+    require_claim_configuration,
+    require_client_id,
+    require_firm_owner,
+)
 from app.core.optimistic_lock import assert_collection_not_stale, assert_not_stale
 from app.db.session import get_db
 from app.models import ClaimDocType
@@ -31,9 +36,11 @@ from app.services.claim_doc_types import (
     DEFAULT_KEYS,
     client_doc_type_rows,
     definition_from_row,
+    expand_legacy_ghs_scope_patterns,
     seed_default_doc_types,
 )
 from app.services.claim_intake import CLAIM_SCOPE_CODES, DOC_SLOT_LABELS
+from app.services.setup_removals import refuse_removals
 
 router = APIRouter(
     prefix="/claim-doc-types",
@@ -148,6 +155,36 @@ def _payload(body: ClaimDocTypeIn) -> dict[str, Any]:
         "slot_key": body.slot_key,
         "claim_scope_keys": _clean_claim_scope_keys(body.claim_scope_keys),
     }
+
+
+def _fold(value: str) -> str:
+    return " ".join(value.split()).casefold()
+
+
+def _removed_scopes(row: ClaimDocType, scopes: list[str]) -> list[str]:
+    """Claim scopes the row routes to now (defaults included) that `scopes` drops."""
+    kept = set(expand_legacy_ghs_scope_patterns(scopes))
+    return [
+        f"claim scope {scope!r}"
+        for scope in definition_from_row(row).claim_scope_keys
+        if scope not in kept
+    ]
+
+
+def _removed_entries(row: ClaimDocType, data: dict[str, Any]) -> list[str]:
+    """Saved aliases, key fields and routing an update drops. Renaming,
+    reordering and adding are edits (mirrors claim_document_setups)."""
+    kept_aliases = {_fold(alias) for alias in data["aliases"]}
+    removed = [
+        f"alias {alias!r}"
+        for alias in row.aliases or []
+        if isinstance(alias, str) and alias.strip() and _fold(alias) not in kept_aliases
+    ]
+    if len(data["key_fields"]) < len(definition_from_row(row).key_fields):
+        removed.append("a key field")
+    if data["claim_scope_keys"] is not row.claim_scope_keys:
+        removed.extend(_removed_scopes(row, data["claim_scope_keys"]))
+    return removed
 
 
 def _ensure_seeded(db: Session, client_id: str) -> list[ClaimDocType]:
@@ -286,6 +323,8 @@ def update_claim_doc_scope_assignments(
             label=f'"{row.display}" document mapping',
         )
         scopes = _clean_claim_scope_keys(assignment.claim_scope_keys)
+        if not is_firm_owner(user):
+            refuse_removals(_removed_scopes(row, scopes), "document routing")
         before = {"claim_scope_keys": row.claim_scope_keys}
         row.claim_scope_keys = scopes
         row.updated_at = now
@@ -322,6 +361,8 @@ def update_claim_doc_type(
         # Backward-compatible for older broker clients: omission means leave
         # routing untouched, while an explicit [] deliberately clears it.
         data["claim_scope_keys"] = row.claim_scope_keys
+    if not is_firm_owner(user):
+        refuse_removals(_removed_entries(row, data), "document-type entries")
     _assert_aliases_unambiguous(
         client_doc_type_rows(db, client_id),
         aliases=data["aliases"],

@@ -81,6 +81,11 @@ def upgrade() -> None:
 
 def _backfill_cancelled(bind, schema, events) -> None:
     """Recover only unresolved resets proven by the audit trail; never send old mail."""
+    # e3f5a7c9d1b2 creates the e-form tables in public only; a firm schema gets
+    # them from provision_tenants, which runs after the whole upgrade. A schema
+    # without the table holds no signed submissions, so there is nothing to cancel.
+    if not sa.inspect(bind).has_table("enrollment_form_submissions", schema=schema):
+        return
     metadata = sa.MetaData()
 
     def table(name):

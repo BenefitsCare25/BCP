@@ -261,10 +261,35 @@ def _record_broker_credential(
 def _validated_email(raw: str) -> str:
     email = raw.strip().lower()
     if not _valid_invite_email(email):
+        # Coded: the invite panel offers an email field for refusals a
+        # different address fixes.
         raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_CONTENT, "Invalid email address."
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            {"code": "invalid_email", "message": "Invalid email address."},
         )
     return email
+
+
+def _existing_account_conflict(db: Session, client_id: str, email: str) -> HTTPException:
+    """409 for a create that collided with an existing account. Coded
+    ``email_in_use`` when another account holds the address — a different
+    address fixes that; a staff-ID collision it does not."""
+    taken = db.scalar(
+        select(MemberAccount.id).where(
+            MemberAccount.client_id == client_id, MemberAccount.email == email
+        )
+    )
+    if taken is not None:
+        return HTTPException(
+            status.HTTP_409_CONFLICT,
+            {
+                "code": "email_in_use",
+                "message": "A portal account already exists for this email address.",
+            },
+        )
+    return HTTPException(
+        status.HTTP_409_CONFLICT, "A portal account already exists for this staff ID."
+    )
 
 
 def _valid_invite_email(email: str) -> bool:
@@ -400,13 +425,19 @@ def create_member_account(
         out.client_origin = _company_origin(db, account.client_id)
         return out
     email = _validated_email(raw_email)
-    if _shared_roster_email(db, employee.client_id, email, employee.staff_id):
+    client_id = employee.client_id
+    if _shared_roster_email(db, client_id, email, employee.staff_id):
         raise HTTPException(
             status.HTTP_409_CONFLICT,
-            "This email address is shared by employees. Use an individual activation link "
-            "or the employee's own email address.",
+            {
+                "code": "shared_email",
+                "message": (
+                    "This email address is shared by employees. Use an individual "
+                    "activation link or the employee's own email address."
+                ),
+            },
         )
-    sign_in_url = _invite_sign_in_url(db, employee.client_id)
+    sign_in_url = _invite_sign_in_url(db, client_id)
 
     try:
         account = _create_account(db, employee, email, user.user_id)
@@ -418,10 +449,7 @@ def create_member_account(
         db.commit()
     except IntegrityError:
         db.rollback()
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            "A portal account already exists for this email or staff ID.",
-        ) from None
+        raise _existing_account_conflict(db, client_id, email) from None
     mail_sent = _issue_and_send_invite(db, account, sign_in_url)
     out = _account_out(db, account)
     out.mail_sent = mail_sent

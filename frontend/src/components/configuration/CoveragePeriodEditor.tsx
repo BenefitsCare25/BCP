@@ -30,6 +30,24 @@ export function validSetupTerms(term: ProductTerm | null, value: SetupPolicyTerm
     && numberValid(value.post_hosp_days, 0, 365, true);
 }
 
+/** The staged terms as confirm sends them. The server takes coverage dates as a
+ *  pair, but the editor stages only the bound the broker changed: the other is
+ *  read from the product's CURRENT term here, so an inherited date that moved
+ *  with a benefit-year edit is never frozen into an override at its old value. */
+export function setupTermsForConfirm(
+  term: ProductTerm | null,
+  value: SetupPolicyTerms,
+): SetupPolicyTerms {
+  if (!term || (value.coverage_start === undefined && value.coverage_end === undefined)) {
+    return value;
+  }
+  return {
+    ...value,
+    coverage_start: value.coverage_start ?? term.coverage_start,
+    coverage_end: value.coverage_end ?? term.coverage_end,
+  };
+}
+
 /** Controlled by the product form: section unmounts cannot discard staged terms. */
 export function CoveragePeriodEditor({ term, value, onChange, disabled = false }: Props) {
   const start = value.coverage_start ?? term.coverage_start;
@@ -208,7 +226,7 @@ export function CoveragePeriodEditor({ term, value, onChange, disabled = false }
               type="date"
               aria-label={`${term.code} coverage start`}
               value={start}
-              onChange={(e) => onChange({ ...value, coverage_start: e.target.value, coverage_end: end })}
+              onChange={(e) => onChange({ ...value, coverage_start: e.target.value })}
               className="h-8 w-[152px] min-w-[152px] px-2"
             />
           </div>
@@ -219,7 +237,7 @@ export function CoveragePeriodEditor({ term, value, onChange, disabled = false }
               aria-label={`${term.code} coverage end`}
               value={end}
               min={start || undefined}
-              onChange={(e) => onChange({ ...value, coverage_start: start, coverage_end: e.target.value })}
+              onChange={(e) => onChange({ ...value, coverage_end: e.target.value })}
               className="h-8 w-[152px] min-w-[152px] px-2"
             />
           </div>

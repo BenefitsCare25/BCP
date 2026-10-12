@@ -18,6 +18,7 @@ import { usePortalTranslation } from "@/i18n/portal";
 import { useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { refreshPortalSession } from "@/api/portalClient";
+import { takePortalReturnPath } from "@/auth/returnPath";
 import { useCompany } from "@/components/portal/useCompany";
 import { QRCodeSVG } from "qrcode.react";
 import { toast } from "sonner";
@@ -463,8 +464,11 @@ export function PortalSecurityPage() {
               setRecovery(null);
               await refetch();
               usePortalSession.setState({ mfaRecoveryPending: false, mfaEnrollmentRequired: false });
-              void navigate({ to: "/portal/$company", params: { company } });
-            });
+              // Where sign-in was taking them before setup came first.
+              const back = takePortalReturnPath(company);
+              if (back) void navigate({ href: back });
+              else void navigate({ to: "/portal/$company", params: { company } });
+            }, (error: unknown) => toast.error(pt(formatError(error))));
           }}
         />
       ) : enrolled ? (

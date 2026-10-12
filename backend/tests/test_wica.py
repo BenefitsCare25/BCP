@@ -254,6 +254,15 @@ def test_viewer_cannot_write(ctx):
     assert client.post(f"/api/v1/wica/incidents/{row['id']}/packs", json={}).status_code == 403
 
 
+def test_search_terms_are_trimmed(ctx):
+    client, _, _ = ctx
+    row, _ = new_incident(client)
+    found = client.get("/api/v1/wica/incidents", params={"q": " W001 "})
+    assert [item["id"] for item in found.json()["items"]] == [row["id"]]
+    short = client.get("/api/v1/wica/employees", params={"q": "a "})
+    assert short.status_code == 200 and short.json() == []
+
+
 @pytest.mark.parametrize("role", ["broker_admin", "system_admin"])
 def test_cross_company_scoped_even_for_system_admin(ctx, role):
     client, user, ids = ctx

@@ -51,6 +51,7 @@ import {
 } from "./setup/setupGaps";
 import {
   CoveragePeriodEditor,
+  setupTermsForConfirm,
   validSetupTerms,
 } from "./CoveragePeriodEditor";
 import {
@@ -76,6 +77,9 @@ interface Props {
   initialSection?: string;
   insuranceLine: InsuranceLine;
   term: ProductTerm | null;
+  /** The product terms are being re-read (e.g. after a benefit-year date
+   *  edit). Confirm resolves untouched coverage dates from `term`, so it waits. */
+  termRefreshing?: boolean;
 }
 
 // Single-row tab labels per setup section.
@@ -333,6 +337,7 @@ export const ProductSetupForm = forwardRef<ProductSetupFormHandle, Props>(functi
   initialSection,
   insuranceLine,
   term,
+  termRefreshing = false,
 }: Props, ref) {
   const [answers, setAnswers] = useState<SetupAnswers>(() =>
     buildAnswers(template, draft),
@@ -449,6 +454,9 @@ export const ProductSetupForm = forwardRef<ProductSetupFormHandle, Props>(functi
         key: c.id,
         description: c.category,
         insured: c.insured.length ? c.insured : null,
+        // Location-split rows (one slip category per office) count only their
+        // own office's members, as the confirmed category's gate will.
+        location_scope: c.location_scope?.trim() || null,
       })),
     [answers.categories],
   );
@@ -574,12 +582,16 @@ export const ProductSetupForm = forwardRef<ProductSetupFormHandle, Props>(functi
     draft?.status === "confirmed" || Boolean(draft?.materialized_product_id);
   const confirmLabel = isConfirmed ? "Update setup" : "Confirm setup";
   const onConfirm = async (acknowledge: boolean) => {
-    if (confirmInFlight.current || saveInFlight.current) return;
+    if (confirmInFlight.current || saveInFlight.current || termRefreshing) return;
     confirmInFlight.current = true;
     try {
       const r = await confirm.mutateAsync({
         code: template.code,
-        answers: { ...answers, policy_number_mappings: policyMappings },
+        answers: {
+          ...answers,
+          policy_terms: setupTermsForConfirm(term, answers.policy_terms ?? {}),
+          policy_number_mappings: policyMappings,
+        },
         templateVersion: template.version,
         expectedUpdatedAt: expectedUpdatedAt.current,
         acknowledge,
@@ -1003,6 +1015,7 @@ export const ProductSetupForm = forwardRef<ProductSetupFormHandle, Props>(functi
             disabled={
               selectedPlans.length === 0 ||
               busy ||
+              termRefreshing ||
               Boolean(conflictMessage) ||
               Boolean(mappingIssue) ||
               !validSetupTerms(term, answers.policy_terms ?? {})
@@ -1032,6 +1045,7 @@ export const ProductSetupForm = forwardRef<ProductSetupFormHandle, Props>(functi
         confirmVariant="default"
         tone="info"
         loading={busy}
+        confirmDisabled={termRefreshing}
         onConfirm={() => onConfirm(false)}
         description={
           <span className="flex flex-col gap-3">
@@ -1056,6 +1070,7 @@ export const ProductSetupForm = forwardRef<ProductSetupFormHandle, Props>(functi
         confirmLabel={`${confirmLabel} anyway`}
         confirmVariant="default"
         loading={busy}
+        confirmDisabled={termRefreshing}
         onConfirm={() => onConfirm(true)}
         description={
           <span className="flex flex-col gap-2">

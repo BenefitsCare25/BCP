@@ -28,6 +28,7 @@ from app.core.deps import (
     policy_year_company,
     require_firm_owner,
 )
+from app.core.downloads import attachment_header
 from app.core.pagination import MAX_LIMIT
 from app.core.rate_limit import limiter
 from app.core.storage import assert_key_in_scope, company_firm_id, get_storage
@@ -265,14 +266,23 @@ def auto_match_dependants(
             dep.link_method = f"auto_{method}"
             matched += 1
 
+    flex_errors: list[str] = []
     if matched:
         write_audit(
             db, user, action="auto_match", entity_type="dependants", entity_id=None,
             after={"matched": matched, "policy_year_id": policy_year_id},
         )
         db.commit()
+        # A new link changes the sponsor's family status, which sizes the flex
+        # wallet — refresh assignments exactly as a manual relink does.
+        assign_flex_safe(
+            db, user, policy_year_id, client_id,
+            trigger="auto_on_dependant_auto_match", errors=flex_errors,
+        )
 
-    return AutoMatchResult(matched=matched, unmatched=len(unlinked) - matched)
+    return AutoMatchResult(
+        matched=matched, unmatched=len(unlinked) - matched, flex_errors=flex_errors,
+    )
 
 
 @router.patch("/{dependant_id}", response_model=DependantOut)
@@ -448,11 +458,10 @@ def download_dependant_document(
         raise HTTPException(
             status.HTTP_502_BAD_GATEWAY, "Document storage is temporarily unavailable"
         ) from None
-    safe_name = doc.file_name.replace('"', "")
     return Response(
         content=content,
         media_type=doc.mime_type or "application/octet-stream",
-        headers={"Content-Disposition": f'attachment; filename="{safe_name}"'},
+        headers={"Content-Disposition": attachment_header(doc.file_name)},
     )
 
 

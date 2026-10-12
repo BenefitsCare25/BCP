@@ -1,4 +1,5 @@
 import { FirmOwnerOnly } from "@/components/auth/FirmOwnerOnly";
+import { RemoveGuard } from "@/components/configuration/setup/savedEntries";
 import { useState } from "react";
 import { ArrowRight, Pencil, Plus, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
@@ -90,6 +91,12 @@ export function SchemaEntityAliasesPage({
       canonicals: d.canonicals.filter((_, i) => i !== index),
     }));
 
+  // Removing an entity the alias already saves un-bridges it, so (like deleting
+  // the alias) only a firm owner may; entities added in this edit stay removable.
+  const savedCanonicals = new Set(
+    editing ? (editing.canonicals.length > 0 ? editing.canonicals : [editing.canonical]) : [],
+  );
+
   // Fold a half-typed entity in on submit so it isn't silently dropped.
   const pending = entityInput.trim();
   const finalCanonicals =
@@ -144,14 +151,16 @@ export function SchemaEntityAliasesPage({
                     {draft.canonicals.map((c, i) => (
                       <Badge key={`${c}-${i}`} variant="outline" className="gap-1 pr-1">
                         {c}
-                        <button
-                          type="button"
-                          onClick={() => removeEntity(i)}
-                          aria-label={`Remove ${c}`}
-                          className="rounded-full p-0.5 text-muted-foreground hover:text-foreground"
-                        >
-                          <X className="size-3" />
-                        </button>
+                        <RemoveGuard saved={savedCanonicals.has(c)}>
+                          <button
+                            type="button"
+                            onClick={() => removeEntity(i)}
+                            aria-label={`Remove ${c}`}
+                            className="rounded-full p-0.5 text-muted-foreground hover:text-foreground"
+                          >
+                            <X className="size-3" />
+                          </button>
+                        </RemoveGuard>
                       </Badge>
                     ))}
                   </div>

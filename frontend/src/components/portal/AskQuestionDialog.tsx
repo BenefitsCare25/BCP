@@ -126,7 +126,8 @@ export function AskQuestionDialog({
   const navigate = useNavigate();
   const company = useCompany();
   const topics = useEnquiryTopics();
-  const claims = usePortalClaims();
+  // The claims of the period the ledger shows (see `create_enquiry`).
+  const claims = usePortalClaims(true);
   const create = useCreateEnquiry();
 
   const [topic, setTopic] = useState<string | null>(null);

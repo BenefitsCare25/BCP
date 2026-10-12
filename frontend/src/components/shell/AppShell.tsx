@@ -11,6 +11,7 @@ import { Sidebar } from "./Sidebar";
 import { TopBar } from "./TopBar";
 import { CompanyPickerDialog } from "./CompanyPickerDialog";
 import { NoCompanyNotice } from "./NoCompanyNotice";
+import { ListError } from "@/components/platform/QueryStates";
 import { isCompanyPath } from "./nav";
 
 /**
@@ -45,7 +46,7 @@ export function AppShell() {
   const router = useRouterState();
   const path = router.location.pathname;
   useActiveClientSync();
-  const { data: me } = useMe();
+  const { data: me, error: meError, isFetching: meFetching, refetch: refetchMe } = useMe();
   const activeClientId = useSession((s) => s.activeClientId);
   const selectionNotice = useClientSelectionNotice((s) => s.notice);
   const clearSelectionNotice = useClientSelectionNotice((s) => s.clear);
@@ -81,11 +82,15 @@ export function AppShell() {
   // don't yet know the caller's companies, hold the page (avoid a flash of the
   // default tenant); with a real choice pending, prompt; with no company at
   // all, say so instead of rendering a page every read of which is refused;
-  // otherwise render.
-  const gate: "loading" | "pick" | "none" | "ready" =
+  // otherwise render. A failed /me read is said, with a retry: the route guard
+  // lets a transient failure through for the page to report, and this gate
+  // holds the page back.
+  const gate: "loading" | "error" | "pick" | "none" | "ready" =
     isCompanyPath(path) && path !== "/settings/ai" && activeClientId == null
       ? !me
-        ? "loading"
+        ? meError && !meFetching
+          ? "error"
+          : "loading"
         : me.accessible_clients.length > 1
           ? "pick"
           : me.accessible_clients.length === 0
@@ -110,6 +115,10 @@ export function AppShell() {
           {gate === "loading" ? (
             <div className="flex items-center gap-2 p-8 text-sm text-muted-foreground">
               <Loader2 className="size-4 animate-spin" /> Loading…
+            </div>
+          ) : gate === "error" ? (
+            <div className="mx-auto max-w-lg py-8">
+              <ListError what="your companies" error={meError} onRetry={() => void refetchMe()} />
             </div>
           ) : gate === "pick" ? null : gate === "none" ? (
             <NoCompanyNotice role={me?.role} />

@@ -15,6 +15,12 @@ export interface LimitPreview {
   employees_above_last_entry_age?: string;
 }
 
+// The API's caps on the preview values (schemas/coverage_limits.py). Limit
+// answers are free text whose first number is the limit, so a clamp to the cap
+// keeps long wording checkable instead of failing the whole preview.
+const LIMIT_TEXT_MAX = 1000;
+const EXEMPT_LIST_MAX = 4000;
+
 /**
  * Who crosses a product's slip limits this benefit year — recomputed from the
  * roster, matching and setup on every fetch. Without a preview it is the whole
@@ -30,7 +36,10 @@ export function useCoverageLimits(
   if (preview) {
     params.set("product_code", preview.productCode);
     for (const [key, value] of Object.entries(preview)) {
-      if (key !== "productCode" && value !== undefined) params.set(key, value);
+      if (key === "productCode" || value === undefined) continue;
+      const max =
+        key === "employees_above_last_entry_age" ? EXEMPT_LIST_MAX : LIMIT_TEXT_MAX;
+      params.set(key, value.slice(0, max));
     }
   }
   const query = params.toString();

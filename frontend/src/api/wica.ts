@@ -18,6 +18,10 @@ export type WicaIncident = {
   documents: WicaDocument[]; packs: WicaPack[];
 };
 export type WicaEmployee = { id: string; employee_name: string; staff_id: string };
+/** `GET /wica/employees` and `/wica/incidents` take `q` up to 100 characters;
+ *  the employee lookup needs at least 2 (after trimming). */
+export const WICA_SEARCH_MAX_LENGTH = 100;
+export const WICA_EMPLOYEE_SEARCH_MIN = 2;
 
 /** Pin tenant before token acquisition: a company switch cannot retarget a write. */
 export function wicaApi(clientId: string) {

@@ -13,7 +13,12 @@ from sqlalchemy.orm import Session
 from app.core.auth import CurrentUser, get_current_user
 from app.core.deps import assert_policy_year_for_user
 from app.db.session import get_db
-from app.schemas.coverage_limits import CoverageLimitsOut, LimitOverrides
+from app.schemas.coverage_limits import (
+    EXEMPT_LIST_MAX,
+    LIMIT_TEXT_MAX,
+    CoverageLimitsOut,
+    LimitOverrides,
+)
 from app.services.coverage_limits import coverage_limit_alerts, limit_counts
 
 router = APIRouter(tags=["coverage-limits"])
@@ -26,12 +31,14 @@ router = APIRouter(tags=["coverage-limits"])
 def list_coverage_limits(
     policy_year_id: str,
     product_code: str | None = Query(default=None, max_length=64),
-    employee_age_limit: str | None = Query(default=None, max_length=40),
-    last_entry_age: str | None = Query(default=None, max_length=40),
-    spouse_age_limit: str | None = Query(default=None, max_length=40),
-    child_age_limit: str | None = Query(default=None, max_length=40),
-    max_sum_insured: str | None = Query(default=None, max_length=40),
-    employees_above_last_entry_age: str | None = Query(default=None, max_length=4000),
+    employee_age_limit: str | None = Query(default=None, max_length=LIMIT_TEXT_MAX),
+    last_entry_age: str | None = Query(default=None, max_length=LIMIT_TEXT_MAX),
+    spouse_age_limit: str | None = Query(default=None, max_length=LIMIT_TEXT_MAX),
+    child_age_limit: str | None = Query(default=None, max_length=LIMIT_TEXT_MAX),
+    max_sum_insured: str | None = Query(default=None, max_length=LIMIT_TEXT_MAX),
+    employees_above_last_entry_age: str | None = Query(
+        default=None, max_length=EXEMPT_LIST_MAX
+    ),
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> CoverageLimitsOut:

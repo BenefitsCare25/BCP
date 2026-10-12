@@ -86,6 +86,12 @@ export type FlexPricingEditor = {
     product: FlexPricingProduct,
     tierKey?: string,
   ) => boolean;
+  /** The schedule as last saved: whether the scope has a saved override, and
+   *  the bands it priced with. Dropping either is a firm-owner action. */
+  savedVoluntaryRates: (
+    product: FlexPricingProduct,
+    tierKey?: string,
+  ) => { override: boolean; bands: VoluntaryRateBand[] };
   setVoluntaryRates: (
     pid: string,
     rates: VoluntaryRateBand[] | null,
@@ -120,6 +126,40 @@ const SCHEME_CODES: Record<FamilyScheme, Record<FamilyRole, string>> = {
   ec_es_ef: { spouse: "ES", child: "EC", both: "EF" },
   so_co_sc: { spouse: "SO", child: "CO", both: "SC" },
 };
+
+function hasVoluntaryOverride(
+  bag: FlexPricingBag,
+  pid: string,
+  tierKey?: string,
+): boolean {
+  const block: FlexPricingProductBlock = bag.products?.[pid] ?? EMPTY_BLOCK;
+  if (tierKey) {
+    return Object.prototype.hasOwnProperty.call(
+      block.voluntary_rates_by_tier ?? {},
+      tierKey,
+    );
+  }
+  return Object.prototype.hasOwnProperty.call(block, "voluntary_rates");
+}
+
+function resolveVoluntaryRates(
+  bag: FlexPricingBag,
+  product: FlexPricingProduct,
+  tierKey?: string,
+): VoluntaryRateBand[] {
+  const block = bag.products?.[product.product_id];
+  if (tierKey) {
+    const tier = product.tiers.find((candidate) => candidate.key === tierKey);
+    return (
+      block?.voluntary_rates_by_tier?.[tierKey] ??
+      block?.voluntary_rates ??
+      tier?.voluntary_rates ??
+      product.voluntary_rates ??
+      []
+    );
+  }
+  return block?.voluntary_rates ?? product.voluntary_rates ?? [];
+}
 
 /**
  * Editing state for the unified per-policy-year price book. Parsed values stay
@@ -185,34 +225,19 @@ export function useFlexPricingEditor(
   const voluntaryRatesEdited = (
     product: FlexPricingProduct,
     tierKey?: string,
-  ): boolean => {
-    const block: FlexPricingProductBlock =
-      bag.products?.[product.product_id] ?? EMPTY_BLOCK;
-    if (tierKey) {
-      return Object.prototype.hasOwnProperty.call(
-        block.voluntary_rates_by_tier ?? {},
-        tierKey,
-      );
-    }
-    return Object.prototype.hasOwnProperty.call(block, "voluntary_rates");
-  };
+  ): boolean => hasVoluntaryOverride(bag, product.product_id, tierKey);
 
   const voluntaryRatesFor = (
     product: FlexPricingProduct,
     tierKey?: string,
-  ): VoluntaryRateBand[] => {
-    const block = bag.products?.[product.product_id];
-    if (tierKey) {
-      const tier = product.tiers.find((candidate) => candidate.key === tierKey);
-      return (
-        block?.voluntary_rates_by_tier?.[tierKey] ??
-        block?.voluntary_rates ??
-        tier?.voluntary_rates ??
-        product.voluntary_rates ??
-        []
-      );
-    }
-    return block?.voluntary_rates ?? product.voluntary_rates ?? [];
+  ): VoluntaryRateBand[] => resolveVoluntaryRates(bag, product, tierKey);
+
+  const savedVoluntaryRates = (product: FlexPricingProduct, tierKey?: string) => {
+    const saved = data?.pricing ?? {};
+    return {
+      override: hasVoluntaryOverride(saved, product.product_id, tierKey),
+      bands: resolveVoluntaryRates(saved, product, tierKey),
+    };
   };
 
   const setVoluntaryRates = (
@@ -356,6 +381,7 @@ export function useFlexPricingEditor(
     clearTierPriceOverrides,
     voluntaryRatesFor,
     voluntaryRatesEdited,
+    savedVoluntaryRates,
     setVoluntaryRates,
     setDepMode,
     clearDepMode,

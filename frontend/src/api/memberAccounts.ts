@@ -1,5 +1,10 @@
 /** Broker-side member-account (employee portal access) provisioning hooks. */
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  useMutation,
+  useQuery,
+  useQueryClient,
+  type QueryClient,
+} from "@tanstack/react-query";
 import { api } from "@/api/client";
 import { useSession } from "@/stores/session";
 
@@ -114,6 +119,21 @@ export interface PortalRollout {
   needs_attention_truncated: boolean;
 }
 
+/** Every account write moves a member between rollout buckets, and changes the
+ *  account Member Coverage's "Employee view" badges (its preview context). */
+function invalidateAccounts(qc: QueryClient) {
+  void qc.invalidateQueries({ queryKey: ["member-accounts"] });
+  void qc.invalidateQueries({ queryKey: ["portal-rollout"] });
+  void qc.invalidateQueries({ queryKey: ["portal-preview", "context"] });
+}
+
+/** Provisioning also settles the enrolment window's portal-access readiness. */
+function invalidateProvisioning(qc: QueryClient) {
+  invalidateAccounts(qc);
+  void qc.invalidateQueries({ queryKey: ["enrollment-readiness"] });
+  void qc.invalidateQueries({ queryKey: ["enrollment-readiness-employees"] });
+}
+
 export function useMemberAccounts() {
   const cid = useSession((s) => s.activeClientId);
   return useQuery({
@@ -130,13 +150,7 @@ export function useCreateMemberAccount() {
         email: input.email ?? null,
         delivery: input.delivery ?? "email",
       }),
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["member-accounts"] });
-      // Every one of these moves a member between rollout buckets.
-      void qc.invalidateQueries({ queryKey: ["portal-rollout"] });
-      void qc.invalidateQueries({ queryKey: ["enrollment-readiness"] });
-      void qc.invalidateQueries({ queryKey: ["enrollment-readiness-employees"] });
-    },
+    onSuccess: () => invalidateProvisioning(qc),
     meta: { localErrorHandling: true },
   });
 }
@@ -146,11 +160,7 @@ export function useResendMemberInvite() {
   return useMutation({
     mutationFn: (accountId: string) =>
       api.post<MemberAccount>(`/member-accounts/${accountId}/resend-invite`, {}),
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["member-accounts"] });
-      // Every one of these moves a member between rollout buckets.
-      void qc.invalidateQueries({ queryKey: ["portal-rollout"] });
-    },
+    onSuccess: () => invalidateAccounts(qc),
   });
 }
 
@@ -161,11 +171,7 @@ export function useSetMemberAccountStatus() {
       api.patch<MemberAccount>(`/member-accounts/${input.accountId}`, {
         status: input.status,
       }),
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["member-accounts"] });
-      // Every one of these moves a member between rollout buckets.
-      void qc.invalidateQueries({ queryKey: ["portal-rollout"] });
-    },
+    onSuccess: () => invalidateAccounts(qc),
   });
 }
 
@@ -176,11 +182,7 @@ export function useMemberPasswordSetupLink() {
   return useMutation({
     mutationFn: (accountId: string) =>
       api.post<MemberAccount>(`/member-accounts/${accountId}/password-setup`, {}),
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["member-accounts"] });
-      // Every one of these moves a member between rollout buckets.
-      void qc.invalidateQueries({ queryKey: ["portal-rollout"] });
-    },
+    onSuccess: () => invalidateAccounts(qc),
     meta: { localErrorHandling: true },
   });
 }
@@ -194,11 +196,7 @@ export function useSetMemberPassword() {
         `/member-accounts/${input.accountId}/set-password`,
         { password: input.password },
       ),
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["member-accounts"] });
-      // Every one of these moves a member between rollout buckets.
-      void qc.invalidateQueries({ queryKey: ["portal-rollout"] });
-    },
+    onSuccess: () => invalidateAccounts(qc),
     meta: { localErrorHandling: true },
   });
 }
@@ -210,9 +208,7 @@ export function useResetMemberMfa() {
   return useMutation({
     mutationFn: (accountId: string) =>
       api.post<void>(`/member-accounts/${accountId}/mfa/reset`, {}),
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["member-accounts"] });
-    },
+    onSuccess: () => invalidateAccounts(qc),
     meta: { localErrorHandling: true },
   });
 }
@@ -225,11 +221,7 @@ export function useRegenerateMemberLoginId() {
         `/member-accounts/${accountId}/regenerate-login-id`,
         {},
       ),
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["member-accounts"] });
-      // Every one of these moves a member between rollout buckets.
-      void qc.invalidateQueries({ queryKey: ["portal-rollout"] });
-    },
+    onSuccess: () => invalidateAccounts(qc),
     meta: { localErrorHandling: true },
   });
 }
@@ -259,11 +251,6 @@ export function useBulkInviteMembers() {
         policy_year_id: policyYearId,
         ...(reenableDisabled ? { reenable_disabled: true } : {}),
       }),
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["member-accounts"] });
-      void qc.invalidateQueries({ queryKey: ["portal-rollout"] });
-      void qc.invalidateQueries({ queryKey: ["enrollment-readiness"] });
-      void qc.invalidateQueries({ queryKey: ["enrollment-readiness-employees"] });
-    },
+    onSuccess: () => invalidateProvisioning(qc),
   });
 }

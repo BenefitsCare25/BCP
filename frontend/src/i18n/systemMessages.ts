@@ -31,6 +31,8 @@ export function systemClaimBody(message: Pick<ClaimMessage, "author_type" | "eve
     case "amended":
       match = new RegExp(`^Your (.+?) claim for ${day} has been updated\\.$`).exec(first);
       if (match) paragraphs[0] = pt("Your {0} claim for {1} has been updated.", [pt(match[1]), date(match[2])]);
+      // The middle paragraph is the server's own "You changed …" (generatedCopy).
+      if (paragraphs.length > 2 && paragraphs[1].startsWith("You changed ")) paragraphs[1] = pt(paragraphs[1]);
       break;
     case "needs_info":
       match = new RegExp(`^Before we can finish your (.+?) claim for ${day}, we need a little more from you\\.$`).exec(first);

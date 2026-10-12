@@ -45,6 +45,7 @@ import {
 } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
+import { RemoveGuard } from "@/components/configuration/setup/savedEntries";
 import { formatError } from "@/lib/errors";
 import { ConfigurationHistory } from "./ConfigurationHistory";
 
@@ -127,6 +128,36 @@ function documentsFromSnapshot(
   return copyDocuments(documents as ClaimSetupDocument[]);
 }
 
+/** What the loaded setup already holds for one document. The API refuses a
+ *  non-owner's save that drops a saved document, alias or key field
+ *  (claim_document_setups._removes_entries); entries added in this edit can
+ *  be taken out again by whoever added them. */
+interface SavedDocument {
+  /** Folded the way the API compares aliases. */
+  aliases: ReadonlySet<string>;
+  keyFields: number;
+}
+
+const NO_SAVED_ALIASES: ReadonlySet<string> = new Set();
+
+function foldAlias(value: string): string {
+  return value.split(/\s+/).filter(Boolean).join(" ").toLowerCase();
+}
+
+function savedDocuments(
+  setup: ClaimDocumentSetup | null,
+): ReadonlyMap<string, SavedDocument> {
+  return new Map(
+    (setup?.documents ?? []).map((document) => [
+      document.id,
+      {
+        aliases: new Set(document.aliases.map(foldAlias)),
+        keyFields: document.key_fields.length,
+      },
+    ]),
+  );
+}
+
 function uniqueDocumentKey(documents: ClaimSetupDocument[]): string {
   const base = `document_${crypto.randomUUID().replaceAll("-", "").slice(0, 12)}`;
   return documents.some((document) => document.key === base)
@@ -138,6 +169,7 @@ function TokenField({
   label,
   hint,
   values,
+  savedValues,
   placeholder,
   max,
   onChange,
@@ -145,6 +177,8 @@ function TokenField({
   label: string;
   hint: string;
   values: string[];
+  /** Saved values, folded: only their Remove is a firm-owner action. */
+  savedValues: ReadonlySet<string>;
   placeholder: string;
   max: number;
   onChange: (values: string[]) => void;
@@ -172,14 +206,14 @@ function TokenField({
             className="inline-flex min-h-8 items-center gap-1 rounded-md border border-border bg-muted pl-2.5 pr-1 text-xs text-foreground"
           >
             {item}
-            <FirmOwnerOnly><button
+            <RemoveGuard saved={savedValues.has(foldAlias(item))}><button
               type="button"
               className="grid size-6 place-items-center rounded text-muted-foreground hover:bg-card hover:text-error focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               aria-label={`Remove ${item}`}
               onClick={() => onChange(values.filter((_, i) => i !== index))}
             >
               <X className="size-3" aria-hidden />
-            </button></FirmOwnerOnly>
+            </button></RemoveGuard>
           </span>
         ))}
         <div className="flex items-center gap-1">
@@ -273,6 +307,7 @@ function KeywordInput({
 
 function DocumentEditor({
   document,
+  saved,
   index,
   total,
   onChange,
@@ -280,6 +315,8 @@ function DocumentEditor({
   onMove,
 }: {
   document: ClaimSetupDocument;
+  /** Undefined for a document added in this edit. */
+  saved: SavedDocument | undefined;
   index: number;
   total: number;
   onChange: (document: ClaimSetupDocument) => void;
@@ -327,7 +364,7 @@ function DocumentEditor({
           >
             <ChevronDown className="size-3.5" aria-hidden />
           </Button>
-          <FirmOwnerOnly><Button
+          <RemoveGuard saved={saved !== undefined}><Button
             type="button"
             variant="ghost"
             size="sm"
@@ -336,7 +373,7 @@ function DocumentEditor({
             onClick={onRemove}
           >
             <Trash2 className="size-3.5" aria-hidden />
-          </Button></FirmOwnerOnly>
+          </Button></RemoveGuard>
         </div>
       </div>
 
@@ -367,6 +404,7 @@ function DocumentEditor({
         label="Recognition aliases"
         hint="Other titles that may be printed on this document."
         values={document.aliases}
+        savedValues={saved?.aliases ?? NO_SAVED_ALIASES}
         placeholder="Add an alias"
         max={MAX_ALIASES}
         onChange={(aliases) => onChange({ ...document, aliases })}
@@ -438,7 +476,9 @@ function DocumentEditor({
                   />
                   {field.optional ? "Optional field" : "Required field"}
                 </label>
-                <FirmOwnerOnly><Button
+                {/* The API counts key fields, and new ones are appended, so
+                    the first `keyFields` rows stand for the saved ones. */}
+                <RemoveGuard saved={fieldIndex < (saved?.keyFields ?? 0)}><Button
                   type="button"
                   variant="ghost"
                   size="sm"
@@ -452,7 +492,7 @@ function DocumentEditor({
                   }
                 >
                   <Trash2 className="size-3.5" aria-hidden />
-                </Button></FirmOwnerOnly>
+                </Button></RemoveGuard>
               </div>
             ))}
           </div>
@@ -477,6 +517,7 @@ function SetupEditor({
   const [documents, setDocuments] = useState<ClaimSetupDocument[]>([]);
   const [confirmEmpty, setConfirmEmpty] = useState(false);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
+  const saved = useMemo(() => savedDocuments(setup), [setup]);
 
   useEffect(() => {
     setDocuments(setup ? copyDocuments(setup.documents) : []);
@@ -560,6 +601,7 @@ function SetupEditor({
                   <DocumentEditor
                     key={document.id}
                     document={document}
+                    saved={saved.get(document.id)}
                     index={index}
                     total={documents.length}
                     onChange={(next) =>

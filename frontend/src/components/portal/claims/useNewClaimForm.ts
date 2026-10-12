@@ -87,7 +87,7 @@ export function useNewClaimForm() {
   const pt = usePortalTranslation();
   const navigate = useNavigate();
   const company = useCompany();
-  const options = useCoverageOptions();
+  const options = useCoverageOptions(true);
   const utilization = usePortalUtilization(true);
   const createClaim = useCreateClaim();
   const uploadDoc = useUploadClaimDocument();

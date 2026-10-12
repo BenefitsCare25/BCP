@@ -6,7 +6,9 @@
  *   backend ignores it in production, where the subdomain is authoritative).
  * - `credentials: "include"` so the host-only refresh cookie rides along.
  * - On 401, transparently tries ONE silent refresh (the whole point of a short
- *   access token); if that fails, clears the session and returns to sign-in.
+ *   access token); if the server refuses it, clears the session and returns to
+ *   sign-in. A refresh with no verdict (429, 5xx, offline) is an ordinary
+ *   error the page shows, never a sign-out.
  * - A 403 `hr_disabled` (the company's HR access was switched off) ends the
  *   session the same way and tells the sign-in page why.
  */
@@ -15,10 +17,13 @@ import { currentHrTenantSlug, hrPath } from "@/lib/tenant";
 import { withSessionRefreshLock } from "@/lib/sessionRefresh";
 import {
   isSignedOut,
+  isTransientRefreshStatus,
   rememberSessionEndNotice,
+  SessionRefreshUnavailableError,
   sessionEndingRefusal,
   sessionEndQuery,
 } from "@/lib/surfaceSession";
+import { signInReturningHere } from "@/auth/returnPath";
 import { useHrSession } from "@/stores/hrSession";
 import { useNotifications } from "@/stores/notifications";
 import { queryClient } from "@/lib/queryClient";
@@ -69,10 +74,17 @@ export function hrSessionEndTarget(): string | null {
   return sessionEndTarget;
 }
 
+/** Set when the refresh cookie turned out to belong to another account. The
+ *  sign-in this tab is then sent to must not resume its page for whoever signs
+ *  in next; every other ended session comes back to it (`?from=`). */
+let accountSwitched = false;
+
 function handleUnauthorized(): never {
   clearLocalHrSession();
   if (window.location.pathname !== SIGN_IN_PATH) {
-    window.location.assign(sessionEndTarget ?? hrPath(SIGN_IN_PATH));
+    window.location.assign(
+      sessionEndTarget ?? hrPath(accountSwitched ? SIGN_IN_PATH : signInReturningHere(SIGN_IN_PATH)),
+    );
   }
   throw new HrUnauthorizedError();
 }
@@ -120,6 +132,11 @@ let refreshInFlight: Promise<boolean> | null = null;
  * user to sign-in despite a valid 12h session. Concurrent callers de-dupe onto
  * a single in-flight request.
  *
+ * True once a fresh token is in place; false when the server refused the
+ * session, which is then over. Rejects with `SessionRefreshUnavailableError`
+ * when no verdict came back (rate-limited, a deploy, no connection), so the
+ * caller keeps the user and their unsaved work where they are.
+ *
  * Never after an explicit sign-out in this tab: the cookie may by then belong
  * to whoever signed in at this company in another tab. */
 export async function refreshHrSession(): Promise<boolean> {
@@ -134,6 +151,7 @@ export async function refreshHrSession(): Promise<boolean> {
           headers: tenantHeader(),
         });
         if (!res.ok) {
+          if (isTransientRefreshStatus(res.status)) throw new SessionRefreshUnavailableError(res.status);
           if (res.status === 403) {
             const refusal = sessionEndingRefusal(await res.text(), SESSION_ENDING_CODES);
             if (refusal) endDisabledSession(refusal.message);
@@ -149,12 +167,16 @@ export async function refreshHrSession(): Promise<boolean> {
         const current = useHrSession.getState().me;
         if (current?.user_id !== expected?.user_id || current?.client_id !== expected?.client_id ||
             (expected && (data.me.user_id !== expected.user_id || data.me.client_id !== expected.client_id))) {
+          accountSwitched = true;
           return handleUnauthorized();
         }
+        accountSwitched = false;
         useHrSession.getState().setSession(data.access_token, data.expires_at, data.me, !!data.mfa_enrollment_required && !!data.me.mfa_required);
         return true;
-      } catch {
-        return false;
+      } catch (error) {
+        // The account switch above has already ended this tab's session.
+        if (error instanceof HrUnauthorizedError) return false;
+        throw error instanceof SessionRefreshUnavailableError ? error : new SessionRefreshUnavailableError();
       } finally {
         refreshInFlight = null;
       }

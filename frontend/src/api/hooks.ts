@@ -257,6 +257,8 @@ export function useAutoMatchDependants() {
       qc.invalidateQueries({ queryKey: ["dependants"] });
       qc.invalidateQueries({ queryKey: ["flex-membership"] });
       qc.invalidateQueries({ queryKey: ["flex-coverage"] });
+      // New links re-size the sponsors' persisted wallets server-side.
+      invalidateWallets(qc);
       qc.invalidateQueries({ queryKey: ["audit-log"] });
     },
   });
@@ -282,6 +284,18 @@ export function useMatchResults(
   });
 }
 
+/** What a matching run rewrites: each employee's matched category — and so
+ *  their `updated_at`, which the roster editor sends back as its stale check —
+ *  the match list, the coverage roster and the statements built on the match.
+ *  `["employee"]` is the drawer's detail; it is not a prefix of `["employees"]`. */
+function invalidateRematch(qc: ReturnType<typeof useQueryClient>) {
+  for (const key of [
+    "match-results", "employees", "employee", "coverage-summary", "benefit-statement",
+  ]) {
+    qc.invalidateQueries({ queryKey: [key] });
+  }
+}
+
 export function useRunMatching() {
   const qc = useQueryClient();
   return useMutation({
@@ -291,11 +305,9 @@ export function useRunMatching() {
         {},
       ),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["match-results"] });
-      qc.invalidateQueries({ queryKey: ["employees"] });
+      invalidateRematch(qc);
       qc.invalidateQueries({ queryKey: ["flex-membership"] });
       qc.invalidateQueries({ queryKey: ["flex-coverage"] });
-      qc.invalidateQueries({ queryKey: ["benefit-statement"] });
       qc.invalidateQueries({ queryKey: ["audit-log"] });
     },
   });
@@ -708,7 +720,7 @@ export function useBulkDeleteDependants() {
       qc.invalidateQueries({ queryKey: ["dependants"] });
       qc.invalidateQueries({ queryKey: ["flex-membership"] });
       qc.invalidateQueries({ queryKey: ["flex-coverage"] });
-      qc.invalidateQueries({ queryKey: ["benefit-statement"] });
+      invalidateWallets(qc);
       qc.invalidateQueries({ queryKey: ["audit-log"] });
     },
     // The caller handles the member_data_at_risk 409 itself (a confirm-and-retry
@@ -757,15 +769,15 @@ export function useUploadSlip() {
       qc.invalidateQueries({ queryKey: ["plans"] });
       qc.invalidateQueries({ queryKey: ["placement-slips"] });
       // The upload also autofills term windows / FCL-NEL and can create
-      // variant products, like a setup confirm.
+      // variant products, like a setup confirm. A term window written from an
+      // acknowledged period mismatch moves the year's envelope (top bar).
       qc.invalidateQueries({ queryKey: ["product-terms"] });
+      qc.invalidateQueries({ queryKey: ["policy-years"] });
       qc.invalidateQueries({ queryKey: ["underwriting"] });
       qc.invalidateQueries({ queryKey: ["schemas", "products"] });
       // Re-upload can auto-rematch employees server-side (`rematched`).
-      qc.invalidateQueries({ queryKey: ["match-results"] });
-      qc.invalidateQueries({ queryKey: ["employees"] });
+      invalidateRematch(qc);
       qc.invalidateQueries({ queryKey: ["flex-membership"] });
-      qc.invalidateQueries({ queryKey: ["benefit-statement"] });
       qc.invalidateQueries({ queryKey: ["audit-log"] });
     },
   });
@@ -899,8 +911,8 @@ export function useApplyConfig() {
       qc.invalidateQueries({ queryKey: ["schemas", "products"] });
       qc.invalidateQueries({ queryKey: ["categories"] });
       qc.invalidateQueries({ queryKey: ["eligibility-mappings"] });
-      qc.invalidateQueries({ queryKey: ["match-results"] });
-      qc.invalidateQueries({ queryKey: ["employees"] });
+      // `rerun_matching` re-matches the roster server-side.
+      invalidateRematch(qc);
       qc.invalidateQueries({ queryKey: ["audit-log"] });
     },
   });
@@ -1060,9 +1072,15 @@ export function useUpdatePolicyYear() {
         leaver_access_days?: number | null;
       };
     }) => api.patch<PolicyYear>(`/policy-years/${policyYearId}`, payload),
-    onSuccess: () => {
+    onSuccess: async (_year, { policyYearId, payload }) => {
       qc.invalidateQueries({ queryKey: ["policy-years"] });
       qc.invalidateQueries({ queryKey: ["audit-log"] });
+      // A product with no coverage period of its own inherits the year's span,
+      // so its term moves with the dates. Settle only once the terms are
+      // re-read, so nothing on the page acts on the old inherited dates.
+      if (payload.start_date !== undefined || payload.end_date !== undefined) {
+        await qc.invalidateQueries({ queryKey: ["product-terms", policyYearId] });
+      }
     },
     meta: { localErrorHandling: true },
   });
@@ -1480,6 +1498,8 @@ export function useUpdateDependant() {
       qc.invalidateQueries({ queryKey: ["dependants"] });
       qc.invalidateQueries({ queryKey: ["flex-membership"] });
       qc.invalidateQueries({ queryKey: ["flex-coverage"] });
+      // A relationship edit or relink re-sizes the sponsor's persisted wallet.
+      invalidateWallets(qc);
       qc.invalidateQueries({ queryKey: ["audit-log"] });
     },
   });
@@ -1831,8 +1851,7 @@ export function useConfirmSetup(policyYearId: string) {
       // Confirm materializes Category rows and re-runs matching, so refresh the
       // category list / coverage, employee matches, and match results too.
       qc.invalidateQueries({ queryKey: ["categories"] });
-      qc.invalidateQueries({ queryKey: ["employees"] });
-      qc.invalidateQueries({ queryKey: ["match-results"] });
+      invalidateRematch(qc);
       // It also proposes eligibility mappings and, on the first confirm,
       // creates the client's catalog row (setup-products' product_id).
       qc.invalidateQueries({ queryKey: ["eligibility-mappings"] });
@@ -1915,6 +1934,7 @@ export function useSaveFlexScheme(policyYearId: string) {
       qc.invalidateQueries({ queryKey: ["flex-membership", policyYearId] });
       qc.invalidateQueries({ queryKey: ["flex-coverage", policyYearId] });
       qc.invalidateQueries({ queryKey: ["flex-roster-vocab", policyYearId] });
+      qc.invalidateQueries({ queryKey: ["audit-log"] });
     },
   });
 }

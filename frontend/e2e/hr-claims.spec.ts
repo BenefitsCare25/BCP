@@ -298,7 +298,8 @@ test("an unauthenticated HR visitor is returned to sign in", async ({ page }) =>
     fulfilJson(route, { detail: "Not authenticated" }, 401),
   );
   await page.goto("/hr/claims");
-  await expect(page).toHaveURL(/\/hr\/sign-in$/);
+  // The page they asked for rides along, to be resumed after sign-in.
+  await expect(page).toHaveURL(/\/hr\/sign-in\?from=(?:%2F|\/)hr(?:%2F|\/)claims$/);
   await expect(page.getByRole("heading", { name: "Welcome back" })).toBeVisible();
 });
 

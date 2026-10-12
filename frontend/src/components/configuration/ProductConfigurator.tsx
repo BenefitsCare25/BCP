@@ -40,7 +40,7 @@ export function ProductConfigurator({
     code,
   );
   const { data: setups = [] } = useProductSetups(policyYearId);
-  const { data: terms = [] } = useProductTerms(policyYearId);
+  const { data: terms = [], isFetching: termsFetching } = useProductTerms(policyYearId);
 
   const codeKey = code.toUpperCase();
   const draft =
@@ -96,6 +96,7 @@ export function ProductConfigurator({
         initialSection={initialSection}
         insuranceLine={term?.line ?? "medical"}
         term={term}
+        termRefreshing={termsFetching}
       />
     </div>
   );

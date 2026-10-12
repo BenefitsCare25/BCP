@@ -266,3 +266,26 @@ def test_price_tags_save_without_a_draft_period(client: TestClient) -> None:
         json={"pricing": {"products": {}}},
     )
     assert saved.status_code == 200, saved.text
+
+
+def test_only_firm_owners_drop_saved_voluntary_age_bands(
+    client: TestClient, system_admin_request
+) -> None:
+    """Shortening or resetting a saved age-band schedule (shared or per tier) is
+    a firm-owner removal; adding and editing bands stay open to broker_admin."""
+    url = f"/api/v1/policy-years/{PY_ID}/flex-pricing"
+    young = {"label": "18-40", "min": 18, "max": 40, "rate": 1.2}
+    old = {"label": "41+", "min": 41, "max": None, "rate": 2.5}
+
+    def bag(shared: list[dict], by_tier: list[dict] | None = None) -> dict:
+        block: dict = {"age_bands": [], "price_tags": {}, "voluntary_rates": shared}
+        if by_tier is not None:
+            block["voluntary_rates_by_tier"] = {"tier-a": by_tier}
+        return {"pricing": {"products": {"life": block}}}
+
+    assert client.put(url, json=bag([young, old], [young, old])).status_code == 200
+    assert client.put(url, json=bag([young, {**old, "rate": 3}], [young, old])).status_code == 200
+    assert client.put(url, json=bag([{**young, "max": None}], [young, old])).status_code == 403
+    assert client.put(url, json=bag([young, old])).status_code == 403
+    reset = system_admin_request(client, "PUT", url, json={"pricing": {"products": {}}})
+    assert reset.status_code == 200, reset.text

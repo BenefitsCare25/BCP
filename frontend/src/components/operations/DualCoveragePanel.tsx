@@ -364,7 +364,7 @@ function SideBlock({
                 disabled={update.isPending}
                 onClick={async () => {
                   try {
-                    await update.mutateAsync({
+                    const res = await update.mutateAsync({
                       dependantId: p.dependant_id!,
                       employee_id: null,
                       relink: true,
@@ -372,6 +372,7 @@ function SideBlock({
                     toast.success(
                       `Unlinked from ${p.employee_name ?? p.staff_id}`,
                     );
+                    if (res.flex_errors?.length) toast.warning(res.flex_errors.join(" "));
                   } catch (err) {
                     toast.error(formatError(err));
                   }

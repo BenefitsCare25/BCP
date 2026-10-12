@@ -4,7 +4,7 @@
 (plan_hydration → benefit statements, coverage summaries, cohort tiers, flex
 pricing) consumes. This module owns the slip-side constructor; the guided-form
 confirm path builds the same shape from form answers in
-``api/v1/product_setups._category_plan_assignments`` (different input, same
+``services/product_setup_materialization._category_plan_assignments`` (different input, same
 output contract — keep the key set in sync).
 """
 from __future__ import annotations

@@ -19,7 +19,9 @@ export function setClaimPeriod(id: string, reload = true): void {
 // Every endpoint a claim in the selected period is filed or answered through.
 // Referral letters and visit anchors belong to the claim being filed: without
 // the period, a run-off leaver filing last year's specialist claim resolved
-// against the current year and was refused.
+// against the current year and was refused. The claims list and coverage
+// options are also read outside the claims flow (Home, Usage, the card), which
+// must stay on the current year: those reads pass `claimPeriod: false`.
 const CLAIM_PERIOD_PATHS = [
   "/portal/claims",
   "/portal/coverage-options",

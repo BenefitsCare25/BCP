@@ -15,6 +15,7 @@ import { errorCode, errorStatus, formatError } from "@/lib/errors";
 import { PASSWORD_MAX_LENGTH } from "@/lib/loginValidation";
 import { useNavigate } from "@tanstack/react-router";
 import { refreshHrSession } from "@/api/hrClient";
+import { takeHrReturnPath } from "@/auth/returnPath";
 import { useHrSession } from "@/stores/hrSession";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -318,8 +319,11 @@ export function HrSecurityPage() {
                   setRecovery(null);
                   await refetch();
                   useHrSession.setState({ mfaRecoveryPending: false, mfaEnrollmentRequired: false });
-                  void navigate({ to: "/hr/dashboard" });
-                });
+                  // Where sign-in was taking them before setup came first.
+                  const back = takeHrReturnPath();
+                  if (back) void navigate({ href: back });
+                  else void navigate({ to: "/hr/dashboard" });
+                }, (error: unknown) => toast.error(pt(formatError(error))));
               }}
             />
           ) : isLoading ? (

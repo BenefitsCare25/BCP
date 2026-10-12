@@ -338,6 +338,7 @@ export function DependantsPage() {
               } else {
                 toast.success(`Auto-matched ${r.matched} dependant${r.matched === 1 ? "" : "s"}${r.unmatched ? ` · ${r.unmatched} still unlinked` : ""}`);
               }
+              if (r.flex_errors?.length) toast.warning(r.flex_errors.join(" "));
             } catch (err) {
               toast.error(formatError(err));
             }
@@ -484,6 +485,7 @@ export function DependantsPage() {
               confirm: false,
             });
             toast.success(`Deleted ${r.deleted} dependants`);
+            if (r.flex_errors?.length) toast.warning(r.flex_errors.join(" "));
             setShowDeleteAll(false);
             setPage(0);
           } catch (e) {
@@ -521,6 +523,7 @@ export function DependantsPage() {
               confirm: true,
             });
             toast.success(`Deleted ${r.deleted} dependants`);
+            if (r.flex_errors?.length) toast.warning(r.flex_errors.join(" "));
             setDeleteRisk(null);
             setPage(0);
           } catch (e) {
@@ -561,12 +564,13 @@ export function DependantsPage() {
                         disabled={updateDependant.isPending}
                         onClick={async () => {
                           try {
-                            await updateDependant.mutateAsync({
+                            const res = await updateDependant.mutateAsync({
                               dependantId: selected.id,
                               employee_id: null,
                               relink: true,
                             });
                             toast.success("Unlinked");
+                            if (res.flex_errors?.length) toast.warning(res.flex_errors.join(" "));
                             // With the Unlinked filter active the row set
                             // changes under the sheet — close it so it can't
                             // go blank.
@@ -624,7 +628,7 @@ export function DependantsPage() {
                             );
                             return;
                           }
-                          await updateDependant.mutateAsync({
+                          const linked = await updateDependant.mutateAsync({
                             dependantId: selected.id,
                             employee_id: match.id,
                             relink: true,
@@ -632,6 +636,7 @@ export function DependantsPage() {
                           toast.success(
                             `Linked to ${match.employee_name ?? match.staff_id}`,
                           );
+                          if (linked.flex_errors?.length) toast.warning(linked.flex_errors.join(" "));
                           setLinkStaffId("");
                           // Linking removes the row from an Unlinked-filtered
                           // list — close the sheet so it can't go blank.
@@ -673,6 +678,7 @@ export function DependantsPage() {
                             editableAttrs(saved.attribute_values, LINK_HINT_KEYS),
                           );
                           toast.success("Dependant updated");
+                          if (saved.flex_errors?.length) toast.warning(saved.flex_errors.join(" "));
                         } catch (err) {
                           toast.error(formatError(err));
                         }

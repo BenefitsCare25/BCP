@@ -160,6 +160,24 @@ def test_proof_upload_and_broker_download(anon: TestClient, broker: TestClient):
     assert dl.content == PNG
 
 
+def test_broker_download_of_non_latin_proof_name(anon: TestClient, broker: TestClient):
+    dep = _add_dependant(anon, "Unicode Proof Kid")
+    res = anon.post(
+        f"/api/v1/portal/dependants/{dep['id']}/documents",
+        files={"file": ("结婚证书.png", PNG, "image/png")},
+        headers=_auth(),
+    )
+    assert res.status_code == 200, res.text
+
+    dl = broker.get(
+        f"/api/v1/dependants/{dep['id']}/documents/{res.json()['id']}/download"
+    )
+    assert dl.status_code == 200
+    assert dl.content == PNG
+    disposition = dl.headers["content-disposition"]
+    assert "filename*=UTF-8''%E7%BB%93%E5%A9%9A%E8%AF%81%E4%B9%A6.png" in disposition
+
+
 def test_broker_approval_activates(anon: TestClient, broker: TestClient):
     dep = _add_dependant(anon, "Approved Kid")
     res = broker.post(

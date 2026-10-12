@@ -99,6 +99,9 @@ export function SchemaAttributesPage({
   const [scope, setScope] = useState<CatalogScope>("company");
   const [editing, setEditing] = useState<AttributeSchema | null>(null);
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
+  // The derivation rule the sheet opened with (an inherited default's rule
+  // when overriding it), restored if a value mapping added here is removed.
+  const [openedRule, setOpenedRule] = useState<Draft["derivation_rule"]>(null);
   const [deleting, setDeleting] = useState<AttributeSchema | null>(null);
 
   // "Firm library" shows only the shared (client_id NULL) rows; "This company"
@@ -114,6 +117,7 @@ export function SchemaAttributesPage({
     if (!next) {
       setDraft(EMPTY_DRAFT);
       setEditing(null);
+      setOpenedRule(null);
     }
   };
 
@@ -121,6 +125,7 @@ export function SchemaAttributesPage({
     // Editing an inherited default in company scope creates a company override.
     setEditing(scope === "company" && attr.client_id === null ? null : attr);
     setDraft(toDraft(attr));
+    setOpenedRule(attr.derivation_rule);
     onOpenChange(true);
   };
 
@@ -338,6 +343,7 @@ export function SchemaAttributesPage({
                 />
               </div>
               {scope === "company" && <ValueMappingEditor rule={draft.derivation_rule} attributes={visible}
+                savedRule={editing?.derivation_rule ?? null} initialRule={openedRule}
                 onChange={rule => setDraft({ ...draft, derivation_rule: rule })} />}
             </SheetBody>
             <SheetFooter>

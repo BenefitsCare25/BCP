@@ -66,9 +66,12 @@ function clamp01(value: number): number {
 
 export function PlacementEditor({
   card,
+  readOnly = false,
   onClose,
 }: {
   card: PanelCard;
+  /** A read-only session (broker_viewer or a `read` grant) views the layout. */
+  readOnly?: boolean;
   onClose: () => void;
 }) {
   const { data: options } = useCardOptions();
@@ -182,9 +185,11 @@ export function PlacementEditor({
               {value === "front" ? "Front" : "Back"}
             </Button>
           ))}
-          <span className="ml-2 text-xs text-muted-foreground">
-            Drag a field onto the artwork to position it.
-          </span>
+          {!readOnly && (
+            <span className="ml-2 text-xs text-muted-foreground">
+              Drag a field onto the artwork to position it.
+            </span>
+          )}
         </div>
 
         <CardCanvas
@@ -201,10 +206,11 @@ export function PlacementEditor({
               <button
                 key={index}
                 type="button"
-                onPointerDown={(e) => startDrag(index, e)}
+                onPointerDown={readOnly ? undefined : (e) => startDrag(index, e)}
                 onClick={() => setSelected(index)}
                 className={cn(
-                  "absolute cursor-grab touch-none whitespace-nowrap rounded px-0.5 outline-offset-2 active:cursor-grabbing",
+                  "absolute touch-none whitespace-nowrap rounded px-0.5 outline-offset-2",
+                  !readOnly && "cursor-grab active:cursor-grabbing",
                   selected === index
                     ? "outline outline-2 outline-primary"
                     : "outline-dashed outline-1 outline-muted-foreground/50",
@@ -234,30 +240,38 @@ export function PlacementEditor({
       </div>
 
       <div className="space-y-4">
-        <div className="space-y-1.5">
-          <Label>Add a field</Label>
-          <Select value="" onValueChange={addField}>
-            <SelectTrigger>
-              <SelectValue placeholder="Choose a field…" />
-            </SelectTrigger>
-            <SelectContent>
-              {(options?.placement_keys ?? [])
-                .filter((option) => !used.has(option.key))
-                .map((option) => (
-                  <SelectItem key={option.key} value={option.key}>
-                    {option.label}
-                  </SelectItem>
-                ))}
-            </SelectContent>
-          </Select>
-          {visible.length === 0 && (
-            <p className="flex items-center gap-1 text-xs text-muted-foreground">
-              <Plus className="size-3" /> No fields on this face yet.
-            </p>
-          )}
-        </div>
+        {!readOnly && (
+          <div className="space-y-1.5">
+            <Label>Add a field</Label>
+            <Select value="" onValueChange={addField}>
+              <SelectTrigger>
+                <SelectValue placeholder="Choose a field…" />
+              </SelectTrigger>
+              <SelectContent>
+                {(options?.placement_keys ?? [])
+                  .filter((option) => !used.has(option.key))
+                  .map((option) => (
+                    <SelectItem key={option.key} value={option.key}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+              </SelectContent>
+            </Select>
+            {visible.length === 0 && (
+              <p className="flex items-center gap-1 text-xs text-muted-foreground">
+                <Plus className="size-3" /> No fields on this face yet.
+              </p>
+            )}
+          </div>
+        )}
 
-        {active && selected !== null ? (
+        {readOnly ? (
+          <p className="text-xs text-muted-foreground">
+            {visible.length === 0
+              ? "No fields on this face."
+              : "You can view this layout but not change it."}
+          </p>
+        ) : active && selected !== null ? (
           <div className="space-y-3 rounded-lg border border-border p-3">
             <div className="flex items-center justify-between">
               <span className="text-sm font-medium text-foreground">
@@ -392,12 +406,14 @@ export function PlacementEditor({
 
         <div className="flex justify-end gap-2">
           <Button variant="outline" size="sm" onClick={onClose}>
-            Cancel
+            {readOnly ? "Close" : "Cancel"}
           </Button>
-          <Button size="sm" onClick={() => void submit()} disabled={save.isPending}>
-            {save.isPending && <Loader2 className="size-4 animate-spin" />}
-            Save layout
-          </Button>
+          {!readOnly && (
+            <Button size="sm" onClick={() => void submit()} disabled={save.isPending}>
+              {save.isPending && <Loader2 className="size-4 animate-spin" />}
+              Save layout
+            </Button>
+          )}
         </div>
       </div>
     </div>

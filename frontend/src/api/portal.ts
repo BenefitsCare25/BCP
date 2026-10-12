@@ -684,10 +684,12 @@ export interface DiagnosisSearch {
   items: DiagnosisOption[];
 }
 
-export function useCoverageOptions() {
+/** `claimPeriod` for the claim form, which files into the year picked on the
+ * Claims page. Home and the card read the current year's insurer member ID. */
+export function useCoverageOptions(claimPeriod = false) {
   return useQuery({
-    queryKey: ["portal", "coverage-options"],
-    queryFn: () => portalApi.get<CoverageOptions>("/portal/coverage-options"),
+    queryKey: ["portal", "coverage-options", claimPeriod ? "period" : "current"],
+    queryFn: () => portalApi.get<CoverageOptions>("/portal/coverage-options", { claimPeriod }),
     meta: { localErrorHandling: true },
     retry: false,
   });
@@ -800,9 +802,13 @@ const CLAIMS_PAGE = 200;
  * relabel every screen; this constant would only make one needless request. */
 const POLICY_CURRENCY_FALLBACK = "SGD";
 
-export function usePortalClaims() {
+/** `claimPeriod` follows the benefit year picked on the Claims page (the
+ * question picker beside that ledger). Home and Usage leave it off: their
+ * balances, card and member ID are the current year's, and a period picked for
+ * last year's claim — or set by an emailed link — must not leak in. */
+export function usePortalClaims(claimPeriod = false) {
   return useQuery({
-    queryKey: ["portal", "claims"],
+    queryKey: ["portal", "claims", claimPeriod ? "period" : "current"],
     queryFn: async () => {
       const items: PortalClaim[] = [];
       const seen = new Set<string>();
@@ -814,6 +820,7 @@ export function usePortalClaims() {
           : "";
         const page: PortalClaimList = await portalApi.get<PortalClaimList>(
           `/portal/claims?limit=${CLAIMS_PAGE}${suffix}`,
+          { claimPeriod },
         );
         first ??= page;
         items.push(...page.items);

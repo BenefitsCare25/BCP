@@ -8,11 +8,14 @@ import { errorCode, errorFromText, uploadRefusal } from "@/lib/errors";
 import { withSessionRefreshLock } from "@/lib/sessionRefresh";
 import {
   isSignedOut,
+  isTransientRefreshStatus,
   rememberSessionEndNotice,
+  SessionRefreshUnavailableError,
   sessionEndingRefusal,
   sessionEndQuery,
   type SessionEndingRefusal,
 } from "@/lib/surfaceSession";
+import { signInReturningHere } from "@/auth/returnPath";
 import { currentPortalTenantSlug, portalPath } from "@/lib/tenant";
 import { usePortalSession } from "@/stores/portalSession";
 import { useNotifications } from "@/stores/notifications";
@@ -139,6 +142,11 @@ async function failed(
   throw errorFromText(res.status, text, res.statusText);
 }
 
+/** Set when the refresh cookie turned out to belong to another account. The
+ *  sign-in this tab is then sent to must not resume its page for whoever signs
+ *  in next; every other ended session comes back to it (`?from=`). */
+let accountSwitched = false;
+
 function handleUnauthorized(): never {
   clearLocalPortalSession();
   // Back to THIS company's sign-in. Dropping the segment on a routine session
@@ -152,14 +160,20 @@ function handleUnauthorized(): never {
     window.location.pathname !== target &&
     window.location.pathname !== "/portal/sign-in"
   ) {
-    window.location.assign(sessionEndTarget ?? target);
+    window.location.assign(sessionEndTarget ?? (accountSwitched ? target : signInReturningHere(target)));
   }
   throw new PortalUnauthorizedError();
 }
 
 let refreshInFlight: Promise<boolean> | null = null;
 
-/** Never after an explicit sign-out in this tab: the refresh cookie may by then
+/** True once a fresh access token is in place; false when the server refused
+ *  the session, which is then over. Rejects with
+ *  `SessionRefreshUnavailableError` when no verdict came back — rate-limited,
+ *  a deploy in progress, no connection — so the caller keeps the member and
+ *  their unsaved work where they are.
+ *
+ *  Never after an explicit sign-out in this tab: the refresh cookie may by then
  *  belong to whoever signed in at this company in another tab. */
 export async function refreshPortalSession(passive = false): Promise<boolean> {
   if (isSignedOut("portal")) return false;
@@ -171,6 +185,7 @@ export async function refreshPortalSession(passive = false): Promise<boolean> {
           method: "POST", credentials: "include", headers: { ...tenantHeader(), ...(passive ? { "X-Inspro-Session-Activity": "passive" } : {}) },
         });
         if (!res.ok) {
+          if (isTransientRefreshStatus(res.status)) throw new SessionRefreshUnavailableError(res.status);
           if (res.status === 403) {
             const refusal = sessionEndingRefusal(await res.text(), SESSION_ENDING_CODES);
             if (refusal) endRefusedSession(refusal);
@@ -182,21 +197,31 @@ export async function refreshPortalSession(passive = false): Promise<boolean> {
         if (currentMember !== expectedMember || (expectedMember !== null && data.member.id !== expectedMember)) {
           // Do not adopt another tab's account or replay this tab's work.
           // Leave its valid refresh cookie alone; only clear this tab.
+          accountSwitched = true;
           return handleUnauthorized();
         }
+        accountSwitched = false;
         usePortalSession.getState().setSession(data.token, data.expires_at, data.member, data.mfa_enrollment_required);
         return true;
-      } catch { return false; }
-      finally { refreshInFlight = null; }
+      } catch (error) {
+        // The account switch above has already ended this tab's session.
+        if (error instanceof PortalUnauthorizedError) return false;
+        throw error instanceof SessionRefreshUnavailableError ? error : new SessionRefreshUnavailableError();
+      } finally { refreshInFlight = null; }
     });
   }
   return refreshInFlight;
 }
 
-async function authenticatedFetch(path: string, init: RequestInit = {}, credential = false): Promise<Response> {
+async function authenticatedFetch(
+  path: string, init: RequestInit = {}, credential = false, claimPeriod = true,
+): Promise<Response> {
   const send = () => fetch(`${API_BASE}${path}`, {
     ...init, credentials: "include",
-    headers: { ...init.headers, ...tenantHeader(), ...authHeader(), ...claimPeriodHeaders(path) },
+    headers: {
+      ...init.headers, ...tenantHeader(), ...authHeader(),
+      ...(claimPeriod ? claimPeriodHeaders(path) : {}),
+    },
   });
   let res = await send();
   if (res.status === 401 && !credential) {
@@ -208,9 +233,15 @@ async function authenticatedFetch(path: string, init: RequestInit = {}, credenti
 async function request<T>(
   path: string,
   init: RequestInit = {},
-  /** Set when the request BODY carries a credential the member just typed —
-   * see `portalApi.verify`. */
-  opts: { credential?: boolean } = {},
+  opts: {
+    /** Set when the request BODY carries a credential the member just typed —
+     * see `portalApi.verify`. */
+    credential?: boolean;
+    /** `false` reads the CURRENT benefit year even on a claims path — for the
+     * screens outside the claims flow (Home, Usage, the card) that share the
+     * claims list and coverage options. See `claimPeriodHeaders`. */
+    claimPeriod?: boolean;
+  } = {},
 ): Promise<T> {
   if (opts.credential && Date.parse(usePortalSession.getState().expiresAt ?? "") <= Date.now()) {
     if (!(await refreshPortalSession())) return handleUnauthorized();
@@ -221,10 +252,9 @@ async function request<T>(
       "Content-Type": "application/json",
       ...tenantHeader(),
       ...authHeader(),
-      ...claimPeriodHeaders(path),
       ...init.headers,
     },
-  }, !!opts.credential);
+  }, !!opts.credential, opts.claimPeriod !== false);
   // Coded 409s (e.g. unpriced_elections / flex_overdrawn on enrollment submit)
   // surface as ConflictDetailError so pages can offer a choice — see `failed`.
   if (!res.ok) return failed(res, opts);
@@ -234,7 +264,7 @@ async function request<T>(
 
 export const portalApi = {
   passiveGet: <T>(path: string) => request<T>(path, { headers: { "X-Inspro-Session-Activity": "passive" } }),
-  get: <T>(path: string) => request<T>(path),
+  get: <T>(path: string, opts: { claimPeriod?: boolean } = {}) => request<T>(path, {}, opts),
   getWithTimeout: <T>(path: string, milliseconds: number) =>
     request<T>(path, { signal: AbortSignal.timeout(milliseconds) }),
   post: <T>(path: string, body: unknown) =>

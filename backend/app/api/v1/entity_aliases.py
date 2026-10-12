@@ -19,11 +19,12 @@ from sqlalchemy.orm import Session
 
 from app.core.audit import write_audit
 from app.core.auth import CurrentUser, get_current_user
-from app.core.deps import require_client_id
+from app.core.deps import is_firm_owner, require_client_id
 from app.db.session import get_db
 from app.models import EntityAlias
 from app.schemas.entity_alias import EntityAliasIn, EntityAliasOut, EntityAliasPatch
 from app.services.matching_engine import normalize_entity
+from app.services.setup_removals import refuse_removals
 
 router = APIRouter(tags=["entity-aliases"])
 
@@ -204,6 +205,13 @@ def update_entity_alias(
         payload.canonicals if payload.canonicals is not None else _canonicals(row)
     )
     norm_alias, targets = _prepare(alias, raw_targets)
+    if not is_firm_owner(user):
+        # Dropping a saved entity un-bridges it, like deleting the alias.
+        kept = {normalize_entity(c) for c in targets}
+        refuse_removals(
+            [repr(c) for c in _canonicals(row) if normalize_entity(c) not in kept],
+            "alias entities",
+        )
 
     clash = _find_by_alias(norm_alias, client_id, db)
     if clash is not None and clash.id != row.id:

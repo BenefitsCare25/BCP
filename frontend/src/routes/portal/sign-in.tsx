@@ -24,6 +24,7 @@ import { Label } from "@/components/ui/label";
 import { useCompany } from "@/components/portal/useCompany";
 import { portalPath } from "@/lib/tenant";
 import { activateNotificationClaimContext, notificationClaimId, notificationClaimYear } from "@/lib/claimNotificationLink";
+import { takePortalReturnPath } from "@/auth/returnPath";
 
 export function PortalSignInPage() {
   const pt = usePortalTranslation();
@@ -67,6 +68,12 @@ export function PortalSignInPage() {
     if (claimId) {
       activateNotificationClaimContext();
       void navigate({ to: "/portal/$company/claims/$claimId", params: { company: routeCompany || company.trim().toLowerCase(), claimId } });
+      return;
+    }
+    // The page they were on when the session ended, or the link they opened.
+    const back = takePortalReturnPath(routeCompany || company.trim().toLowerCase());
+    if (back) {
+      void navigate({ href: back });
       return;
     }
     void navigate({

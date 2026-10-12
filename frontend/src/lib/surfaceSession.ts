@@ -3,9 +3,35 @@
  * Both pieces must outlive the full-page loads these surfaces use to leave a
  * dead session, so they live in `tabStorage` rather than in a store. */
 import { useEffect, useState } from "react";
+import { ApiError } from "@/lib/errors";
 import { tabStorage } from "@/lib/tabStorage";
 
 export type CredentialSurface = "hr" | "portal";
+
+// ── A refresh with no verdict ────────────────────────────────────────────────
+
+/** Refresh answers that say nothing about the session: throttled (the refresh
+ *  endpoints allow 30 a minute per address, and an office shares one), timed
+ *  out, or a server or gateway fault. Any other refusal is the server's verdict
+ *  and ends the session. */
+export function isTransientRefreshStatus(status: number): boolean {
+  return status === 408 || status === 429 || status >= 500;
+}
+
+/** The session could not be renewed, which says nothing about whether it is
+ *  still valid. Callers keep the person on their page, with anything they had
+ *  entered, and let them try again — never sign them out. `status` is the
+ *  refresh response's, or 0 when no response arrived. */
+export class SessionRefreshUnavailableError extends ApiError {
+  constructor(status = 0) {
+    super(
+      "We couldn't confirm your sign-in just now. Try again in a moment.",
+      status,
+      "session_refresh_unavailable",
+    );
+    this.name = "SessionRefreshUnavailableError";
+  }
+}
 
 // ── Explicit sign-out ────────────────────────────────────────────────────────
 

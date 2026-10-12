@@ -272,3 +272,40 @@ def test_confirm_warns_on_unmatched_then_acknowledges(client: TestClient) -> Non
     )
     assert res.status_code == 200, res.text
     assert res.json()["status"] == "confirmed"
+
+
+def test_auto_match_resizes_the_sponsor_wallet(client: TestClient) -> None:
+    """Auto-match links a dependant exactly as a manual relink does, so the
+    sponsor's persisted wallet is re-sized from the new family status."""
+    py = _py_id()
+    emp_id = "00000000-0000-0000-0000-0000000000a3"
+    with SessionLocal() as s:
+        s.add(Employee(
+            id=emp_id, client_id=DEMO_CLIENT_ID, policy_year_id=py,
+            staff_id="FX-003", employee_name="Flex Matched",
+            attribute_values={
+                "grade": 18, "nationality": "Singapore", "marital_status": "single",
+            },
+            derived_attribute_values={"grade": 18},
+            source="csv_import", status="active",
+        ))
+        s.add(Dependant(
+            client_id=DEMO_CLIENT_ID, policy_year_id=py, employee_id=None,
+            link_method="unlinked", status="active",
+            attribute_values={
+                "name": "Spouse Y", "relationship": "spouse", "employee_staff_id": "FX-003",
+            },
+        ))
+        s.commit()
+    assert client.post(f"/api/v1/policy-years/{py}/flex-scheme/assign").status_code == 200
+    with SessionLocal() as s:
+        assert s.get(Employee, emp_id).flex_wallet_amount == 1000.0  # single
+
+    res = client.post(f"/api/v1/dependants/auto-match?policy_year_id={py}")
+    assert res.status_code == 200, res.text
+    assert res.json()["matched"] >= 1
+    assert res.json()["flex_errors"] == []
+    with SessionLocal() as s:
+        emp = s.get(Employee, emp_id)
+        assert emp.flex_family_status == "M"
+        assert emp.flex_wallet_amount == 2000.0

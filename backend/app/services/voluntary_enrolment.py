@@ -97,29 +97,41 @@ def enrolled_products(
     return taken - declined
 
 
-def voluntary_product_ids(db: Session, employee: Employee) -> set[str]:
-    """Products the member's matched categories make them only ELIGIBLE for:
-    employee participation ``voluntary``, and never one a compulsory category
-    of theirs requires (that cover can't be declined, so it is always held)."""
-    cat_ids = [
-        m["category_id"]
-        for m in (employee.matched_categories or [])
-        if m.get("category_id")
-    ]
-    if not cat_ids:
-        return set()
-    rows = db.execute(
-        select(
-            Category.product_id,
-            Category.participation_detail,
-            Category.participation_model,
-        ).where(Category.id.in_(cat_ids), Category.product_id.is_not(None))
-    ).all()
-    voluntary = {
-        row.product_id for row in rows if employee_participation(row) == "voluntary"
+def voluntary_products_by_employee(
+    db: Session, employees: list[Employee]
+) -> dict[str, set[str]]:
+    """Per member, the products their matched categories make them only
+    ELIGIBLE for: employee participation ``voluntary``, and never one a
+    compulsory category of theirs requires (that cover can't be declined, so it
+    is always held). One query for the whole list."""
+    cats_by_employee = {
+        emp.id: [m["category_id"] for m in (emp.matched_categories or []) if m.get("category_id")]
+        for emp in employees
     }
-    compulsory = {row.product_id for row in rows if row.participation_model == "compulsory"}
-    return voluntary - compulsory
+    cat_ids = {cat_id for ids in cats_by_employee.values() for cat_id in ids}
+    rows = {
+        row.id: row
+        for row in db.execute(
+            select(
+                Category.id,
+                Category.product_id,
+                Category.participation_detail,
+                Category.participation_model,
+            ).where(Category.id.in_(cat_ids), Category.product_id.is_not(None))
+        ).all()
+    } if cat_ids else {}
+    out: dict[str, set[str]] = {}
+    for emp_id, ids in cats_by_employee.items():
+        mine = [rows[cat_id] for cat_id in ids if cat_id in rows]
+        voluntary = {r.product_id for r in mine if employee_participation(r) == "voluntary"}
+        compulsory = {r.product_id for r in mine if r.participation_model == "compulsory"}
+        out[emp_id] = voluntary - compulsory
+    return out
+
+
+def voluntary_product_ids(db: Session, employee: Employee) -> set[str]:
+    """``voluntary_products_by_employee`` for one member."""
+    return voluntary_products_by_employee(db, [employee])[employee.id]
 
 
 def eligible_only_product_ids(

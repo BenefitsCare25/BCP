@@ -3,7 +3,7 @@ import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, ChevronDown, ChevronRight, Download, Plus, Upload } from "lucide-react";
 import { useMe } from "@/api/hooks";
-import { wicaApi, STATUSES, type WicaEmployee, type WicaIncident, type WicaSettings } from "@/api/wica";
+import { wicaApi, STATUSES, WICA_EMPLOYEE_SEARCH_MIN, WICA_SEARCH_MAX_LENGTH, type WicaEmployee, type WicaIncident, type WicaSettings } from "@/api/wica";
 import { useSession } from "@/stores/session";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -37,10 +37,11 @@ function IncidentList({ clientId, editable, settings, open }: { clientId: string
   const [period, setPeriod] = useState("");
   const [offset, setOffset] = useState(0);
   const [adding, setAdding] = useState(false);
-  const query = useQuery({ queryKey: ["wica", clientId, "incidents", q, period, offset], queryFn: () => wicaApi(clientId).get<{ items: WicaIncident[]; total: number }>(`/incidents?${new URLSearchParams({ q, ...(period ? { period_id: period } : {}), offset: String(offset) })}`) });
+  const term = q.trim();
+  const query = useQuery({ queryKey: ["wica", clientId, "incidents", term, period, offset], queryFn: () => wicaApi(clientId).get<{ items: WicaIncident[]; total: number }>(`/incidents?${new URLSearchParams({ q: term, ...(period ? { period_id: period } : {}), offset: String(offset) })}`) });
   return <div className="space-y-4">
     <div className="flex flex-wrap items-center gap-3">
-      <Input aria-label="Search incidents" placeholder="Search employee, staff ID or I-Report" value={q} onChange={e => { setQ(e.target.value); setOffset(0); }} className="sm:max-w-80" />
+      <Input aria-label="Search incidents" placeholder="Search employee, staff ID or I-Report" value={q} maxLength={WICA_SEARCH_MAX_LENGTH} onChange={e => { setQ(e.target.value); setOffset(0); }} className="sm:max-w-80" />
       <div className="w-full sm:w-56"><Choice aria-label="WICA period" value={period} onChange={e => { setPeriod(e.target.value); setOffset(0); }}><option value="">All WICA periods</option>{settings.periods.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}</Choice></div>
       {editable && settings.enabled && <Button className="sm:ml-auto" onClick={() => setAdding(v => !v)} aria-expanded={adding}><Plus className="size-4" />New incident</Button>}
     </div>
@@ -50,7 +51,7 @@ function IncidentList({ clientId, editable, settings, open }: { clientId: string
       <div className="wica-incidents overflow-x-auto rounded-xl border border-border bg-card">
         <table className="w-full text-left text-sm"><thead className="border-b border-border bg-muted/40 text-muted-foreground"><tr>{["Employee", "Incident date", "I-Report", "Period", ""].map((label, i) => <th key={i} scope="col" className="px-4 py-3 font-medium">{label}</th>)}</tr></thead>
           <tbody className="divide-y divide-border">{query.data.items.map(row => <tr key={row.id} className="hover:bg-muted/30"><td className="px-4 py-4"><button className="text-left font-medium text-primary underline-offset-4 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring" onClick={() => open(row.id)}>{row.employee_name}</button><div className="mt-1 text-xs text-muted-foreground">{row.staff_id}</div></td><td className="whitespace-nowrap px-4 py-4">{dateLabel(row.incident_date)}</td><td className="px-4 py-4">{row.report_number || "—"}</td><td className="px-4 py-4">{settings.periods.find(p => p.id === row.period_id)?.label || "—"}</td><td className="px-4 py-4"><Button variant="ghost" size="icon" aria-label={`Open incident for ${row.employee_name}`} onClick={() => open(row.id)}><ChevronRight className="size-4" /></Button></td></tr>)}
-          {!query.data.items.length && <tr><td colSpan={5} className="px-4 py-12 text-center text-muted-foreground">{q || period ? "No matching incidents." : "No incidents recorded."}</td></tr>}</tbody></table>
+          {!query.data.items.length && <tr><td colSpan={5} className="px-4 py-12 text-center text-muted-foreground">{term || period ? "No matching incidents." : "No incidents recorded."}</td></tr>}</tbody></table>
       </div>
       {query.data.total > 25 && <div className="flex items-center justify-end gap-3 text-sm"><span>{offset + 1}–{Math.min(offset + 25, query.data.total)} of {query.data.total}</span><Button variant="outline" disabled={!offset} onClick={() => setOffset(offset - 25)}>Previous</Button><Button variant="outline" disabled={offset + 25 >= query.data.total} onClick={() => setOffset(offset + 25)}>Next</Button></div>}
     </>}
@@ -64,7 +65,11 @@ function NewIncident({ clientId, settings, cancel, open }: { clientId: string; s
   const [manual, setManual] = useState(false);
   const [employee, setEmployee] = useState<WicaEmployee | null>(null);
   const [period, setPeriod] = useState(settings.periods.find(p => p.start_date <= today() && p.end_date >= today())?.id ?? settings.periods[0]?.id ?? "");
-  const employees = useQuery({ queryKey: ["wica", clientId, "employees", search], queryFn: () => wicaApi(clientId).get<WicaEmployee[]>(`/employees?q=${encodeURIComponent(search)}`), enabled: search.trim().length >= 2 && !manual && !employee });
+  // One trimmed term drives the request AND the dropdown: gating the list on the
+  // raw text left "a " showing "Searching…" for a query that never ran.
+  const term = search.trim();
+  const lookup = term.length >= WICA_EMPLOYEE_SEARCH_MIN && !manual && !employee;
+  const employees = useQuery({ queryKey: ["wica", clientId, "employees", term], queryFn: () => wicaApi(clientId).get<WicaEmployee[]>(`/employees?${new URLSearchParams({ q: term })}`), enabled: lookup });
   const mutation = useMutation({ mutationFn: (body: unknown) => wicaApi(clientId).post<WicaIncident>("/incidents", body), onSuccess: row => {
     void queryClient.invalidateQueries({ queryKey: ["wica", clientId, "incidents"] });
     open(row.id);
@@ -78,8 +83,8 @@ function NewIncident({ clientId, settings, cancel, open }: { clientId: string; s
     <fieldset disabled={mutation.isPending} className="space-y-4">
       <div className="grid gap-4 md:grid-cols-2"><Field label="WICA period"><Choice value={period} onChange={e => setPeriod(e.target.value)} required>{settings.periods.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}</Choice></Field><Field label="Incident date"><Input name="incident_date" type="date" max={today()} required /></Field></div>
       <label className="flex items-center gap-2 text-sm"><input type="checkbox" className="size-4 accent-primary" checked={manual} onChange={e => { setManual(e.target.checked); setEmployee(null); }} />Employee not in member listing</label>
-      {manual ? <div className="grid gap-4 md:grid-cols-2"><Field label="Employee name"><Input name="employee_name" maxLength={255} required /></Field><Field label="Staff ID"><Input name="staff_id" maxLength={128} required /></Field></div> : <div className="space-y-2"><Field label="Employee"><Input value={employee ? `${employee.employee_name} · ${employee.staff_id}` : search} placeholder="Search name or staff ID" onChange={e => { setEmployee(null); setSearch(e.target.value); }} autoComplete="off" /></Field>
-        {!employee && search.length >= 2 && <div className="max-h-48 overflow-auto rounded-md border border-border">{employees.isPending ? <p role="status" className="p-3 text-sm">Searching…</p> : employees.isError ? <Failure error={employees.error} /> : employees.data?.length ? employees.data.map(emp => <button type="button" key={emp.id} className="block w-full px-3 py-2 text-left text-sm hover:bg-muted focus-visible:bg-muted focus-visible:outline focus-visible:outline-ring" onClick={() => setEmployee(emp)}>{emp.employee_name} · {emp.staff_id}</button>) : <p className="p-3 text-sm text-muted-foreground">No matching employees.</p>}</div>}
+      {manual ? <div className="grid gap-4 md:grid-cols-2"><Field label="Employee name"><Input name="employee_name" maxLength={255} required /></Field><Field label="Staff ID"><Input name="staff_id" maxLength={128} required /></Field></div> : <div className="space-y-2"><Field label="Employee"><Input value={employee ? `${employee.employee_name} · ${employee.staff_id}` : search} placeholder="Search name or staff ID" maxLength={employee ? undefined : WICA_SEARCH_MAX_LENGTH} onChange={e => { setEmployee(null); setSearch(e.target.value.slice(0, WICA_SEARCH_MAX_LENGTH)); }} autoComplete="off" /></Field>
+        {lookup && <div className="max-h-48 overflow-auto rounded-md border border-border">{employees.isPending ? <p role="status" className="p-3 text-sm">Searching…</p> : employees.isError ? <Failure error={employees.error} /> : employees.data?.length ? employees.data.map(emp => <button type="button" key={emp.id} className="block w-full px-3 py-2 text-left text-sm hover:bg-muted focus-visible:bg-muted focus-visible:outline focus-visible:outline-ring" onClick={() => setEmployee(emp)}>{emp.employee_name} · {emp.staff_id}</button>) : <p className="p-3 text-sm text-muted-foreground">No matching employees.</p>}</div>}
       </div>}
       <div className="grid gap-4 md:grid-cols-2"><Field label="MOM I-Report number (optional)"><Input name="report_number" maxLength={128} /></Field><Field label="Broker remarks (optional)"><Input name="remarks" maxLength={4000} /></Field></div>
       <div className="flex justify-end gap-2"><Button type="button" variant="outline" onClick={cancel}>Cancel</Button><Button loading={mutation.isPending} disabled={!period || (!manual && !employee)}>Create incident</Button></div>

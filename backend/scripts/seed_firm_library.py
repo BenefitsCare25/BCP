@@ -144,9 +144,12 @@ def seed_all_schemas(firm_id: str | None = None) -> None:
       would reach `public` and stop there, while the app reads the firm schema
       and keeps the stale value.
 
-    Copying first and then seeding resolves both: the copy brings new rows in at
-    their canonical ids, and the seed matches on the NATURAL key (attribute_id /
-    code / name) so it updates those rows in place and inserts nothing.
+    Provisioning now copies the global library only into catalog tables it has
+    just created (a new firm), so it can never bring back an entry a firm
+    deleted. For an existing firm the seed does the work: it matches on the
+    NATURAL key (attribute_id / code / name), updating rows in place and
+    inserting only entries the firm lacks — which includes a default the firm
+    deleted, so run it for a firm only when re-adding the defaults is intended.
 
     Insurers are seeded per-firm for a different reason: `insurers` is not in the
     copy list at all, so seeding only `public` leaves the firm's table empty and
@@ -178,10 +181,11 @@ def seed_all_schemas(firm_id: str | None = None) -> None:
 
     for fid in firm_ids:
         print(f"firm {fid}:")
-        # 1. Copy any NEW catalog rows down from public, at canonical ids.
+        # 1. Make sure the firm's tables exist (a new table gets the global
+        #    library at canonical ids; existing tables are left as they are).
         provision_firm_schema(engine, fid)
-        # 2. Then seed, which matches on the natural key — so it refreshes the
-        #    rows the copy skipped and inserts nothing.
+        # 2. Then seed, which matches on the natural key — it refreshes rows in
+        #    place and inserts only entries the firm does not have.
         print(f"    {_seed_one_schema(fid)}")
 
 

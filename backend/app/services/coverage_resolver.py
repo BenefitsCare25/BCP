@@ -13,7 +13,7 @@ in callers.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Final, Literal
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -183,17 +183,34 @@ def employee_compulsory_product_ids(db: Session, employee: Employee) -> set[str]
     return {product_id for product_id in rows if product_id is not None}
 
 
+OrphanReason = Literal["product_left_cohort", "tier_missing"]
+#: The product left the employee's cohort — the resolver skips the override.
+ORPHAN_PRODUCT_LEFT_COHORT: Final = "product_left_cohort"
+#: The elected tier was deleted — the override is STILL APPLIED; removing it
+#: returns the member to the cohort default plan.
+ORPHAN_TIER_MISSING: Final = "tier_missing"
+
+
 def find_orphan_overrides(
     db: Session, policy_year_id: str, employees: list[Employee]
 ) -> list[EmployeePlanOverride]:
-    """Overrides stranded by category churn, in either of two ways:
+    """Overrides stranded by category churn (see :func:`classify_orphan_overrides`)."""
+    return [ov for ov, _ in classify_orphan_overrides(db, policy_year_id, employees)]
 
-    1. The override's PRODUCT is no longer covered by the employee's current
-       matched categories (re-matching moved them to a different cohort).
-    2. The override's elected ``tier_category_id`` no longer resolves to a live
-       Category row (a slip re-parse deleted the tier) — the coverage line
-       still renders, but its pricing silently falls back to the baseline
-       tier, so the election must be reconciled.
+
+def classify_orphan_overrides(
+    db: Session, policy_year_id: str, employees: list[Employee]
+) -> list[tuple[EmployeePlanOverride, OrphanReason]]:
+    """Overrides stranded by category churn, with why, in either of two ways:
+
+    1. ``product_left_cohort`` — the override's PRODUCT is no longer covered by
+       the employee's current matched categories (re-matching moved them to a
+       different cohort). Inert: the resolver never reaches it.
+    2. ``tier_missing`` — the override's elected ``tier_category_id`` no longer
+       resolves to a live Category row (a slip re-parse deleted the tier). The
+       override still applies — the coverage line renders its plan — but its
+       pricing silently falls back to the baseline tier, so the election must
+       be reconciled.
 
     Surface both so they can be reconciled rather than silently applied,
     repriced, or dropped.
@@ -240,10 +257,10 @@ def find_orphan_overrides(
             ).scalars()
         )
 
-    orphans: list[EmployeePlanOverride] = []
+    orphans: list[tuple[EmployeePlanOverride, OrphanReason]] = []
     for (emp_id, product_id), ov in overrides.items():
         if product_id not in emp_product_ids.get(emp_id, set()):
-            orphans.append(ov)
+            orphans.append((ov, ORPHAN_PRODUCT_LEFT_COHORT))
         elif ov.tier_category_id and ov.tier_category_id not in live_tier_ids:
-            orphans.append(ov)
+            orphans.append((ov, ORPHAN_TIER_MISSING))
     return orphans

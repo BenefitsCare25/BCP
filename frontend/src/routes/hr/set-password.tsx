@@ -9,6 +9,8 @@ import { errorCode } from "@/lib/errors";
 import { PASSWORD_MAX_LENGTH, authStepError } from "@/lib/loginValidation";
 import { useSetPasswordToken } from "@/lib/setPasswordToken";
 import { hrPath } from "@/lib/tenant";
+import { takeHrReturnPath } from "@/auth/returnPath";
+import { useHrSession } from "@/stores/hrSession";
 import { MFA_CODE_MAX_LENGTH, canSubmitMfaCode, normalizeMfaCode } from "@/lib/mfa";
 import { AuthScene } from "@/components/auth/AuthScene";
 import { Button } from "@/components/ui/button";
@@ -50,7 +52,13 @@ export function HrSetPasswordPage() {
   const match = password.length > 0 && password === confirm;
   const canSubmit = st.ok && match && !!token && password.length <= PASSWORD_MAX_LENGTH;
 
-  const finish = () => void navigate({ to: "/hr/dashboard" });
+  const finish = () => {
+    // Where sign-in was taking them; kept for the security page when two-step
+    // setup comes first.
+    const back = useHrSession.getState().mfaEnrollmentRequired ? null : takeHrReturnPath();
+    if (back) void navigate({ href: back });
+    else void navigate({ to: "/hr/dashboard" });
+  };
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();

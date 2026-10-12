@@ -16,6 +16,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useCompany } from "@/components/portal/useCompany";
 import { activateNotificationClaimContext, notificationClaimId } from "@/lib/claimNotificationLink";
+import { takePortalReturnPath } from "@/auth/returnPath";
+import { usePortalSession } from "@/stores/portalSession";
 
 const MIN_LENGTH = 12;
 
@@ -58,9 +60,13 @@ export function PortalSetPasswordPage() {
     if (claimId) {
       activateNotificationClaimContext();
       void navigate({ to: "/portal/$company/claims/$claimId", params: { company, claimId } });
-    } else {
-      void navigate({ to: "/portal/$company", params: { company } });
+      return;
     }
+    // Where sign-in was taking them; kept for the security page when two-step
+    // setup comes first.
+    const back = usePortalSession.getState().mfaEnrollmentRequired ? null : takePortalReturnPath(company);
+    if (back) void navigate({ href: back });
+    else void navigate({ to: "/portal/$company", params: { company } });
   };
 
   const submit = (e: React.FormEvent) => {

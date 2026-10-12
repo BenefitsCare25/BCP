@@ -32,6 +32,17 @@ function Explain({ text, children }: { text: ReactNode; children: ReactNode }) {
   );
 }
 
+/** The change row a full revert emits for the cleared buy/sell-leave trade. */
+const LEAVE_ROW = "(leave)";
+
+/** Where a reverted product landed. Only the server's flags name a decline or
+ *  "not enrolled": a null `to_plan` is also a cohort default with no plan code. */
+function destination(c: CoverageChange): string {
+  if (c.to_plan) return c.to_plan;
+  if (c.not_enrolled) return "not enrolled";
+  return c.declined ? "declined" : "cohort default";
+}
+
 /**
  * Revert a member's coverage — to the cohort default, and (only where a specific
  * enrolment period is on screen) to that period's baseline. Both confirm first
@@ -97,7 +108,7 @@ export function CoverageRevertControls({
   // only, so it cannot put the trade back. Undo must say so, or a broker who
   // reverted someone who had traded 3 days gets the coverage back and the trade
   // (and its wallet impact) stays gone with nothing on screen admitting it.
-  const clearedLeave = (result ?? []).some((c) => c.product_code === "(leave)");
+  const clearedLeave = (result ?? []).some((c) => c.product_code === LEAVE_ROW);
 
   const runUndo = async () => {
     if (!batchId) return;
@@ -131,8 +142,11 @@ export function CoverageRevertControls({
     }
   };
 
+  // The leave row is a trade, not a product — it has its own note below.
   const applied = (result ?? []).filter(
-    (c) => c.outcome === "reverted" || c.outcome === "reset_to_default",
+    (c) =>
+      (c.outcome === "reverted" || c.outcome === "reset_to_default") &&
+      c.product_code !== LEAVE_ROW,
   );
   // `skipped` is NOT "already correct" — it means the revert deliberately left a
   // live override in place (the product left the member's cohort, or the
@@ -178,11 +192,11 @@ export function CoverageRevertControls({
         <div className="space-y-1 text-xs">
           <p className="text-muted-foreground">
             {applied.length === 0
-              ? skipped.length === 0
+              ? skipped.length === 0 && !clearedLeave
                 ? "No coverage changed — already at the target state."
-                : "No coverage changed."
+                : "No product coverage changed."
               : `Reverted ${applied.length} product${applied.length === 1 ? "" : "s"}: ${applied
-                  .map((c) => `${c.product_code} → ${c.to_plan ?? "declined"}`)
+                  .map((c) => `${c.product_code} → ${destination(c)}`)
                   .join(", ")}.`}
           </p>
           {/* Keyed by index: `product_code` is NOT unique here. A baseline
@@ -190,7 +204,7 @@ export function CoverageRevertControls({
               the cohort) and another from the leftover-override walk for that
               same code — the documented orphan-override case. */}
           {skipped.length > 0 && (
-            <ul className="space-y-0.5 text-amber-700">
+            <ul className="space-y-0.5 text-warn">
               {skipped.map((c, i) => (
                 <li key={`${c.product_code}-${i}`}>
                   <span className="font-medium">{c.product_code}</span> left
@@ -199,10 +213,11 @@ export function CoverageRevertControls({
               ))}
             </ul>
           )}
-          {batchId && clearedLeave && (
-            <p className="text-amber-700">
-              The buy/sell-leave trade was cleared too. Undo restores coverage
-              only — it cannot put the trade back.
+          {clearedLeave && (
+            <p className="text-warn">
+              The buy/sell-leave trade was cleared{applied.length > 0 ? " too" : ""}.
+              {batchId &&
+                " Undo restores coverage only — it cannot put the trade back."}
             </p>
           )}
           {batchId && (

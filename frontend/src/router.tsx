@@ -16,7 +16,12 @@ import {
 } from "@/components/shell/ErrorBoundary";
 import { clearLocalSession, getActiveAccount } from "@/auth/msal";
 import { clearBrokerInvite } from "@/auth/brokerInvite";
-import { rememberReturnPath, takeReturnPath } from "@/auth/returnPath";
+import {
+  rememberReturnPath,
+  takeHrReturnPath,
+  takePortalReturnPath,
+  takeReturnPath,
+} from "@/auth/returnPath";
 import { brokerAuthEnabled } from "@/auth/staffSignIn";
 import { useBrokerSession } from "@/stores/brokerSession";
 import { DENIED_SEARCH, NoAccessError, SIGN_IN_PATH } from "@/api/client";
@@ -258,6 +263,10 @@ const signInRoute = createRoute({
   component: SignInPage,
 });
 
+/** The employee and HR sign-in pages' own session check. A refresh that got no
+ *  verdict (rate limit, deploy, offline) shows the form, not an error page. */
+const signedInAlready = (refresh: () => Promise<boolean>) => refresh().catch(() => false);
+
 // ── Employee portal — a sibling surface with its OWN auth (member token, not
 // MSAL). The broker shell's guard never runs for /portal/* routes.
 //
@@ -276,9 +285,12 @@ const signInRoute = createRoute({
 const portalSignInRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/portal/$company/sign-in",
-  beforeLoad: async ({ params }) => {
+  beforeLoad: async ({ params, search }) => {
+    // The page the shell sent a signed-out member away from, resumed once
+    // sign-in (and any password or two-factor step) completes.
+    rememberReturnPath((search as { from?: unknown }).from, "portal");
     // Already signed in → straight in.
-    if (hasValidPortalSession() || await refreshPortalSession()) {
+    if (hasValidPortalSession() || await signedInAlready(refreshPortalSession)) {
       if (usePortalSession.getState().mfaEnrollmentRequired) {
         throw redirect({ to: "/portal/$company/security", params: { company: params.company } });
       }
@@ -287,6 +299,8 @@ const portalSignInRoute = createRoute({
         activateNotificationClaimContext();
         throw redirect({ to: "/portal/$company/claims/$claimId", params: { company: params.company, claimId } });
       }
+      const back = takePortalReturnPath(params.company);
+      if (back) throw redirect({ href: back });
       throw redirect({
         to: "/portal/$company",
         params: { company: params.company },
@@ -396,9 +410,13 @@ const portalLegacyClaimRoute = createRoute({
 const hrSignInRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/hr/sign-in",
-  beforeLoad: async () => {
-    if (hasValidHrSession() || await refreshHrSession()) {
-      throw redirect({ to: useHrSession.getState().mfaEnrollmentRequired ? "/hr/security" : "/hr/dashboard" });
+  beforeLoad: async ({ search }) => {
+    rememberReturnPath((search as { from?: unknown }).from, "hr");
+    if (hasValidHrSession() || await signedInAlready(refreshHrSession)) {
+      if (useHrSession.getState().mfaEnrollmentRequired) throw redirect({ to: "/hr/security" });
+      const back = takeHrReturnPath();
+      if (back) throw redirect({ href: back });
+      throw redirect({ to: "/hr/dashboard" });
     }
   },
   component: HrSignInPage,
@@ -423,12 +441,17 @@ const hrLayoutRoute = createRoute({
     // The access token lives ~10 min; the refresh session ~12h. If the access
     // token has expired, try a silent refresh against the cookie BEFORE bouncing
     // to sign-in — otherwise navigation forces a full re-login every 10 minutes.
+    // A refresh with no verdict (429, 5xx, offline) rejects: the route shows
+    // the error with a retry, and nobody is signed out for a blip.
     if (!hasValidHrSession() && !(await refreshHrSession())) {
       // A refresh refused because HR access was switched off has already sent
       // the tab to sign-in with that reason; follow it, not the bare page.
       const ended = hrSessionEndTarget();
       if (ended) throw redirect({ href: ended, reloadDocument: true });
-      throw redirect({ to: "/hr/sign-in" });
+      throw redirect({
+        to: "/hr/sign-in",
+        search: { from: location.href } as Record<string, string>,
+      });
     }
     if (useHrSession.getState().mfaEnrollmentRequired && location.pathname !== "/hr/security") {
       throw redirect({ to: "/hr/security" });
@@ -468,16 +491,23 @@ const portalLayoutRoute = createRoute({
   getParentRoute: () => rootRoute,
   id: "portal-shell",
   beforeLoad: async ({ params, location }) => {
+    // A refresh with no verdict (429, 5xx, offline) rejects: the route shows
+    // the error with a retry, and nobody is signed out for a blip.
     if (!hasValidPortalSession() && !(await refreshPortalSession())) {
       // A refresh refused because access ended or the portal was switched off
       // has already sent the tab to sign-in with that reason; follow it.
       const ended = portalSessionEndTarget();
       if (ended) throw redirect({ href: ended, reloadDocument: true });
       // Back to THIS company's sign-in, not the pathless one — an expired
-      // session must not cost the member the company their link named.
+      // session must not cost the member the company their link named, or
+      // the page it opened (`from`, resumed after sign-in).
       const company = (params as { company?: string }).company;
       if (company) {
-        throw redirect({ to: "/portal/$company/sign-in", params: { company } });
+        throw redirect({
+          to: "/portal/$company/sign-in",
+          params: { company },
+          search: { from: location.href } as Record<string, string>,
+        });
       }
       throw redirect({ to: "/portal/sign-in" });
     }

@@ -395,6 +395,7 @@ def populate_claim_out(
         else claim_documents(db, claim)
     )
     out.documents = [StoredDocumentOut.model_validate(d) for d in docs]
+    ref: StoredDocument | None = None
     if claim.referral_document_id:
         ref = (
             referral_docs.get(claim.referral_document_id)
@@ -437,12 +438,20 @@ def populate_claim_out(
     # Filled HERE — in the one builder the member payload, the broker payload
     # and the broker's employee-view preview all share — so the three cannot
     # answer "may this member still edit?" differently.
+    required_keys = [slot.key for slot in out.required_doc_slots]
     for source, result in zip(docs, out.documents, strict=True):
         result.removal_reason = claim_document_removal_block(
-            claim, source, docs, [slot.key for slot in out.required_doc_slots],
-            for_broker=for_broker,
+            claim, source, docs, required_keys, for_broker=for_broker,
         )
         result.removal_allowed = result.removal_reason is None
+    # The referral letter too: the broker viewer lists it beside the claim's own
+    # documents, and left to the schema default it told the assessor to
+    # "contact your claims team".
+    if ref is not None and out.referral_document is not None:
+        out.referral_document.removal_reason = claim_document_removal_block(
+            claim, ref, docs, required_keys, for_broker=for_broker,
+        )
+        out.referral_document.removal_allowed = out.referral_document.removal_reason is None
     out.member_editable, out.member_edit_block = member_editability(claim)
     out.member_can_submit = member_can_submit(claim)
     # Whether THIS claim must name the treating doctor. Served for the same
