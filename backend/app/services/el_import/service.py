@@ -9,18 +9,17 @@ after the commit.
 """
 from __future__ import annotations
 
-from datetime import date
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import delete, or_, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.audit import write_audit
 from app.core.auth import CurrentUser
 from app.core.deps import tenant_or_global
-from app.models import Category, Dependant, Employee, EmployeeAttributeSchema, PolicyYear
-from app.models.employee_listing import ElLayoutProfile, ListingAssignment
+from app.models import Category, EmployeeAttributeSchema, PolicyYear
+from app.models.employee_listing import ElLayoutProfile
 from app.schemas.employee_listing import (
     JoinerProductOut,
     JoinerRuleOut,
@@ -32,6 +31,7 @@ from app.schemas.employee_listing import (
     ListingLabelOut,
     ListingLayoutOut,
     ListingMappingIn,
+    ListingPeopleOut,
     ListingPreviewOut,
     ListingProductOut,
 )
@@ -42,7 +42,10 @@ from app.services.adc import (
     missing_digest,
     refuse_blind_termination,
 )
-from app.services.el_import.checks import cover_checks
+from app.services.coverage_limits import ProductLimits, product_limits
+from app.services.el_import.assignments import write_assignments
+from app.services.el_import.checks import CheckContext, cover_checks
+from app.services.el_import.entities import link_entities, listing_entities
 from app.services.el_import.joiner_rules import (
     ProductRules,
     derive_product_rules,
@@ -56,10 +59,10 @@ from app.services.el_import.mapping import (
     block_label_stats,
     category_options,
     company_products,
-    normalize_label,
     suggest_block_products,
     suggest_labels,
 )
+from app.services.el_import.notices import listing_notices
 from app.services.el_import.records import (
     PII_ATTRIBUTES,
     ListingRecords,
@@ -67,14 +70,9 @@ from app.services.el_import.records import (
     unreadable_rows,
 )
 from app.services.el_import.underwriting import apply_listing_underwriting
-from app.services.el_workbook import ElCover, ElEmployee, ElFormatError, ElLayout, ElWorkbook
+from app.services.el_workbook import ElFormatError, ElLayout, ElWorkbook
 from app.services.el_workbook import read_employee_listing as read_workbook
-from app.services.el_workbook.values import text
 from app.services.matching_engine import insured_names, normalize_entity
-from app.services.roster_attributes import DOB_KEYS, first_value, iso_date
-from app.services.roster_dedup import DEP_NAME_KEYS, employee_nric, staff_key
-
-_DECISION_ROLES = {"category", "plan_type", "family_group", "admin_type"}
 
 
 class UnresolvedListingMapping(ValueError):
@@ -228,6 +226,35 @@ def _joiner_out(
     ]
 
 
+def _people(workbook: ElWorkbook) -> ListingPeopleOut:
+    relations = [d.fields.get("relationship") for e in workbook.employees for d in e.dependants]
+    return ListingPeopleOut(
+        employees=len(workbook.employees), dependants=len(relations),
+        spouses=relations.count("spouse"), children=relations.count("child"),
+    )
+
+
+def _year_limits(
+    db: Session, policy_year_id: str
+) -> tuple[PolicyYear | None, dict[str, ProductLimits]]:
+    """The policy year and each product's slip limits, keyed by product code."""
+    year = db.get(PolicyYear, policy_year_id)
+    if year is None:
+        return None, {}
+    return year, {lim.code: lim for lim in product_limits(db, year).values()}
+
+
+def _label_out(d: LabelSuggestion) -> ListingLabelOut:
+    return ListingLabelOut(
+        block=d.block, key=d.key, label=d.stats.label,
+        employees=d.stats.employees, dependants=d.stats.dependants,
+        plans=[p for p, _ in d.stats.plans.most_common()],
+        tier_dependants=d.stats.tier_dependants,
+        choice=_option_out(d.choice) if d.choice else None,
+        not_covered=d.not_covered, confidence=d.confidence, source=d.source,
+    )
+
+
 def preview(
     db: Session,
     client_id: str,
@@ -239,38 +266,40 @@ def preview(
     products, block_products, options, decisions, profile = _resolve(
         db, client_id, policy_year_id, workbook, mapping
     )
-    records = _with_sole_entity(
-        db, policy_year_id, build_records(workbook, _known_attribute_ids(db, client_id))
-    )
+    year, limits = _year_limits(db, policy_year_id)
+    records = _with_sole_entity(db, policy_year_id, build_records(
+        workbook, _known_attribute_ids(db, client_id), year.start_date if year else None,
+    ))
     plan, members = evaluate_records(
         db, policy_year_id, client_id, records.employees, records.dependants,
         dropped_rows=unreadable_rows(workbook),
     )
     members.missing_digest = missing_digest(plan)
+    layout = workbook.layout
     return ListingPreviewOut(
-        layout=_layout_out(workbook.layout),
+        layout=_layout_out(layout),
         products=[ListingProductOut(code=p.code, display_name=p.display_name)
                   for p in sorted(products, key=lambda p: p.code)],
         block_products={str(i): codes for i, codes in block_products.items()},
-        labels=[
-            ListingLabelOut(
-                block=d.block, key=d.key, label=d.stats.label,
-                employees=d.stats.employees, dependants=d.stats.dependants,
-                plans=[p for p, _ in d.stats.plans.most_common()],
-                choice=_option_out(d.choice) if d.choice else None,
-                not_covered=d.not_covered, confidence=d.confidence, source=d.source,
-            )
-            for d in decisions
-        ],
+        labels=[_label_out(d) for d in decisions],
         options={str(i): [_option_out(o) for o in opts] for i, opts in options.items()},
         members=members,
         issues=[ListingIssueOut(row=i.row, field=i.field, code=i.code, message=i.message)
                 for i in workbook.issues],
-        checks=cover_checks(workbook, decisions),
+        checks=cover_checks(
+            workbook, decisions,
+            CheckContext(period_start=year.start_date if year else None, limits=limits),
+        ),
         reused_profile=profile is not None,
         joiner_rules=_joiner_out(
             _joiner_rules(workbook, records, decisions, block_products), options
         ),
+        people=_people(workbook),
+        entities=listing_entities(db, client_id, policy_year_id, workbook),
+        notices=listing_notices(
+            year, layout.stated_period, layout.reference_date, decisions, limits
+        ),
+        policy_period=(year.start_date, year.end_date) if year else None,
     )
 
 
@@ -338,160 +367,6 @@ def _ensure_attributes(db: Session, client_id: str, attribute_ids: dict[str, str
             description="Imported from the company's Employee Listing.",
         ))
     db.flush()
-
-
-def _recorded(cover: ElCover) -> dict[str, Any]:
-    return {
-        k: (v.isoformat() if isinstance(v, date) else v)
-        for k, v in cover.values.items()
-        if k not in _DECISION_ROLES and v not in (None, "")
-    }
-
-
-def _listed_employee(
-    listed: ElEmployee, by_staff: dict[str, Employee], by_nric: dict[str, Employee]
-) -> Employee | None:
-    staff_id = staff_key(listed.fields.get("staff_id"))
-    employee = by_staff.get(staff_id) if staff_id else None
-    if employee is None:
-        nric = employee_nric({"id_no": listed.fields.get("national_id")})
-        employee = by_nric.get(nric) if nric else None
-    return employee
-
-
-def _write_assignments(
-    db: Session,
-    client_id: str,
-    policy_year_id: str,
-    workbook: ElWorkbook,
-    decisions: dict[tuple[int, str], LabelSuggestion],
-    product_ids: dict[str, str],
-    block_products: dict[int, list[str]],
-) -> tuple[int, int]:
-    """Replace the listed cover of everyone in the uploaded listing.
-
-    People absent from the file keep the cover an earlier listing stated, as
-    the roster keeps them. A block whose listed wording is mapped to "not
-    covered", and every block of an employee listed with no cover at all, get a
-    row per product with no category: the listing says
-    they are not covered, so matching must not fall back to rules for them.
-    A repeated row for the same person and product (a duplicate staff ID)
-    keeps the first, as the movement planner does.
-    """
-    employees = list(db.execute(
-        select(Employee).where(Employee.policy_year_id == policy_year_id,
-                               Employee.client_id == client_id)
-    ).scalars())
-    by_staff = {staff_key(e.staff_id): e for e in employees if e.staff_id}
-    by_nric = {e.national_id_normalized: e for e in employees if e.national_id_normalized}
-    dependants: dict[str, list[Dependant]] = {}
-    for dep in db.execute(
-        select(Dependant).where(Dependant.policy_year_id == policy_year_id,
-                                Dependant.client_id == client_id)
-    ).scalars():
-        dependants.setdefault(dep.employee_id or "", []).append(dep)
-
-    resolved = [
-        (listed, employee) for listed in workbook.employees
-        if (employee := _listed_employee(listed, by_staff, by_nric)) is not None
-    ]
-    listed_ids = {employee.id for _, employee in resolved}
-    if listed_ids:
-        # A dependant's row is keyed by the dependant, not the employee it was
-        # listed under, so one re-linked since an earlier listing is cleared too.
-        listed_dependant_ids = {d.id for e in listed_ids for d in dependants.get(e, [])}
-        db.execute(delete(ListingAssignment).where(
-            ListingAssignment.policy_year_id == policy_year_id,
-            ListingAssignment.client_id == client_id,
-            or_(
-                ListingAssignment.employee_id.in_(listed_ids),
-                ListingAssignment.dependant_id.in_(listed_dependant_ids),
-            ),
-        ))
-    written: set[tuple[str, str]] = set()
-
-    def add(row: ListingAssignment) -> int:
-        key = (row.member_key, row.product_id)
-        if key in written:
-            return 0
-        written.add(key)
-        db.add(row)
-        return 1
-
-    emp_count = dep_count = 0
-    for listed, employee in resolved:
-        own: dict[int, LabelSuggestion] = {}
-        not_covered = [] if listed.covers else list(block_products)
-        for cover in listed.covers:
-            label = normalize_label(text(cover.values.get("category")))
-            decision = decisions.get((cover.block, label))
-            if decision is not None and decision.not_covered:
-                not_covered.append(cover.block)
-                continue
-            if decision is None or decision.choice is None:
-                continue
-            own[cover.block] = decision
-            emp_count += add(_assignment(client_id, policy_year_id, employee.id, None, cover,
-                                         decision, product_ids, listed.row))
-        for block in not_covered:
-            for code in block_products.get(block, []):
-                add(ListingAssignment(
-                    client_id=client_id, policy_year_id=policy_year_id,
-                    employee_id=employee.id, member_key=f"E:{employee.id}",
-                    product_id=product_ids[code], category_id=None,
-                    block_index=block, recorded={}, source_row=listed.row,
-                ))
-        for listed_dep in listed.dependants:
-            dependant = _find_dependant(dependants.get(employee.id, []), listed_dep.fields)
-            if dependant is None:
-                continue
-            for cover in listed_dep.covers:
-                key = normalize_label(text(cover.values.get("category")))
-                decision = decisions.get((cover.block, key)) if key else own.get(cover.block)
-                if decision is None or decision.choice is None:
-                    continue
-                dep_count += add(_assignment(client_id, policy_year_id, employee.id,
-                                             dependant.id, cover, decision, product_ids,
-                                             listed_dep.row))
-    db.flush()
-    return emp_count, dep_count
-
-
-def _find_dependant(candidates: list[Dependant], fields: dict[str, Any]) -> Dependant | None:
-    name = text(fields.get("name")).lower()
-    dob = fields.get("date_of_birth")
-    dob_text = dob.isoformat() if isinstance(dob, date) else ""
-    for dep in candidates:
-        attrs = dep.attribute_values or {}
-        if text(first_value(attrs, DEP_NAME_KEYS)).lower() == name and (
-            not dob_text or iso_date(first_value(attrs, DOB_KEYS)) == dob_text
-        ):
-            return dep
-    return None
-
-
-def _assignment(
-    client_id: str, policy_year_id: str, employee_id: str, dependant_id: str | None,
-    cover: ElCover, decision: LabelSuggestion, product_ids: dict[str, str], row: int,
-) -> ListingAssignment:
-    choice = decision.choice
-    assert choice is not None
-    return ListingAssignment(
-        client_id=client_id,
-        policy_year_id=policy_year_id,
-        employee_id=employee_id,
-        dependant_id=dependant_id,
-        member_key=f"D:{dependant_id}" if dependant_id else f"E:{employee_id}",
-        product_id=product_ids[choice.product_code],
-        category_id=choice.category_id,
-        block_index=cover.block,
-        listed_category=text(cover.values.get("category"))[:512] or None,
-        listed_plan=text(cover.values.get("plan_type"))[:255] or None,
-        family_group=cover.values.get("family_group"),
-        admin_type=cover.values.get("admin_type"),
-        recorded=_recorded(cover),
-        source_row=row,
-    )
 
 
 def _save_profile(
@@ -569,9 +444,10 @@ def apply(
             "Map each listed category to a slip category or mark it not covered: "
             + "; ".join(sorted(unresolved)[:10])
         )
-    records = _with_sole_entity(
-        db, policy_year_id, build_records(workbook, _known_attribute_ids(db, client_id))
-    )
+    year = db.get(PolicyYear, policy_year_id)
+    records = _with_sole_entity(db, policy_year_id, build_records(
+        workbook, _known_attribute_ids(db, client_id), year.start_date if year else None,
+    ))
     # Planned (read-only, exactly as the preview did) before
     # `_ensure_attributes`, the first write, so a blocked termination writes
     # nothing. The planner adds rows that identify nobody to the reader's count.
@@ -593,9 +469,13 @@ def apply(
     counts: dict[str, int] = {}
 
     def record_cover(session: Session) -> None:
-        counts["employees"], counts["dependants"] = _write_assignments(
+        counts["employees"], counts["dependants"] = write_assignments(
             session, client_id, policy_year_id, workbook, by_key, product_ids,
             block_products,
+        )
+        # Before matching, so employees whose spelling was linked match today.
+        counts["aliases"] = link_entities(
+            session, user, client_id, policy_year_id, workbook, mapping.entity_links,
         )
         _save_profile(session, client_id, user, workbook, block_products, decisions,
                       profile, source_filename)
@@ -611,7 +491,8 @@ def apply(
             session, user, action="employee_listing_import", entity_type="policy_year",
             entity_id=policy_year_id,
             after={"filename": source_filename, "listed_covers": counts["employees"],
-                   "listed_dependant_covers": counts["dependants"]},
+                   "listed_dependant_covers": counts["dependants"],
+                   "entity_aliases_linked": counts["aliases"]},
         )
 
     result = apply_plan(
@@ -621,7 +502,6 @@ def apply(
     )
     # Matching (inside apply_plan) has opened the underwriting cases; add what
     # the listing records about them.
-    year = db.get(PolicyYear, policy_year_id)
     underwriting = apply_listing_underwriting(db, year) if year is not None else None
     db.commit()
     return ListingApplyOut(
@@ -632,4 +512,5 @@ def apply(
         flex_errors=result.flex_errors,
         joiner_rules_written=counts.get("rules", 0),
         underwriting_updated=underwriting.updated if underwriting else 0,
+        entity_aliases_linked=counts.get("aliases", 0),
     )

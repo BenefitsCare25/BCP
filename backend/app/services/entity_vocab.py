@@ -197,6 +197,26 @@ def _gating_entities(
     return out
 
 
+def gating_entities(
+    db: Session, policy_year_id: str, aliases: EntityAliases
+) -> dict[str, str]:
+    """{resolved: raw spelling} of the entities that gate matching this year —
+    the matcher's own gate, for callers outside this panel (the Employee
+    Listing review) that must agree with it."""
+    return _gating_entities(db, policy_year_id, aliases)
+
+
+def closest_entity(name: str, spellings: list[str]) -> str | None:
+    """Which of ``spellings`` an unreconciled ``name`` most likely means, by
+    the same acronym and word-overlap rule as this panel's suggestions."""
+    candidates = [
+        _Candidate(value=s, tokens=_identity_tokens(norm), acronym=_acronym(norm))
+        for s in spellings
+        if (norm := normalize_entity(s))
+    ]
+    return _closest(normalize_entity(name), candidates)
+
+
 def _setup_header_entities(
     db: Session, policy_year_id: str, aliases: EntityAliases
 ) -> dict[str, str]:

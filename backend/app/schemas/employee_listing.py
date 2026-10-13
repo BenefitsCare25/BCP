@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import date
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.schemas.adc import AdcPreview
 
@@ -49,6 +49,9 @@ class ListingLabelOut(BaseModel):
     employees: int
     dependants: int
     plans: list[str]
+    # Dependants covered through their employee's family tier where the
+    # listing's dependant rows state no cover.
+    tier_dependants: int = 0
     choice: ListingCategoryOption | None
     not_covered: bool
     confidence: float
@@ -60,6 +63,34 @@ class ListingCheck(BaseModel):
     message: str
     count: int
     rows: list[int] = Field(default_factory=list)
+
+
+class ListingNoticeOut(BaseModel):
+    """A file-level finding (wrong period, ages at another date)."""
+
+    code: str
+    tone: str  # "warn" | "info"
+    message: str
+
+
+class ListingPeopleOut(BaseModel):
+    """Who the file lists, before it is compared with the roster."""
+
+    employees: int
+    dependants: int
+    spouses: int
+    children: int
+
+
+class ListingEntityOut(BaseModel):
+    """One Entity spelling on the listing and the slip entity it resolves to."""
+
+    spelling: str
+    employees: int
+    status: str  # "matched" | "aliased" | "unmatched"
+    entity: str | None = None
+    # For an unmatched spelling: the slip entity it most likely means.
+    suggestion: str | None = None
 
 
 class ListingIssueOut(BaseModel):
@@ -96,6 +127,10 @@ class ListingPreviewOut(BaseModel):
     reused_profile: bool
     # Rules that place joiners not on the listing, learned from it.
     joiner_rules: list[JoinerProductOut] = Field(default_factory=list)
+    people: ListingPeopleOut
+    entities: list[ListingEntityOut] = Field(default_factory=list)
+    notices: list[ListingNoticeOut] = Field(default_factory=list)
+    policy_period: tuple[date, date] | None = None
 
 
 class LabelChoiceIn(BaseModel):
@@ -113,6 +148,15 @@ class ListingMappingIn(BaseModel):
     block_products: dict[str, list[str]] = Field(default_factory=dict)
     # block index -> normalized listing label -> decision
     labels: dict[str, dict[str, LabelChoiceIn]] = Field(default_factory=dict)
+    # listing Entity spelling -> the slip entity it is linked to on apply.
+    entity_links: dict[str, str] = Field(default_factory=dict, max_length=200)
+
+    @field_validator("entity_links")
+    @classmethod
+    def _bounded_links(cls, links: dict[str, str]) -> dict[str, str]:
+        if any(len(k) > 255 or len(v) > 255 for k, v in links.items()):
+            raise ValueError("Entity names are limited to 255 characters.")
+        return links
 
 
 class ListingApplyOut(BaseModel):
@@ -128,3 +172,4 @@ class ListingApplyOut(BaseModel):
     flex_errors: list[str]
     joiner_rules_written: int = 0
     underwriting_updated: int = 0
+    entity_aliases_linked: int = 0

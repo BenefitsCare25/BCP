@@ -392,7 +392,7 @@ PRODUCT_CATALOG: list[dict[str, Any]] = [
     {"code": "GTL", "display_name": "Group Term Life", "has_dependants": False},
     {"code": "GHS", "display_name": "Group Hospital & Surgical", "has_dependants": True},
     {"code": "GMM", "display_name": "Group Major Medical", "has_dependants": True},
-    {"code": "SP", "display_name": "Supplementary Plan", "has_dependants": True},
+    {"code": "SP", "display_name": "Group Outpatient Specialist", "has_dependants": True},
     {"code": "GPA", "display_name": "Group Personal Accident", "has_dependants": False},
     {"code": "GBT", "display_name": "Group Business Travel", "has_dependants": False},
     {"code": "WICA", "display_name": "Work Injury Compensation Act", "has_dependants": False},

@@ -13,7 +13,8 @@ from datetime import date
 from typing import Any
 
 from app.services.el_workbook import ElColumn, ElEmployee, ElWorkbook
-from app.services.el_workbook.values import text
+from app.services.el_workbook.models import ElDependant
+from app.services.el_workbook.values import text, wef_date
 from app.services.roster_parser import DependantRecord, EmployeeRecord, _coerce_attr
 
 # Listing role -> roster attribute id. Roles absent here are not imported as
@@ -65,13 +66,16 @@ PII_ATTRIBUTES = frozenset({
 
 # Work-pass wording -> the roster's ``pass`` codes (CITIZEN/PR/EP/SP/WP), plus
 # LTVP/DP for listings that state those passes.
+# First match wins: the dependant's, long-term visit and ONE passes are tested
+# before the S Pass, whose "s pass" also appears in "Dependant's Pass".
 _PASS_PATTERNS: tuple[tuple[str, str], ...] = (
     ("WP", r"work\s*permit|\bwp\b"),
-    ("SP", r"\bs[\s-]*pass\b|\bspass\b"),
-    ("EP", r"employment\s*pass|\bep\b"),
-    ("LTVP", r"long\s*term\s*visit|\bltvp\b|\bploc\b"),
     ("DP", r"dependant'?s?\s*pass|\bdp\b"),
-    ("PR", r"permanent\s*resident|nric\s*blue|\bpr\b"),
+    ("LTVP", r"long\s*term\s*visit|\bltvp\b|\bploc\b"),
+    ("ONE", r"overseas\s*networks?|\bone\s*pass\b"),
+    ("SP", r"\bs[\s-]*pass\b|\bspass\b|\bsp\b"),
+    ("EP", r"employment\s*pass|\bep\b"),
+    ("PR", r"permanent\s*resident|nric\s*blue|\bs?pr\b"),
     ("CITIZEN", r"singaporean|citizen|nric\s*pink"),
 )
 
@@ -130,7 +134,47 @@ class ListingRecords:
     attribute_ids: dict[str, str]  # attribute id -> source heading
 
 
-def build_records(workbook: ElWorkbook, known_ids: frozenset[str]) -> ListingRecords:
+# A remark's WEF date is a cover START only when the remark adds the person
+# ("Add newborn WEF 29 Aug 2026", "enrolled … WEF 14 Oct 2025"); "Delete
+# spouse WEF 31 Mar 2026" states when cover ends and must never start it.
+_ADDING = re.compile(
+    r"\b(add(ed|ition)?|enrol+(ed|ment|s)?|join(ed|s|ing)?|new\s*-?\s*born|includ(e|ed|es))\b",
+    re.IGNORECASE,
+)
+_ENDING = re.compile(
+    r"\b(delet\w*|remov\w*|terminat\w*|ceas\w*|withdr\w*|exclud\w*|divorc\w*|deceas\w*"
+    r"|resign\w*|left|end(s|ed|ing)?)\b",
+    re.IGNORECASE,
+)
+
+
+def _stated_start(remark: Any) -> date | None:
+    words = text(remark)
+    if not words or _ENDING.search(words) or not _ADDING.search(words):
+        return None
+    return wef_date(words)
+
+
+def dependant_cover_start(dep: ElDependant, period_start: date | None) -> date | None:
+    """When a dependant added during the year starts cover, or None from the
+    start of the period.
+
+    An adding remark's "WEF <date>" states it; a newborn otherwise starts at
+    birth. Cover never starts before the dependant is born, and a date on or
+    before the period start is just the period start.
+    """
+    if period_start is None:
+        return None
+    born = dep.fields.get("date_of_birth")
+    born = born if isinstance(born, date) else None
+    stated = _stated_start(dep.trailing.get("remarks"))
+    start = max((d for d in (stated, born) if d is not None), default=None)
+    return start if start is not None and start > period_start else None
+
+
+def build_records(
+    workbook: ElWorkbook, known_ids: frozenset[str], period_start: date | None = None
+) -> ListingRecords:
     layout = workbook.layout
     emp_block, dep_block = layout.employee, layout.dependant
     columns = [*(emp_block.columns if emp_block else ()), *layout.trailing]
@@ -158,7 +202,9 @@ def build_records(workbook: ElWorkbook, known_ids: frozenset[str]) -> ListingRec
         staff_id = text(emp.fields.get("staff_id"))
         name = text(emp.fields.get("name"))
         employees.append(EmployeeRecord(staff_id, name or None, attrs, row=emp.row))
-        dependants.extend(_dependant_records(emp, staff_id, name, dep_block is not None))
+        dependants.extend(_dependant_records(
+            emp, staff_id, name, dep_block is not None, period_start
+        ))
     return ListingRecords(employees, dependants, attribute_ids)
 
 
@@ -172,7 +218,7 @@ def unreadable_rows(workbook: ElWorkbook) -> int:
 
 
 def _dependant_records(
-    emp: ElEmployee, staff_id: str, name: str, has_block: bool
+    emp: ElEmployee, staff_id: str, name: str, has_block: bool, period_start: date | None
 ) -> list[DependantRecord]:
     if not has_block:
         return []
@@ -186,6 +232,10 @@ def _dependant_records(
             if role == "relationship":
                 value = str(value).capitalize()
             attrs[attr_id] = _value(attr_id, value)
+        if (remarks := text(dep.trailing.get("remarks"))):
+            attrs["remarks"] = remarks
+        if (start := dependant_cover_start(dep, period_start)) is not None:
+            attrs["effective_date"] = start.isoformat()
         if staff_id:
             attrs["employee_staff_id"] = staff_id
         if name:

@@ -42,6 +42,16 @@ class ElLayoutProfile(Base, TimestampMixin):
     created_by: Mapped[str | None] = mapped_column(String(36), nullable=True)
 
 
+# `ListingAssignment.recorded` keys on a dependant's cover derived from the
+# employee's family tier rather than stated on the dependant's own row.
+# FAMILY_TIER_KEY holds the tier ("EF"); FAMILY_TIER_EXCLUDED_KEY is true when
+# that tier excludes the dependant. The exclusion is stated, never inferred
+# from a missing category: `category_id` also goes NULL when a slip re-upload
+# deletes the category (ondelete SET NULL), and that row must re-link.
+FAMILY_TIER_KEY = "family_tier"
+FAMILY_TIER_EXCLUDED_KEY = "family_tier_excluded"
+
+
 class ListingAssignment(Base, TimestampMixin):
     __tablename__ = "listing_assignments"
     __table_args__ = (

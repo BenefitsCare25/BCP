@@ -23,23 +23,15 @@ from app.core.deps import is_firm_owner, require_client_id
 from app.db.session import get_db
 from app.models import EntityAlias
 from app.schemas.entity_alias import EntityAliasIn, EntityAliasOut, EntityAliasPatch
+from app.services.entity_alias_store import alias_canonicals, find_alias, merge_alias
 from app.services.matching_engine import normalize_entity
 from app.services.setup_removals import refuse_removals
 
 router = APIRouter(tags=["entity-aliases"])
 
 
-def _canonicals(row: EntityAlias) -> list[str]:
-    """The alias's entity list, falling back to the single `canonical` for a
-    row written before the `canonicals` column existed."""
-    stored = row.canonicals
-    if isinstance(stored, list) and stored:
-        return list(stored)
-    return [row.canonical]
-
-
 def _out(row: EntityAlias) -> EntityAliasOut:
-    canonicals = _canonicals(row)
+    canonicals = alias_canonicals(row)
     return EntityAliasOut(
         id=row.id,
         alias=row.alias,
@@ -97,17 +89,6 @@ def _prepare(alias: str, canonicals: list[str]) -> tuple[str, list[str]]:
     return norm_alias, out
 
 
-def _find_by_alias(
-    norm_alias: str, client_id: str, db: Session
-) -> EntityAlias | None:
-    return db.execute(
-        select(EntityAlias).where(
-            EntityAlias.client_id == client_id,
-            EntityAlias.alias_normalized == norm_alias,
-        )
-    ).scalar_one_or_none()
-
-
 @router.get("/entity-aliases", response_model=list[EntityAliasOut])
 def list_entity_aliases(
     user: CurrentUser = Depends(get_current_user),
@@ -139,54 +120,12 @@ def create_entity_alias(
     what lets a roster spelling stand for several subsidiaries, and it makes the
     reconciliation panel's one-click "same entity" idempotent."""
     client_id = require_client_id(user)
-    norm_alias, targets = _prepare(payload.alias, payload.canonicals)
-
-    existing = _find_by_alias(norm_alias, client_id, db)
-    if existing is not None:
-        current = _canonicals(existing)
-        seen = {normalize_entity(c) for c in current}
-        merged = list(current)
-        for c in targets:
-            if normalize_entity(c) not in seen:
-                seen.add(normalize_entity(c))
-                merged.append(c)
-        before = {"alias": existing.alias, "canonicals": current}
-        existing.canonicals = merged
-        existing.canonical = merged[0]
-        db.flush()
-        write_audit(
-            db,
-            user,
-            action="update",
-            entity_type="entity_alias",
-            entity_id=existing.id,
-            before=before,
-            after={"alias": existing.alias, "canonicals": merged},
-        )
-        db.commit()
-        db.refresh(existing)
-        response.status_code = status.HTTP_200_OK
-        return _out(existing)
-
-    row = EntityAlias(
-        client_id=client_id,
-        alias=payload.alias,
-        canonical=targets[0],
-        canonicals=targets,
-        alias_normalized=norm_alias,
-    )
-    db.add(row)
-    db.flush()
-    write_audit(
-        db,
-        user,
-        action="create",
-        entity_type="entity_alias",
-        entity_id=row.id,
-        after={"alias": payload.alias, "canonicals": targets},
-    )
+    _, targets = _prepare(payload.alias, payload.canonicals)
+    row, created = merge_alias(db, user, client_id, payload.alias, targets)
     db.commit()
     db.refresh(row)
+    if not created:
+        response.status_code = status.HTTP_200_OK
     return _out(row)
 
 
@@ -202,25 +141,25 @@ def update_entity_alias(
     alias = payload.alias or row.alias
     # A supplied list REPLACES the alias's entities; omit it to keep them.
     raw_targets = (
-        payload.canonicals if payload.canonicals is not None else _canonicals(row)
+        payload.canonicals if payload.canonicals is not None else alias_canonicals(row)
     )
     norm_alias, targets = _prepare(alias, raw_targets)
     if not is_firm_owner(user):
         # Dropping a saved entity un-bridges it, like deleting the alias.
         kept = {normalize_entity(c) for c in targets}
         refuse_removals(
-            [repr(c) for c in _canonicals(row) if normalize_entity(c) not in kept],
+            [repr(c) for c in alias_canonicals(row) if normalize_entity(c) not in kept],
             "alias entities",
         )
 
-    clash = _find_by_alias(norm_alias, client_id, db)
+    clash = find_alias(db, client_id, norm_alias)
     if clash is not None and clash.id != row.id:
         raise HTTPException(
             status.HTTP_409_CONFLICT,
             f"{alias!r} is already an alias — edit that one to add entities.",
         )
 
-    before = {"alias": row.alias, "canonicals": _canonicals(row)}
+    before = {"alias": row.alias, "canonicals": alias_canonicals(row)}
     row.alias, row.canonical, row.canonicals, row.alias_normalized = (
         alias,
         targets[0],

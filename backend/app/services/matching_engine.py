@@ -52,6 +52,11 @@ FUZZY_THRESHOLD = 0.6
 CONTAINMENT_CONFIDENCE = 0.7
 COMMIT_BATCH_SIZE = 500
 _TOKEN_RE = re.compile(r"[^a-z0-9]+")
+# Entities in a legacy Insured string: comma-joined, or "A / B" with spaces.
+_LEGACY_SEPARATOR = re.compile(r",|\s+/\s+")
+# "A / B" alone — for spellings (a roster Entity, an alias target) where a
+# comma may be part of one registered name.
+_SLASH_SEPARATOR = re.compile(r"\s+/\s+")
 
 # Tokens that carry no tier meaning — used to gate the containment fallback so a
 # label made only of connectives can't be "contained" in everything.
@@ -106,16 +111,23 @@ def insured_names(raw: object) -> list[str]:
     Storage is a list — one element per entity — so an entity whose registered
     name contains a comma ("Acme Pte Ltd, Singapore Branch") stays one entity.
     A legacy `str` (everything written before the token picker, plus the slip
-    parser's single-entity cell) still splits on commas, so old rows keep
-    working without a data migration.
+    parser's Insured cell) still splits on commas, and on a slash between
+    spaces — slips join two insured entities as "A Pte. Ltd / B Pte Ltd" —
+    so old rows keep working without a data migration. A slash inside a name
+    ("S/O") has no spaces around it and is kept.
 
     Callers that need to COMPARE entities want `insured_entities`; this one is
-    for display and round-tripping (e.g. the placement-slip export, which must
-    reproduce the legal spelling verbatim).
+    for display. The placement-slip export reproduces a legacy string
+    verbatim (`slip_export.basis.insured_text`).
     """
     if not raw:
         return []
-    parts = raw if isinstance(raw, list) else str(raw).split(",")
+    if isinstance(raw, list):
+        # A picked token holding "A / B" (picked from a combined spelling)
+        # names both, as the same text typed into a legacy string would.
+        parts = [p for item in raw for p in _SLASH_SEPARATOR.split(str(item))]
+    else:
+        parts = _LEGACY_SEPARATOR.split(str(raw))
     return [name for part in parts if (name := str(part).strip())]
 
 
@@ -143,12 +155,19 @@ def resolve_entities(
 
     Deliberately single-hop: an alias never resolves through another alias, so a
     map containing A→B and B→C can't loop or depend on iteration order.
+
+    A spelling joining two entities as "A / B" (a roster Entity copied from
+    such a slip line) resolves to both, unless the whole spelling is itself an
+    alias.
     """
     norm = normalize_entity(name)
     if not norm:
         return frozenset()
     if aliases and (expanded := aliases.get(norm)):
         return expanded
+    parts = _SLASH_SEPARATOR.split(str(name))
+    if len(parts) > 1:
+        return frozenset().union(*(resolve_entities(p, aliases) for p in parts))
     return frozenset((norm,))
 
 
@@ -278,7 +297,11 @@ def entity_alias_map(db: Session, client_id: str | None) -> EntityAliases:
         if not alias:
             continue
         raw_targets = canonicals if isinstance(canonicals, list) and canonicals else [canonical]
-        norms = frozenset(n for c in raw_targets if (n := normalize_entity(c)))
+        # A target saved as "A / B" stands for both entities.
+        norms = frozenset(
+            n for c in raw_targets for part in _SLASH_SEPARATOR.split(str(c or ""))
+            if (n := normalize_entity(part))
+        )
         if norms:
             out[alias] = norms
     return out

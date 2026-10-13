@@ -13,7 +13,7 @@ from app.services.el_workbook.models import (
     ElLayout,
     ElWorkbook,
 )
-from app.services.el_workbook.values import normalize, text
+from app.services.el_workbook.values import normalize, same_person, text
 from app.services.excel_reader import Cell, open_workbook
 
 _DATE_ROLES = {"date_of_birth", "date_of_hire", "last_day_of_service",
@@ -75,6 +75,57 @@ def _carries_identity(layout: ElLayout, row: list[Cell]) -> bool:
     return any(text(_cell(row, column.index)) for column in identity)
 
 
+def _trailing(layout: ElLayout, row: list[Cell]) -> dict[str, object]:
+    return {c.role: normalize(c.role, _cell(row, c.index)) for c in layout.trailing}
+
+
+def _dependant_owner(
+    row_no: int,
+    staff_id: str,
+    listed_name: str,
+    employees: list[ElEmployee],
+    by_staff_id: dict[str, ElEmployee],
+    issues: list[ElIssue],
+) -> ElEmployee | None:
+    """The employee a dependant row belongs to, or None when it can't be told.
+
+    A staff ID decides. Without one the dependant belongs to the employee row
+    above it. When the row repeats an employee name that is clearly another
+    employee's (a re-sorted sheet), the dependant is linked to that employee
+    instead; a name that only differs in spelling stays with the employee
+    above, with a warning, so a salutation or typo never drops the row.
+    """
+    if staff_id:
+        owner = by_staff_id.get(staff_id)
+        if owner is None:
+            issues.append(ElIssue(
+                row_no, "staff_id", "orphan_dependant",
+                f"Row {row_no}: dependant has no employee row with the same staff ID.",
+            ))
+        return owner
+    previous = employees[-1] if employees else None
+    if previous is not None and (
+        not listed_name or same_person(listed_name, previous.fields.get("name"))
+    ):
+        return previous
+    named = [e for e in employees if e is not previous
+             and same_person(listed_name, e.fields.get("name"))]
+    if len(named) == 1:
+        return named[0]
+    if previous is None:
+        issues.append(ElIssue(
+            row_no, "staff_id", "orphan_dependant",
+            f"Row {row_no}: dependant has no employee row above it.",
+        ))
+        return None
+    issues.append(ElIssue(
+        row_no, "name", "dependant_name_differs",
+        f"Row {row_no}: the employee name on this dependant row differs from the "
+        "employee above it; the dependant was linked to the employee above.",
+    ))
+    return previous
+
+
 def read_rows(layout: ElLayout, rows: list[list[Cell]]) -> ElWorkbook:
     employee_block, dependant_block = layout.employee, layout.dependant
     issues: list[ElIssue] = []
@@ -95,14 +146,11 @@ def read_rows(layout: ElLayout, rows: list[list[Cell]]) -> ElWorkbook:
         staff_id = text(_cell(row, emp_id.index)) if emp_id else ""
         dependant_name = text(_cell(row, dep_name.index)) if dep_name else ""
         if dependant_name and dependant_block is not None:
-            owner = by_staff_id.get(staff_id) if staff_id else None
-            if owner is None and not staff_id and employees:
-                owner = employees[-1]
+            owner = _dependant_owner(
+                row_no, staff_id, text(_cell(row, emp_name.index)), employees,
+                by_staff_id, issues,
+            )
             if owner is None:
-                issues.append(ElIssue(
-                    row_no, "staff_id", "orphan_dependant",
-                    f"Row {row_no}: dependant has no employee row with the same staff ID.",
-                ))
                 unread.append(row_no)
                 continue
             if owner is not employees[-1]:
@@ -116,9 +164,10 @@ def read_rows(layout: ElLayout, rows: list[list[Cell]]) -> ElWorkbook:
                     row_no, "relationship", "unknown_relationship",
                     f"Row {row_no}: relationship is not spouse or child.",
                 ))
-            owner.dependants.append(
-                ElDependant(row_no, fields, _covers(layout, row, row_no, issues))
-            )
+            owner.dependants.append(ElDependant(
+                row_no, fields, _covers(layout, row, row_no, issues),
+                _trailing(layout, row),
+            ))
             continue
         if not text(_cell(row, emp_name.index)):
             if _carries_identity(layout, row):
@@ -126,10 +175,7 @@ def read_rows(layout: ElLayout, rows: list[list[Cell]]) -> ElWorkbook:
             continue
         fields = _block_values(employee_block, row, row_no, issues)
         employee = ElEmployee(
-            row_no,
-            fields,
-            _covers(layout, row, row_no, issues),
-            {c.role: normalize(c.role, _cell(row, c.index)) for c in layout.trailing},
+            row_no, fields, _covers(layout, row, row_no, issues), _trailing(layout, row),
         )
         if staff_id:
             if staff_id in by_staff_id:

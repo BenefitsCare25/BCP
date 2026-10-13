@@ -49,6 +49,9 @@ class ElLayout:
     # service, remarks, internal update notes).
     trailing: tuple[ElColumn, ...]
     reference_date: date | None = None  # the age reference above the DOB column
+    # "Period Of Insurance : 01/07/2024 - 30/06/2025" printed above the table,
+    # compared with the policy year so a wrong year's file is caught.
+    stated_period: tuple[date, date] | None = None
 
     @property
     def employee(self) -> ElBlock | None:
@@ -84,6 +87,8 @@ class ElDependant:
     row: int  # 1-based worksheet row
     fields: dict[str, Any]
     covers: list[ElCover] = field(default_factory=list)
+    # Row-level facts outside every block ("Add newborn WEF 29 Aug 2026").
+    trailing: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Sequence
+from datetime import date
 
 from openpyxl.utils import get_column_letter
 
@@ -24,7 +25,10 @@ _EMPLOYEE_ROLES: tuple[tuple[str, str], ...] = (
     ("department", r"^dept\b|department"),
     ("designation", r"designation|job\s*title|position"),
     ("grade", r"grade"),
-    ("citizenship", r"citizenship|residen(cy|tial)\s*status|pass\s*type|work\s*pass"),
+    # A pass's number, expiry or issue date is not the pass type.
+    ("citizenship", r"^(?!.*\b(no|number|expiry|issue|date)\b).*(citizenship"
+                    r"|residen(cy|tial)\s*status|pass\s*type|work\s*pass"
+                    r"|type\s*of\s*(work\s*|employment\s*)?pass)"),
     ("nationality", r"nationality"),
     ("age", r"^age\b"),
     ("location", r"depot|work\s*location|^location|^site\b"),
@@ -116,16 +120,49 @@ def _banner_kind(text: str) -> BlockKind:
     return "product"
 
 
+def _words(value: str) -> str:
+    return " ".join(re.findall(r"[a-z0-9]+", value.lower().replace("&", " and ")))
+
+
 def _code_hint(banner: str, headers: list[str]) -> str | None:
+    """The product code a block names: "(GTL)" in its banner, a code in a
+    premium header ("Clinical GP (Premium)"), else the registry product whose
+    name the banner spells out ("Group Clinical Specialist Insurance")."""
     known = product_registry.known_codes()
     for token in re.findall(r"\(([A-Za-z]{2,6})\)", banner):
         code = str(token).upper()
         if code in known:
             return code
     for header in headers:
-        match = re.match(r"\s*([A-Za-z]{2,6})\b", header)
-        if match and match.group(1).upper() in known and "premium" in header.lower():
-            return match.group(1).upper()
+        if "premium" not in header.lower():
+            continue
+        for token in re.findall(r"\b([A-Za-z]{2,6})\b", header):
+            if str(token).upper() in known:
+                return str(token).upper()
+    words = f" {_words(banner)} "
+    named = [
+        (len(name), entry.code)
+        for entry in product_registry.entries()
+        if (name := _words(entry.name)) and f" {name} " in words
+    ]
+    return max(named)[1] if named else None
+
+
+_PERIOD = re.compile(
+    r"period\s*of\s*insurance\s*:?\s*(\S+)\s*(?:-|\u2013|to)\s*(\S+)", re.IGNORECASE
+)
+
+
+def _stated_period(rows: list[list[Cell]], header_row: int) -> tuple[date, date] | None:
+    """The insurance period printed above the table, read day-first."""
+    for row in rows[: max(header_row - 1, 0)]:
+        for cell in row:
+            match = _PERIOD.search(norm_header(cell))
+            if match is None:
+                continue
+            start, end = as_date(match.group(1)), as_date(match.group(2))
+            if start is not None and end is not None and start < end:
+                return start, end
     return None
 
 
@@ -211,4 +248,5 @@ def detect_layout(sheet_name: str, rows: list[list[Cell]]) -> ElLayout | None:
             value = rows[r][dob.index] if dob.index < len(rows[r]) else None
             if (found := as_date(value)) is not None:
                 reference = found
-    return ElLayout(sheet_name, banner_row, header_row, tuple(blocks), trailing, reference)
+    return ElLayout(sheet_name, banner_row, header_row, tuple(blocks), trailing, reference,
+                    _stated_period(rows, header_row))

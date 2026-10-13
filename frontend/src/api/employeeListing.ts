@@ -30,6 +30,8 @@ export interface ListingLabel {
   employees: number;
   dependants: number;
   plans: string[];
+  /** Dependants covered through their employee's tier, where their own rows state no cover. */
+  tier_dependants: number;
   choice: ListingCategoryOption | null;
   not_covered: boolean;
   confidence: number;
@@ -41,6 +43,37 @@ export interface ListingCheck {
   message: string;
   count: number;
   rows: number[];
+}
+
+/** A file-level finding: the stated period or age date differs from the year. */
+export interface ListingNotice {
+  code: string;
+  tone: "warn" | "info";
+  message: string;
+}
+
+export interface ListingPeople {
+  employees: number;
+  dependants: number;
+  spouses: number;
+  children: number;
+}
+
+/** One Entity spelling on the listing and the slip entity it resolves to. */
+export interface ListingEntity {
+  spelling: string;
+  employees: number;
+  status: "matched" | "aliased" | "unmatched";
+  entity: string | null;
+  /** For an unmatched spelling, the slip entity it most likely means. */
+  suggestion: string | null;
+}
+
+export interface ListingIssue {
+  row: number | null;
+  field: string | null;
+  code: string;
+  message: string;
 }
 
 export interface JoinerRule {
@@ -71,10 +104,15 @@ export interface ListingPreview {
   labels: ListingLabel[];
   options: Record<string, ListingCategoryOption[]>;
   members: AdcPreview;
-  issues: { row: number | null; field: string | null; code: string; message: string }[];
+  issues: ListingIssue[];
   checks: ListingCheck[];
   reused_profile: boolean;
   joiner_rules: JoinerProductRules[];
+  people: ListingPeople;
+  entities: ListingEntity[];
+  notices: ListingNotice[];
+  /** The policy year's [start, end], ISO dates. */
+  policy_period: [string, string] | null;
 }
 
 export interface LabelChoice {
@@ -85,6 +123,8 @@ export interface LabelChoice {
 export interface ListingMapping {
   block_products: Record<string, string[]>;
   labels: Record<string, Record<string, LabelChoice>>;
+  /** Listing Entity spelling -> the slip entity it is linked to on apply. */
+  entity_links: Record<string, string>;
 }
 
 export interface ListingApplyResult {
@@ -100,6 +140,7 @@ export interface ListingApplyResult {
   flex_errors: string[];
   joiner_rules_written: number;
   underwriting_updated: number;
+  entity_aliases_linked: number;
 }
 
 /** The decisions a preview currently shows, in the shape apply expects. */
@@ -110,7 +151,10 @@ export function mappingFromPreview(preview: ListingPreview): ListingMapping {
     if (label.not_covered) block[label.key] = { not_covered: true };
     else if (label.choice) block[label.key] = { category_id: label.choice.category_id };
   }
-  return { block_products: { ...preview.block_products }, labels };
+  // Entity links start empty: a suggested match is a guess (two sister
+  // companies spell alike) and linking writes a lasting alias, so the broker
+  // ticks each one.
+  return { block_products: { ...preview.block_products }, labels, entity_links: {} };
 }
 
 interface PreviewArgs {

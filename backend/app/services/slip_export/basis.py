@@ -71,10 +71,13 @@ def insured_text(pa: dict[str, Any]) -> str:
 
     The export reproduces the LEGAL spelling verbatim — this document goes to
     an insurer — so it renders the stored names, never a normalized or
-    alias-resolved form. Storage is a token list; a legacy comma-joined string
-    round-trips unchanged.
+    alias-resolved form. Storage is a token list; a legacy string ("A, B" or
+    "A / B") round-trips exactly as the slip wrote it.
     """
-    return ", ".join(insured_names(pa.get("insured")))
+    raw = pa.get("insured")
+    if isinstance(raw, str):
+        return raw.strip()
+    return ", ".join(insured_names(raw))
 
 
 def participation_text(c: Category) -> str:

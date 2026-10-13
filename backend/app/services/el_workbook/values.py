@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import re
 from datetime import date, datetime, timedelta
+from difflib import SequenceMatcher
 from typing import Any
 
 from app.services.excel_reader import Cell
@@ -49,6 +50,64 @@ def as_date(value: Cell) -> date | None:
         except ValueError:
             continue
     return None
+
+
+# "WEF 29 Aug 2026", "w.e.f. 14/10/2025" — a four-digit year only, so a typo
+# such as "11 May 206" yields nothing rather than year 206.
+_WEF = re.compile(
+    r"\bw\.?\s*e\.?\s*f\.?\s*:?\s*(\d{1,2})(?:st|nd|rd|th)?[\s/.-]+([a-z]{3,9}|\d{1,2})"
+    r"\.?[\s/.-]+(\d{4})\b",
+    re.IGNORECASE,
+)
+
+
+def wef_date(value: Cell) -> date | None:
+    """The date a remark says a change takes effect from ("WEF 29 Aug 2026")."""
+    match = _WEF.search(text(value))
+    if match is None:
+        return None
+    day, month, year = match.groups()
+    if month.isdigit():
+        return as_date(f"{day}/{month}/{year}")
+    return as_date(f"{day} {month[:3].title()} {year}")
+
+
+# Words that never tell two people apart: salutations and the "bin" / "s/o"
+# joiners of Malay and Indian names.
+_NAME_NOISE = frozenset({
+    "mr", "mrs", "ms", "mdm", "madam", "miss", "dr", "mx", "sir",
+    "bin", "binte", "binti", "bte", "s", "o", "d",
+})
+# One spelling for names commonly abbreviated on rosters.
+_NAME_VARIANTS = {
+    "mohd": "muhammad", "muhd": "muhammad", "mohamed": "muhammad", "mohammad": "muhammad",
+    "mohammed": "muhammad", "muhamad": "muhammad", "mohamad": "muhammad",
+}
+
+
+def _name_tokens(value: Cell) -> frozenset[str]:
+    return frozenset(
+        _NAME_VARIANTS.get(t, t)
+        for t in re.findall(r"[a-z0-9]+", text(value).lower())
+        if t not in _NAME_NOISE
+    )
+
+
+def same_person(a: Cell, b: Cell) -> bool:
+    """Whether two spellings of a name are the same person: case, punctuation,
+    word order, salutations and common abbreviations aside ("Loong, Li Juan" =
+    "Li Juan Loong", "Mr Tan Ah Kow" = "TAN AH KOW"). One name may also carry
+    an extra given name ("Tan Ah Kow" = "Tan Ah Kow Eric"), and a one-letter
+    slip still matches."""
+    ta, tb = _name_tokens(a), _name_tokens(b)
+    if not ta or not tb:
+        return False
+    if ta == tb:
+        return True
+    smaller = ta if len(ta) <= len(tb) else tb
+    if len(smaller) >= 2 and (ta <= tb or tb <= ta):
+        return True
+    return SequenceMatcher(None, " ".join(sorted(ta)), " ".join(sorted(tb))).ratio() >= 0.9
 
 
 def as_number(value: Cell) -> float | None:

@@ -25,13 +25,18 @@ from sqlalchemy.orm import Session
 from app.core.deps import tenant_or_global
 from app.models import Category, Product
 from app.services import product_registry
+from app.services.el_import.family_tiers import tier_covered, tier_only_blocks, uses_tier
 from app.services.el_workbook import ElWorkbook
 from app.services.el_workbook.values import text
 from app.services.eligibility_mapping import category_signature
 
 _NUMBERING = re.compile(r"^\s*\(?\d+[.)]\s*")
+# The sum-insured basis a listing appends to the cohort ("- 24 times last drawn
+# basic monthly salary", "- 36 x BMS", "- $50,000", "- S$100,000"); the slip
+# keeps the basis apart from the category name.
 _BASIS_TAIL = re.compile(
-    r"\s+-\s+(?:\d+\s*x\b.*|\$?\s*[\d,]+(?:\.\d+)?\s*$|s\$.*)", re.IGNORECASE
+    r"\s+-\s+(?:\d+(?:\.\d+)?\s*(?:x|times)\b.*|\$?\s*[\d,]+(?:\.\d+)?\s*$|s\$.*)",
+    re.IGNORECASE,
 )
 _PLAN_IN_LABEL = re.compile(r"\bplan\s*([0-9]+[a-z]?)\b", re.IGNORECASE)
 _LEADING_CODE = re.compile(r"^\s*([0-9]+[a-z]?)\b")
@@ -75,6 +80,9 @@ class LabelStats:
     employees: int = 0
     dependants: int = 0
     plans: Counter[str] = field(default_factory=Counter)
+    # Dependants covered through their employee's tier in a block whose
+    # dependant rows state no cover (see `family_tiers`).
+    tier_dependants: int = 0
 
 
 @dataclass(frozen=True)
@@ -101,6 +109,7 @@ class LabelSuggestion:
 def block_label_stats(workbook: ElWorkbook) -> dict[int, dict[str, LabelStats]]:
     """Distinct category wording per product block, with headcounts."""
     out: dict[int, dict[str, LabelStats]] = {}
+    tier_only = tier_only_blocks(workbook)
     for emp in workbook.employees:
         people = [(emp.covers, False), *((d.covers, True) for d in emp.dependants)]
         for covers, is_dependant in people:
@@ -115,6 +124,8 @@ def block_label_stats(workbook: ElWorkbook) -> dict[int, dict[str, LabelStats]]:
                     stats.dependants += 1
                 else:
                     stats.employees += 1
+                    if uses_tier(emp, cover.block, tier_only):
+                        stats.tier_dependants += len(tier_covered(emp, cover.block))
                 if (plan := text(cover.values.get("plan_type"))):
                     stats.plans[plan] += 1
     return out

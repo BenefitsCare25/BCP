@@ -50,6 +50,9 @@ export function EntityReconciliationPanel({
     ? (data?.roster ?? []).filter((r) => !r.claimed)
     : [];
 
+  // With nobody on the roster yet every configured entity "matches no
+  // employee" — that is the empty roster, not a spelling to reconcile.
+  if (!data || data.employees_total === 0) return null;
   if (unreconciled.length === 0 && unclaimed.length === 0) return null;
 
   const link = async (alias: string, canonical: string) => {

@@ -15,7 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import Category, Employee, Product
-from app.models.employee_listing import ElLayoutProfile, ListingAssignment
+from app.models.employee_listing import FAMILY_TIER_EXCLUDED_KEY, ElLayoutProfile, ListingAssignment
 from app.services.el_import.joiner_rules import derive_product_rules, persist_rules
 from app.services.el_import.mapping import NOT_COVERED, normalize_label
 from app.services.eligibility_mapping import category_signature
@@ -53,6 +53,9 @@ def refresh_listing_links(db: Session, client_id: str, policy_year_id: str) -> t
         if a.category_id in categories:
             if a.dependant_id is None:
                 employee_category[(a.employee_id, a.product_id)] = a.category_id
+            continue
+        if (a.recorded or {}).get(FAMILY_TIER_EXCLUDED_KEY):
+            # The employee's tier excludes this dependant; nothing to re-link.
             continue
         target = None
         if a.listed_category:

@@ -9,6 +9,7 @@ from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 
 from app.models import Dependant, Employee
+from app.models.employee_listing import FAMILY_TIER_EXCLUDED_KEY, FAMILY_TIER_KEY
 from app.services.el_workbook import ElBlock
 from app.services.full_el.cells import (
     DATE_ROLES,
@@ -68,11 +69,15 @@ def _dependant_covered(
     ctx: ElContext, dep: Dependant, info: CategoryInfo,
     elected: list[str] | None, deps_with_listing: set[str],
 ) -> bool:
-    """The member's election decides; else the listing; else the category default."""
+    """The member's election decides; else the listing; else the category default.
+
+    A listing row says the dependant is covered unless it states that the
+    employee's family tier excludes them."""
     if elected is not None:
         return dep.id in elected and dep.status == "active"
-    if (f"D:{dep.id}", info.product.id) in ctx.listed:
-        return True
+    listed = ctx.listed.get((f"D:{dep.id}", info.product.id))
+    if listed is not None:
+        return not (listed.recorded or {}).get(FAMILY_TIER_EXCLUDED_KEY)
     return dep.id not in deps_with_listing and info.covers_dependants and dep.status == "active"
 
 
@@ -213,10 +218,21 @@ def write_listing(ws: Worksheet, ctx: ElContext, *, masked: bool) -> dict[str, A
             for column in dep_block.columns:
                 _put(ws, column.letter, row, column.role,
                      dependant_value(column.role, dep, ctx, row, refs, masked))
-            dep_covers = {
-                b: Cover(c.info, ctx.listed.get((f"D:{dep.id}", c.info.product.id)), None, [])
-                for b, c in covers.items() if dep in c.covered_dependants
-            }
+            dep_covers: dict[int, Cover] = {}
+            for b, c in covers.items():
+                if dep not in c.covered_dependants:
+                    continue
+                listed = ctx.listed.get((f"D:{dep.id}", c.info.product.id))
+                # Covered through the employee's tier on a tier-priced product:
+                # the premium sits on the employee's row and the listing leaves
+                # the dependant's cells blank, so the export does too. A
+                # per-member rate still prices the dependant's own row.
+                if (
+                    listed is not None and FAMILY_TIER_KEY in (listed.recorded or {})
+                    and c.info.rate_basis == "tiered"
+                ):
+                    continue
+                dep_covers[b] = Cover(c.info, listed, None, [])
             _write_covers(ws, ctx, dep_covers, row, refs, rate_cells, uw, dep,
                           dep.attribute_values or {})
             unpriced.update(

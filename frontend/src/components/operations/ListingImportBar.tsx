@@ -71,6 +71,7 @@ export function ListingImportBar({ policyYearId, stats, hasRows }: Props) {
   const [elMapping, setElMapping] = useState<ListingMapping>({
     block_products: {},
     labels: {},
+    entity_links: {},
   });
   const [elDirty, setElDirty] = useState(false);
 
@@ -109,11 +110,29 @@ export function ListingImportBar({ policyYearId, stats, hasRows }: Props) {
     setElDirty(true);
   }
 
+  // Applied as aliases on apply; no recheck needed.
+  function onElEntityLink(spelling: string, target: string | null) {
+    setElMapping((current) => {
+      const entity_links = { ...current.entity_links };
+      if (target) entity_links[spelling] = target;
+      else delete entity_links[spelling];
+      return { ...current, entity_links };
+    });
+  }
+
   function onElRecheck() {
     if (!file) return;
     elPreviewMut.mutate(
       { file, policyYearId, mapping: elMapping },
-      { onSuccess: acceptElPreview, onError: (e) => toast.error(formatError(e)) },
+      {
+        // A recheck re-suggests categories; the broker's entity choices stand.
+        onSuccess: (next) => {
+          const links = elMapping.entity_links;
+          acceptElPreview(next);
+          setElMapping((current) => ({ ...current, entity_links: links }));
+        },
+        onError: (e) => toast.error(formatError(e)),
+      },
     );
   }
 
@@ -142,6 +161,9 @@ export function ListingImportBar({ policyYearId, stats, hasRows }: Props) {
             r.joiner_rules_written ? `${r.joiner_rules_written} joiner rules` : null,
             r.underwriting_updated
               ? `${r.underwriting_updated} underwriting cases updated`
+              : null,
+            r.entity_aliases_linked
+              ? `${r.entity_aliases_linked} entity spelling${r.entity_aliases_linked === 1 ? "" : "s"} linked`
               : null,
           ].filter(Boolean);
           toast.success(`Applied — ${parts.join(", ")}`);
@@ -318,6 +340,7 @@ export function ListingImportBar({ policyYearId, stats, hasRows }: Props) {
         mapping={elMapping}
         onLabelChange={onElLabelChange}
         onBlockProductToggle={onElBlockToggle}
+        onEntityLinkChange={onElEntityLink}
         dirty={elDirty}
         onRecheck={onElRecheck}
         checking={elPreviewMut.isPending}
