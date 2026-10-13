@@ -156,6 +156,10 @@ class ExtractedPlan:
     # actually said. `dataclasses.replace` carries it through the fan-out for
     # free, so every derived plan keeps pointing at the header it came from.
     source_label: str | None = None
+    # What the plan pays, in short form, from its categories' basis of cover
+    # ("24x BMS", "$100,000"); see ``plan_names``. Stored as the plan's insurer
+    # report label.
+    details: str | None = None
 
 
 @dataclass(frozen=True)

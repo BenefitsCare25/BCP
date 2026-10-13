@@ -19,6 +19,7 @@ from app.services.slip_parsing.models import (
     ExtractedPlan,
     ExtractedSubItem,
 )
+from app.services.slip_parsing.plan_names import plan_name
 from app.services.slip_parsing.text import (
     _cell_text,
     _int_code,
@@ -1302,9 +1303,11 @@ def _extract_plans_from_sheet(
         )
         if not items:
             return ()
+        # One schedule, no plan column: the slip names no plan, so it is
+        # called by its code (slip_parsing.plan_names), never by the heading.
         return (ExtractedPlan(
             code="1",
-            display_name="Schedule of Benefits",
+            display_name=plan_name("1"),
             cover_description=cover_desc,
             items=tuple(items),
             source_row=sob_idx + 1,

@@ -40,7 +40,14 @@ export function PlanTypeSettings({ plans, policyYearId, productId, saveFirst = f
                   setSelectedPlanId((current) => current === plan.id ? null : plan.id);
                 }}
               >
-                <span className="truncate">{plan.display_name || plan.code}</span>
+                <span className="truncate">
+                  {plan.display_name || plan.code}
+                  {/* The plan's details ("24x BMS"), so plans that share one
+                      schedule and differ by basis read apart at a glance. */}
+                  {plan.report_label && (
+                    <span className="font-normal text-muted-foreground"> · {plan.report_label}</span>
+                  )}
+                </span>
                 <Pencil className="size-3 shrink-0" aria-hidden="true" />
                 <span className="sr-only">Edit plan type</span>
               </Button>

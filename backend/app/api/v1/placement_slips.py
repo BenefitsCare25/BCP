@@ -1022,13 +1022,15 @@ def _ingest_slip(
                     for item in extracted_plan.items
                 ]
             }
-            # Free-text fields are clipped to their columns: a fanned
-            # descriptive plan is named after its full category text.
+            # Free-text fields are clipped to their columns. A plan's details
+            # ("24x BMS", from its categories' basis) seed the insurer report
+            # label, the field the plan types editor shows beside its name.
             db.add(Plan(
                 product_id=product.id,
                 policy_year_id=policy_year_id,
                 code=extracted_plan.code,
                 display_name=extracted_plan.display_name[:255],
+                report_label=(extracted_plan.details or "")[:255] or None,
                 benefit_schedule=schedule_json,
                 cover_description=(
                     extracted_plan.cover_description[:512]

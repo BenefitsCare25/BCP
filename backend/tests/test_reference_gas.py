@@ -42,11 +42,13 @@ def test_gas_category_plan_rate_and_depot_boundaries() -> None:
         {b["location"] for b in c.location_breakdown} == {"Loyang Depot", "East Coast Depot"}
         for c in gpa
     )
-    assert [p.display_name for p in by_code["GTL"].plans] == [
-        "Directors",
-        "All Professionals, Executives & Management Staff",
-        "All Other Staff (excl. Bus Drivers)",
-        "All Bus Drivers",
+    # The slip names no GTL plan: each is called by its code, with the
+    # category's basis as its details.
+    assert [(p.display_name, p.details) for p in by_code["GTL"].plans] == [
+        ("Plan 1", "48x BMS"),
+        ("Plan 2", "24x BMS"),
+        ("Plan 3", "$15,000"),
+        ("Plan 4", "$10,000"),
     ]
     for code, depot in [("WICA-EASTCOAST", "East Coast Depot"), ("WICA-LOYANG", "Loyang Depot")]:
         assert all(c.location_scope == depot for c in by_code[code].categories)

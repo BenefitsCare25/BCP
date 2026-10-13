@@ -31,6 +31,7 @@ from app.services.product_templates import (
     TemplateSubItem,
     TemplateTier,
 )
+from app.services.slip_parsing.plan_names import plan_name
 from app.services.slip_parsing.text import natural_code_key
 
 # Generic header fields — product-agnostic, reusing GHS's field ids so slip
@@ -79,18 +80,9 @@ def _participation_model(product: Product) -> ParticipationModel:
 
 
 def _plan_label(code: str, display_name: str | None) -> str:
-    """A human label for a plan, without doubling the word "Plan".
-
-    Slip-derived plan codes are inconsistent: some already read like
-    "Plan A - International / Asia", others are bare like "1 / International".
-    Blindly prefixing ``f"Plan {code}"`` produced "Plan Plan A …". Use the
-    display name when present, else prefix only if the code doesn't already
-    start with "plan"."""
-    dn = (display_name or "").strip()
-    if dn:
-        return dn
-    c = (code or "").strip()
-    return c if c.lower().startswith("plan") else f"Plan {c}"
+    """A human label for a plan: its display name, else ``plan_name(code)``
+    (which never doubles the word "Plan")."""
+    return (display_name or "").strip() or plan_name(code or "")
 
 
 def _plan_specs(plans: list[Plan], cats: list[Category]) -> list[tuple[str, str]]:

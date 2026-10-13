@@ -32,6 +32,7 @@ from app.services.placement_slip_parser import (
     ProductSlip,
     split_plan_codes,
 )
+from app.services.slip_parsing.plan_names import name_plans, plan_name
 
 # Below this confidence the upload surfaces the product for review / AI fallback.
 LOW_CONFIDENCE = 0.6
@@ -104,16 +105,6 @@ def _confidence(recognized: bool, reconciliation: str) -> float:
     return max(0.0, min(1.0, round(score, 2)))
 
 
-def _fanned_display_name(ref: str) -> str:
-    """Display name for a plan split out of a composite/descriptive schedule.
-
-    Codes are usually bare ("U01" -> "Plan U01"), but some slips carry the word
-    in the code itself (VDL GBT's "Plan A - International / Asia"), which the
-    old unconditional prefix turned into "Plan Plan A - International / Asia".
-    """
-    return ref if ref.strip().lower().startswith("plan") else f"Plan {ref}"
-
-
 def _reconcile_product(product: ProductSlip) -> tuple[ProductSlip, ProductDiagnostics]:
     cats = product.categories
     plans = product.plans
@@ -162,7 +153,7 @@ def _reconcile_product(product: ProductSlip) -> tuple[ProductSlip, ProductDiagno
                 replace(
                     cover,
                     code=ref,
-                    display_name=_fanned_display_name(ref),
+                    display_name=plan_name(ref),
                     source_label=(
                         cover.source_label if ref.lower() in header_codes else None
                     ),
@@ -170,21 +161,6 @@ def _reconcile_product(product: ProductSlip) -> tuple[ProductSlip, ProductDiagno
             )
         else:
             emitted.append(cover)
-
-    # One descriptive schedule shared by every category (GTL/GPA cohorts that
-    # differ only by sum insured): each fanned "plan" is that category's cover,
-    # so it is named after the category rather than "Schedule of Benefits" /
-    # "Plan 2", which the slip never printed.
-    if fanned and len(plans) == 1:
-        names: dict[str, str] = {}
-        for c in cats:
-            names.setdefault((c.plan_code or "").strip(), c.category.strip())
-        emitted = [
-            replace(p, display_name=names[p.code.strip()])
-            if names.get(p.code.strip()) and not p.source_label
-            else p
-            for p in emitted
-        ]
 
     # Preserve any parsed plans that were never referenced (don't lose schedules).
     kept = [p for p in plans if id(p) not in consumed]
@@ -195,6 +171,10 @@ def _reconcile_product(product: ProductSlip) -> tuple[ProductSlip, ProductDiagno
     if len(plans) == 1 and not referenced:
         cats = tuple(replace(c, plan_code=plans[0].code) for c in cats)
         assigned_default = True
+
+    # A plan no slip header names ("Schedule of Benefits", a fanned GTL/GPA
+    # cohort) is "Plan <code>", with its categories' basis as its details.
+    new_plans = name_plans(new_plans, cats)
 
     issues: list[str] = list(product.extraction_issues)
     if not plans:
