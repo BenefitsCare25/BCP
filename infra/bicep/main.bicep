@@ -222,6 +222,7 @@ var hasAlertRecipients = length(alertRecipients) > 0
 // Built-in role IDs (https://learn.microsoft.com/azure/role-based-access-control/built-in-roles).
 var keyVaultSecretsUserRoleId = '4633458b-17de-408a-b874-0445c86b69e6'
 var storageBlobDataContributorRoleId = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
+var monitoringMetricsPublisherRoleId = '3913510d-42f4-4e42-8a64-420c390055eb'
 
 // ── Observability ───────────────────────────────────────────────────────────
 resource law 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
@@ -552,6 +553,10 @@ var commonAppSettings = [
   { name: 'INSPRO_STORAGE_ACCOUNT_URL', value: storage.properties.primaryEndpoints.blob }
   { name: 'INSPRO_STORAGE_CONTAINER', value: documentsContainer.name }
   { name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', value: appInsights.properties.ConnectionString }
+  // Telemetry is sent with the app's managed identity (Entra ID), so the
+  // connection string only locates the resource. Once local auth is disabled
+  // on Application Insights, a copy of the string can send nothing.
+  { name: 'INSPRO_APPINSIGHTS_AUTH', value: 'managed_identity' }
 ]
 
 // Appended only when Redis exists. An unset INSPRO_REDIS_URL is the documented
@@ -748,6 +753,27 @@ resource workerStorageBlobRole 'Microsoft.Authorization/roleAssignments@2022-04-
     principalId: reviewWorker.identity.principalId
     principalType: 'ServicePrincipal'
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageBlobDataContributorRoleId)
+  }
+}
+
+// Entra-authenticated telemetry: each app's identity may publish to App Insights.
+resource appInsightsPublisherRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: appInsights
+  name: guid(appInsights.id, webapp.id, 'metrics-publisher')
+  properties: {
+    principalId: webapp.identity.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', monitoringMetricsPublisherRoleId)
+  }
+}
+
+resource workerAppInsightsPublisherRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: appInsights
+  name: guid(appInsights.id, reviewWorker.id, 'metrics-publisher')
+  properties: {
+    principalId: reviewWorker.identity.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', monitoringMetricsPublisherRoleId)
   }
 }
 
