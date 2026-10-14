@@ -244,6 +244,10 @@ resource appInsights 'Microsoft.Insights/components@2020-02-02' = {
   properties: {
     Application_Type: 'web'
     WorkspaceResourceId: law.id
+    // Entra-only ingestion: the apps publish with their managed identities
+    // (Monitoring Metrics Publisher, below), so the connection string alone
+    // can send nothing — a leaked copy is useless.
+    DisableLocalAuth: true
   }
 }
 
