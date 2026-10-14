@@ -161,7 +161,7 @@ resource customDomain 'Microsoft.Cdn/profiles/customDomains@2024-09-01' = [for (
 // dependency on the domains explicitly.
 var customDomainRefs = [for n in customDomainNames: { id: resourceId('Microsoft.Cdn/profiles/customDomains', profileName, n) }]
 
-// Everything except hashed bundle files: no caching. API responses are
+// Everything except hashed bundles and public broker login media: no caching. API responses are
 // per-user, and index.html and the web manifest are branded per host
 // (core/spa.py), so none of it may be shared from an edge cache.
 resource defaultRoute 'Microsoft.Cdn/profiles/afdEndpoints/routes@2024-09-01' = {
@@ -216,6 +216,33 @@ resource assetsRoute 'Microsoft.Cdn/profiles/afdEndpoints/routes@2024-09-01' = {
           'font/woff2'
         ]
       }
+    }
+  }
+  dependsOn: [
+    origin
+    edgeHostRule
+    customDomain
+  ]
+}
+
+// Public, identical scenery on every host. Versioned files have immutable
+// origin headers; HTML fallbacks remain no-cache. Authentication stays on the
+// default route above. This route is only provisioned with deployFrontDoor.
+resource brokerLoginMediaRoute 'Microsoft.Cdn/profiles/afdEndpoints/routes@2024-09-01' = {
+  parent: endpoint
+  name: 'broker-login-media'
+  properties: {
+    originGroup: { id: originGroup.id }
+    ruleSets: [{ id: ruleSet.id }]
+    customDomains: customDomainRefs
+    supportedProtocols: ['Http', 'Https']
+    patternsToMatch: ['/broker/login/*']
+    forwardingProtocol: 'HttpsOnly'
+    httpsRedirect: 'Enabled'
+    linkToDefaultDomain: 'Enabled'
+    enabledState: 'Enabled'
+    cacheConfiguration: {
+      queryStringCachingBehavior: 'IgnoreQueryString'
     }
   }
   dependsOn: [

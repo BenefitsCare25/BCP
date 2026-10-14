@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.42.1.51946",
-      "templateHash": "12154166688447029089"
+      "templateHash": "10411533164506303504"
     }
   },
   "parameters": {
@@ -1699,7 +1699,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.42.1.51946",
-              "templateHash": "11666016740851577312"
+              "templateHash": "16229744403360229725"
             }
           },
           "parameters": {
@@ -1947,6 +1947,44 @@
                       "font/woff2"
                     ]
                   }
+                }
+              },
+              "dependsOn": [
+                "customDomain",
+                "[resourceId('Microsoft.Cdn/profiles/ruleSets/rules', variables('profileName'), 'EdgeHeaders', 'SetEdgeHost')]",
+                "[resourceId('Microsoft.Cdn/profiles/afdEndpoints', variables('profileName'), variables('endpointName'))]",
+                "[resourceId('Microsoft.Cdn/profiles/originGroups/origins', variables('profileName'), 'app-service', 'web-app')]",
+                "[resourceId('Microsoft.Cdn/profiles/originGroups', variables('profileName'), 'app-service')]",
+                "[resourceId('Microsoft.Cdn/profiles/ruleSets', variables('profileName'), 'EdgeHeaders')]"
+              ]
+            },
+            {
+              "type": "Microsoft.Cdn/profiles/afdEndpoints/routes",
+              "apiVersion": "2024-09-01",
+              "name": "[format('{0}/{1}/{2}', variables('profileName'), variables('endpointName'), 'broker-login-media')]",
+              "properties": {
+                "originGroup": {
+                  "id": "[resourceId('Microsoft.Cdn/profiles/originGroups', variables('profileName'), 'app-service')]"
+                },
+                "ruleSets": [
+                  {
+                    "id": "[resourceId('Microsoft.Cdn/profiles/ruleSets', variables('profileName'), 'EdgeHeaders')]"
+                  }
+                ],
+                "customDomains": "[variables('customDomainRefs')]",
+                "supportedProtocols": [
+                  "Http",
+                  "Https"
+                ],
+                "patternsToMatch": [
+                  "/broker/login/*"
+                ],
+                "forwardingProtocol": "HttpsOnly",
+                "httpsRedirect": "Enabled",
+                "linkToDefaultDomain": "Enabled",
+                "enabledState": "Enabled",
+                "cacheConfiguration": {
+                  "queryStringCachingBehavior": "IgnoreQueryString"
                 }
               },
               "dependsOn": [

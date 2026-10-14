@@ -29,6 +29,9 @@ from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SURFACES = ("staff", "client", "all")
+# Every route in infra/bicep/modules/frontdoor.bicep. Each must carry every
+# custom domain, or that path falls through to another route on the new host.
+ROUTES = ("default", "assets", "broker-login-media")
 # Front Door Premium allows 500 custom domains per profile.
 DOMAIN_LIMIT = 500
 # Microsoft.Cdn/profiles/customDomains names: letters, digits, single or
@@ -192,9 +195,10 @@ def print_infra(args: argparse.Namespace, host: str, name: str, names: list[str]
     print("\n     " + ("Written (--write-params)." if wrote else
                        "Not written (dry run). Re-run with --write-params to add it."))
     print("     The next infrastructure deploy then creates the domain and binds it to")
-    print("     both routes and the WAF. Routes and the WAF policy are reconciled from")
-    print("     this list on every deploy, so a domain added only with the commands")
-    print("     below is DETACHED again by the next deploy unless the entry is committed.")
+    print(f"     every route ({', '.join(ROUTES)}) and the WAF. Routes and")
+    print("     the WAF policy are reconciled from this list on every deploy, so a domain")
+    print("     added only with the commands below is DETACHED again by the next deploy")
+    print("     unless the entry is committed.")
 
     domain_ids = " ".join(f'"$PROFILE_ID/customDomains/{n}"' for n in names)
     print("\n  b) Apply now without a full infrastructure deploy (operator, reviewed):\n")
@@ -208,8 +212,8 @@ def print_infra(args: argparse.Namespace, host: str, name: str, names: list[str]
     print(f"       --custom-domain-name {name} --host-name {host} \\")
     print("       --certificate-type ManagedCertificate --minimum-tls-version TLS12")
     print()
-    print("     # Both routes take the FULL list: --custom-domains replaces it.")
-    for route in ("default", "assets"):
+    print("     # Every route takes the FULL list: --custom-domains replaces it.")
+    for route in ROUTES:
         print('     az afd route update -g "$RG" --profile-name "$PROFILE" \\')
         print(f'       --endpoint-name "$ENDPOINT" --route-name {route} \\')
         print(f"       --custom-domains {' '.join(names)}")
