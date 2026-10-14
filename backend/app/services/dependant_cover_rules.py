@@ -33,8 +33,11 @@ _ANY_DEPENDANT = frozenset({"dependant", "dependants", "dependent", "dependents"
 
 
 class DependantLike(Protocol):
-    id: str
-    attribute_values: dict[str, Any] | None
+    @property
+    def id(self) -> str: ...
+
+    @property
+    def attribute_values(self) -> dict[str, Any] | None: ...
 
 
 def cover_roles(answers: Any) -> frozenset[str] | None:

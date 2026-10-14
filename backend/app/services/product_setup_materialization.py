@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import HTTPException, status
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
@@ -306,7 +306,14 @@ def _adoption_conflict(message: str) -> HTTPException:
 # Member records of one policy year, keyed by product: they belong with the
 # categories, so they move with them. Left on the catalog product, the
 # company's listing, elections and underwriting stop applying to its plans.
-_MEMBER_RECORDS = (
+_MemberRecord = (
+    ListingAssignment
+    | EmployeePlanOverride
+    | EnrollmentElection
+    | UnderwritingCase
+    | DependantCoverDecision
+)
+_MEMBER_RECORDS: tuple[type[_MemberRecord], ...] = (
     ListingAssignment,
     EmployeePlanOverride,
     EnrollmentElection,
@@ -324,15 +331,12 @@ def _adopt_member_records(
     if not related_ids:
         return moved
     for model in _MEMBER_RECORDS:
-        rows = list(
-            db.scalars(
-                select(model).where(
-                    model.policy_year_id == policy_year_id,
-                    model.product_id.in_(related_ids),
-                )
-            ).all()
+        stranded = (
+            model.policy_year_id == policy_year_id,
+            model.product_id.in_(related_ids),
         )
-        if not rows:
+        count = db.scalar(select(func.count()).select_from(model).where(*stranded)) or 0
+        if not count:
             continue
         held = db.scalar(
             select(func.count()).select_from(model).where(
@@ -344,9 +348,8 @@ def _adopt_member_records(
                 f"{product.code} has {model.__tablename__.replace('_', ' ')} on two "
                 "product records. Reconcile the duplicate records before confirming."
             )
-        for row in rows:
-            row.product_id = product.id
-        moved[model.__tablename__] = len(rows)
+        db.execute(update(model).where(*stranded).values(product_id=product.id))
+        moved[model.__tablename__] = count
     return moved
 
 

@@ -301,7 +301,12 @@ def _employee_alerts(
 
 
 def _dependant_alert(
-    kind: str, emp: Employee, dep: Dependant, limits: ProductLimits, message: str, **extra: Any
+    kind: LimitKind,
+    emp: Employee,
+    dep: Dependant,
+    limits: ProductLimits,
+    message: str,
+    **extra: Any,
 ) -> CoverageLimitAlert:
     attrs = dep.attribute_values or {}
     return CoverageLimitAlert(
