@@ -336,9 +336,15 @@ def _extract_categories_from_sheet(
             if c.premium_rate is None and not c.rate_tiers and not c.annual_premium
         ]
         if missing:
+            unrated = "; ".join(
+                f"Plan {c.plan_code} · {c.category}" if c.plan_code else c.category
+                for c in missing
+            )
             rate_issues += (
-                f"{len(missing)} category row(s) have no usable rate. "
-                "Check blank source rates and insured-entity names before pricing.",
+                f"No rate found on the slip for {unrated}. Enter it under Employee "
+                "Category & Plan Type, or 0 when another product's premium "
+                "includes it. If the slip does state one, check its insured "
+                "name matches the rate table's.",
             )
 
     # Age-banded voluntary rate table — drives voluntary employee and dependant

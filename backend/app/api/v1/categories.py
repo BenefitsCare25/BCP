@@ -27,16 +27,20 @@ from app.core.rate_limit import limiter
 from app.db.session import get_db
 from app.models import (
     Category,
+    Employee,
     Plan,
     PolicyYear,
     Product,
     ProductSetup,
 )
 from app.models.category import CategoryStatus, SourceKind
+from app.models.employee import EMPLOYEE_STATUS_ACTIVE
 from app.models.product_setup import ProductSetupStatus
 from app.schemas.api import (
     CategoryCreate,
     CategoryGrouped,
+    CategoryHeadcountOut,
+    CategoryHeadcountsOut,
     CategoryOut,
     CategoryOverlapOut,
     CategoryPatch,
@@ -45,6 +49,7 @@ from app.services.ai_breaker import CircuitOpenError
 from app.services.ai_extractor import AINotConfiguredError, AIParseError
 from app.services.ai_gateway import AIBudgetExceededError, generate_rule_for_category
 from app.services.category_factory import build_manual_category
+from app.services.category_member_counts import build_category_member_counts
 from app.services.eligibility_mapping import (
     BULK_CONFIRM_MIN_CONFIDENCE,
     CategoryConfirmationBatch,
@@ -182,6 +187,36 @@ def list_category_overlaps(
         )
         for category_id, employees in details.items()
     ]
+
+
+@router.get("/headcounts", response_model=CategoryHeadcountsOut)
+def list_category_headcounts(
+    policy_year_id: str,
+    user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> CategoryHeadcountsOut:
+    """Live headcount per plan assignment, split by family tier, so a tiered
+    rate prices the listing's members rather than the slip's stated count."""
+    assert_policy_year_for_user(policy_year_id, user, db)
+    total = db.execute(
+        select(func.count(Employee.id)).where(
+            Employee.policy_year_id == policy_year_id,
+            Employee.status == EMPLOYEE_STATUS_ACTIVE,
+        )
+    ).scalar_one()
+    counts = build_category_member_counts(db, policy_year_id) if total else {}
+    return CategoryHeadcountsOut(
+        employees_total=total,
+        categories=[
+            CategoryHeadcountOut(
+                category_id=category_id,
+                employees=members.employees,
+                dependants=members.dependants,
+                tier_counts=members.tier_counts,
+            )
+            for category_id, members in counts.items()
+        ],
+    )
 
 
 @router.post("", response_model=CategoryOut, status_code=status.HTTP_201_CREATED)

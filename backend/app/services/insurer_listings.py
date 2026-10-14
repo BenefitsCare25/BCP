@@ -40,6 +40,11 @@ from app.models.dependant import (
 )
 from app.services.benefit_statement import _category_covers_dependants
 from app.services.coverage_resolver import load_overrides
+from app.services.dependant_cover_rules import (
+    load_cover_rules,
+    load_listed_cover,
+    plan_covered_dependants,
+)
 from app.services.flex_membership import classify_relationship
 from app.services.insurer_reports import (
     _autosize,
@@ -242,6 +247,8 @@ def _employee_coverage(
         cat.id for cat in cat_rows if employee_participation(cat) == "voluntary"
     }
     enrolled = enrolled_products(db, py.id, [e.id for e in employees])
+    rules = load_cover_rules(db, py.id)
+    listed = load_listed_cover(db, py.id)
 
     deps_by_emp: dict[str, list[Dependant]] = {}
     for dep in db.execute(
@@ -295,9 +302,9 @@ def _employee_coverage(
                 eligible = mp.financials.sum_insured
             basis_raw = pa.get("basis")
             if mp.covered_dependant_ids is not None:
-                covered = [
-                    d.id for d in report_deps if d.id in mp.covered_dependant_ids
-                ]
+                covered_deps = plan_covered_dependants(
+                    report_deps, None, mp.covered_dependant_ids, block.product.id, listed
+                )
             else:
                 # Dependant-scope option categories (GPA/GTL/GCI Spouse/Child
                 # levels) prove dependant cover even when the catalog's
@@ -308,7 +315,17 @@ def _employee_coverage(
                 )
                 if not explicit:
                     covers = bool(block.role_options) or covers
-                covered = [d.id for d in report_deps] if covers else []
+                covered_deps = (
+                    plan_covered_dependants(
+                        report_deps, "compulsory", None, block.product.id, listed
+                    )
+                    if covers
+                    else []
+                )
+            # The product's Eligibility ticks and broker exclusions decide last.
+            covered = [
+                d.id for d in rules.filter(covered_deps, block.product.id, block.product.code)
+            ]
             # Family grouping (EO/ES/EC/EF): any covered dependant lifts it off
             # employee-only. A spouse gives ES, a non-spouse dependant (child or
             # an unclassified relationship — billed on the with-dependants side)

@@ -46,6 +46,11 @@ def test_plan_label_suppresses_generic_placeholder() -> None:
     assert _plan_label(_plan("Schedule of Benefits"), "1") == ""
     assert _plan_label(_plan("Plan 3"), "3") == "Plan 3"  # real name kept
     assert _plan_label(None, "7") == "7"  # falls back to the code
+    # The parser now names that plan by its code: a placeholder only when it is
+    # the product's sole plan; beside "Plan 2" it is what tells them apart.
+    assert _plan_label(_plan("Plan 1"), "1", sole=True) == ""
+    assert _plan_label(_plan("Plan 1"), "1") == "Plan 1"
+    assert _plan_label(_plan("Directors"), "1", sole=True) == "Directors"
 
 
 def test_parse_dob_handles_excel_datetime_string() -> None:

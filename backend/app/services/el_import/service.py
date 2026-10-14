@@ -72,7 +72,7 @@ from app.services.el_import.records import (
 from app.services.el_import.underwriting import apply_listing_underwriting
 from app.services.el_workbook import ElFormatError, ElLayout, ElWorkbook
 from app.services.el_workbook import read_employee_listing as read_workbook
-from app.services.matching_engine import insured_names, normalize_entity
+from app.services.matching_engine import entity_parts, insured_names, normalize_entity
 
 
 class UnresolvedListingMapping(ValueError):
@@ -307,25 +307,32 @@ def _with_sole_entity(
     db: Session, policy_year_id: str, records: ListingRecords
 ) -> ListingRecords:
     """Give listed employees the company's insured entity when the listing has
-    no entity column and every slip category insures the same one entity.
+    no entity column and every slip category insures the same entities.
 
     Categories are gated by insured entity; an employee without one matches
     none of them (GAS's five directors, added from the listing, did exactly
-    that). With several insured entities nothing is assumed.
+    that). A slip Insured cell naming two entities ("A / B") on every category
+    gives the joined spelling, which the gate reads as both. When categories
+    insure different entities nothing is assumed.
     """
     if "entity" in records.attribute_ids:
         return records
-    names = {
-        name.strip()
-        for (insured,) in db.execute(
-            select(Category.plan_assignments).where(Category.policy_year_id == policy_year_id)
-        )
-        for name in insured_names((insured or {}).get("insured"))
-        if name.strip()
-    }
-    if len({normalize_entity(n) for n in names}) != 1:
+    gates: dict[frozenset[str], str] = {}
+    for (assignments,) in db.execute(
+        select(Category.plan_assignments).where(Category.policy_year_id == policy_year_id)
+    ):
+        names: dict[str, str] = {}
+        for name in insured_names((assignments or {}).get("insured")):
+            for part in entity_parts(name):
+                if norm := normalize_entity(part):
+                    names.setdefault(norm, part)
+        if names:
+            spelling = " / ".join(names.values())
+            gate = frozenset(names)
+            gates[gate] = min(gates.get(gate, spelling), spelling)
+    if len(gates) != 1:
         return records
-    entity = sorted(names)[0]
+    entity = next(iter(gates.values()))
     for record in records.employees:
         record.attributes.setdefault("entity", entity)
     return ListingRecords(

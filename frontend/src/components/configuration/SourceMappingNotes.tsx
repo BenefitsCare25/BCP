@@ -1,7 +1,23 @@
+import { ArrowRight } from "lucide-react";
 import type { SetupAnswers } from "@/types";
 import { fmtDay } from "@/lib/format";
 
-export function SourceMappingNotes({ answers, onReview }: { answers: SetupAnswers | null; onReview?: (reviewed: boolean) => void }) {
+/** Where a source issue can be fixed: a plan assignment, or the section. */
+export interface SourceIssueLink {
+  key: string;
+  label: string;
+  onGo: () => void;
+}
+
+export function SourceMappingNotes({
+  answers,
+  onReview,
+  links = [],
+}: {
+  answers: SetupAnswers | null;
+  onReview?: (reviewed: boolean) => void;
+  links?: SourceIssueLink[];
+}) {
   const schedules = answers?.source_rate_schedules ?? [];
   const issues = answers?.source_issues ?? [];
   if (!issues.length && schedules.length < 2) return null;
@@ -12,6 +28,13 @@ export function SourceMappingNotes({ answers, onReview }: { answers: SetupAnswer
     {issues.length > 0 && <ul className="mt-3 list-disc space-y-1 pl-5 text-sm text-foreground">
       {issues.map(issue => <li key={issue}>{issue}</li>)}
     </ul>}
+    {issues.length > 0 && links.length > 0 && <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+      <span className="text-muted-foreground">Review in:</span>
+      {links.map(link => <button key={link.key} type="button" onClick={link.onGo}
+        className="inline-flex items-center gap-1 font-medium text-primary underline-offset-2 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring">
+        {link.label} <ArrowRight className="size-3.5" aria-hidden />
+      </button>)}
+    </div>}
     {schedules.length > 0 && <ul className="mt-3 space-y-2 text-sm">
       {schedules.map((schedule, i) => <li key={i} className="flex flex-wrap items-baseline gap-x-2">
         <span className="font-medium">{schedule.label}</span>

@@ -485,8 +485,10 @@ function EditForm({
 
           {coversAll ? (
             <p className="px-1 text-xs italic text-muted-foreground">
-              Matches everyone in the policy year — the condition builder is
-              disabled. Turn this off to match on specific attributes.
+              Matches every employee in the policy year — the condition builder
+              is disabled. Turn this off to match on specific attributes. Their
+              dependants follow the plan&apos;s dependant participation:
+              Compulsory covers all of them, Voluntary only those who enrol.
             </p>
           ) : (
             <RuleBuilder rule={rule} schema={schema} onChange={setRule} />

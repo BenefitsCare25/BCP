@@ -1,16 +1,18 @@
-"""Name the plans a placement slip did not name: "Plan 1", with its details.
+"""Name the plans a placement slip did not name: "Plan 1".
 
 Slips for sum-assured products (GTL, GPA, GCI, WICA) often have no plan column,
 and the parser named such plans after the section heading ("Schedule of
 Benefits") or a category's wording ("Directors"). Uploads now name them by
-code and store their categories' basis as the details ("24x BMS"); see
-``slip_parsing.plan_names``. This applies the same rule to plans already
-stored, and to the plan labels of their setup drafts, which confirming a setup
-writes back onto the plan.
+code, or by the plan their basis names; see ``slip_parsing.plan_names``. This
+renames stored plans the same way, and the plan labels of their setup drafts,
+which confirming a setup writes back onto the plan.
 
-Only a heading or a category's own wording is replaced; any other name is
-kept. Details fill an empty report label only. Public and provisioned firm
-schemas; idempotent; forward-only.
+Only a heading name is replaced. A stored plan does not record where its name
+came from, so a name matching a category's wording may be the slip's own
+column header ("Directors") and is kept, as is any plan a broker edited. The
+insurer report label is never touched: it is how insurers and members name the
+plan, and details ("24x BMS") are derived when plans are listed. Public and
+provisioned firm schemas; idempotent; forward-only.
 
 Revision ID: f2c4e6a8b0d1
 Revises: e7a9c1d3f5b8
@@ -66,56 +68,70 @@ def _prefix(connection: sa.engine.Connection, schema: str | None) -> str:
 def _rename_plans(
     connection: sa.engine.Connection, schema: str | None
 ) -> dict[tuple[str, str, str], tuple[str, str]]:
-    """Rename and describe the schema's plans. Returns ``(policy year, product
+    """Rename the schema's heading-named plans. Returns ``(policy year, product
     code, plan code) -> (old name, new name)`` for each renamed plan."""
     from app.services.slip_parsing.plan_names import (
         describing_bases,
+        distinct_names,
         generated_name,
-        plan_details,
+        is_placeholder_name,
     )
 
     prefix = _prefix(connection, schema)
-    cited: dict[tuple[str, str, str], list[tuple[list[str], object, object]]] = defaultdict(list)
-    for product_id, year_id, name, raw, assignments in connection.execute(sa.text(
-        "SELECT product_id, policy_year_id, display_name, raw_description, plan_assignments "
+    cited: dict[tuple[str, str, str], list[tuple[object, object]]] = defaultdict(list)
+    for product_id, year_id, assignments in connection.execute(sa.text(
+        "SELECT product_id, policy_year_id, plan_assignments "
         f"FROM {prefix}categories WHERE product_id IS NOT NULL"
     )):
         pa = _as_dict(assignments)
         code = str(pa.get("plan_code") or "").strip()
         if code:
-            cited[(year_id, product_id, code)].append(
-                ([name or "", raw or ""], pa.get("basis"), pa.get("member_scope"))
-            )
+            cited[(year_id, product_id, code)].append((pa.get("basis"), pa.get("member_scope")))
+
+    by_product: dict[tuple[str, str, str], list[tuple[str, str, str, bool]]] = defaultdict(list)
+    for plan_id, year_id, product_id, product_code, code, name, edited in connection.execute(
+        sa.text(
+            "SELECT p.id, p.policy_year_id, p.product_id, pr.code, p.code, p.display_name, "
+            f"p.human_modified FROM {prefix}plans p JOIN {prefix}products pr "
+            "ON pr.id = p.product_id"
+        )
+    ):
+        by_product[(year_id, product_id, product_code)].append(
+            (plan_id, str(code), name or "", bool(edited))
+        )
 
     plans = sa.table(
         "plans",
         sa.column("id", sa.String),
         sa.column("display_name", sa.String),
-        sa.column("report_label", sa.String),
         schema=schema,
     )
     renamed: dict[tuple[str, str, str], tuple[str, str]] = {}
-    for plan_id, year_id, product_id, product_code, code, name, label in connection.execute(
-        sa.text(
-            "SELECT p.id, p.policy_year_id, p.product_id, pr.code, p.code, p.display_name, "
-            f"p.report_label FROM {prefix}plans p JOIN {prefix}products pr "
-            "ON pr.id = p.product_id"
-        )
-    ):
-        own = cited.get((year_id, product_id, str(code).strip()), [])
-        texts = [text for texts_, _, _ in own for text in texts_]
-        bases = describing_bases((basis, scope) for _, basis, scope in own)
-        new_name = generated_name(str(code), name, texts, bases)[:255]
-        new_label = label or plan_details(bases)
-        if new_name == name and new_label == label:
-            continue
-        connection.execute(
-            plans.update().where(plans.c.id == plan_id).values(
-                display_name=new_name, report_label=new_label
+    for (year_id, product_id, product_code), rows in by_product.items():
+        proposals = [
+            (
+                code,
+                name,
+                name
+                if edited or not is_placeholder_name(name)
+                else generated_name(
+                    code,
+                    name,
+                    (),
+                    describing_bases(cited.get((year_id, product_id, code.strip()), [])),
+                )[:255],
             )
-        )
-        if new_name != name:
-            renamed[(year_id, product_code, str(code))] = (name, new_name)
+            for _, code, name, edited in rows
+        ]
+        for (plan_id, code, name, _), new_name in zip(
+            rows, distinct_names(proposals), strict=True
+        ):
+            if new_name == name:
+                continue
+            connection.execute(
+                plans.update().where(plans.c.id == plan_id).values(display_name=new_name)
+            )
+            renamed[(year_id, product_code, code)] = (name, new_name)
     return renamed
 
 
@@ -169,6 +185,6 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # Forward-only: the old names were a section heading or a category's
-    # wording, never a plan name a broker chose.
+    # Forward-only: the old names were a section heading, never a plan name a
+    # slip or a broker gave.
     pass

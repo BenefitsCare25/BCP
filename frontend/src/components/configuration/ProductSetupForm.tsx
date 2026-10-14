@@ -2,7 +2,7 @@ import { Fragment, forwardRef, useCallback, useEffect, useImperativeHandle, useM
 import { useQueryClient } from "@tanstack/react-query";
 import { CircleCheck } from "lucide-react";
 import { toast } from "sonner";
-import { SourceMappingNotes } from "./SourceMappingNotes";
+import { SourceMappingNotes, type SourceIssueLink } from "./SourceMappingNotes";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { AlertDialog } from "@/components/ui/alert-dialog";
@@ -91,6 +91,9 @@ const SECTION_LABELS: Record<string, string> = {
   claim_limits: "Claim limits",
   endorsements: "Endorsements",
 };
+
+/** Plan assignment gaps a source rate issue can be fixed in. */
+const RATE_GAP_FIELDS = new Set(["rate", "dependant_rate", "tier_rates", "annual_premium", "age_bands", "earnings"]);
 
 function setupDirtySections(current: SetupAnswers, savedJson: string): string[] {
   let saved: SetupAnswers;
@@ -869,6 +872,27 @@ export const ProductSetupForm = forwardRef<ProductSetupFormHandle, Props>(functi
     setFocusTarget({ categoryId: gap.categoryId, fieldId: gap.fieldId, nonce: Date.now() });
   };
 
+  // A source issue names slip rows, not saved records: link it to the plan
+  // assignments still missing a rate, else to the section that holds them.
+  const sourceIssueLinks: SourceIssueLink[] = (() => {
+    if (!answers.source_issues?.length || !sections.includes("basis_of_cover")) return [];
+    const rateGaps = gaps.filter(
+      (gap) => gap.categoryId && RATE_GAP_FIELDS.has(gap.key.split(":")[2] ?? ""),
+    );
+    if (rateGaps.length === 0) {
+      return [{
+        key: "basis_of_cover",
+        label: SECTION_LABELS.basis_of_cover,
+        onGo: () => setActiveSection("basis_of_cover"),
+      }];
+    }
+    return rateGaps.map((gap) => ({
+      key: gap.key,
+      label: gap.where ? `${gap.where} · ${gap.label}` : gap.label,
+      onGo: () => goToGap(gap),
+    }));
+  })();
+
   const switchSection = (next: string) => {
     if (next === activeId) return;
     setActiveSection(next);
@@ -917,7 +941,11 @@ export const ProductSetupForm = forwardRef<ProductSetupFormHandle, Props>(functi
     <SavedEntriesProvider value={savedEntries}>
     <div className="flex flex-col gap-4">
       <fieldset disabled={busy} className="min-w-0 space-y-4">
-      <SourceMappingNotes answers={answers} onReview={source_reviewed => setAnswers(a => ({ ...a, source_reviewed }))} />
+      <SourceMappingNotes
+        answers={answers}
+        onReview={source_reviewed => setAnswers(a => ({ ...a, source_reviewed }))}
+        links={sourceIssueLinks}
+      />
       {conflictMessage && (
         <SetupConflictAlert
           message={conflictMessage}

@@ -52,6 +52,17 @@ _SPOUSE_RE = re.compile(r"(?i)spouse|wife|husband|partner|married")
 _CHILD_RE = re.compile(r"(?i)child|son|daughter|kid|dependent child")
 
 
+def relationship_role(values: dict[str, Any] | None) -> str | None:
+    """A dependant's relationship as "spouse" or "child"; None when the roster
+    doesn't say which."""
+    rel = first_value(values or {}, REL_KEYS) or ""
+    if _SPOUSE_RE.search(rel):
+        return "spouse"
+    if _CHILD_RE.search(rel):
+        return "child"
+    return None
+
+
 def family_tier_bucket(
     dependant_values: Iterable[dict[str, Any]] | None,
 ) -> str:
@@ -63,13 +74,8 @@ def family_tier_bucket(
     count block, and anything added later. One implementation means those
     documents can never disagree about the same household.
     """
-    has_spouse = has_child = False
-    for values in dependant_values or ():
-        rel = first_value(values or {}, REL_KEYS) or ""
-        if _SPOUSE_RE.search(rel):
-            has_spouse = True
-        elif _CHILD_RE.search(rel):
-            has_child = True
+    roles = {relationship_role(values) for values in dependant_values or ()}
+    has_spouse, has_child = "spouse" in roles, "child" in roles
     if has_spouse and has_child:
         return "EF"
     if has_spouse:

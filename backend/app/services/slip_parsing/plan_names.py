@@ -10,7 +10,8 @@ wording ("Directors"), neither of which is a plan name.
 Here a plan the slip does not name is called by its code ("Plan 1"), or by the
 plan its basis names ("Plan 1 - $50,000"). A plan whose categories state a
 basis also gets that basis in short form as its details ("24 times last drawn
-basic monthly salary" -> "24x BMS"), stored as the plan's insurer report label.
+basic monthly salary" -> "24x BMS"), shown beside its name. Details are never
+the plan's insurer report label, which is how insurers and members name it.
 Nothing here depends on the product type: it reads only the slip's own plan
 headers and category bases, so every slip layout is named the same way.
 """
@@ -168,13 +169,35 @@ def generated_name(
 
     A real name already given (an AI-read "Plan A - International", a fanned
     "Plan U01") is kept; a heading or one of the plan's own category wordings
-    is replaced by the plan the basis names, else by ``plan_name(code)``.
+    is replaced by the plan the basis names, else by ``plan_name(code)``. A
+    basis's name another plan also bears is undone by ``distinct_names``.
     """
     texts = {_norm(text) for text in category_texts}
     if current and not is_placeholder_name(current) and _norm(current) not in texts:
         return current
     stated = {name for basis in bases if (name := stated_plan(basis)[0])}
     return stated.pop() if len(stated) == 1 else plan_name(code)
+
+
+def distinct_names(proposals: Iterable[tuple[str, str | None, str]]) -> list[str]:
+    """One product's plan names, from ``(code, current name, proposed name)``,
+    with no name a basis gave borne by two plans.
+
+    A basis can name a plan other than the one it sits on ("Plan 2 - $50,000"
+    on plan 1, beside a plan 2): such a name, neither kept nor the plan's own
+    code name, yields to ``plan_name(code)`` when another plan bears it too.
+    Codes are unique per product, so code names never collide.
+    """
+    rows = list(proposals)
+    seen: dict[str, int] = {}
+    for _, _, proposed in rows:
+        seen[_norm(proposed)] = seen.get(_norm(proposed), 0) + 1
+    out: list[str] = []
+    for code, current, proposed in rows:
+        own = plan_name(code)
+        from_basis = proposed != current and _norm(proposed) != _norm(own)
+        out.append(own if from_basis and seen[_norm(proposed)] > 1 else proposed)
+    return out
 
 
 def name_plans(
@@ -184,7 +207,7 @@ def name_plans(
     state a basis, its details. A plan named by a slip column header keeps that
     name; its details are still filled from the basis."""
     cats = list(categories)
-    out: list[ExtractedPlan] = []
+    drafts: list[tuple[ExtractedPlan, str, str | None]] = []
     for plan in plans:
         code = plan.code.strip()
         own = [c for c in cats if (c.plan_code or "").strip() == code]
@@ -193,7 +216,11 @@ def name_plans(
         name = plan.display_name if named else generated_name(
             code, plan.display_name, (c.category for c in own), bases
         )
-        out.append(replace(
-            plan, display_name=name, details=plan.details or plan_details(bases)
-        ))
-    return tuple(out)
+        drafts.append((plan, name, plan.details or plan_details(bases)))
+    names = distinct_names(
+        (plan.code.strip(), plan.display_name, name) for plan, name, _ in drafts
+    )
+    return tuple(
+        replace(plan, display_name=name, details=details)
+        for (plan, _, details), name in zip(drafts, names, strict=True)
+    )

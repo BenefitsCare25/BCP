@@ -170,9 +170,10 @@ def cover_checks(
     findings = [
         _check("over_age_limit", f"Above the slip's age limit for {over_age}. Confirm the "
                "insurer accepts them before applying.", out.over_age),
-        _check("dependant_not_eligible", f"Dependants listed under {not_eligible}, which "
-               "the product setup covers for employees only. Update the setup's member "
-               "cover or the listing.", out.not_eligible),
+        _check("dependant_not_eligible", f"Dependants listed under {not_eligible}, whose "
+               "member cover eligibility does not include their relationship. They are not "
+               "covered there; update the setup's member cover or the listing.",
+               out.not_eligible),
         _check("family_tier_mismatch", "Family tier (EO/ES/EC/EF) does not match the "
                "dependants listed for the employee.", out.tier_mismatch),
         _check("dependant_without_employee_cover", "Dependants covered under a product "

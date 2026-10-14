@@ -6,6 +6,8 @@ export const LIMIT_ORDER: LimitKind[] = [
   "over_age",
   "over_entry_age",
   "dependant_over_age",
+  "dependant_not_eligible",
+  "relationship_unknown",
   "underwriting",
   "no_dob",
   "no_salary",
@@ -28,6 +30,16 @@ export const LIMIT_KIND: Record<
   dependant_over_age: {
     title: "Dependant above the age limit",
     summary: (n) => `${n} ${n === 1 ? "dependant is" : "dependants are"} above a spouse or child age limit`,
+  },
+  dependant_not_eligible: {
+    title: "Listed, but not eligible",
+    summary: (n) =>
+      `${n} ${n === 1 ? "dependant is" : "dependants are"} listed under a product whose eligibility excludes them`,
+  },
+  relationship_unknown: {
+    title: "Relationship not stated",
+    summary: (n) =>
+      `${n} ${n === 1 ? "dependant has" : "dependants have"} no stated relationship on a product covering only some`,
   },
   underwriting: {
     title: "Needs underwriting",
@@ -56,6 +68,10 @@ export function limitBadge(alert: CoverageLimitAlert): string {
       return `Joined at ${alert.age} · entry limit ${alert.limit}`;
     case "dependant_over_age":
       return `${alert.relationship === "child" ? "Child" : "Spouse"} ${alert.age} · above limit ${alert.limit}`;
+    case "dependant_not_eligible":
+      return `${alert.relationship === "child" ? "Child" : "Spouse"} not eligible`;
+    case "relationship_unknown":
+      return "Relationship not stated";
     case "underwriting":
       return alert.amount != null ? `Underwriting ${fmtMoney(alert.amount)}` : "Needs underwriting";
     case "capped":

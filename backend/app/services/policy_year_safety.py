@@ -166,6 +166,12 @@ _LIMIT_WARNINGS: dict[str, tuple[str, str, str]] = {
     "over_age": ("employee is", "employees are", "above a product's age limit"),
     "over_entry_age": ("employee", "employees", "joined above a product's last entry age"),
     "dependant_over_age": ("dependant is", "dependants are", "above a spouse or child age limit"),
+    "dependant_not_eligible": (
+        "dependant is", "dependants are", "listed under a product whose eligibility excludes them"
+    ),
+    "relationship_unknown": (
+        "dependant has", "dependants have", "no stated relationship on a product covering only some"
+    ),
     "underwriting": ("member needs", "members need", "underwriting before the excess is covered"),
     "no_salary": ("employee has", "employees have", "no salary for a salary-based sum insured"),
     "no_dob": ("employee has", "employees have", "no date of birth to check age limits"),

@@ -25,6 +25,7 @@ guessed.
 from __future__ import annotations
 
 import re
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
@@ -69,6 +70,8 @@ from app.services.roster_attributes import (
     first_value,
     parse_dob,
 )
+from app.services.slip_parsing.plan_names import is_placeholder_name
+from app.services.slip_parsing.plan_names import plan_name as code_plan_name
 
 TEMPLATE_PATH = Path(__file__).resolve().parent.parent / "templates" / "fact_find_form.docx"
 
@@ -118,19 +121,23 @@ PAGE_SECTIONS = ("GTL", "GPA", "GHS", "GCM", "GCGP_GCSP", "GBT")
 # guard). Categories beyond this are dropped and flagged in the completeness notes.
 MAX_BASIS_ROWS = 40
 
-# Generic plan name the slip parser assigns when a product is a single benefit
-# schedule with no named plan columns (e.g. GPA, where tiers differ by sum
-# assured, not by named plans). Showing it in every basis row is noise — the
-# sum-insured column already carries the differentiator — so it's blanked.
-_PLACEHOLDER_PLAN_NAMES = frozenset({"schedule of benefits"})
+def _plan_label(plan: Plan | None, fallback_code: str | None, *, sole: bool = False) -> str:
+    """Display label for a resolved plan: the plan's name, falling back to the
+    code — blank when the name only stands in for one.
 
-
-def _plan_label(plan: Plan | None, fallback_code: str | None) -> str:
-    """Display label for a resolved plan: the plan's name, unless it's the
-    generic single-schedule placeholder (then blank), falling back to the code.
+    A product that is a single benefit schedule with no named plan column (GPA,
+    where tiers differ by sum assured) has a plan the slip never named: once
+    the section heading ("Schedule of Benefits"), now its generated code name
+    ("Plan 1", ``slip_parsing.plan_names``). Showing it in every basis row is
+    noise — the sum-insured column already carries the differentiator. The
+    code name is a placeholder only on a ``sole`` plan; among several plans
+    ("Plan 1", "Plan 2") it is what tells them apart.
     """
     name = (plan.display_name if plan else "") or ""
-    if name.strip().lower() in _PLACEHOLDER_PLAN_NAMES:
+    if name.strip() and is_placeholder_name(name):
+        return ""
+    generated = code_plan_name(plan.code).casefold() if plan is not None else None
+    if sole and name.strip().casefold() == generated:
         return ""
     return name or (fallback_code or "")
 
@@ -796,6 +803,11 @@ def _aggregate(
     basis_acc: dict[tuple[str, str], dict[str, Any]] = {}
     exact_configured_counts: dict[str, int] = {}
     insurers: set[str] = set()
+    plans_per_product = Counter(product_id for product_id, _ in data.plans)
+
+    def plan_label(plan: Plan | None, code: str | None) -> str:
+        sole = plan is not None and plans_per_product[plan.product_id] == 1
+        return _plan_label(plan, code, sole=sole)
 
     def section(code: str) -> SectionContext:
         if code not in sections:
@@ -833,7 +845,7 @@ def _aggregate(
             key=lambda value: _natural_key(value.display_name or value.code),
         )
         for plan in product_plans:
-            label = _plan_label(plan, plan.code)
+            label = plan_label(plan, plan.code)
             if label and label not in sec.available_plans:
                 sec.available_plans.append(label)
 
@@ -872,7 +884,7 @@ def _aggregate(
                 cat.id,
                 cat,
                 seed_plan,
-                _plan_label(seed_plan, plan_code),
+                plan_label(seed_plan, plan_code),
                 product.code,
             )
             # Seeding calls the same accumulator as live membership; cancel its
@@ -891,7 +903,7 @@ def _aggregate(
                     f"plan:{product.id}:{plan.code}",
                     None,
                     plan,
-                    _plan_label(plan, plan.code),
+                    plan_label(plan, plan.code),
                     product.code,
                 )
                 basis_acc[(section_code, f"plan:{product.id}:{plan.code}")]["count"] = 0
@@ -950,7 +962,7 @@ def _aggregate(
             )
 
             employee_plan = data.plans.get((product_id, resolved.plan_code or ""))
-            plan_name = _plan_label(employee_plan, resolved.plan_code)
+            plan_name = plan_label(employee_plan, resolved.plan_code)
 
             if section_code not in counted:
                 counted.add(section_code)

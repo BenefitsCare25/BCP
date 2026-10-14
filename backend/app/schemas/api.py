@@ -527,6 +527,23 @@ class CategoryOverlapOut(BaseModel):
     employees: list[CategoryOverlapEmployee]
 
 
+class CategoryHeadcountOut(BaseModel):
+    """Who the roster places in one plan assignment now (live, not the slip)."""
+
+    category_id: str
+    employees: int
+    dependants: int | None = None
+    # Employees by family tier (EO/ES/EC/EF); empty when the category covers
+    # no dependants, so every employee is EO.
+    tier_counts: dict[str, int] = {}
+
+
+class CategoryHeadcountsOut(BaseModel):
+    # Active employees in the policy year: zero until a listing is uploaded.
+    employees_total: int
+    categories: list[CategoryHeadcountOut]
+
+
 class EligibilityMappingItemOut(BaseModel):
     category_id: str
     product_code: str | None = None

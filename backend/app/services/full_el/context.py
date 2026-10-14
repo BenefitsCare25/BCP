@@ -26,6 +26,7 @@ from app.models.employee_listing import ElLayoutProfile, ListingAssignment
 from app.models.product_setup import ProductSetupStatus
 from app.models.product_term import DEFAULT_GST_RATE
 from app.services.coverage_resolver import load_overrides
+from app.services.dependant_cover_rules import NO_RULES, CoverRules, load_cover_rules
 from app.services.dependant_coverage import category_covers_dependants
 from app.services.el_import.mapping import normalize_label
 from app.services.el_report_rules import (
@@ -96,6 +97,8 @@ class ElContext:
     # Underwriting state, loaded only when a product bills on accepted SI.
     uw_cases: CaseMap = field(default_factory=dict)  # (subject_id, product_id)
     uw_fcls: dict[str, float] = field(default_factory=dict)  # product_id -> FCL
+    # Eligibility ticks and broker exclusions every covered dependant passes.
+    cover_rules: CoverRules = NO_RULES
 
 
 def _gst_factor(term: ProductTerm | None, answers: dict[str, Any]) -> float | None:
@@ -225,6 +228,7 @@ def load_context(
         gaps=gaps,
         uw_cases=load_cases(db, year.id) if accepted_basis else {},
         uw_fcls=free_cover_limits(db, year.id) if accepted_basis else {},
+        cover_rules=load_cover_rules(db, year.id),
     )
 
 

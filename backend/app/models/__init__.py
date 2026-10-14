@@ -25,6 +25,7 @@ from app.models.claim_review_job import ClaimReviewJob
 from app.models.client import BrokerFirm, Client
 from app.models.client_ai_config import ClientAIConfig
 from app.models.dependant import Dependant
+from app.models.dependant_cover_decision import DependantCoverDecision
 from app.models.dual_coverage_decision import DualCoverageDecision
 from app.models.eligibility_mapping_profile import EligibilityMappingProfile
 from app.models.email_template import (
@@ -108,6 +109,7 @@ __all__ = [
     "ClientAIConfig",
     "ClientAuthPolicy",
     "Dependant",
+    "DependantCoverDecision",
     "DualCoverageDecision",
     "ElLayoutProfile",
     "EligibilityMappingProfile",

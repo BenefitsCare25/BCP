@@ -274,6 +274,19 @@ export interface CategoryGroup {
   categories: Category[];
 }
 
+/** Live headcount per plan assignment from the uploaded listing (not the slip). */
+export interface CategoryHeadcounts {
+  /** Active employees in the year: zero until a listing is uploaded. */
+  employees_total: number;
+  categories: {
+    category_id: string;
+    employees: number;
+    dependants: number | null;
+    /** Employees by family tier; empty when the plan covers no dependants. */
+    tier_counts: Record<string, number>;
+  }[];
+}
+
 export interface CategoryOverlap {
   category_id: string;
   employees: {
@@ -601,6 +614,9 @@ export interface PlanDetail {
   annual_policy_limit: string | null;
   // Insurer-facing label for report columns ("4 Bed Restr Hosp / …").
   report_label: string | null;
+  // What the plan pays in short form ("24x BMS"), derived from its categories'
+  // basis. Present on plan lists only.
+  details?: string | null;
   financials: PlanFinancials | null;
   source: string;
   confidence: number | null;
@@ -693,6 +709,8 @@ export type LimitKind =
   | "over_age"
   | "over_entry_age"
   | "dependant_over_age"
+  | "dependant_not_eligible"
+  | "relationship_unknown"
   | "underwriting"
   | "capped"
   | "no_salary"
@@ -715,6 +733,9 @@ export interface CoverageLimitAlert {
   limit: number | null;
   amount: number | null;
   message: string;
+  /** The broker's call on a dependant above an age limit. */
+  decision?: "keep" | "exclude" | null;
+  decision_reason?: string | null;
 }
 
 export interface CoverageLimits {

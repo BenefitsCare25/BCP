@@ -1023,14 +1023,14 @@ def _ingest_slip(
                 ]
             }
             # Free-text fields are clipped to their columns. A plan's details
-            # ("24x BMS", from its categories' basis) seed the insurer report
-            # label, the field the plan types editor shows beside its name.
+            # ("24x BMS") are not stored: report_label is the insurer's and
+            # member's name for the plan, and the plan list derives details
+            # from the categories' basis (api/v1/plans.py).
             db.add(Plan(
                 product_id=product.id,
                 policy_year_id=policy_year_id,
                 code=extracted_plan.code,
                 display_name=extracted_plan.display_name[:255],
-                report_label=(extracted_plan.details or "")[:255] or None,
                 benefit_schedule=schedule_json,
                 cover_description=(
                     extracted_plan.cover_description[:512]

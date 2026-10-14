@@ -132,7 +132,9 @@ function LimitsOverview({ policyYearId }: { policyYearId: string }) {
       <h2 className="text-sm font-semibold text-foreground">Coverage limits</h2>
       <p className="mt-0.5 text-xs text-muted-foreground">
         Members crossing a placement-slip limit. Nothing is changed automatically:
-        end the cover, record the insurer's agreement, or correct the listing.
+        end the cover, record the insurer's agreement, or correct the listing. For a
+        dependant above an age limit, keep them covered (saying why) or exclude them
+        from that product.
       </p>
       <div className="mt-3">
         {isLoading ? (
@@ -140,7 +142,7 @@ function LimitsOverview({ policyYearId }: { policyYearId: string }) {
             <Loader2 className="size-4 animate-spin" /> Checking limits…
           </p>
         ) : alerts.length ? (
-          <LimitAlertList alerts={alerts} />
+          <LimitAlertList alerts={alerts} policyYearId={policyYearId} />
         ) : (
           <p className="text-sm text-muted-foreground">No member crosses a limit.</p>
         )}

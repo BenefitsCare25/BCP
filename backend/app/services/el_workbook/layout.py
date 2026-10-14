@@ -120,32 +120,55 @@ def _banner_kind(text: str) -> BlockKind:
     return "product"
 
 
-def _words(value: str) -> str:
-    return " ".join(re.findall(r"[a-z0-9]+", value.lower().replace("&", " and ")))
+def _words(value: str) -> list[str]:
+    return re.findall(r"[a-z0-9]+", re.sub(r"[&/+]", " and ", value.lower()))
+
+
+def _named_code(banner: str) -> str | None:
+    """The registry product whose name the banner spells out, or None when it
+    names none or several. A name inside a longer matched one ("Group Hospital
+    & Surgical" in "... (Plan 2)") is that product, not a second one; a
+    conjunction left over after the name ("Group Clinical GP & Specialist")
+    names another product in shorthand."""
+    words = _words(banner)
+    spans: list[tuple[int, int, str]] = []
+    for entry in product_registry.entries():
+        name = _words(entry.name)
+        for i in range(len(words) - len(name) + 1) if name else ():
+            if words[i:i + len(name)] == name:
+                spans.append((i, i + len(name), entry.code))
+    kept = [
+        (start, stop, code) for start, stop, code in spans
+        if not any(s <= start and stop <= e and (e - s) > (stop - start) for s, e, _ in spans)
+    ]
+    codes = {code for _, _, code in kept}
+    covered = {i for start, stop, _ in kept for i in range(start, stop)}
+    if len(codes) != 1 or any(w == "and" for i, w in enumerate(words) if i not in covered):
+        return None
+    return codes.pop()
 
 
 def _code_hint(banner: str, headers: list[str]) -> str | None:
-    """The product code a block names: "(GTL)" in its banner, a code in a
+    """The one product code a block names: "(GTL)" in its banner, a code in a
     premium header ("Clinical GP (Premium)"), else the registry product whose
-    name the banner spells out ("Group Clinical Specialist Insurance")."""
+    name the banner spells out ("Group Clinical Specialist Insurance").
+
+    A block naming several products ("Group Term Life & Group Personal
+    Accident") has no hint, so the mapping offers every product for it."""
     known = product_registry.known_codes()
-    for token in re.findall(r"\(([A-Za-z]{2,6})\)", banner):
-        code = str(token).upper()
-        if code in known:
-            return code
-    for header in headers:
-        if "premium" not in header.lower():
-            continue
-        for token in re.findall(r"\b([A-Za-z]{2,6})\b", header):
-            if str(token).upper() in known:
-                return str(token).upper()
-    words = f" {_words(banner)} "
-    named = [
-        (len(name), entry.code)
-        for entry in product_registry.entries()
-        if (name := _words(entry.name)) and f" {name} " in words
-    ]
-    return max(named)[1] if named else None
+    in_brackets = {
+        code for token in re.findall(r"\(([A-Za-z]{2,6})\)", banner)
+        if (code := str(token).upper()) in known
+    }
+    in_premiums = {
+        code for header in headers if "premium" in header.lower()
+        for token in re.findall(r"\b([A-Za-z]{2,6})\b", header)
+        if (code := str(token).upper()) in known
+    }
+    for codes in (in_brackets, in_premiums):
+        if codes:
+            return codes.pop() if len(codes) == 1 else None
+    return _named_code(banner)
 
 
 _PERIOD = re.compile(
@@ -154,8 +177,10 @@ _PERIOD = re.compile(
 
 
 def _stated_period(rows: list[list[Cell]], header_row: int) -> tuple[date, date] | None:
-    """The insurance period printed above the table, read day-first."""
-    for row in rows[: max(header_row - 1, 0)]:
+    """The insurance period printed above the table, read day-first. Every row
+    above the header is read: without a product banner, the row just above
+    the header is often the period line itself."""
+    for row in rows[:header_row]:
         for cell in row:
             match = _PERIOD.search(norm_header(cell))
             if match is None:

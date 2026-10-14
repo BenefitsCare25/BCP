@@ -9,6 +9,8 @@ LimitKindStr = Literal[
     "over_age",
     "over_entry_age",
     "dependant_over_age",
+    "dependant_not_eligible",
+    "relationship_unknown",
     "underwriting",
     "capped",
     "no_salary",
@@ -55,9 +57,29 @@ class CoverageLimitAlert(BaseModel):
     limit: float | None = None
     amount: float | None = None
     message: str
+    # The broker's call on an over-age dependant: kept covered (with why) or
+    # excluded from the product. A decided alert no longer needs action.
+    decision: Literal["keep", "exclude"] | None = None
+    decision_reason: str | None = None
 
 
 class CoverageLimitsOut(BaseModel):
     alerts: list[CoverageLimitAlert]
     # People affected per kind; a person crossing three products counts once.
     counts: dict[str, int]
+
+
+class DependantCoverDecisionIn(BaseModel):
+    """Keep an over-age dependant covered (saying why) or exclude them."""
+
+    dependant_id: str = Field(min_length=1, max_length=36)
+    product_code: str = Field(min_length=1, max_length=64)
+    decision: Literal["keep", "exclude"]
+    reason: str | None = Field(default=None, max_length=255)
+
+
+class DependantCoverDecisionOut(BaseModel):
+    dependant_id: str
+    product_code: str
+    decision: Literal["keep", "exclude"]
+    reason: str | None = None

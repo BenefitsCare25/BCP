@@ -18,7 +18,18 @@ from sqlalchemy.orm.attributes import flag_modified
 from app.core.audit import write_audit
 from app.core.auth import CurrentUser
 from app.core.deps import tenant_or_global
-from app.models import Category, FlexPricing, Plan, Product, ProductTerm
+from app.models import (
+    Category,
+    DependantCoverDecision,
+    EmployeePlanOverride,
+    EnrollmentElection,
+    FlexPricing,
+    ListingAssignment,
+    Plan,
+    Product,
+    ProductTerm,
+    UnderwritingCase,
+)
 from app.models.category import CategoryStatus, SourceKind
 from app.services.category_factory import build_manual_category
 from app.services.claim_limits import (
@@ -292,6 +303,53 @@ def _adoption_conflict(message: str) -> HTTPException:
     )
 
 
+# Member records of one policy year, keyed by product: they belong with the
+# categories, so they move with them. Left on the catalog product, the
+# company's listing, elections and underwriting stop applying to its plans.
+_MEMBER_RECORDS = (
+    ListingAssignment,
+    EmployeePlanOverride,
+    EnrollmentElection,
+    UnderwritingCase,
+    DependantCoverDecision,
+)
+
+
+def _adopt_member_records(
+    db: Session, product: Product, policy_year_id: str, related_ids: list[str]
+) -> dict[str, int]:
+    """Re-parent the year's member records from same-code products; fail
+    closed when both records hold some, as for categories."""
+    moved: dict[str, int] = {}
+    if not related_ids:
+        return moved
+    for model in _MEMBER_RECORDS:
+        rows = list(
+            db.scalars(
+                select(model).where(
+                    model.policy_year_id == policy_year_id,
+                    model.product_id.in_(related_ids),
+                )
+            ).all()
+        )
+        if not rows:
+            continue
+        held = db.scalar(
+            select(func.count()).select_from(model).where(
+                model.policy_year_id == policy_year_id, model.product_id == product.id
+            )
+        )
+        if held:
+            raise _adoption_conflict(
+                f"{product.code} has {model.__tablename__.replace('_', ' ')} on two "
+                "product records. Reconcile the duplicate records before confirming."
+            )
+        for row in rows:
+            row.product_id = product.id
+        moved[model.__tablename__] = len(rows)
+    return moved
+
+
 def _adopt_slip_artifacts(
     db: Session, user: CurrentUser, product: Product, policy_year_id: str
 ) -> None:
@@ -341,6 +399,7 @@ def _adopt_slip_artifacts(
         )
     for category in source_categories:
         category.product_id = product.id
+    members_moved = _adopt_member_records(db, product, policy_year_id, related_ids)
 
     source_terms = (
         list(
@@ -421,7 +480,7 @@ def _adopt_slip_artifacts(
         db.delete(plan)
         plans_removed += 1
     db.flush()
-    if source_categories or source_terms or pricing_moved or plans_removed:
+    if source_categories or source_terms or pricing_moved or plans_removed or members_moved:
         write_audit(
             db,
             user,
@@ -434,6 +493,7 @@ def _adopt_slip_artifacts(
                 "term_reparented": bool(source_terms),
                 "pricing_rekeyed": pricing_moved,
                 "provisional_plans_removed": plans_removed,
+                "member_records_reparented": members_moved,
             },
         )
 

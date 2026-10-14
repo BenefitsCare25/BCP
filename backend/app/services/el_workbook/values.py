@@ -6,6 +6,7 @@ from datetime import date, datetime, timedelta
 from difflib import SequenceMatcher
 from typing import Any
 
+from app.services.dual_coverage import normalize_name
 from app.services.excel_reader import Cell
 
 # Excel's 1900 date system: serial 1 = 1900-01-01, with the phantom 1900-02-29.
@@ -72,12 +73,14 @@ def wef_date(value: Cell) -> date | None:
     return as_date(f"{day} {month[:3].title()} {year}")
 
 
-# Words that never tell two people apart: salutations and the "bin" / "s/o"
-# joiners of Malay and Indian names.
+# Words that never tell two people apart: salutations and the "bin" joiners of
+# Malay names. The "s/o", "d/o", "a/l", "a/p" joiners of Indian names are
+# removed before splitting, so a lone "S" or "D" stays an initial.
 _NAME_NOISE = frozenset({
     "mr", "mrs", "ms", "mdm", "madam", "miss", "dr", "mx", "sir",
-    "bin", "binte", "binti", "bte", "s", "o", "d",
+    "bin", "binte", "binti", "bte",
 })
+_PARENT_JOINER = re.compile(r"\b(?:[sd]\s*/\s*o|a\s*/\s*[lp])\b", re.IGNORECASE)
 # One spelling for names commonly abbreviated on rosters.
 _NAME_VARIANTS = {
     "mohd": "muhammad", "muhd": "muhammad", "mohamed": "muhammad", "mohammad": "muhammad",
@@ -86,28 +89,44 @@ _NAME_VARIANTS = {
 
 
 def _name_tokens(value: Cell) -> frozenset[str]:
-    return frozenset(
-        _NAME_VARIANTS.get(t, t)
-        for t in re.findall(r"[a-z0-9]+", text(value).lower())
-        if t not in _NAME_NOISE
-    )
+    """A name's words on the platform's one name normalisation
+    (``dual_coverage.normalize_name``), minus words that never tell people
+    apart."""
+    words = normalize_name(_PARENT_JOINER.sub(" ", text(value))).split()
+    return frozenset(_NAME_VARIANTS.get(w, w) for w in words if w not in _NAME_NOISE)
+
+
+def same_name(a: Cell, b: Cell) -> bool:
+    """The same words, whatever their order, case, punctuation, salutations and
+    abbreviations ("Loong, Li Juan" = "Li Juan Loong", "Mr Tan Ah Kow" =
+    "TAN AH KOW")."""
+    ta = _name_tokens(a)
+    return bool(ta) and ta == _name_tokens(b)
 
 
 def same_person(a: Cell, b: Cell) -> bool:
-    """Whether two spellings of a name are the same person: case, punctuation,
-    word order, salutations and common abbreviations aside ("Loong, Li Juan" =
-    "Li Juan Loong", "Mr Tan Ah Kow" = "TAN AH KOW"). One name may also carry
-    an extra given name ("Tan Ah Kow" = "Tan Ah Kow Eric"), and a one-letter
-    slip still matches."""
+    """Whether two spellings could be the same person: ``same_name``, or one
+    name carrying an extra given name ("Tan Ah Kow" = "Tan Ah Kow Eric"), or a
+    one-letter slip between names of the same length ("Lim Mei Ling" = "Lim
+    Mei Lin").
+
+    Initials tell people apart ("S. Kumar" is not "D. Kumar"), and a two-word
+    name is a part of too many longer ones ("Tan Wei" is not "Tan Wei Ming").
+    Tolerant by design: use ``same_name`` to choose between people.
+    """
     ta, tb = _name_tokens(a), _name_tokens(b)
     if not ta or not tb:
         return False
     if ta == tb:
         return True
-    smaller = ta if len(ta) <= len(tb) else tb
-    if len(smaller) >= 2 and (ta <= tb or tb <= ta):
+    if {t for t in ta if len(t) == 1} != {t for t in tb if len(t) == 1}:
+        return False
+    smaller, larger = sorted((ta, tb), key=len)
+    if len(smaller) >= 3 and smaller < larger:
         return True
-    return SequenceMatcher(None, " ".join(sorted(ta)), " ".join(sorted(tb))).ratio() >= 0.9
+    return len(ta) == len(tb) and SequenceMatcher(
+        None, " ".join(sorted(ta)), " ".join(sorted(tb))
+    ).ratio() >= 0.9
 
 
 def as_number(value: Cell) -> float | None:

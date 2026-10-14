@@ -123,6 +123,7 @@ def _action_alerts_by_employee(db: Session, policy_year_id: str) -> dict[str, in
         return {}
     counts: dict[str, int] = {}
     for alert in coverage_limit_alerts(db, py):
-        if alert.kind in ACTION_KINDS:
+        # A dependant the broker has kept or excluded no longer needs them.
+        if alert.kind in ACTION_KINDS and not alert.decision:
             counts[alert.employee_id] = counts.get(alert.employee_id, 0) + 1
     return counts

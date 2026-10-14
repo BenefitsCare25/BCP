@@ -11,7 +11,14 @@ import { cn } from "@/lib/cn";
 import { NOT_COVERED, parsePastedColumn } from "@/lib/sob";
 import { isNotApplicable } from "@/lib/sobValues";
 
-const BOOLEAN_OPTIONS = ["YES", "NO", "NA"];
+const BOOLEAN_OPTIONS = ["Yes", "No", "NA"];
+
+/** The Yes/No choice a stored value reads as. Slips write "Yes", "YES" or
+ * "yes"; matching only one spelling left the others showing blank. */
+function booleanChoice(value: string): string | undefined {
+  const wanted = value.trim().toUpperCase();
+  return BOOLEAN_OPTIONS.find((option) => option.toUpperCase() === wanted);
+}
 
 /** Inline affix for the value's kind, so the type is legible without a column. */
 export function affixes(kind: string): { prefix: string | null; suffix: string | null } {
@@ -56,6 +63,11 @@ export function SobCell({
   const notApplicable = isNotApplicable(value);
   const naTitle = notApplicable ? "Not applicable — employees won't see this" : undefined;
   const { prefix, suffix } = affixes(kind);
+  const choice = kind === "boolean" ? booleanChoice(value) : undefined;
+  // Wording the slip states that is not a plain yes/no stays visible as its
+  // own option instead of an empty box.
+  const booleanOptions =
+    choice || !value.trim() ? BOOLEAN_OPTIONS : [...BOOLEAN_OPTIONS, value];
 
   if (notCovered) {
     return (
@@ -76,7 +88,7 @@ export function SobCell({
   return (
     <div className="group/cell relative">
       {kind === "boolean" ? (
-        <Select value={value} onValueChange={onChange}>
+        <Select value={choice ?? value} onValueChange={onChange}>
           <SelectTrigger
             aria-label={ariaLabel}
             title={naTitle}
@@ -89,7 +101,7 @@ export function SobCell({
             <SelectValue placeholder="—" />
           </SelectTrigger>
           <SelectContent>
-            {BOOLEAN_OPTIONS.map((o) => (
+            {booleanOptions.map((o) => (
               <SelectItem key={o} value={o}>
                 {o}
               </SelectItem>
@@ -142,7 +154,14 @@ export function SobCell({
         </>
       )}
 
-      <div className="absolute right-1 top-1/2 flex -translate-y-1/2 items-center opacity-0 transition-opacity focus-within:opacity-100 group-hover/cell:opacity-100">
+      {/* Left of a select's arrow: over it, a click meant to open the list
+          marked the cell not covered. */}
+      <div
+        className={cn(
+          "absolute top-1/2 flex -translate-y-1/2 items-center opacity-0 transition-opacity focus-within:opacity-100 group-hover/cell:opacity-100",
+          kind === "boolean" ? "right-8" : "right-1",
+        )}
+      >
         {overridden && onReset && (
           <button
             type="button"

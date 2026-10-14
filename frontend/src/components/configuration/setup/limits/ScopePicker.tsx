@@ -11,13 +11,16 @@ interface Props {
   onToggle: (scopeCode: string, checked: boolean) => void;
 }
 
-/** Claim types linked to a limit. Suggested and already-linked types show
- * first; the rest sit behind "+ N more" so a GHS product's list of inpatient
- * sub-types doesn't bury the one that matters. */
+/** Claim types linked to a limit — one or several, when they share its amount.
+ * Suggested and already-linked types show first; the rest sit behind "+ N
+ * more" so a GHS product's list of inpatient sub-types doesn't bury the one
+ * that matters. Order and folding follow the selection the editor opened
+ * with: ticking a type must not fold away or reshuffle the others. */
 export function ScopePicker({ idPrefix, labelledBy, selected, scopes, suggested, onToggle }: Props) {
   const [showAll, setShowAll] = useState(false);
+  const [opened] = useState(selected);
   const rank = (scope: ClaimLimitScope) =>
-    suggested.includes(scope.code) ? 0 : selected.includes(scope.code) ? 1 : 2;
+    suggested.includes(scope.code) ? 0 : opened.includes(scope.code) ? 1 : 2;
   const ordered = [...scopes].sort((a, b) => rank(a) - rank(b));
   const initial = ordered.filter((scope) => rank(scope) < 2);
   const compact = initial.length > 0 && initial.length < ordered.length;

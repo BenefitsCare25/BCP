@@ -13,7 +13,7 @@ from app.services.el_workbook.models import (
     ElLayout,
     ElWorkbook,
 )
-from app.services.el_workbook.values import normalize, same_person, text
+from app.services.el_workbook.values import normalize, same_name, same_person, text
 from app.services.excel_reader import Cell, open_workbook
 
 _DATE_ROLES = {"date_of_birth", "date_of_hire", "last_day_of_service",
@@ -90,10 +90,12 @@ def _dependant_owner(
     """The employee a dependant row belongs to, or None when it can't be told.
 
     A staff ID decides. Without one the dependant belongs to the employee row
-    above it. When the row repeats an employee name that is clearly another
-    employee's (a re-sorted sheet), the dependant is linked to that employee
-    instead; a name that only differs in spelling stays with the employee
-    above, with a warning, so a salutation or typo never drops the row.
+    above it. When the row repeats the name of exactly one other employee
+    (a re-sorted sheet), the dependant is linked to that employee instead.
+    Moving a dependant to another household takes the same name, never a
+    near one; a name that only resembles the employee above (an extra given
+    name, a typo) stays with them, and any other name stays with them with a
+    warning, so a salutation or typo never drops the row.
     """
     if staff_id:
         owner = by_staff_id.get(staff_id)
@@ -104,14 +106,15 @@ def _dependant_owner(
             ))
         return owner
     previous = employees[-1] if employees else None
-    if previous is not None and (
-        not listed_name or same_person(listed_name, previous.fields.get("name"))
-    ):
+    above = previous.fields.get("name") if previous is not None else None
+    if previous is not None and (not listed_name or same_name(listed_name, above)):
         return previous
     named = [e for e in employees if e is not previous
-             and same_person(listed_name, e.fields.get("name"))]
+             and same_name(listed_name, e.fields.get("name"))]
     if len(named) == 1:
         return named[0]
+    if previous is not None and same_person(listed_name, above):
+        return previous
     if previous is None:
         issues.append(ElIssue(
             row_no, "staff_id", "orphan_dependant",

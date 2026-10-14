@@ -78,6 +78,24 @@ class _RateRow:
     premium_note: str | None = None
 
 
+# A rate cell saying the cover is priced inside another product: "Part of GP",
+# "Included in GHS", "Inclusive". No separate premium, so the rate is zero.
+_INCLUDED_RATE = re.compile(
+    r"^\s*(part\s+of|included\b|inclusive\b|incl\.?\s|covered\s+(?:in|under)|bundled\b)",
+    re.IGNORECASE,
+)
+
+
+def _included_wording(row: list[Cell], *cols: int) -> str | None:
+    """The first of these cells that states its premium is included elsewhere."""
+    for col in cols:
+        if 0 <= col < len(row) and isinstance(row[col], str):
+            text = _norm(row[col])
+            if _INCLUDED_RATE.match(text):
+                return text
+    return None
+
+
 def _tier_suffix_keys(key: str) -> list[str]:
     """Canonical tier keys named by a per-member rate key's suffix.
 
@@ -705,7 +723,12 @@ def _parse_flat_rates(
         earn = _currency_amount(row, earnings_col)
 
         if rate is None and prem is None:
-            continue
+            included = _included_wording(row, rate_col, prem_col)
+            if included is None:
+                continue
+            # Priced inside another product: a stated zero, not a blank, with
+            # the slip's wording kept for the setup to show.
+            rate, prem_note = 0.0, included
 
         if is_per_1000:
             basis = "per_1000_si"

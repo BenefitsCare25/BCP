@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Link } from "@tanstack/react-router";
 import { ArrowRight } from "lucide-react";
 import type { CoverageLimitAlert, LimitKind } from "@/types";
+import { CoverDecision } from "./CoverDecision";
 import { LIMIT_KIND, LIMIT_ORDER } from "./limitKinds";
 
 /** One person crossing one limit, across every product it applies to. */
@@ -9,6 +10,8 @@ interface PersonRow {
   key: string;
   alert: CoverageLimitAlert;
   products: string[];
+  /** One alert per product: decisions are per product. */
+  alerts: CoverageLimitAlert[];
 }
 
 const ROWS_SHOWN = 8;
@@ -21,10 +24,13 @@ function rowsByKind(alerts: CoverageLimitAlert[]): Map<LimitKind, PersonRow[]> {
     const key = [alert.kind, alert.employee_id, alert.dependant_id ?? "", alert.message].join("|");
     const row = byKey.get(key);
     if (row) {
-      if (!row.products.includes(alert.product_code)) row.products.push(alert.product_code);
+      if (!row.products.includes(alert.product_code)) {
+        row.products.push(alert.product_code);
+        row.alerts.push(alert);
+      }
       continue;
     }
-    const next: PersonRow = { key, alert, products: [alert.product_code] };
+    const next: PersonRow = { key, alert, products: [alert.product_code], alerts: [alert] };
     byKey.set(key, next);
     out.set(alert.kind, [...(out.get(alert.kind) ?? []), next]);
   }
@@ -39,10 +45,13 @@ function rowsByKind(alerts: CoverageLimitAlert[]): Map<LimitKind, PersonRow[]> {
 export function LimitAlertList({
   alerts,
   showCoverageLinks = true,
+  policyYearId,
 }: {
   alerts: CoverageLimitAlert[];
   /** Each row opens the member's coverage. */
   showCoverageLinks?: boolean;
+  /** Offers the keep/exclude decision on dependants above an age limit. */
+  policyYearId?: string;
 }) {
   const groups = rowsByKind(alerts);
   return (
@@ -53,6 +62,7 @@ export function LimitAlertList({
           kind={kind}
           rows={groups.get(kind) ?? []}
           showCoverageLinks={showCoverageLinks}
+          policyYearId={policyYearId}
         />
       ))}
     </div>
@@ -63,21 +73,28 @@ function KindGroup({
   kind,
   rows,
   showCoverageLinks,
+  policyYearId,
 }: {
   kind: LimitKind;
   rows: PersonRow[];
   showCoverageLinks: boolean;
+  policyYearId?: string;
 }) {
   const [all, setAll] = useState(false);
   const shown = all ? rows : rows.slice(0, ROWS_SHOWN);
+  const decides = kind === "dependant_over_age" && Boolean(policyYearId);
+  const open = rows.filter((row) => row.alerts.some((alert) => !alert.decision)).length;
   return (
     <div>
       <h4 className="mb-1 text-2xs font-medium uppercase tracking-wider text-muted-foreground">
         {LIMIT_KIND[kind].title}
-        <span className="ml-1.5 tabular-nums normal-case tracking-normal">· {rows.length}</span>
+        <span className="ml-1.5 tabular-nums normal-case tracking-normal">
+          · {rows.length}
+          {decides && open < rows.length ? ` (${rows.length - open} decided)` : ""}
+        </span>
       </h4>
       <ul className="grid gap-0.5">
-        {shown.map(({ key, alert, products }) => (
+        {shown.map(({ key, alert, products, alerts }) => (
           <li
             key={key}
             className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-x-3 rounded-md px-2 py-1.5 hover:bg-muted/40"
@@ -103,6 +120,13 @@ function KindGroup({
                 ))}
               </div>
               <p className="mt-0.5 text-xs text-muted-foreground">{alert.message}</p>
+              {decides && policyYearId && (
+                <div className="mt-1.5 grid gap-1.5">
+                  {alerts.map((one) => (
+                    <CoverDecision key={one.product_code} alert={one} policyYearId={policyYearId} />
+                  ))}
+                </div>
+              )}
             </div>
             {showCoverageLinks && (
               <Link

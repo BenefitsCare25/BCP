@@ -36,6 +36,11 @@ from app.models import (
 )
 from app.models.employee import EMPLOYEE_STATUS_ACTIVE
 from app.services.coverage_resolver import load_overrides, resolve_plan
+from app.services.dependant_cover_rules import (
+    load_cover_rules,
+    load_listed_cover,
+    plan_covered_dependants,
+)
 from app.services.dependant_coverage import (
     category_dependant_mode,
     has_member_cover_eligibility_answer,
@@ -127,6 +132,7 @@ def build_category_member_counts(
 
     # product_id per category, plus which categories cover dependants.
     cat_product: dict[str, str | None] = {}
+    cat_code: dict[str, str] = {}
     # How dependants join each category: compulsory (all counted), voluntary
     # (only those an override enrols) or None (no dependant cover).
     dependant_mode: dict[str, str | None] = {}
@@ -148,6 +154,7 @@ def build_category_member_counts(
         cid, product_id, assignments, has_deps, code, detail, display_name, raw = row
         product_code = str(code or "").strip().upper()
         cat_product[cid] = product_id
+        cat_code[cid] = product_code
         cat_assignments[cid] = assignments if isinstance(assignments, dict) else {}
         legacy_default = bool(has_deps) and not setup_has_member_cover.get(
             product_code, False
@@ -162,6 +169,8 @@ def build_category_member_counts(
         )
 
     overrides = load_overrides(db, policy_year_id, [e.id for e in employees])
+    listed = load_listed_cover(db, policy_year_id)
+    rules = load_cover_rules(db, policy_year_id)
 
     emp_counts: dict[str, int] = defaultdict(int)
     dep_counts: dict[str, int] = defaultdict(int)
@@ -198,10 +207,12 @@ def build_category_member_counts(
             mode = dependant_mode.get(cid)
             if mode is None:
                 continue
-            covered = household if mode == "compulsory" else []
-            if override is not None and override.covered_dependant_ids is not None:
-                chosen = set(override.covered_dependant_ids)
-                covered = [d for d in household if d.id in chosen]
+            elected = override.covered_dependant_ids if override is not None else None
+            covered = rules.filter(
+                plan_covered_dependants(household, mode, elected, product_id, listed),
+                product_id,
+                cat_code.get(cid),
+            )
             dep_counts[cid] += len(covered)
             bucket = family_tier_bucket(d.attribute_values or {} for d in covered)
             tier_counts[cid][bucket] += 1

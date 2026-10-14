@@ -95,6 +95,13 @@ const positive = (value: unknown): boolean => {
   return n !== null && n > 0;
 };
 
+// A rate the broker entered, zero included: "Part of GP" prices a product
+// inside another one's premium, so 0 is an answer, not a gap.
+const stated = (value: unknown): boolean => {
+  const n = parseAmount(value);
+  return n !== null && n >= 0;
+};
+
 const blank = (value: unknown): boolean =>
   (Array.isArray(value) ? value.join("") : String(value ?? "")).trim() === "";
 
@@ -146,7 +153,7 @@ export function assignmentGaps(
       if (!(pa.voluntary_rates ?? []).some((band) => positive(band.rate))) {
         gaps.push({ field: "age_bands" });
       }
-    } else if (!positive(pa.premium_rate)) {
+    } else if (!stated(pa.premium_rate)) {
       gaps.push({ field: "rate" });
     }
     return gaps;
@@ -156,11 +163,11 @@ export function assignmentGaps(
     const tierGap = tierRateGaps(pa);
     if (tierGap) gaps.push(tierGap);
   } else if (ctx.rateModel === "flat") {
-    if (!positive(pa.annual_premium)) gaps.push({ field: "annual_premium" });
+    if (!stated(pa.annual_premium)) gaps.push({ field: "annual_premium" });
   } else if (ctx.rateModel === "earnings_based") {
     if (!positive(pa.estimated_annual_earnings)) gaps.push({ field: "earnings" });
     if (!positive(pa.premium_rate)) gaps.push({ field: "rate" });
-  } else if (!positive(pa.premium_rate) && !hasPricedTier(pa)) {
+  } else if (!stated(pa.premium_rate) && !hasPricedTier(pa)) {
     gaps.push({ field: "rate" });
   }
 
@@ -172,7 +179,7 @@ export function assignmentGaps(
     ctx.rateModel === "per_member" &&
     (dependantMode === "compulsory" || dependantMode === "voluntary") &&
     !hasPricedTier(pa) &&
-    !positive(pa.dependant_rate)
+    !stated(pa.dependant_rate)
   ) {
     gaps.push({ field: "dependant_rate" });
   }

@@ -44,8 +44,8 @@ export function PlanTypeSettings({ plans, policyYearId, productId, saveFirst = f
                   {plan.display_name || plan.code}
                   {/* The plan's details ("24x BMS"), so plans that share one
                       schedule and differ by basis read apart at a glance. */}
-                  {plan.report_label && (
-                    <span className="font-normal text-muted-foreground"> · {plan.report_label}</span>
+                  {plan.details && (
+                    <span className="font-normal text-muted-foreground"> · {plan.details}</span>
                   )}
                 </span>
                 <Pencil className="size-3 shrink-0" aria-hidden="true" />

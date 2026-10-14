@@ -28,6 +28,8 @@ import {
 } from "@/components/ui/table";
 import { basisShort, coverWording } from "@/lib/basis";
 import { fmtMoney } from "@/lib/format";
+import { useSession } from "@/stores/session";
+import { CoverDecision } from "@/components/limits/CoverDecision";
 import { cn } from "@/lib/cn";
 import type { CoverageLine, FinancialGap, Utilization } from "@/types";
 import { CoverageDetail } from "./CoverageDetail";
@@ -142,6 +144,7 @@ export function CoverageTable({
   canEdit?: boolean;
 }) {
   const [open, setOpen] = useState<ReadonlySet<string>>(() => new Set());
+  const policyYearId = useSession((s) => s.currentPolicyYearId);
   const usageByProduct = useMemo(() => indexUsage(utilization), [utilization]);
 
   const toggle = (key: string) =>
@@ -290,6 +293,17 @@ export function CoverageTable({
                             ))}
                           </div>
                         )}
+                        {canEdit && policyYearId && (line.limit_alerts ?? [])
+                          .filter((alert) => alert.kind === "dependant_over_age")
+                          .map((alert) => (
+                            // The broker's keep/exclude call, on the line it changes.
+                            <div key={`decide-${alert.dependant_id}`} className="mt-1.5">
+                              <span className="text-2xs text-muted-foreground">
+                                {alert.dependant_name ?? "Dependant"}:
+                              </span>
+                              <CoverDecision alert={alert} policyYearId={policyYearId} />
+                            </div>
+                          ))}
                       </div>
                     </div>
                   </TableCell>

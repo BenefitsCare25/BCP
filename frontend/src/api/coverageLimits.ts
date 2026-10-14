@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/api/client";
 import { keepPreviousInScope } from "@/lib/scopedPlaceholder";
 import { useSession } from "@/stores/session";
@@ -55,5 +55,48 @@ export function useCoverageLimits(
     // a company or benefit-year switch, where it would show the previous
     // company's crossings under the new company's name.
     ...(preview ? keepPreviousInScope(cid, policyYearId) : {}),
+  });
+}
+
+export interface DependantCoverDecision {
+  dependantId: string;
+  productCode: string;
+  decision: "keep" | "exclude";
+  reason?: string;
+}
+
+/** Everything that shows who a dependant's cover includes. */
+function invalidateCover(qc: ReturnType<typeof useQueryClient>) {
+  for (const key of ["coverage-limits", "benefit-statement", "categories", "member-counts"]) {
+    qc.invalidateQueries({ queryKey: [key] });
+  }
+}
+
+/** Keep a dependant above an age limit covered (saying why) or exclude them. */
+export function useSetDependantCoverDecision(policyYearId: string | null | undefined) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: DependantCoverDecision) =>
+      api.put(`/policy-years/${policyYearId}/dependant-cover-decisions`, {
+        dependant_id: body.dependantId,
+        product_code: body.productCode,
+        decision: body.decision,
+        reason: body.reason ?? null,
+      }),
+    onSuccess: () => invalidateCover(qc),
+  });
+}
+
+/** Undo a decision: the dependant needs one again. */
+export function useClearDependantCoverDecision(policyYearId: string | null | undefined) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ dependantId, productCode }: { dependantId: string; productCode: string }) =>
+      api.delete(
+        `/policy-years/${policyYearId}/dependant-cover-decisions/${encodeURIComponent(
+          dependantId,
+        )}/${encodeURIComponent(productCode)}`,
+      ),
+    onSuccess: () => invalidateCover(qc),
   });
 }

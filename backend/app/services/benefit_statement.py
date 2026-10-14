@@ -42,6 +42,11 @@ from app.schemas.api import (
     StatementEmployee,
 )
 from app.schemas.coverage_limits import CoverageLimitAlert
+from app.services.dependant_cover_rules import (
+    load_cover_rules,
+    load_listed_cover,
+    plan_covered_dependants,
+)
 from app.services.dependant_coverage import (
     category_covers_dependants as _shared_category_covers_dependants,
 )
@@ -477,6 +482,8 @@ def build_benefit_statement(db: Session, employee: Employee) -> BenefitStatement
     )
     dep_summaries = [_dep_summary(d) for d in dependants]
     dep_by_id = {d.id: _dep_summary(d) for d in dependants}
+    rules = load_cover_rules(db, employee.policy_year_id)
+    listed = load_listed_cover(db, employee.policy_year_id)
 
     coverage: list[CoverageLine] = []
     for mp in matched_plans:
@@ -491,14 +498,31 @@ def build_benefit_statement(db: Session, employee: Employee) -> BenefitStatement
         if enrolment == "eligible":
             # Not enrolled themselves, so no dependant can hold this cover yet.
             covered_deps: list[DependantSummary] = []
-        elif mp.covered_dependant_ids is not None:
-            # An override naming the enrolled dependants is authoritative.
-            covered_deps = [dep_by_id[i] for i in mp.covered_dependant_ids if i in dep_by_id]
+        elif mp.covered_dependant_ids is None and not dep_mode:
+            covered_deps = []
         else:
-            covered_deps = dep_summaries if dep_mode == "compulsory" else []
+            # An override naming the enrolled dependants is authoritative, then
+            # the uploaded listing, then the plan's dependant mode; the product's
+            # Eligibility ticks and broker exclusions apply to all of them.
+            covered_deps = [
+                dep_by_id[d.id]
+                for d in rules.filter(
+                    plan_covered_dependants(
+                        dependants, dep_mode, mp.covered_dependant_ids, facts.product_id, listed
+                    ),
+                    facts.product_id,
+                    mp.product_code,
+                )
+            ]
         covered_ids = {d.id for d in covered_deps}
         eligible_deps = (
-            [d for d in dep_summaries if d.id not in covered_ids] if dep_mode else []
+            [
+                dep_by_id[d.id]
+                for d in dependants
+                if d.id not in covered_ids and rules.allows(d, facts.product_id, mp.product_code)
+            ]
+            if dep_mode
+            else []
         )
         # Price and diagnose from the plan assignment the figures came from:
         # the elected tier when the member chose one, else the matched cohort.

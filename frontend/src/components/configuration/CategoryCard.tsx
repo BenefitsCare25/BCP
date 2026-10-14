@@ -14,6 +14,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import {
+  useCategoryHeadcounts,
   useConfirmCategory,
   useDeleteCategory,
   usePatchCategory,
@@ -34,7 +35,7 @@ import type {
 import { toast } from "sonner";
 import { DependantAssignmentFields } from "./DependantCard";
 import { AssignmentField } from "./setup/SetupPrimitives";
-import { RemoveGuard } from "./setup/savedEntries";
+import { TierRateGrid, tierHeadcounts } from "./TierRateGrid";
 import {
   assignmentGaps,
   isAgeBanded,
@@ -458,11 +459,12 @@ export function CategoryCard({
     writeAssignments({}, "Rate on earnings");
   };
 
-  // Tiered medical: update one tier's rate or premium, then persist on blur.
-  const setTierField = (code: string, field: "rate" | "premium", value: number) =>
+  // Tiered medical: update one tier's rate, then persist on blur. The slip's
+  // premium rides along unchanged, for comparison only.
+  const setTierRate = (code: string, rate: number) =>
     setTierRates((t) => ({
       ...t,
-      [code]: { rate: t[code]?.rate ?? 0, premium: t[code]?.premium ?? 0, [field]: value },
+      [code]: { rate, premium: t[code]?.premium ?? 0 },
     }));
   const saveTiers = () => writeAssignments({}, "Tier rates");
 
@@ -513,10 +515,8 @@ export function CategoryCard({
   const [tierGridOpened, setTierGridOpened] = useState(false);
   const showTierGrid =
     rateModel === "tiered" || Object.keys(tierRates).length > 0 || tierGridOpened;
-  const tierAnnual = effectiveTiers.reduce(
-    (sum, t) => sum + (tierRates[t.code]?.premium ?? 0),
-    0,
-  );
+  const headcountQuery = useCategoryHeadcounts(category.policy_year_id);
+  const headcounts = tierHeadcounts(headcountQuery.data, headcountQuery.isError, category.id);
 
   // Missing fields, read from what the broker is typing so the highlight clears
   // the moment a value is entered — the same rules as the setup checklist.
@@ -842,9 +842,9 @@ export function CategoryCard({
         <TierRateGrid
           tiers={effectiveTiers}
           tierRates={tierRates}
-          annual={tierAnnual}
+          headcounts={headcounts}
           addable={addableTiers}
-          onField={setTierField}
+          onRate={setTierRate}
           onCommit={saveTiers}
           onAdd={addTier}
           onRemove={removeTier}
@@ -938,9 +938,9 @@ export function CategoryCard({
         <TierRateGrid
           tiers={effectiveTiers}
           tierRates={tierRates}
-          annual={tierAnnual}
+          headcounts={headcounts}
           addable={addableTiers}
-          onField={setTierField}
+          onRate={setTierRate}
           onCommit={saveTiers}
           onAdd={addTier}
           onRemove={removeTier}
@@ -1006,119 +1006,6 @@ export function CategoryCard({
           setShowDelete(false);
         }}
       /></FirmOwnerOnly>
-    </div>
-  );
-}
-
-
-// Tiered medical rate editor (EO/ES/EC/EF): a rate + premium per dependant-tier,
-// with the annual total summed across tiers. Tiers can be added (from the
-// canonical vocabulary) and removed per category, so a plan priced for tiers
-// the template doesn't declare — or an extra tier a client negotiates — is
-// configurable without re-uploading the slip.
-function TierRateGrid({
-  tiers,
-  tierRates,
-  annual,
-  addable,
-  onField,
-  onCommit,
-  onAdd,
-  onRemove,
-  savedTiers,
-  flagMissing = false,
-}: {
-  tiers: TemplateTier[];
-  tierRates: Record<string, RateTier>;
-  annual: number;
-  addable: { code: string; label: string }[];
-  onField: (code: string, field: "rate" | "premium", value: number) => void;
-  onCommit: () => void;
-  onAdd: (code: string) => void;
-  onRemove: (code: string) => void;
-  savedTiers: ReadonlySet<string>;
-  /** Outline the tiers that still have no rate. */
-  flagMissing?: boolean;
-}) {
-  const safe = (v: string) => {
-    const n = Number(v);
-    return Number.isFinite(n) ? n : 0;
-  };
-  return (
-    <div className="mt-3 border-t border-border pt-3">
-      <div className="grid grid-cols-[1.4fr_1fr_1fr_auto] items-center gap-2">
-        <Label className="text-2xs uppercase tracking-wider text-muted-foreground">
-          Tier
-        </Label>
-        <Label className="text-2xs uppercase tracking-wider text-muted-foreground">
-          Rate
-        </Label>
-        <Label className="text-2xs uppercase tracking-wider text-muted-foreground">
-          Premium
-        </Label>
-        <span />
-        {tiers.map((t) => {
-          const cell = tierRates[t.code] ?? { rate: 0, premium: 0 };
-          const rateMissing = flagMissing && !((cell.rate ?? 0) > 0);
-          return (
-            <div key={t.code} className="contents">
-              <div className="flex items-baseline gap-1 text-sm text-foreground">
-                {t.code}
-                <span className="text-2xs text-muted-foreground">{t.label}</span>
-              </div>
-              <Input
-                type="number"
-                value={cell.rate || ""}
-                onChange={(e) => onField(t.code, "rate", safe(e.target.value))}
-                onBlur={onCommit}
-                aria-label={`${t.code} rate`}
-                aria-invalid={rateMissing || undefined}
-                placeholder={rateMissing ? "Missing" : undefined}
-                className={cn("h-8 text-sm", rateMissing && "border-warn")}
-              />
-              <Input
-                type="number"
-                value={cell.premium || ""}
-                onChange={(e) => onField(t.code, "premium", safe(e.target.value))}
-                onBlur={onCommit}
-                className="h-8 text-sm"
-              />
-              <RemoveGuard saved={savedTiers.has(t.code)}><Button
-                size="icon-sm"
-                variant="ghost"
-                aria-label={`Remove tier ${t.code}`}
-                title={`Remove tier ${t.code}`}
-                className="text-error hover:text-error"
-                onClick={() => onRemove(t.code)}
-              >
-                <X className="size-3.5" />
-              </Button></RemoveGuard>
-            </div>
-          );
-        })}
-      </div>
-      <div className="mt-2 flex items-center justify-between gap-3">
-        <div className="text-2xs text-muted-foreground">
-          Annual premium (sum of tiers):{" "}
-          <span className="font-medium text-foreground">
-            {annual.toLocaleString(undefined, { maximumFractionDigits: 2 })}
-          </span>
-        </div>
-        {addable.length > 0 && (
-          <Select value="" onValueChange={onAdd}>
-            <SelectTrigger className="h-7 w-48 text-2xs text-muted-foreground">
-              <SelectValue placeholder="+ Add tier" />
-            </SelectTrigger>
-            <SelectContent>
-              {addable.map((t) => (
-                <SelectItem key={t.code} value={t.code}>
-                  {t.code} — {t.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        )}
-      </div>
     </div>
   );
 }

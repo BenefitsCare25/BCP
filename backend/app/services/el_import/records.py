@@ -65,15 +65,16 @@ PII_ATTRIBUTES = frozenset({
 })
 
 # Work-pass wording -> the roster's ``pass`` codes (CITIZEN/PR/EP/SP/WP), plus
-# LTVP/DP for listings that state those passes.
-# First match wins: the dependant's, long-term visit and ONE passes are tested
-# before the S Pass, whose "s pass" also appears in "Dependant's Pass".
+# LTVP/DP/STP/ONE for listings that state those passes.
+# First match wins. The S Pass's "S" must be a word of its own: in "Dependant's
+# Pass" or "Student's Pass" it is a possessive, never the pass.
 _PASS_PATTERNS: tuple[tuple[str, str], ...] = (
     ("WP", r"work\s*permit|\bwp\b"),
-    ("DP", r"dependant'?s?\s*pass|\bdp\b"),
+    ("DP", r"depend[ae]nt['\u2019]?s?\s*pass|\bdp\b"),
+    ("STP", r"student['\u2019]?s?\s*pass|\bstp\b"),
     ("LTVP", r"long\s*term\s*visit|\bltvp\b|\bploc\b"),
     ("ONE", r"overseas\s*networks?|\bone\s*pass\b"),
-    ("SP", r"\bs[\s-]*pass\b|\bspass\b|\bsp\b"),
+    ("SP", r"(?<![\w'\u2019])s[\s-]*pass\b|\bspass\b|\bsp\b"),
     ("EP", r"employment\s*pass|\bep\b"),
     ("PR", r"permanent\s*resident|nric\s*blue|\bs?pr\b"),
     ("CITIZEN", r"singaporean|citizen|nric\s*pink"),
@@ -148,11 +149,42 @@ _ENDING = re.compile(
 )
 
 
+# Where one statement in a remark ends and the next begins. A full stop is not
+# a break: "w.e.f." and "1.10.2026" carry them.
+_CLAUSE_BREAK = re.compile(r"[;,()&\n]|\b(?:and|but)\b", re.IGNORECASE)
+
+
+def _clause_verb(clause: str) -> str | None:
+    """"add", "end", "both" or None for one clause of a remark."""
+    adding, ending = bool(_ADDING.search(clause)), bool(_ENDING.search(clause))
+    if adding and ending:
+        return "both"
+    return "add" if adding else "end" if ending else None
+
+
 def _stated_start(remark: Any) -> date | None:
-    words = text(remark)
-    if not words or _ENDING.search(words) or not _ADDING.search(words):
-        return None
-    return wef_date(words)
+    """The WEF date of the statement that adds the person: "Spouse added WEF
+    1 Oct 2026, previous policy ended" starts cover on 1 Oct 2026.
+
+    Each date belongs to its own clause's verb, or, in a clause without one
+    ("Spouse added, WEF 1 Oct 2026"), to the nearest verb before it, else after
+    it. A date an ending word governs, alone or alongside an adding one, never
+    starts cover.
+    """
+    clauses = [c for c in _CLAUSE_BREAK.split(text(remark)) if c.strip()]
+    verbs = [_clause_verb(c) for c in clauses]
+    for i, clause in enumerate(clauses):
+        start = wef_date(clause)
+        if start is None:
+            continue
+        verb = (
+            verbs[i]
+            or next((v for v in reversed(verbs[:i]) if v), None)
+            or next((v for v in verbs[i + 1:] if v), None)
+        )
+        if verb == "add":
+            return start
+    return None
 
 
 def dependant_cover_start(dep: ElDependant, period_start: date | None) -> date | None:

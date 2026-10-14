@@ -59,14 +59,23 @@ def listing_entities(
 ) -> list[ListingEntityOut]:
     """Each Entity spelling on the listing with its headcount and resolution.
     Empty when the listing has no Entity column or nothing gates by entity."""
-    spellings = Counter(
-        value for emp in workbook.employees if (value := text(emp.fields.get("entity")))
-    )
-    if not spellings:
+    if not _spellings(workbook):
         return []
     aliases = entity_alias_map(db, client_id)
-    gate = _gate_spellings(db, client_id, policy_year_id, aliases)
-    if not gate:
+    return _entity_rows(workbook, aliases, _gate_spellings(db, client_id, policy_year_id, aliases))
+
+
+def _spellings(workbook: ElWorkbook) -> Counter[str]:
+    return Counter(
+        value for emp in workbook.employees if (value := text(emp.fields.get("entity")))
+    )
+
+
+def _entity_rows(
+    workbook: ElWorkbook, aliases: EntityAliases, gate: dict[str, str]
+) -> list[ListingEntityOut]:
+    spellings = _spellings(workbook)
+    if not spellings or not gate:
         return []
     out: list[ListingEntityOut] = []
     for spelling, employees in spellings.most_common():
@@ -97,8 +106,7 @@ def link_entities(
     aliases = entity_alias_map(db, client_id)
     gate = _gate_spellings(db, client_id, policy_year_id, aliases)
     unmatched = {
-        e.spelling for e in listing_entities(db, client_id, policy_year_id, workbook)
-        if e.status == "unmatched"
+        e.spelling for e in _entity_rows(workbook, aliases, gate) if e.status == "unmatched"
     }
     written = 0
     for spelling, target in sorted(links.items()):

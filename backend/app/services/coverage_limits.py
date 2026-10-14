@@ -41,6 +41,13 @@ from app.models import (
 from app.models.underwriting_case import normalize_uw_status
 from app.schemas.coverage_limits import CoverageLimitAlert, LimitOverrides
 from app.services.coverage_resolver import load_overrides
+from app.services.dependant_cover_rules import (
+    CoverRules,
+    ListedCover,
+    load_cover_rules,
+    load_listed_cover,
+    plan_covered_dependants,
+)
 from app.services.dependant_coverage import (
     category_dependant_mode,
     has_member_cover_eligibility_answer,
@@ -64,6 +71,8 @@ LimitKind = Literal[
     "over_age",
     "over_entry_age",
     "dependant_over_age",
+    "dependant_not_eligible",
+    "relationship_unknown",
     "underwriting",
     "capped",
     "no_salary",
@@ -72,7 +81,10 @@ LimitKind = Literal[
 
 # Alerts that need the broker to act. "capped" states a fact the slip intends.
 ACTION_KINDS: frozenset[str] = frozenset(
-    {"over_age", "over_entry_age", "dependant_over_age", "underwriting", "no_salary", "no_dob"}
+    {
+        "over_age", "over_entry_age", "dependant_over_age", "dependant_not_eligible",
+        "relationship_unknown", "underwriting", "no_salary", "no_dob",
+    }
 )
 _UNDECIDED = frozenset({"pending", "postponed"})
 _FIRST_INT = re.compile(r"\d+")
@@ -288,33 +300,67 @@ def _employee_alerts(
     return alerts
 
 
+def _dependant_alert(
+    kind: str, emp: Employee, dep: Dependant, limits: ProductLimits, message: str, **extra: Any
+) -> CoverageLimitAlert:
+    attrs = dep.attribute_values or {}
+    return CoverageLimitAlert(
+        kind=kind, severity="action",
+        product_code=limits.code, product_name=limits.name,
+        employee_id=emp.id, staff_id=str(emp.staff_id or ""),
+        employee_name=emp.employee_name, dependant_id=dep.id,
+        dependant_name=first_value(attrs, DEP_NAME_KEYS) or "Dependant",
+        relationship=classify_relationship(first_value(attrs, REL_KEYS)),
+        message=message, **extra,
+    )
+
+
 def _dependant_alerts(
     emp: Employee,
-    deps: Iterable[Dependant],
+    planned: list[Dependant],
     limits: ProductLimits,
     ref: date,
+    rules: CoverRules,
+    named: set[str],
 ) -> list[CoverageLimitAlert]:
+    """The plan's dependants (``planned``: election, listing, then dependant
+    mode) checked against the product's ticks and age limits. ``named`` are
+    the ones a listing row or an election put there explicitly."""
     alerts: list[CoverageLimitAlert] = []
-    for dep in deps:
+    for dep in planned:
         attrs = dep.attribute_values or {}
+        name = first_value(attrs, DEP_NAME_KEYS) or "Dependant"
         role = classify_relationship(first_value(attrs, REL_KEYS))
+        if not rules.relationship_allowed(limits.code, attrs):
+            # The slip wins; tell the broker only when the listing or an
+            # election said otherwise, since the plan's own default never did.
+            if dep.id in named:
+                alerts.append(_dependant_alert(
+                    "dependant_not_eligible", emp, dep, limits,
+                    f"{(role or 'dependant').capitalize()} {name} is listed as covered, but "
+                    f"{limits.code}'s eligibility does not include a {role}. Not covered.",
+                ))
+            continue
+        if role is None and rules.restricts(limits.code):
+            alerts.append(_dependant_alert(
+                "relationship_unknown", emp, dep, limits,
+                f"{name}'s relationship is not stated, and {limits.code} covers only some "
+                "dependants. Kept covered; add the relationship to check.",
+            ))
         limit = {"spouse": limits.spouse_age_limit, "child": limits.child_age_limit}.get(role or "")
         if not limit:
             continue
         age = limits.age(parse_dob(first_value(attrs, DOB_KEYS)), ref)
         if age is None or age <= limit:
             continue
-        name = first_value(attrs, DEP_NAME_KEYS) or "Dependant"
-        alerts.append(CoverageLimitAlert(
-            kind="dependant_over_age", severity="action",
-            product_code=limits.code, product_name=limits.name,
-            employee_id=emp.id, staff_id=str(emp.staff_id or ""),
-            employee_name=emp.employee_name, dependant_id=dep.id,
-            dependant_name=name, relationship=role, age=age, limit=float(limit),
-            message=(
-                f"{role.capitalize() if role else 'Dependant'} {name} is {age} {limits.unit}, "
-                f"above the {role} age limit of {limit} {limits.unit}."
-            ),
+        decided = rules.decision(dep.id, limits.product_id)
+        alerts.append(_dependant_alert(
+            "dependant_over_age", emp, dep, limits,
+            f"{role.capitalize() if role else 'Dependant'} {name} is {age} {limits.unit}, "
+            f"above the {role} age limit of {limit} {limits.unit}.",
+            age=age, limit=float(limit),
+            decision=decided.decision if decided else None,
+            decision_reason=decided.reason if decided else None,
         ))
     return alerts
 
@@ -411,6 +457,8 @@ def coverage_limit_alerts(
             deps_by_emp.setdefault(dep.employee_id, []).append(dep)
             dependants[dep.id] = dep
 
+    rules = load_cover_rules(db, policy_year.id)
+    listed: ListedCover = load_listed_cover(db, policy_year.id)
     alerts: list[CoverageLimitAlert] = []
     for emp in employees.values():
         for match in emp.matched_categories or []:
@@ -424,8 +472,6 @@ def coverage_limit_alerts(
             # The basis follows the tier the member elected, as coverage does.
             priced = categories.get(override.tier_category_id or "") if override else None
             alerts.extend(_employee_alerts(emp, lim, priced or category, ref))
-            if not (lim.spouse_age_limit or lim.child_age_limit):
-                continue
             mode = category_dependant_mode(
                 has_dependants.get(category.product_id, False),
                 category.plan_assignments,
@@ -438,12 +484,16 @@ def coverage_limit_alerts(
                 ),
             )
             household = deps_by_emp.get(emp.id, [])
-            if override is not None and override.covered_dependant_ids is not None:
-                named = set(override.covered_dependant_ids)
-                covered = [d for d in household if d.id in named]
-            else:
-                covered = household if mode == "compulsory" else []
-            alerts.extend(_dependant_alerts(emp, covered, lim, ref))
+            elected = override.covered_dependant_ids if override is not None else None
+            planned = (
+                plan_covered_dependants(household, mode, elected, category.product_id, listed)
+                if mode or elected is not None
+                else []
+            )
+            named = set(elected or ()) | {
+                d.id for d in household if listed.covered.get((d.id, category.product_id))
+            }
+            alerts.extend(_dependant_alerts(emp, planned, lim, ref, rules, named))
     alerts.extend(
         _underwriting_alerts(db, policy_year.id, limits, employees, dependants)
     )
@@ -454,5 +504,7 @@ def limit_counts(alerts: Iterable[CoverageLimitAlert]) -> dict[str, int]:
     """People affected per kind (a person crossing three products counts once)."""
     people: dict[str, set[str]] = {}
     for alert in alerts:
+        if alert.decision:
+            continue  # the broker has decided it
         people.setdefault(alert.kind, set()).add(alert.dependant_id or alert.employee_id)
     return {kind: len(ids) for kind, ids in people.items()}

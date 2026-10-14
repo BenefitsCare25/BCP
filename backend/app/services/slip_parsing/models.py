@@ -157,8 +157,8 @@ class ExtractedPlan:
     # free, so every derived plan keeps pointing at the header it came from.
     source_label: str | None = None
     # What the plan pays, in short form, from its categories' basis of cover
-    # ("24x BMS", "$100,000"); see ``plan_names``. Stored as the plan's insurer
-    # report label.
+    # ("24x BMS", "$100,000"); see ``plan_names``. Parse output only: stored
+    # plans derive it from their categories when listed (api/v1/plans.py).
     details: str | None = None
 
 

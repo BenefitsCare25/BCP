@@ -33,6 +33,7 @@ from app.services.matching_engine import (
     EntityAliases,
     category_gate_names,
     entity_alias_map,
+    entity_parts,
     insured_names,
     jaccard,
     normalize_entity,
@@ -240,9 +241,10 @@ def _setup_header_entities(
         if not isinstance(header, dict):
             continue
         for key in ("insured", "entities"):
-            for name in insured_names(header.get(key)):
-                for norm in resolve_entities(name, aliases):
-                    out.setdefault(norm, name)
+            for picked in insured_names(header.get(key)):
+                for name in entity_parts(picked):
+                    for norm in resolve_entities(name, aliases):
+                        out.setdefault(norm, name)
     return out
 
 

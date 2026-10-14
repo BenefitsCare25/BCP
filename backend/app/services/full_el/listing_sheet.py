@@ -72,7 +72,10 @@ def _dependant_covered(
     """The member's election decides; else the listing; else the category default.
 
     A listing row says the dependant is covered unless it states that the
-    employee's family tier excludes them."""
+    employee's family tier excludes them. The product's Eligibility ticks and
+    the broker's exclusions apply on top (`dependant_cover_rules`)."""
+    if not ctx.cover_rules.allows(dep, info.product.id, info.product.code):
+        return False
     if elected is not None:
         return dep.id in elected and dep.status == "active"
     listed = ctx.listed.get((f"D:{dep.id}", info.product.id))

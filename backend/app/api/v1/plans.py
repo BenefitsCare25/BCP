@@ -1,6 +1,7 @@
 """Plans CRUD — Schedule of Benefits per product plan."""
 from __future__ import annotations
 
+from collections import defaultdict
 from copy import deepcopy
 from typing import Any
 
@@ -33,6 +34,7 @@ from app.services.benefit_key_guard import (
 )
 from app.services.plan_hydration import build_financials
 from app.services.setup_removals import refuse_removals, removed_schedule_entries
+from app.services.slip_parsing.plan_names import describing_bases, plan_details
 
 router = APIRouter(prefix="/plans", tags=["plans"])
 
@@ -47,6 +49,11 @@ class PlanOut(BaseModel):
     cover_description: str | None = None
     annual_policy_limit: str | None = None
     report_label: str | None = None
+    # What the plan pays in short form ("24x BMS", "$100,000"), read from the
+    # basis of the categories citing it (``slip_parsing.plan_names``), so plans
+    # sharing one schedule read apart. Derived, never stored: report_label is
+    # the insurer's and member's name for the plan. Plan lists only.
+    details: str | None = None
     # Premium / covered-amount figures sourced from the category that assigns
     # this plan code. None when no category assigns the plan or it has no
     # financial data. Used by the enrollment election UI.
@@ -127,7 +134,9 @@ class PlanUpdate(BaseModel):
     acknowledge: bool = False
 
 
-def _plan_out(p: Plan, financials: PlanFinancials | None = None) -> PlanOut:
+def _plan_out(
+    p: Plan, financials: PlanFinancials | None = None, details: str | None = None
+) -> PlanOut:
     return PlanOut(
         id=p.id,
         product_id=p.product_id,
@@ -138,6 +147,7 @@ def _plan_out(p: Plan, financials: PlanFinancials | None = None) -> PlanOut:
         cover_description=p.cover_description,
         annual_policy_limit=p.annual_policy_limit,
         report_label=p.report_label,
+        details=details,
         financials=financials,
         source=p.source,
         confidence=p.confidence,
@@ -146,8 +156,35 @@ def _plan_out(p: Plan, financials: PlanFinancials | None = None) -> PlanOut:
     )
 
 
+def _category_assignments(db: Session, policy_year_id: str) -> list[tuple[str, dict[str, Any]]]:
+    """``(product_id, plan_assignments)`` of the year's categories."""
+    rows = db.execute(
+        select(Category.product_id, Category.plan_assignments).where(
+            Category.policy_year_id == policy_year_id
+        )
+    ).all()
+    return [(product_id, pa) for product_id, pa in rows if isinstance(pa, dict)]
+
+
+def _details_by_plan(
+    rows: list[tuple[str, dict[str, Any]]],
+) -> dict[tuple[str, str], str]:
+    """Map ``(product_id, plan_code) → details`` from the bases of the
+    categories citing each plan, as a slip upload names them."""
+    cited: dict[tuple[str, str], list[tuple[object, Any]]] = defaultdict(list)
+    for product_id, pa in rows:
+        code = str(pa.get("plan_code") or "").strip()
+        if product_id and code:
+            cited[(product_id, code)].append((pa.get("basis"), pa.get("member_scope")))
+    out: dict[tuple[str, str], str] = {}
+    for key, scoped in cited.items():
+        if details := plan_details(describing_bases(scoped)):
+            out[key] = details
+    return out
+
+
 def _financials_by_plan(
-    db: Session, policy_year_id: str
+    rows: list[tuple[str, dict[str, Any]]],
 ) -> dict[tuple[str, str], PlanFinancials]:
     """Map ``(product_id, plan_code) → PlanFinancials`` from category assignments.
 
@@ -155,11 +192,6 @@ def _financials_by_plan(
     inherits the figures of the category that assigns its code. When several
     cohorts assign the same plan, the first with financial data wins.
     """
-    rows = db.execute(
-        select(Category.product_id, Category.plan_assignments).where(
-            Category.policy_year_id == policy_year_id
-        )
-    ).all()
     out: dict[tuple[str, str], PlanFinancials] = {}
     for product_id, pa in rows:
         if not product_id or not pa:
@@ -286,10 +318,19 @@ def list_plans(
             .limit(limit)
         ).scalars().all()
     )
-    fin = _financials_by_plan(db, policy_year_id)
+    assignments = _category_assignments(db, policy_year_id)
+    fin = _financials_by_plan(assignments)
+    details = _details_by_plan(assignments)
     return PlanList(
         total=total,
-        items=[_plan_out(p, fin.get((p.product_id, p.code))) for p in plans],
+        items=[
+            _plan_out(
+                p,
+                fin.get((p.product_id, p.code)),
+                details.get((p.product_id, p.code.strip())),
+            )
+            for p in plans
+        ],
     )
 
 
